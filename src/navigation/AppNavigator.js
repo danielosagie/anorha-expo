@@ -9,6 +9,12 @@ import MarketplaceScreen from '../screens/MarketplaceScreen';
 import AddListingScreen from '../screens/AddListingScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import ProductDetailScreen from '../screens/ProductDetail';
+import { NavigationContainer } from '@react-navigation/native';
+
+// Screens
+import SplashScreen from '../screens/SplashScreen';
+import OnboardingSlides from '../screens/OnboardingSlides';
+import AuthScreen from '../screens/AuthScreen';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -28,7 +34,16 @@ const MainStack = () => {
 };
 
 const AppNavigator = () => {
-  return <MainStack />;
+  return (
+    <NavigationContainer>
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="Splash" component={SplashScreen} />
+        <Stack.Screen name="OnboardingSlides" component={OnboardingSlides} />
+        <Stack.Screen name="Auth" component={AuthScreen} />
+        <Stack.Screen name="Dashboard" component={MainTabs} />
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
 };
 
 const TabNavigator = () => {

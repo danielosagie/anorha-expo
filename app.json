@@ -38,6 +38,22 @@
           "microphonePermission": "Allow sssync to access your microphone",
           "recordAudioAndroid": true
         }
+      ],
+      [
+        "expo-font"
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#200030",
+          "image": "./src/assets/rounded_sssync.png",
+          "resizeMode": "contain",
+          "imageWidth": 200,
+          "dark": {
+            "backgroundColor": "#000000",
+            "image": "./assets/splash-icon-dark.png"
+          }
+        }
       ]
     ],
     "extra": {
