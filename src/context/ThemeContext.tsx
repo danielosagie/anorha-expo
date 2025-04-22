@@ -3,7 +3,7 @@ import React, { createContext, useContext } from 'react';
 // Colors based on your dashboard screenshot
 const theme = {
   colors: {
-    primary: '#0E8F7F', // The teal/green from your chart
+    primary: '#8BB04F', // The teal/green from your chart
     secondary: '#F17F5F', // The orange/salmon from Amazon bar
     accent: '#3CAD46', // Green from Clover
     background: '#FFFFFF',
@@ -68,7 +68,8 @@ export const useTheme = () => useContext(ThemeContext);
 // Add a default export for the theme object
 export default theme;
 
-export const ThemeProvider = ({ children }) => {
+// Add React.ReactNode type for children
+export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
   return (
     <ThemeContext.Provider value={theme}>
       {children}

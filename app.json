@@ -40,6 +40,9 @@
         }
       ],
       [
+        "react-native-vision-camera"
+      ],
+      [
         "expo-font"
       ],
       [
@@ -53,6 +56,12 @@
             "backgroundColor": "#000000",
             "image": "./assets/splash-icon-dark.png"
           }
+        }
+      ],
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps._some_id_here_"
         }
       ]
     ],
