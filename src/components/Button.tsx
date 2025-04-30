@@ -62,7 +62,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   outlinedButton: {
-    backgroundColor: 'transparent',
+    backgroundColor: 'gray',
     borderWidth: 1,
     borderColor: 'white',
   },

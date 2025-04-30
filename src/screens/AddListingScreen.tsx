@@ -12,7 +12,11 @@ import {
   Alert,
   SafeAreaView,
   Dimensions,
-  Platform
+  Platform,
+  FlatList,
+  KeyboardAvoidingView,
+  Modal,
+  Pressable
 } from 'react-native';
 import { CameraView, useCameraPermissions, Camera, CameraType, FlashMode } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
@@ -38,7 +42,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'; // Import
 const AVAILABLE_PLATFORMS = [
   { key: 'shopify', name: 'Shopify', icon: 'shopify' },
   { key: 'amazon', name: 'Amazon', icon: 'amazon' },
-  { key: 'etsy', name: 'Etsy', icon: 'etsy' },
+  { key: 'facebook', name: 'Facebook', icon: 'facebook' },
   { key: 'ebay', name: 'eBay', icon: 'ebay' },
   { key: 'clover', name: 'Clover', icon: 'clover' },
   { key: 'square', name: 'Square', icon: 'square' },
@@ -79,16 +83,43 @@ interface SerpApiLensResponse {
   message?: string; 
 }
 
+interface BackendAnalysisResponse {
+  product: { Id: string; /* other fields */ };
+  variant: { Id: string; /* other fields */ };
+  analysis: {
+    GeneratedText: string;
+  };
+  message?: string; 
+}
+
 interface GeneratedPlatformDetails {
   title?: string;
   description?: string;
-  price?: number;
+  price?: number | { amount?: number; currency?: string }; // Handle both number and object
   category?: string;
-  tags?: string[];
+  tags?: string[] | string; // Handle array or comma-separated string
   weight?: number;
-  weightUnit?: string;
+  weightUnit?: string; // Or weight_unit
   bullet_points?: string[]; 
   search_terms?: string[]; 
+  // Add other potential fields from LLM or platform specs
+  status?: string; // Shopify
+  vendor?: string; // Shopify
+  locations?: string; // Square (simple text for now)
+  gtin?: string; // Square
+  condition?: string; // eBay, Amazon, FB
+  listingFormat?: string; // eBay
+  duration?: string; // eBay
+  dispatchTime?: string; // eBay
+  returnPolicy?: string; // eBay
+  shippingService?: string; // eBay
+  itemLocationPostalCode?: string; // eBay
+  productType?: string; // Amazon
+  productIdType?: string; // Amazon
+  brand?: string; // Amazon, FB
+  availability?: string; // FB
+  // Add Compare At Price if LLM might return it
+  compareAtPrice?: number;
 }
 
 interface GenerateDetailsResponse {
@@ -180,14 +211,17 @@ const AddListingScreen = () => {
   const [capturedMedia, setCapturedMedia] = useState<CapturedMediaItem[]>([]);
   const [coverImageIndex, setCoverImageIndex] = useState<number>(-1);
   const [showCameraSection, setShowCameraSection] = useState(false); // Keep this for now
-  const [analysisResponse, setAnalysisResponse] = useState<SerpApiLensResponse | null>(null);
-  const [selectedMatch, setSelectedMatch] = useState<VisualMatch | null>(null);
+  const [analysisResponse, setAnalysisResponse] = useState<BackendAnalysisResponse | null>(null);
   const [generationResponse, setGenerationResponse] = useState<GenerateDetailsResponse | null>(null);
   const [formData, setFormData] = useState<GenerateDetailsResponse['generatedDetails'] | null>(null);
   const [productId, setProductId] = useState<string | null>(null);
   const [variantId, setVariantId] = useState<string | null>(null);
   const [uploadedImageUrls, setUploadedImageUrls] = useState<string[]>([]);
   const [activeFormTab, setActiveFormTab] = useState<string | null>(null);
+  const [serpApiResponse, setSerpApiResponse] = useState<SerpApiLensResponse | null>(null);
+
+  // --- NEW State for Visual Match Selection ---
+  const [selectedMatchForGeneration, setSelectedMatchForGeneration] = useState<VisualMatch | null>(null);
 
   // --- Camera State (Moved from CameraSection) ---
   const [cameraPermission, requestPermission] = useCameraPermissions();
@@ -198,6 +232,8 @@ const AddListingScreen = () => {
   const cameraRef = useRef<CameraView>(null);
   // --- End Camera State ---
 
+  // --- NEW State for Publish Modal ---
+  const [isPublishModalVisible, setIsPublishModalVisible] = useState(false);
 
   // Define the limit in bytes (4MB, as requested)
   const IMAGE_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024; 
@@ -543,176 +579,366 @@ const AddListingScreen = () => {
     // --- Analysis API Call --- 
     console.log("Fetching user for analysis API call...");
     const { data: { user }, error: userError } = await supabase.auth.getUser();
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+
     if (userError || !user) {
         console.error("Error fetching user for analysis API:", userError);
         setError("User session error. Please log out and back in.");
         setIsLoading(false);
         setLoadingMessage('');
-        setCurrentStage(ListingStage.ImageInput); // Go back to image input on user error
+        setCurrentStage(ListingStage.ImageInput);
         return;
     }
+    if (sessionError || !sessionData?.session?.access_token) {
+        console.error("Error fetching session token:", sessionError);
+        setError("Could not retrieve authentication token. Please log out and back in.");
+        setIsLoading(false);
+        setLoadingMessage('');
+        setCurrentStage(ListingStage.ImageInput);
+        return;
+    }
+
     const userId = user.id;
+    const token = sessionData.session.access_token;
     console.log(`User ID fetched for analysis: ${userId}`);
 
     const analyzeApiUrl = `https://sssync-bknd-production.up.railway.app/products/analyze?userId=${userId}`;
-    // Use the 'urls' variable directly from the upload result
-    const requestBodyAnalyze = {
-        imageUris: urls, // <-- Use the direct result
-        selectedPlatforms: selectedPlatforms,
+    const requestBodyAnalyze = { imageUris: urls, selectedPlatforms: selectedPlatforms };
+    
+    // Define headers including the Authorization token
+    const headers = { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
     };
+    
     console.log(`Attempting to POST to: ${analyzeApiUrl}`);
-    console.log("Request Body (Analyze):", JSON.stringify(requestBodyAnalyze, null, 2));
+    console.log("Request Headers (Analyze):", { ...headers, Authorization: 'Bearer [REDACTED]' }); // Log headers, redact token
 
     try {
         const response = await fetch(analyzeApiUrl, {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(requestBodyAnalyze),
+            method: 'POST', 
+            headers: headers, // Use the headers object
+            body: JSON.stringify(requestBodyAnalyze),
         });
         console.log(`Analysis API Response Status: ${response.status}`);
-        const responseData = await response.json();
+        // Only attempt to parse JSON if the response is not 204 No Content or similar non-JSON success cases
+        let responseData: BackendAnalysisResponse | null = null;
+        if (response.status !== 204 && response.headers.get('content-type')?.includes('application/json')) {
+            responseData = await response.json(); 
+        }
 
         if (!response.ok) {
             console.error("Analysis API Error Response Body:", responseData);
-            // Improved Error Message Handling
             let apiErrorMessage = `HTTP error! status: ${response.status}`;
-            if (responseData && responseData.message) {
-                if (Array.isArray(responseData.message)) {
-                     // Join array messages, fallback to generic error if array is empty/invalid
-                    apiErrorMessage = responseData.message.join(', ') || `Analysis API Error (Code: ${response.status})`;
-                } else if (typeof responseData.message === 'string') {
-                    apiErrorMessage = responseData.message;
-                }
+            // Use backend response message if available
+            if (responseData && responseData.message) { 
+                apiErrorMessage = typeof responseData.message === 'string' ? responseData.message : `Analysis API Error (Code: ${response.status})`;
+            } else if (response.status === 401) {
+                 apiErrorMessage = "Unauthorized. Please ensure you are logged in.";
             }
-            // Specific handling for 404 or "no matches" scenarios
-            if (response.status === 404 || (typeof apiErrorMessage === 'string' && apiErrorMessage.toLowerCase().includes("no visual matches"))) {
-                console.log("Analysis returned no visual matches.");
-                setAnalysisResponse({ search_metadata: {}, visual_matches: [] });
-                setCurrentStage(ListingStage.VisualMatch);
+            
+            // Check specific conditions based on backend response structure if needed
+            if (response.status === 404 || (typeof apiErrorMessage === 'string' && apiErrorMessage.toLowerCase().includes("no matches"))) {
+                console.log("Analysis indicated no visual matches found (or 404). Setting minimal response.");
+                setAnalysisResponse({ product: { Id: 'unknown'}, variant: {Id: 'unknown'}, analysis: { GeneratedText: '{}' } }); 
+                setSerpApiResponse(null); // No parsed data
+                setProductId(null); // No valid ID
+                setVariantId(null); // No valid ID
+                setCurrentStage(ListingStage.VisualMatch); // Go to visual match to show "No Matches"
             } else {
-                // Throw for other non-OK responses
                 throw new Error(apiErrorMessage);
             }
         } else {
-            console.log("Analysis Response Data:", JSON.stringify(responseData, null, 2));
-            setAnalysisResponse(responseData);
-            setCurrentStage(ListingStage.VisualMatch);
+             console.log("Analysis Response Data (Backend):", JSON.stringify(responseData, null, 2));
+             // Handle potential null responseData for non-JSON success cases if needed
+             if (responseData && 
+                 responseData.product && responseData.product.Id && 
+                 responseData.variant && responseData.variant.Id && 
+                 responseData.analysis && typeof responseData.analysis.GeneratedText === 'string') 
+             {
+                 // --- Set State on Success --- 
+                 setAnalysisResponse(responseData); // Set the full backend response
+                 setProductId(responseData.product.Id); // <-- SET PRODUCT ID
+                 setVariantId(responseData.variant.Id); // <-- SET VARIANT ID
+                 console.log(`Product/Variant IDs set: ${responseData.product.Id} / ${responseData.variant.Id}`);
+                 
+                 // Attempt to parse SerpApi response from GeneratedText
+                 try {
+                     const parsedSerp = JSON.parse(responseData.analysis.GeneratedText);
+                     setSerpApiResponse(parsedSerp);
+                     console.log("[triggerImageAnalysis] Parsed and set serpApiResponse state.");
+                 } catch (parseErr) {
+                     console.error("[triggerImageAnalysis] Failed to parse GeneratedText JSON:", parseErr);
+                     setSerpApiResponse(null); // Ensure it's null if parsing fails
+                 }
+                 // --- End Set State --- 
+                 
+                 setCurrentStage(ListingStage.VisualMatch);
+             } else {
+                 // Handle successful but unexpected response structure 
+                 console.error("Analysis API response successful (2xx) but structure is invalid:", responseData);
+                 setError("Received invalid data structure from analysis API.");
+                 setCurrentStage(ListingStage.ImageInput); // Go back if data is unusable
+             }
         }
-        setError(null); // Clear error on success or handled non-match
+        // setError(null); // Clear error only if fully successful - moved inside success block
     } catch (err: any) {
         console.error("Analysis API fetch/processing failed:", err);
-        // Use the message from the caught error (which might be the one constructed above)
-        const errorMessage = err.message || (typeof err === 'string' ? err : 'Unknown error during analysis fetch');
-        setError(`Analysis Failed: ${errorMessage}`);
-        setCurrentStage(ListingStage.ImageInput); // Go back to image input on analysis error
+        setError(`Analysis Failed: ${err.message || 'Unknown error during analysis fetch'}`);
+        setProductId(null); // Clear IDs on error
+        setVariantId(null);
+        setSerpApiResponse(null);
+        setCurrentStage(ListingStage.ImageInput); 
     } finally {
         setIsLoading(false);
         setLoadingMessage('');
     }
 };
 
-  const handleMatchSelected = (match: VisualMatch) => { 
-      console.log("Selected Match:", match.title); 
-      setSelectedMatch(match);
-      triggerDetailsGeneration(analysisResponse);
-  };
   const handleProceedWithoutMatch = () => { 
       console.log("Proceeding without match."); 
-      setSelectedMatch(null);
-      triggerDetailsGeneration(null);
+      setSelectedMatchForGeneration(null); // Ensure selection is cleared
+      triggerDetailsGeneration(); // Call generate details (will use null context)
   };
 
-  const triggerDetailsGeneration = async (lensResponseContext: SerpApiLensResponse | null) => { 
+  // --- NEW Handler for tapping a visual match card --- 
+  const handleSelectMatchForGeneration = (match: VisualMatch) => {
+      // If the tapped match is already selected, deselect it
+      if (selectedMatchForGeneration?.position === match.position) {
+          console.log(`Deselecting match: ${match.title}`);
+          setSelectedMatchForGeneration(null);
+      } else {
+          console.log(`Selecting match for generation: ${match.title}`);
+          setSelectedMatchForGeneration(match); // Select the new match
+      }
+  };
+
+  // UPDATED triggerDetailsGeneration to use selectedMatchForGeneration state and clean the match data
+  const triggerDetailsGeneration = async () => { 
+    // Check if Product/Variant IDs are available BEFORE proceeding
+    if (!productId || !variantId) {
+        Alert.alert("Missing Information", "Product or Variant ID is missing. Cannot generate details. Please try analyzing the image again.");
+        setError("Internal error: Missing Product/Variant ID.");
+        setCurrentStage(ListingStage.ImageInput); 
+        return;
+    }
     if (uploadedImageUrls.length === 0) { Alert.alert("Internal Error", "Missing uploaded image URLs."); setCurrentStage(ListingStage.ImageInput); return; }
-    // Cover index is now implicitly 0 for the API call based on uploadedImageUrls
+    
     const coverImageIndexForApi = 0; 
     
-    setError(null); setCurrentStage(ListingStage.Generating); setIsLoading(true); setLoadingMessage('Generating details...'); // Use setLoadingMessage
+    setError(null); 
+    setCurrentStage(ListingStage.Generating);
+    setIsLoading(true); 
+    setLoadingMessage('Generating details...');
 
+    // ... (Get User ID and Auth Token) ...
     const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
-        console.error("Error fetching user for generation API:", userError); setError("User session error."); setIsLoading(false); setCurrentStage(ListingStage.ImageInput); return;
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+
+    if (userError || !user || sessionError || !sessionData?.session?.access_token) {
+         console.error("Auth error during generation trigger:", {userError, sessionError});
+         setError("Authentication error. Please log out and back in.");
+         setIsLoading(false); setLoadingMessage(''); 
+         setCurrentStage(ListingStage.VisualMatch); 
+         return;
     }
     const userId = user.id;
+    const token = sessionData.session.access_token;
 
+    // --- Clean the selected match (AGAIN) to EXCLUDE price --- 
+    let cleanedSelectedMatch: Partial<VisualMatch> | null = null;
+    if (selectedMatchForGeneration) {
+        cleanedSelectedMatch = {
+            position: selectedMatchForGeneration.position,
+            title: selectedMatchForGeneration.title,
+            link: selectedMatchForGeneration.link,
+            source: selectedMatchForGeneration.source,
+            // EXCLUDED: price: selectedMatchForGeneration.price
+        };
+        console.log("Cleaned selected match for API (v2 - no price):", cleanedSelectedMatch);
+    }
+    // --- End Cleaning ---
+
+    // --- Prepare Request --- 
     const generateApiUrl = `https://sssync-bknd-production.up.railway.app/products/generate-details?userId=${userId}`;
     const requestBodyGenerate = { 
-        imageUris: uploadedImageUrls, // Already has cover first
+        productId: productId, 
+        variantId: variantId, 
+        imageUris: uploadedImageUrls, 
         coverImageIndex: coverImageIndexForApi,
         selectedPlatforms: selectedPlatforms, 
-        lensResponse: lensResponseContext
+        selectedMatch: cleanedSelectedMatch // Use the newly cleaned object
     };
+    
+     const headers = { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      };
+
     console.log(`Attempting to POST to: ${generateApiUrl}`);
-    console.log("Request Body (Generate):", JSON.stringify(requestBodyGenerate, null, 2));
+    console.log("Request Headers (Generate):", { ...headers, Authorization: 'Bearer [REDACTED]' });
+    console.log("Request Body (Generate):", JSON.stringify(requestBodyGenerate));
 
     try {
       const response = await fetch(generateApiUrl, {
-        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(requestBodyGenerate),
+        method: 'POST', 
+        headers: headers, 
+        body: JSON.stringify(requestBodyGenerate),
       });
       
       let responseData: any; 
-      try { responseData = await response.json(); } 
-      catch (jsonError) { throw new Error(response.statusText || `HTTP error! status: ${response.status}`); }
+      try { 
+          if (response.status === 204) {
+              responseData = null; 
+          } else if (response.headers.get('content-type')?.includes('application/json')) {
+             responseData = await response.json(); 
+          } else {
+             const textResponse = await response.text();
+             console.warn(`Generation API returned non-JSON response (Status ${response.status}): ${textResponse}`);
+             responseData = null; 
+          }
+      } 
+      catch (jsonError) { 
+          console.error("Error parsing JSON response from generation API:", jsonError);
+          throw new Error(`Failed to parse response from generation API (Status: ${response.status})`); 
+      }
 
       if (!response.ok) { 
+          console.error("Generation API Error Response Body:", responseData);
           let msg = `HTTP error! status: ${response.status}`;
-          if (responseData?.message) msg = Array.isArray(responseData.message) ? responseData.message.join(', ') : String(responseData.message);
+          if (responseData?.message && typeof responseData.message === 'string') { 
+              msg = responseData.message; 
+          } else if (response.status === 401) {
+              msg = "Unauthorized. Please ensure you are logged in.";
+          } else if (response.status === 400) {
+              if (responseData?.message && Array.isArray(responseData.message)) {
+                  msg = `Invalid input: ${responseData.message.join(', ')}`;
+              } else {
+                   msg = "Invalid input provided to generate details.";
+              }
+          }
           throw new Error(msg); 
       }
 
-      const generationData = responseData as GenerateDetailsResponse;
+      if (!responseData) {
+          // Keep this check for null/empty responses after successful status
+          throw new Error("Received no details from generation API.");
+      }
+
+      // --- UPDATED Validation Logic --- 
+      // Only validate the structure we expect based on docs/actual response
+      const generationData = responseData as Partial<GenerateDetailsResponse>; // Use Partial since we don't expect productId/variantId
       console.log("Generation Response:", JSON.stringify(generationData, null, 2));
-      if (!generationData.productId || !generationData.variantId || !generationData.generatedDetails) throw new Error("Incomplete response from generation API.");
       
-      setGenerationResponse(generationData); 
-      setProductId(generationData.productId); 
-      setVariantId(generationData.variantId); 
-      setFormData(generationData.generatedDetails);
+      // Check if generatedDetails exists and is an object (can be empty {} which is valid)
+      if (typeof generationData.generatedDetails !== 'object' || generationData.generatedDetails === null) { 
+          console.error("Invalid or missing 'generatedDetails' object in generation API response:", generationData);
+          throw new Error("Invalid response structure from generation API (missing generatedDetails).");
+      }
+      // --- End UPDATED Validation Logic --- 
+      
+      // Cast to the expected type for state update (assuming the structure is now validated)
+      setGenerationResponse(generationData as GenerateDetailsResponse); 
+      setFormData(generationData.generatedDetails || {}); 
       setActiveFormTab(selectedPlatforms[0] || null);
+      console.log("[triggerDetailsGeneration] Successfully processed response. Setting stage to FormReview.");
       setCurrentStage(ListingStage.FormReview); 
       setError(null);
 
     } catch (err: any) {
-      console.error("Details generation failed:", err); setError(`Generation Failed: ${err.message || 'Unknown error'}`);
-      // Go back to visual match if it exists, otherwise image input
-      setCurrentStage(analysisResponse && analysisResponse.visual_matches && analysisResponse.visual_matches.length > 0 ? ListingStage.VisualMatch : ListingStage.ImageInput); 
-    } finally { setIsLoading(false); setLoadingMessage(''); } // Clear loading message
+        console.error("[triggerDetailsGeneration] Details generation failed:", err);
+        setError(`Generation Failed: ${err.message || 'Unknown error'}`);
+        // Explicitly log BEFORE setting stage
+        console.log("[triggerDetailsGeneration] Error occurred. Setting stage back to VisualMatch.");
+        setCurrentStage(ListingStage.VisualMatch); // Fallback to VisualMatch
+    } finally {
+         setIsLoading(false); 
+         setLoadingMessage('');
+     } 
   };
   
+  // UPDATED handleFormUpdate to handle nested price and potential arrays
   const handleFormUpdate = (platform: string, field: keyof GeneratedPlatformDetails, value: any) => {
-    setFormData(prevData => { if (!prevData) return null;
-      let processedValue = value;
-      processedValue = value;
-      return { ...prevData, [platform]: { ...(prevData[platform] || {}), [field]: processedValue } };
+    setFormData(prevData => { 
+      if (!prevData) return null;
+      const platformData = prevData[platform] || {};
+      let updatedValue = value;
+
+      // Handle nested Square price
+      if (platform === 'square' && field === 'price' && typeof platformData.price === 'object' && platformData.price !== null) {
+          // Attempt to parse the input as a number for amount
+          const amount = parseFloat(value);
+          updatedValue = { 
+              ...platformData.price, 
+              amount: isNaN(amount) ? undefined : amount // Store number or undefined
+          };
+      } else if (field === 'price' || field === 'compareAtPrice' || field === 'weight') {
+          // Handle regular numeric fields
+          const numValue = parseFloat(value);
+          updatedValue = isNaN(numValue) ? undefined : numValue;
+      } else if (field === 'tags' && typeof value === 'string') {
+          // Keep tags as comma-separated string in the input, backend/publish logic will handle splitting
+          updatedValue = value;
+      }
+      // Add handling for other specific field types if necessary
+
+      return { 
+          ...prevData, 
+          [platform]: { 
+              ...(platformData), 
+              [field]: updatedValue 
+          } 
+      };
     });
   };
 
   const handleSaveDraft = async () => { console.log("Saving Draft...", { productId, variantId, formData }); Alert.alert("Draft Saved (Logged)", "API call not implemented."); };
   const handlePublish = async () => {
-    console.log("Publishing...", { productId, variantId, formData }); 
-    
-    const finalDataForApi = JSON.parse(JSON.stringify(formData));
-    for (const platform in finalDataForApi) {
-        const platformData = finalDataForApi[platform];
-        if (platformData.price) platformData.price = parseFloat(platformData.price) || 0;
-        if (platformData.weight) platformData.weight = parseFloat(platformData.weight) || 0;
-        const arrayFields = ['tags', 'bullet_points', 'search_terms'];
-        arrayFields.forEach(field => {
-           if (typeof platformData[field] === 'string') {
-                platformData[field] = platformData[field].split(',').map((s: string) => s.trim()).filter((s: string) => s);
-           } else if (!Array.isArray(platformData[field])) {
-               platformData[field] = [];
-           }
-        });
-    }
-     console.log("Converted Data for Publish API:", finalDataForApi);
-    
-    setCurrentStage(ListingStage.Publishing);
+      console.log("Attempting to publish...");
+      // Add validation here if needed before showing modal
+      setIsPublishModalVisible(true); 
+  };
+
+  // ADDED handlers for modal buttons
+  const handlePublishAction = (publishMode: 'draft' | 'live') => {
+    setIsPublishModalVisible(false);
+    console.log(`Publishing as ${publishMode}...`, { productId, variantId, formData }); 
+    // Replace with actual API call later
+    setCurrentStage(ListingStage.Publishing); // Show loading indicator
     setIsLoading(true);
+    setLoadingMessage(`Publishing as ${publishMode}...`);
 
     setTimeout(() => { 
         setIsLoading(false);
-        Alert.alert("Published (Simulated)", "API call not implemented yet."); 
+        Alert.alert(`Published as ${publishMode} (Simulated)`, "API call not implemented yet."); 
+        // Reset state or navigate away after successful publish
+        // setCurrentStage(ListingStage.PlatformSelection); // Example reset
     }, 2000); 
   };
+
+  // --- ADDED handleRegenerateConfirm --- 
+  const handleRegenerateConfirm = () => {
+    Alert.alert(
+        "Regenerate Details?",
+        "This will use the AI to generate new details based on the current images and selected match (if any). This may incur usage costs. Proceed?",
+        [
+            { text: "Cancel", style: "cancel" },
+            { 
+                text: "Regenerate", 
+                // Ensure triggerDetailsGeneration exists and is called correctly
+                onPress: () => {
+                    if(typeof triggerDetailsGeneration === 'function') {
+                         triggerDetailsGeneration();
+                    } else {
+                        console.error("triggerDetailsGeneration function not found!");
+                        Alert.alert("Error", "Regeneration function is unavailable.");
+                    }
+                }
+            }
+        ]
+    );
+  };
+  // --- End ADDED --- 
 
   // --- Helper Render Functions ---
   const renderLoading = (message: string) => {
@@ -734,9 +960,25 @@ const AddListingScreen = () => {
         <View style={styles.platformGrid}>
           {AVAILABLE_PLATFORMS.map((platform) => {
             const isSelected = selectedPlatforms.includes(platform.key);
+            const imageSource = platformImageMap[platform.key]; // Get image source from map
             return (
-              <TouchableOpacity key={platform.key} style={[styles.platformCard, isSelected && styles.platformCardSelected]} onPress={() => togglePlatformSelection(platform.key)}>
-                <Icon name={platform.icon} size={40} color={isSelected ? '#294500' : '#888'} style={styles.platformIcon} /> {/* DEBUG: Hardcoded colors */}
+              <TouchableOpacity 
+                 key={platform.key} 
+                 style={[styles.platformCard, isSelected && styles.platformCardSelected]} 
+                 onPress={() => togglePlatformSelection(platform.key)}
+                 activeOpacity={0.7} // Add feedback
+              >
+                {/* Replace Icon with Image */}
+                {imageSource ? (
+                    <Image 
+                        source={imageSource} 
+                        style={[styles.platformImage, !isSelected && styles.platformImageDeselected]} // Apply base and conditional style
+                        resizeMode="contain" // Ensure image fits well
+                    />
+                 ) : (
+                    // Fallback if image not found
+                    <View style={styles.platformIconPlaceholder} />
+                 )}
                 <Text style={[styles.platformName, isSelected && styles.platformNameSelected]}>{platform.name}</Text>
               </TouchableOpacity>
             );
@@ -867,117 +1109,361 @@ const AddListingScreen = () => {
     );
   };
 
-  // Restore Skeleton RenderVisualMatch
+  // Updated RenderVisualMatch with corrected checks
   const renderVisualMatch = () => {
     console.log("[AddListingScreen] Rendering Visual Match Stage");
-    if (isLoading && currentStage === ListingStage.Analyzing) return renderLoading('Analyzing Media...'); // Show loading specific to analysis
-    // Basic skeleton - show loading or a placeholder if analysisResponse is null
+    
+    let visualMatches: VisualMatch[] = [];
+    let parseError: string | null = null;
+
+    // Parse logic (using serpApiResponse state set by triggerImageAnalysis)
+    if (serpApiResponse && Array.isArray(serpApiResponse.visual_matches)) {
+        visualMatches = serpApiResponse.visual_matches;
+    } else if (analysisResponse && analysisResponse.analysis && typeof analysisResponse.analysis.GeneratedText === 'string' && analysisResponse.analysis.GeneratedText !== '{}') {
+        // This case handles if parsing failed in triggerImageAnalysis or if serpApiResponse state update hasn't happened yet
+        // We might already have an error message to show from the parsing attempt
+        // If no prior error, maybe set one now? Or just rely on visualMatches being empty.
+        console.warn("[renderVisualMatch] serpApiResponse state is not set or invalid, but analysisResponse seems to have text.");
+    }
+     // Note: Explicit parsing error handling might be redundant if triggerImageAnalysis handles it,
+     // but keeping it for safety might be good.
+    
+     // Render Loading or Waiting state if analysisResponse is still null
     if (!analysisResponse) {
-      return (
-        <Animated.View style={styles.stageContainer} entering={FadeIn}>
-          <Text style={styles.stageTitle}>Waiting for Analysis</Text>
-          {/* Optionally show a spinner here too */}
-          <View style={styles.navigationButtons}>
-            <Button title="Back to Media" onPress={() => setCurrentStage(ListingStage.ImageInput)} outlined style={styles.navButton}/>
-          </View>
-        </Animated.View>
-      );
-    }
-    
-    const hasMatches = analysisResponse.visual_matches && analysisResponse.visual_matches.length > 0;
-
-    return (
-      <Animated.View style={styles.stageContainer} entering={FadeIn}>
-        <Text style={styles.stageTitle}>{hasMatches ? "Select Best Visual Match" : "No Matches Found"}</Text>
-        <Text style={styles.stageSubtitle}>
-          {hasMatches 
-            ? "Tap the item that looks most like yours, or proceed without a match." 
-            : "We couldn't find similar products online. Proceed to generate details from your images."}
-        </Text>
-
-        {/* Skeleton/Placeholder for match list or no-match message */}
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          {hasMatches ? (
-            <Text style={{ color: '#999' }}>[Visual Match List Placeholder]</Text>
-            // <ScrollView style={styles.visualMatchScrollView}> ... map matches ... </ScrollView>
-          ) : (
-            <Text style={{ color: '#999' }}>[No Matches Found Placeholder]</Text>
-          )}
-        </View>
-        
-        <View style={styles.navigationButtons}>
-          <Button title="Back to Media" onPress={() => setCurrentStage(ListingStage.ImageInput)} outlined style={styles.navButton}/>
-          <Button 
-            title={hasMatches ? "No Match / Use My Images" : "Generate Details"} 
-            onPress={handleProceedWithoutMatch} 
-            style={styles.navButton} 
-          />
-        </View>
-      </Animated.View>
-    );
-  };
-
-  // Restore Skeleton RenderFormReview
-  const renderFormReview = () => {
-    console.log("[AddListingScreen] Rendering Form Review Stage");
-    if (isLoading && currentStage === ListingStage.Generating) return renderLoading('Generating Details...'); // Show loading specific to generation
-    
-    // Basic skeleton - show loading or placeholder if formData is null
-    if (!formData || !activeFormTab) {
-      return (
-        <Animated.View style={styles.stageContainer} entering={FadeIn}>
-          <Text style={styles.stageTitle}>Waiting for Details</Text>
-           {/* Optionally show a spinner here too */}
-          <View style={styles.navigationButtons}>
-            {/* Allow going back if generation failed or is slow */}
-            <Button title="Back to Matches" onPress={() => setCurrentStage(ListingStage.VisualMatch)} outlined style={styles.navButton}/>
-          </View>
-        </Animated.View>
-      );
+        return (
+            <Animated.View style={styles.stageContainer} entering={FadeIn}>
+                <Text style={styles.stageTitle}>Waiting for Analysis</Text>
+                <ActivityIndicator size="small" color="#666" />
+                <View style={styles.navigationButtons}>
+                    <Button title="Back to Media" onPress={() => setCurrentStage(ListingStage.ImageInput)} outlined style={styles.navButton}/>
+                </View>
+            </Animated.View>
+        );
     }
 
-    // Skeleton structure for form
-    return (
-      <Animated.View style={styles.stageContainer} entering={FadeIn}>
-        <Text style={styles.stageTitle}>Review & Edit Details</Text>
-        <Text style={styles.stageSubtitle}>Review AI generated details for {activeFormTab}.</Text>
-        
-        {/* Placeholder for image scroll */}
-         <View style={{ height: 90, marginBottom: 15, alignItems: 'center', justifyContent: 'center' }}>
-             <Text style={{ color: '#999' }}>[Image Thumbnails Placeholder]</Text>
-         </View>
+    // Render Error state if parsing previously failed
+    if (parseError) { /* ... Error UI ... */ }
+    
+    const hasMatches = visualMatches.length > 0;
 
-        {/* Placeholder for tabs */}
-        <View style={styles.tabContainer}>
-          {selectedPlatforms.map(platform => (
+    // --- Render Item for Grid --- 
+    const renderMatchItem = ({ item }: { item: VisualMatch }) => {
+        const isSelected = selectedMatchForGeneration?.position === item.position;
+        return (
             <TouchableOpacity 
-              key={platform} 
-              style={[styles.tabButton, activeFormTab === platform && styles.tabButtonActive]} 
-              onPress={() => setActiveFormTab(platform)}
+                style={[styles.matchGridItem, isSelected && styles.matchCardSelected]} // Apply grid item and selected styles
+                onPress={() => handleSelectMatchForGeneration(item)} 
+                activeOpacity={0.7}
             >
-              <Text style={[styles.tabButtonText, activeFormTab === platform && styles.tabButtonTextActive]}>
-                {AVAILABLE_PLATFORMS.find(p => p.key === platform)?.name || platform} 
-              </Text>
+                <Image source={{ uri: item.thumbnail }} style={styles.matchThumbnailGrid} resizeMode="contain"/>
+                <View style={styles.matchDetailsGrid}>
+                    <Text style={styles.matchTitleGrid} numberOfLines={2}>{item.title || 'No Title'}</Text>
+                    <Text style={styles.matchSourceGrid}>{item.source || 'Unknown Source'}</Text>
+                    {item.price?.value && <Text style={styles.matchPriceGrid}>{item.price.value}</Text>}
+                </View>
             </TouchableOpacity>
-          ))}
-        </View>
+        );
+    };
+
+    return (
+        <Animated.View style={styles.stageContainer} entering={FadeIn}>
+             <Text style={styles.stageTitle}>{hasMatches ? "Select Best Visual Match" : "No Matches Found"}</Text>
+             <Text style={styles.stageSubtitle}>
+                 {hasMatches 
+                     ? "Tap an item below to select it for context." 
+                     : "We couldn't find similar products online."}
+             </Text>
+ 
+             {/* Render Match Grid or No Matches Found Message */} 
+             {hasMatches ? (
+                 <FlatList
+                    data={visualMatches}
+                    renderItem={renderMatchItem}
+                    keyExtractor={(item) => `${item.position}-${item.link}`}
+                    numColumns={2}
+                    style={styles.visualMatchGrid}
+                    contentContainerStyle={styles.visualMatchGridContainer}
+                    ListEmptyComponent={ // Should not be reached if hasMatches is true, but for safety
+                        <View style={styles.centeredInfoContainer}> 
+                            <Icon name="image-search-outline" size={60} color="#ccc" />
+                            <Text style={styles.noMatchText}>No similar items found.</Text>
+                        </View>
+                    }
+                 />
+             ) : (
+                  <View style={styles.centeredInfoContainer}> 
+                      <Icon name="image-search-outline" size={60} color="#ccc" />
+                      <Text style={styles.noMatchText}>No similar items found.</Text>
+                  </View>
+             )}
+             
+             {/* --- NEW Navigation Buttons --- */} 
+             <View style={styles.navigationButtons}>
+                 {/* Back Button - Always Visible */} 
+                 <Button 
+                      title="Back to Media" 
+                      onPress={() => setCurrentStage(ListingStage.ImageInput)} 
+                      outlined 
+                      style={styles.navButton}
+                 />
+                 
+                 {/* Conditional Buttons based on matches and selection */}
+                 {hasMatches ? (
+                    <> 
+                        <Button 
+                            title="No Matches / Use Images" 
+                            onPress={handleProceedWithoutMatch} 
+                            disabled={!!selectedMatchForGeneration} // Disabled if something IS selected
+                            outlined 
+                            style={StyleSheet.flatten([styles.navButton, !!selectedMatchForGeneration && styles.disabledButton])}
+                        />
+                        <Button 
+                            title={`Generate w/ Selection${selectedMatchForGeneration ? ' (1)' : ''}`}
+                            onPress={triggerDetailsGeneration} 
+                            disabled={!selectedMatchForGeneration} // Disabled if nothing IS selected
+                            style={StyleSheet.flatten([styles.navButton, !selectedMatchForGeneration && styles.disabledButton])}
+                         />
+                    </> 
+                 ) : ( 
+                    // Only show Generate button if NO matches were found initially
+                    <Button 
+                         title="Generate Details from Images" 
+                         onPress={handleProceedWithoutMatch} // Still calls proceed without match
+                         style={styles.navButton} 
+                    />
+                 )}
+             </View>
+         </Animated.View>
+     );
+};
+
+  // --- UPDATED renderFormReview --- 
+  const renderFormReview = () => {
+    console.log(`[AddListingScreen] Rendering Form Review Stage for tab: ${activeFormTab}`);
+    
+    if (!formData || !activeFormTab || !formData[activeFormTab]) {
+        // ... loading/error state ...
+        return (
+             <Animated.View style={styles.stageContainer} entering={FadeIn}>
+                 <Text style={styles.stageTitle}>Loading Details...</Text>
+                 <ActivityIndicator size="small" color="#666" />
+                  <View style={styles.navigationButtons}>
+                      <Button title="Back to Matches" onPress={() => setCurrentStage(ListingStage.VisualMatch)} outlined style={styles.navButton}/>
+                  </View>
+             </Animated.View>
+         );
+    }
+
+    const currentPlatformData = formData[activeFormTab] || {}; 
+    
+    // Define field structure
+    const coreFields: (keyof GeneratedPlatformDetails)[] = ['title', 'description', 'price', 'compareAtPrice', 'weight', 'weightUnit']; // Removed SKU/Barcode for now, add back if needed via variant data
+    const platformSpecificFields: { [key: string]: (keyof GeneratedPlatformDetails)[] } = {
+        shopify: ['status', 'vendor', 'category', 'tags'], 
+        square: ['category', 'locations', 'gtin'],
+        ebay: ['condition', 'category', 'listingFormat', 'duration', 'dispatchTime', 'returnPolicy', 'shippingService', 'itemLocationPostalCode'],
+        amazon: ['productType', 'condition', 'brand', 'productIdType'], // productId is complex (ASIN match)
+        facebook: ['category', 'brand', 'condition', 'availability'],
+    };
+
+    const fieldsToShow = [ ...coreFields, ...(platformSpecificFields[activeFormTab!] || []) ];
+
+    // --- RESTORED getKeyboardType --- 
+    const getKeyboardType = (field: string): 'default' | 'numeric' | 'email-address' | 'phone-pad' => {
+        const lowerField = field.toLowerCase();
+        if (lowerField === 'price' || lowerField.includes('quantity') || lowerField.includes('weight') || lowerField === 'compareatprice') {
+            return 'numeric';
+        }
+        return 'default';
+    }; // Ensure this closing brace is here
+    // --- End RESTORED ---
+
+    // --- REFINED getFieldValue --- 
+    const getFieldValue = (field: keyof GeneratedPlatformDetails): string => {
+        const value = currentPlatformData[field];
         
-        {/* Placeholder for form fields */}
-        <ScrollView style={styles.formScrollView}>
-          <Text style={{ color: '#999', textAlign: 'center', padding: 20 }}>[Form Fields Placeholder for {activeFormTab}]</Text>
-          {/* Later: Map Object.entries(formData[activeFormTab])... */}
-        </ScrollView>
+        // Handle Square Price object specifically and safely
+        if (activeFormTab === 'square' && field === 'price' && typeof value === 'object' && value !== null && 'amount' in value) {
+             // Ensure value.amount is not undefined before String()
+             return String(value.amount ?? ''); 
+        }
         
-        <View style={styles.navigationButtons}>
-          <Button title="Save Draft" onPress={handleSaveDraft} outlined style={styles.navButton}/>
-          <Button title="Publish" onPress={handlePublish} style={styles.navButton}/>
-        </View>
-      </Animated.View>
+        // Handle Tags array
+        if (field === 'tags' && Array.isArray(value)) {
+            return value.join(', ');
+        }
+        
+         // Handle other numbers
+         if (typeof value === 'number') {
+             return String(value);
+         }
+         
+        // Handle strings
+        if (typeof value === 'string') {
+            return value;
+        }
+        
+        // Fallback for null, undefined, or other unexpected types
+        return ''; 
+    };
+    // --- End REFINED --- 
+    
+    const getCurrencySymbol = () => {
+       if (activeFormTab === 'square' && typeof currentPlatformData.price === 'object' && currentPlatformData.price !== null) {
+           return currentPlatformData.price.currency === 'USD' ? '$' : (currentPlatformData.price.currency || '');
+       }
+       return ''; // Or determine currency based on user settings?
+    };
+
+    // --- Draggable Media Preview Renderer --- 
+    const renderDraggableMediaItem = ({ item, drag, isActive }: RenderItemParams<CapturedMediaItem>) => {
+        const isCover = capturedMedia[coverImageIndex]?.id === item.id;
+          return (
+          <ScaleDecorator>
+                        <TouchableOpacity 
+                          style={[styles.mediaPreviewItemContainer, isActive && styles.previewImageContainerActive, isCover && styles.previewImageCover ]}
+                          onPress={() => handleSetCover(capturedMedia.findIndex(m => m.id === item.id))}
+                          onLongPress={drag}
+                          disabled={isActive}
+                          activeOpacity={0.9}
+            >
+              <Image source={{ uri: item.uri }} style={styles.mediaPreviewImage} />
+              {item.type === 'video' && (
+                <View style={styles.videoIndicatorPreview}><Icon name="play-circle" size={18} color={'white'} /></View>
+              )}
+              {/* Delete button maybe not needed here? Or smaller? */} 
+               <TouchableOpacity style={styles.deleteMediaButtonSmall} onPress={() => handleRemoveMedia(item.id)}>
+                 <Icon name="close-circle" size={18} color="#FF5252" />
+               </TouchableOpacity>
+               {isCover && <View style={styles.coverLabelSmall}><Text style={styles.coverLabelText}>Cover</Text></View>}
+            </TouchableOpacity>
+          </ScaleDecorator>
+        );
+      };
+
+    return (
+        <GestureHandlerRootView style={{ flex: 1 }}> 
+            <KeyboardAvoidingView 
+                behavior={Platform.OS === "ios" ? "padding" : "height"} 
+                style={styles.stageContainer} 
+                keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0} // Adjust offset
+            >
+                <Animated.View style={{flex: 1}} entering={FadeIn}>
+                    <Text style={styles.stageTitle}>Review & Edit Details</Text>
+                    
+                    {/* --- Media Management Section --- */}
+                    <View style={styles.mediaSectionContainer}>
+                        <Text style={styles.sectionTitle}>Media ({capturedMedia.length}/10)</Text>
+                        {capturedMedia.length > 0 ? (
+                            <DraggableFlatList
+                                data={capturedMedia}
+                                onDragEnd={({ data }) => {
+                                    const oldCoverId = capturedMedia[coverImageIndex]?.id;
+                                    const newIndex = data.findIndex(item => item.id === oldCoverId);
+                                    setCoverImageIndex(newIndex >= 0 ? newIndex : (data.length > 0 ? 0 : -1));
+                                    setCapturedMedia(data);
+                                }}
+                                keyExtractor={(item) => item.id}
+                                renderItem={renderDraggableMediaItem}
+                                horizontal
+                                contentContainerStyle={styles.mediaPreviewScrollContent}
+                                showsHorizontalScrollIndicator={false}
+                            />
+                        ) : (
+                             <Text style={styles.noMediaText}>No media added yet.</Text>
+                        )}
+                         <View style={styles.mediaButtonsContainer}>
+                            <Button title="Add from Library" onPress={pickImagesFromLibrary} icon="image-multiple-outline" outlined disabled={capturedMedia.length >= 10} style={styles.mediaButton} />
+                             <Button title="Open Camera" onPress={() => setShowCameraSection(true)} icon="camera-outline" outlined disabled={capturedMedia.length >= 10} style={styles.mediaButton} /> 
+                         </View>
+                    </View>
+                    {/* --- End Media Management --- */}
+
+                    {/* --- Platform Tabs --- */ }
+                    <View style={styles.tabContainer}>
+                         {/* ... tab rendering logic ... */} 
+                         {selectedPlatforms.map(platform => (
+                            <TouchableOpacity 
+                                key={platform} 
+                                style={[styles.tabButton, activeFormTab === platform && styles.tabButtonActive]} 
+                                onPress={() => setActiveFormTab(platform)}
+                            >
+                                <Text style={[styles.tabButtonText, activeFormTab === platform && styles.tabButtonTextActive]}>
+                                    {AVAILABLE_PLATFORMS.find(p => p.key === platform)?.name || platform} 
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                    
+                    {/* --- Form Fields --- */}
+                    <ScrollView style={styles.formScrollView} keyboardShouldPersistTaps="handled">
+                         <Text style={styles.sectionTitle}>Details for {AVAILABLE_PLATFORMS.find(p => p.key === activeFormTab)?.name || activeFormTab}</Text>
+                        {fieldsToShow.map(field => (
+                            <View key={field} style={styles.formInputContainer}>
+                                <Text style={styles.formLabel}>{field.replace(/([A-Z])/g, ' $1')}</Text> {/* Add spaces for camelCase */} 
+                                 {/* Special handling for price to show currency */}
+                                 {field === 'price' && activeFormTab === 'square' && 
+                                     <Text style={styles.currencyLabel}>{getCurrencySymbol()}</Text>
+                                 }
+                                <TextInput
+                                    style={[styles.formInput, field === 'description' && styles.formInputMultiline, field === 'price' && activeFormTab === 'square' && styles.priceInputWithCurrency]}
+                                    value={getFieldValue(field)}
+                                    onChangeText={(text) => handleFormUpdate(activeFormTab, field, text)}
+                                    placeholder={field.replace(/([A-Z])/g, ' $1')} // Basic placeholder
+                                    placeholderTextColor="#aaa"
+                                    multiline={field === 'description'}
+                                    keyboardType={getKeyboardType(field)}
+                                    autoCapitalize="none"
+                                />
+                            </View>
+                        ))}
+                         {/* Regenerate Button */} 
+                         <Button 
+                            title="Regenerate Details with AI" 
+                            onPress={handleRegenerateConfirm} 
+                            icon="brain" 
+                            outlined 
+                            style={{marginTop: 15, marginBottom: 10}}
+                         /> 
+                    </ScrollView>
+                    
+                    {/* --- Bottom Navigation Buttons --- */} 
+                    <View style={styles.navigationButtons}>
+                         <Button title="Back" onPress={() => setCurrentStage(ListingStage.VisualMatch)} outlined style={styles.navButton}/> 
+                        <Button title="Save Draft" onPress={handleSaveDraft} outlined style={styles.navButton}/>
+                        <Button title="Publish..." onPress={handlePublish} style={styles.navButton}/>
+                    </View>
+                </Animated.View>
+            </KeyboardAvoidingView>
+
+            {/* --- Publish Modal --- */} 
+             <Modal
+                animationType="fade"
+                transparent={true}
+                visible={isPublishModalVisible}
+                onRequestClose={() => setIsPublishModalVisible(false)}
+             >
+                <Pressable style={styles.modalOverlay} onPress={() => setIsPublishModalVisible(false)}> 
+                    <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}> 
+                        <Text style={styles.modalTitle}>Publish Options</Text>
+                        <Text style={styles.modalSubtitle}>How would you like to publish to the selected platforms?</Text>
+                        <View style={styles.modalButtonContainer}>
+                            <Button title="Publish as DRAFT" onPress={() => handlePublishAction('draft')} style={styles.modalButton} outlined/>
+                            <Button title="Publish LIVE" onPress={() => handlePublishAction('live')} style={styles.modalButton}/>
+                        </View>
+                        <Button title="Cancel" onPress={() => setIsPublishModalVisible(false)} style={styles.modalCancelButton}/>
+                    </Pressable>
+                 </Pressable>
+             </Modal>
+        </GestureHandlerRootView>
     );
   };
 
   // --- Current Stage Logic --- //
   const renderCurrentStage = () => {
+    // Added logging here
+    console.log(`[renderCurrentStage] Rendering stage: ${currentStage}`);
+
     if (error) return (<View style={styles.errorContainer}><Icon name="alert-circle-outline" size={40} color="#D8000C" /><Text style={styles.errorText}>{error}</Text><Button title="Try Again" onPress={() => { setError(null); setCurrentStage(ListingStage.ImageInput); }} /></View>);
     
     // Handle Loading states explicitly
@@ -996,7 +1482,7 @@ const AddListingScreen = () => {
         case ListingStage.FormReview: return renderFormReview();
         // Analyzing, Generating, Publishing are handled by the isLoading check above
         default:
-            console.warn("Unhandled stage:", currentStage);
+            console.warn("[renderCurrentStage] Unhandled stage:", currentStage);
             return <Text>Unknown Stage: {currentStage}</Text>;
     }
   };
@@ -1037,8 +1523,23 @@ const styles = StyleSheet.create({
   stageSubtitle: { fontSize: 14, color: '#666', textAlign: 'center', marginBottom: 20 },
   bottomButton: { marginHorizontal: 15, marginBottom: 10 },
   platformGrid: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'flex-start', paddingTop: 20, },
-  platformCard: { width: '40%', aspectRatio: 1, justifyContent: 'center', alignItems: 'center', margin: 10, borderRadius: 12, borderWidth: 1, borderColor: '#ddd', backgroundColor: '#fff', padding: 10, },
-  platformCardSelected: { borderColor: '#4CAF50', backgroundColor: '#E8F5E9', borderWidth: 2},
+  platformCard: { 
+      width: '40%', 
+      aspectRatio: 1, 
+      justifyContent: 'center', // Center content vertically
+      alignItems: 'center', 
+      margin: 10, 
+      borderRadius: 12, 
+      borderWidth: 1.5, // Slightly thicker border
+      borderColor: '#ddd', 
+      backgroundColor: '#fff', 
+      padding: 10, 
+  },
+  platformCardSelected: { 
+      borderColor: '#4CAF50', 
+      backgroundColor: '#E8F5E9', 
+      borderWidth: 2, // Even thicker border when selected
+  },
   platformIcon: { marginBottom: 10, },
   platformName: { fontSize: 14, fontWeight: '500', color: '#555', textAlign: 'center', },
   platformNameSelected: { color: '#2E7D32', fontWeight: '600', },
@@ -1189,44 +1690,62 @@ const styles = StyleSheet.create({
       zIndex: 3, // Above controls
   },
 
-  // --- Styles for Visual Match --- 
-  visualMatchScrollView: { flex: 1, marginBottom: 15, },
-  matchCard: { flexDirection: 'row', padding: 12, marginBottom: 12, backgroundColor: 'white', borderRadius: 8, borderWidth: 1, borderColor: '#eee', alignItems: 'center', shadowColor: "#000", shadowOffset: { width: 0, height: 1, }, shadowOpacity: 0.18, shadowRadius: 1.00, elevation: 1, },
-  matchThumbnail: { width: 70, height: 70, borderRadius: 4, marginRight: 12, backgroundColor: '#f0f0f0' },
-  matchDetails: { flex: 1, marginRight: 5 },
-  matchTitle: { fontWeight: '600', fontSize: 14, color: '#333', marginBottom: 3 },
-  matchSource: { fontSize: 12, color: '#666', marginBottom: 4 },
-  matchPrice: { fontSize: 13, color: '#2E7D32', fontWeight: '500'},
-  centeredButtonContainer: { paddingVertical: 20, alignItems: 'center'},
-  noMatchText: {
-      fontSize: 16,
-      color: '#666',
-      marginTop: 15,
-      textAlign: 'center',
-  },
-  centeredInfoContainer: {
+  // --- Styles for Visual Match GRID ---
+  visualMatchGrid: { 
       flex: 1, 
-      justifyContent: 'center', 
-      alignItems: 'center', 
-      paddingBottom: 50
+      marginHorizontal: -5, // Counteract item margin
   },
-
-  // --- Styles for Form Review --- 
-  formImageScroll: { height: 90, marginBottom: 15, paddingLeft: 5 },
-  formImageThumbnail: { width: 70, height: 70, borderRadius: 6, marginRight: 10, backgroundColor: '#eee'},
-  tabContainer: { flexDirection: 'row', marginBottom: 15, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  tabButton: { flex: 1, paddingVertical: 12, alignItems: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
-  tabButtonActive: { borderBottomColor: '#4CAF50'},
-  tabButtonText: { color: '#666', fontWeight: '500'},
-  tabButtonTextActive: { color: '#2E7D32'},
-  formScrollView: { flex: 1, marginBottom: 10, paddingHorizontal: 5 },
-  formInputContainer: { marginBottom: 18, },
-  formLabel: { fontSize: 14, color: '#333', fontWeight: '500', marginBottom: 6, },
-  formInput: { borderWidth: 1, borderColor: '#DDE2E7', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15, color: '#333', },
-  formInputMultiline: { minHeight: 100, textAlignVertical: 'top', },
-  aiGeneratedText: { color: '#800080', }, 
-  noDataText: { color: '#666', fontStyle: 'italic', textAlign: 'center', paddingVertical: 20, },
-
+  visualMatchGridContainer: {
+      paddingBottom: 15, // Add padding at the bottom of the grid
+  },
+  matchGridItem: { // Style for each item in the grid
+    flex: 1, // Take up equal space
+    maxWidth: '50%', // Ensure two columns
+    margin: 5, 
+    backgroundColor: 'white', 
+    borderRadius: 8, 
+    borderWidth: 1, 
+    borderColor: '#eee', 
+    overflow: 'hidden', // Ensure content stays within border radius
+    shadowColor: "#000", 
+    shadowOffset: { width: 0, height: 1 }, 
+    shadowOpacity: 0.18, 
+    shadowRadius: 1.00, 
+    elevation: 1,
+  },
+  matchCardSelected: { // Style for the selected item
+    borderColor: '#4CAF50', 
+    borderWidth: 2.5,
+    elevation: 3, // Slightly more shadow when selected
+  },
+  matchThumbnailGrid: {
+    width: '100%', 
+    height: 130, // Adjust height as needed for grid
+    borderTopLeftRadius: 7, // Match card radius
+    borderTopRightRadius: 7,
+    backgroundColor: '#f0f0f0',
+  },
+  matchDetailsGrid: {
+    padding: 8, 
+  },
+  matchTitleGrid: {
+    fontWeight: '600', 
+    fontSize: 13, // Slightly smaller for grid?
+    color: '#333', 
+    marginBottom: 3, 
+    minHeight: 34, // Reserve space for 2 lines
+  },
+  matchSourceGrid: { 
+    fontSize: 11, 
+    color: '#666', 
+    marginBottom: 4 
+  },
+  matchPriceGrid: { 
+    fontSize: 12, 
+    color: '#2E7D32', 
+    fontWeight: '500'
+  },
+  
   // --- General Navigation Buttons --- 
   navigationButtons: { 
       flexDirection: 'row', 
@@ -1293,4 +1812,205 @@ const styles = StyleSheet.create({
     marginHorizontal: 5,
   },
   addButtonText: { marginTop: 4, fontSize: 11, color: '#aaa' },
+
+  // --- RESTORED Styles for No Match/Empty State ---
+  centeredInfoContainer: {
+    flex: 1, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    paddingBottom: 50,
+    marginTop: 20, // Add some margin if it's inside the grid area
+  },
+  noMatchText: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 15,
+    textAlign: 'center',
+  },
+
+  // --- RESTORED Styles for Form Review --- 
+  formImageScrollContainer: {
+    height: 90, 
+    marginBottom: 15, 
+  },
+  formImageScrollContent: {
+    paddingHorizontal: 5, 
+    alignItems: 'center'
+  },
+  formImageThumbnail: { 
+      width: 70, 
+      height: 70, 
+      borderRadius: 6, 
+      marginHorizontal: 5, 
+      backgroundColor: '#eee'
+  },
+  tabContainer: { flexDirection: 'row', marginBottom: 15, borderBottomWidth: 1, borderBottomColor: '#eee' },
+  tabButton: { flex: 1, paddingVertical: 12, alignItems: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  tabButtonActive: { borderBottomColor: '#4CAF50'},
+  tabButtonText: { color: '#666', fontWeight: '500'},
+  tabButtonTextActive: { color: '#2E7D32'},
+  formScrollView: { flex: 1, marginBottom: 10, paddingHorizontal: 5 },
+  formInputContainer: { marginBottom: 18, position: 'relative' }, // Added relative positioning for currency
+  formLabel: { fontSize: 14, color: '#333', fontWeight: '500', marginBottom: 6, textTransform: 'capitalize' }, 
+  formInput: { borderWidth: 1, borderColor: '#DDE2E7', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15, color: '#333', },
+  formInputMultiline: { minHeight: 100, textAlignVertical: 'top', borderWidth: 1, borderColor: '#DDE2E7', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15, color: '#333', }, 
+  priceInputWithCurrency: {
+      paddingLeft: 25, // Add padding for currency symbol
+  },
+  currencyLabel: {
+      position: 'absolute',
+      left: 12,
+      top: 39, // Adjust based on label height and input padding/border
+      fontSize: 15,
+      color: '#666', 
+      fontWeight: '500'
+  },
+  
+  // --- Styles for Publish Modal ---
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 25,
+    width: '85%',
+    maxWidth: 400,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 10,
+    color: '#333',
+  },
+   modalSubtitle: {
+     fontSize: 14,
+     color: '#666',
+     textAlign: 'center',
+     marginBottom: 25,
+   },
+  modalButtonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 15,
+  },
+  modalButton: {
+    flex: 1,
+    marginHorizontal: 5,
+  },
+  modalCancelButton: {
+      marginTop: 10,
+  },
+  
+  // --- Media Management Section Styles (in FormReview) ---
+  mediaSectionContainer: {
+    marginBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+    paddingBottom: 15,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#444',
+    marginBottom: 10,
+    paddingHorizontal: 5, // Match form padding
+  },
+   mediaPreviewScrollContent: {
+        paddingVertical: 5, 
+        paddingHorizontal: 5, 
+        alignItems: 'center'
+   },
+   mediaPreviewItemContainer: {
+        width: 80, 
+        height: 80, 
+        borderRadius: 6, 
+        marginHorizontal: 4,
+        position: 'relative', 
+        overflow: 'hidden', // Keep overflow hidden
+        borderWidth: 1.5,
+        borderColor: 'transparent', 
+   },
+    mediaPreviewImage: {
+        width: '100%', 
+        height: '100%'
+    },
+    deleteMediaButtonSmall: {
+        position: 'absolute',
+        top: -2, right: -2,
+        backgroundColor: 'rgba(255, 255, 255, 0.8)', 
+        borderRadius: 10,
+        width: 20,
+        height: 20,
+        justifyContent: 'center',
+        alignItems: 'center'
+    },
+    coverLabelSmall: {
+        position: 'absolute',
+        bottom: 0, left: 0, right: 0,
+        backgroundColor: 'rgba(76, 175, 80, 0.85)', // Green background for cover
+        paddingVertical: 2,
+    },
+    coverLabelText: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 'bold',
+        textAlign: 'center'
+    },
+    noMediaText: {
+        fontSize: 14,
+        color: '#888',
+        textAlign: 'center',
+        paddingVertical: 20,
+        paddingHorizontal: 5,
+    },
+    mediaButtonsContainer: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        marginTop: 10,
+        paddingHorizontal: 5,
+    },
+    mediaButton: {
+        flex: 1,
+        marginHorizontal: 5,
+    },
+   // --- Style for Platform Image (Added by previous edit, keep this) --- 
+  platformImage: {
+      width: '60%', // Adjust size as needed
+      height: '60%', // Adjust size as needed
+      marginBottom: 10, 
+  },
+  platformImageDeselected: {
+      opacity: 1, // Make deselected images slightly faded
+  },
+  platformIconPlaceholder: { // Placeholder style if image fails to load
+      width: 40,
+      height: 40,
+      backgroundColor: '#eee',
+      borderRadius: 5,
+      marginBottom: 10,
+  },
+  // --- End Platform Image Style ---
 });
+
+// --- Platform Images Map --- 
+// Adjust paths based on your actual asset location
+const platformImageMap: { [key: string]: any } = {
+    shopify: require('../../src/assets/shopify.png'),
+    amazon: require('../../src/assets/amazon.png'),
+    facebook: require('../../src/assets/facebook.png'),
+    ebay: require('../../src/assets/ebay.png'),
+    clover: require('../../src/assets/clover.png'),
+    square: require('../../src/assets/square.png'),
+};
+// --- End Platform Images Map ---
