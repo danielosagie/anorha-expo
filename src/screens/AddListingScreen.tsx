@@ -92,42 +92,56 @@ interface BackendAnalysisResponse {
   message?: string; 
 }
 
-interface GeneratedPlatformDetails {
+// UPDATED Frontend interface to match Backend's GeneratedPlatformSpecificDetails
+interface GeneratedPlatformDetails { // Keep frontend name consistent for now, map backend structure here
   title?: string;
-  description?: string;
-  price?: number | { amount?: number; currency?: string }; // Handle both number and object
-  category?: string;
-  tags?: string[] | string; // Handle array or comma-separated string
+  description?: string; // Should be detailed, potentially HTML or Markdown if requested
+  price?: number; // Primary price suggestion in USD
+  compareAtPrice?: number; // Optional compare-at price in USD
+  categorySuggestion?: string; // Text suggestion (e.g., "Men's T-shirts", "Home Decor > Vases") - Not an ID
+  tags?: string[] | string; // Array preferred, but handle string
   weight?: number;
-  weightUnit?: string; // Or weight_unit
-  bullet_points?: string[]; 
-  search_terms?: string[]; 
-  // Add other potential fields from LLM or platform specs
-  status?: string; // Shopify
-  vendor?: string; // Shopify
-  locations?: string; // Square (simple text for now)
-  gtin?: string; // Square
-  condition?: string; // eBay, Amazon, FB
-  listingFormat?: string; // eBay
-  duration?: string; // eBay
-  dispatchTime?: string; // eBay
-  returnPolicy?: string; // eBay
-  shippingService?: string; // eBay
-  itemLocationPostalCode?: string; // eBay
-  productType?: string; // Amazon
-  productIdType?: string; // Amazon
-  brand?: string; // Amazon, FB
-  availability?: string; // FB
-  // Add Compare At Price if LLM might return it
-  compareAtPrice?: number;
+  weightUnit?: string; // e.g., "kg", "lb"
+  // Common fields expanded
+  brand?: string;
+  condition?: string; // e.g., "New", "Used - Like New" (Suggest based on image/context)
+  // Platform-specific suggestions
+  // Shopify
+  status?: 'active' | 'draft' | 'archived'; // Suggest 'active' or 'draft'
+  vendor?: string;
+  productType?: string; // Shopify's own categorization (matches backend name for Shopify)
+  // Square
+  locations?: string; // Suggest "All Available Locations" or similar placeholder
+  gtin?: string; // Suggest extracting from visual match barcode if possible
+  // eBay
+  listingFormat?: 'FixedPrice' | 'Auction'; // Suggest 'FixedPrice' generally
+  duration?: string; // Suggest 'GTC' (Good 'Til Canceled) for FixedPrice
+  dispatchTime?: string; // Suggest a reasonable default like "1 business day"
+  returnPolicy?: string; // Suggest a basic return policy text
+  shippingService?: string; // Suggest a common domestic service like "USPS Ground Advantage"
+  itemLocationPostalCode?: string; // Try to infer if possible, otherwise leave null
+  itemSpecifics?: { [key: string]: string }; // Suggest common specifics like Size, Color, Material based on image/context
+  // Amazon
+  bullet_points?: string[]; // Suggest 3-5 key feature bullet points
+  search_terms?: string[]; // Suggest relevant keywords
+  amazonProductType?: string; // Renamed on frontend (maps to backend's productType for Amazon)
+  productIdType?: 'UPC' | 'EAN' | 'GTIN' | 'ASIN'; // Suggest based on visual match barcode or if it looks like an existing product
+  // Facebook Marketplace
+  availability?: 'in stock' | 'limited stock' | 'out of stock'; // Suggest 'in stock'
+  // Allow for other potential fields
+  [key: string]: any;
 }
 
+// UPDATED Frontend interface to match Backend's GeneratedDetails
 interface GenerateDetailsResponse {
-  productId: string;
-  variantId: string;
+  // The backend response structure might not include productId/variantId at the top level
+  // The core part is the mapping of platforms to their details.
   generatedDetails: {
-    [platformKey: string]: GeneratedPlatformDetails;
+      [platformKey: string]: GeneratedPlatformDetails; // Use updated details interface
   };
+  // Include productId/variantId if the backend still sends them, otherwise remove
+  productId?: string; // Optional: Check if backend still includes this
+  variantId?: string; // Optional: Check if backend still includes this
 }
 
 interface ImageInfo {
@@ -152,68 +166,66 @@ interface CameraSectionProps {
 }
 
 
-// --- UN-NESTED CameraSection Component (Using expo-camera) --- //
+// --- UN-NESTED CameraSection Component (Placeholder) --- //
 const CameraSection = ({ onCapture, onClose, styles, initialMedia = [] }: CameraSectionProps) => {
-    // State and functions will be moved out
-    // const [cameraPermission, setCameraPermission] = useState<boolean | null>(null);
-    // const [facing, setFacing] = useState<CameraType>("back");
-    // const [capturedMedia, setCapturedMedia] = useState<CapturedMediaItem[]>(
-    //     initialMedia.map((item, index) => ({ ...item, id: item.uri + index }))
-    // );
-    // const [cameraMode, setCameraMode] = useState<"picture" | "video">("picture");
-    // const [recording, setRecording] = useState(false);
-    // const [flash, setFlash] = useState<FlashMode>("off");
-    // const cameraRef = useRef<CameraView>(null);
-    // const theme = useTheme(); // DEBUG: Commented out
-  
-    // useEffect(() => {
-    //     (async () => {
-    //         const cameraPermissionResponse = await Camera.requestCameraPermissionsAsync();
-    //         const microphonePermissionResponse = await Camera.requestMicrophonePermissionsAsync();
-    //         setCameraPermission(cameraPermissionResponse.status === "granted" && microphonePermissionResponse.status === "granted");
-    //     })();
-    // }, []);
-
-    // const takePicture = async () => { ... };
-    // const startRecording = async () => { ... };
-    // const stopRecording = () => { ... };
-    // const pickMedia = async () => { ... };
-    // const toggleCameraMode = () => setCameraMode(current => current === "picture" ? "video" : "picture");
-    // const toggleFlash = () => setFlash(current => current === 'off' ? 'on' : current === 'on' ? 'auto' : 'off');
-    // const toggleCameraFacing = () => setFacing(current => current === "back" ? "front" : "back");
-    // const saveAndClose = () => { ... };
-    // const deleteMedia = (idToDelete: string) => { ... };
-    // const onDragEnd = ({ data }: { data: CapturedMediaItem[] }) => { ... };
-    // const renderDraggableItem = ({ item, drag, isActive }: RenderItemParams<CapturedMediaItem>) => { ... };
-    // const getFlashIcon = () => flash === 'on' ? 'flash' : flash === 'auto' ? 'flash-auto' : 'flash-off';
-
-    // Keep the render logic for now, it will be adapted later
-    // if (cameraPermission === null) return ( ... );
-    // if (!cameraPermission) return ( ... );
-
     return (
-        // Keep placeholder return for now
         <View><Text>Camera Section Placeholder</Text></View> 
     );
 };
 
+// --- Sample Data for Debugging ---
+const DEBUG_SAMPLE_FORM_DATA = {
+    shopify: {
+        title: "DEBUG Sample T-Shirt",
+        description: "This is a debug description for a sample Shopify product. 100% Cotton.",
+        price: 25.99,
+        compareAtPrice: 29.99,
+        categorySuggestion: "Apparel & Accessories > Clothing > Shirts & Tops",
+        tags: ["debug", "sample", "cotton"],
+        weight: 0.2,
+        weightUnit: "kg",
+        brand: "DebugBrand",
+        condition: "New",
+        status: "active" as const, // Use 'as const' to help TS infer literal type
+        vendor: "DebugBrand",
+        productType: "T-Shirt"
+      },
+    amazon: {
+        title: "DEBUG Brand Sample Cotton T-Shirt (Amazon)",
+        description: "Debug description for Amazon. High quality sample.",
+        price: 24.99,
+        compareAtPrice: undefined, // FIXED: Changed null to undefined
+        categorySuggestion: "Clothing, Shoes & Jewelry > Men > Clothing > Shirts > T-Shirts",
+        weight: 0.2,
+        weightUnit: "kg",
+        brand: "DebugBrand",
+        condition: "New",
+        bullet_points: ["100% Sample Cotton", "Debug Feature 1", "Debug Feature 2"],
+        search_terms: ["debug tee", "sample t-shirt", "cotton shirt"],
+        amazonProductType: "SHIRT",
+        productIdType: undefined // Also ensure this matches (undefined is fine if optional)
+      }
+};
+// --- End Sample Data ---
 
 // --- Main Component --- //
 const AddListingScreen = () => {
-  console.log("[AddListingScreen] Component Mounted"); 
+  console.log("[AddListingScreen] Component Mounted");
   // const theme = useTheme(); // DEBUG: Commented out
   const [currentStage, setCurrentStage] = useState<ListingStage>(ListingStage.PlatformSelection);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
-  const [images, setImages] = useState<ImageInfo[]>([]);
+  // const [images, setImages] = useState<ImageInfo[]>([]); // Keep commented out if not used
   const [capturedMedia, setCapturedMedia] = useState<CapturedMediaItem[]>([]);
   const [coverImageIndex, setCoverImageIndex] = useState<number>(-1);
-  const [showCameraSection, setShowCameraSection] = useState(false); // Keep this for now
+  const [showCameraSection, setShowCameraSection] = useState(false);
   const [analysisResponse, setAnalysisResponse] = useState<BackendAnalysisResponse | null>(null);
-  const [generationResponse, setGenerationResponse] = useState<GenerateDetailsResponse | null>(null);
-  const [formData, setFormData] = useState<GenerateDetailsResponse['generatedDetails'] | null>(null);
+  // UPDATED State type
+  const [generationResponse, setGenerationResponse] = useState<GenerateDetailsResponse['generatedDetails'] | null>(null); // Store only the details part
+  // UPDATED State type
+  const [formData, setFormData] = useState<GenerateDetailsResponse['generatedDetails'] | null>(null); // Holds the editable form data based on the new structure
   const [productId, setProductId] = useState<string | null>(null);
   const [variantId, setVariantId] = useState<string | null>(null);
   const [uploadedImageUrls, setUploadedImageUrls] = useState<string[]>([]);
@@ -235,8 +247,7 @@ const AddListingScreen = () => {
   // --- NEW State for Publish Modal ---
   const [isPublishModalVisible, setIsPublishModalVisible] = useState(false);
 
-  // Define the limit in bytes (4MB, as requested)
-  const IMAGE_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024; 
+  const IMAGE_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
 
   // --- Upload Function --- //
   const uploadImagesToSupabase = async (
@@ -385,7 +396,7 @@ const AddListingScreen = () => {
     return uploadedUrls;
   };
 
-  // --- Camera Functions (Moved from CameraSection) --- //
+  // --- Camera Functions --- //
   const takePicture = async () => {
       if (cameraRef.current && capturedMedia.length < 10) {
           try {
@@ -713,111 +724,102 @@ const AddListingScreen = () => {
       }
   };
 
-  // UPDATED triggerDetailsGeneration to use selectedMatchForGeneration state and clean the match data
-  const triggerDetailsGeneration = async () => { 
-    // Check if Product/Variant IDs are available BEFORE proceeding
+  // UPDATED triggerDetailsGeneration - Response handling adjusted
+  const triggerDetailsGeneration = async () => {
+    // ... (Initial checks for productId, variantId, auth etc. remain the same) ...
     if (!productId || !variantId) {
         Alert.alert("Missing Information", "Product or Variant ID is missing. Cannot generate details. Please try analyzing the image again.");
         setError("Internal error: Missing Product/Variant ID.");
-        setCurrentStage(ListingStage.ImageInput); 
+        setCurrentStage(ListingStage.ImageInput);
         return;
     }
     if (uploadedImageUrls.length === 0) { Alert.alert("Internal Error", "Missing uploaded image URLs."); setCurrentStage(ListingStage.ImageInput); return; }
-    
-    const coverImageIndexForApi = 0; 
-    
-    setError(null); 
+
+    const coverImageIndexForApi = 0;
+
+    setError(null);
     setCurrentStage(ListingStage.Generating);
-    setIsLoading(true); 
+    setIsLoading(true);
     setLoadingMessage('Generating details...');
 
-    // ... (Get User ID and Auth Token) ...
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    // ... (Get User ID and Auth Token - same as before) ...
+     const { data: { user }, error: userError } = await supabase.auth.getUser();
+     const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
 
-    if (userError || !user || sessionError || !sessionData?.session?.access_token) {
-         console.error("Auth error during generation trigger:", {userError, sessionError});
-         setError("Authentication error. Please log out and back in.");
-         setIsLoading(false); setLoadingMessage(''); 
-         setCurrentStage(ListingStage.VisualMatch); 
-         return;
-    }
-    const userId = user.id;
-    const token = sessionData.session.access_token;
+     if (userError || !user || sessionError || !sessionData?.session?.access_token) {
+          console.error("Auth error during generation trigger:", {userError, sessionError});
+          setError("Authentication error. Please log out and back in.");
+          setIsLoading(false); setLoadingMessage('');
+          setCurrentStage(ListingStage.VisualMatch);
+          return;
+     }
+     const userId = user.id;
+     const token = sessionData.session.access_token;
 
-    // --- Clean the selected match (AGAIN) to EXCLUDE price --- 
-    let cleanedSelectedMatch: Partial<VisualMatch> | null = null;
-    if (selectedMatchForGeneration) {
-        cleanedSelectedMatch = {
-            position: selectedMatchForGeneration.position,
-            title: selectedMatchForGeneration.title,
-            link: selectedMatchForGeneration.link,
-            source: selectedMatchForGeneration.source,
-            // EXCLUDED: price: selectedMatchForGeneration.price
-        };
-        console.log("Cleaned selected match for API (v2 - no price):", cleanedSelectedMatch);
-    }
-    // --- End Cleaning ---
+    // ... (Clean selected match - same as before) ...
+     let cleanedSelectedMatch: Partial<VisualMatch> | null = null;
+     if (selectedMatchForGeneration) {
+         cleanedSelectedMatch = {
+             position: selectedMatchForGeneration.position,
+             title: selectedMatchForGeneration.title,
+             link: selectedMatchForGeneration.link,
+             source: selectedMatchForGeneration.source,
+         };
+         console.log("Cleaned selected match for API:", cleanedSelectedMatch);
+     }
 
-    // --- Prepare Request --- 
-    const generateApiUrl = `https://sssync-bknd-production.up.railway.app/products/generate-details?userId=${userId}`;
-    const requestBodyGenerate = { 
-        productId: productId, 
-        variantId: variantId, 
-        imageUris: uploadedImageUrls, 
-        coverImageIndex: coverImageIndexForApi,
-        selectedPlatforms: selectedPlatforms, 
-        selectedMatch: cleanedSelectedMatch // Use the newly cleaned object
-    };
-    
-     const headers = { 
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      };
+    // ... (Prepare Request Body - same as before) ...
+     const generateApiUrl = `https://sssync-bknd-production.up.railway.app/products/generate-details?userId=${userId}`;
+     const requestBodyGenerate = {
+         productId: productId,
+         variantId: variantId,
+         imageUris: uploadedImageUrls,
+         coverImageIndex: coverImageIndexForApi,
+         selectedPlatforms: selectedPlatforms,
+         selectedMatch: cleanedSelectedMatch
+     };
 
-    console.log(`Attempting to POST to: ${generateApiUrl}`);
-    console.log("Request Headers (Generate):", { ...headers, Authorization: 'Bearer [REDACTED]' });
-    console.log("Request Body (Generate):", JSON.stringify(requestBodyGenerate));
+      const headers = {
+         'Content-Type': 'application/json',
+         'Authorization': `Bearer ${token}`
+       };
+
+     console.log(`Attempting to POST to: ${generateApiUrl}`);
+     console.log("Request Headers (Generate):", { ...headers, Authorization: 'Bearer [REDACTED]' });
+     console.log("Request Body (Generate):", JSON.stringify(requestBodyGenerate));
+
 
     try {
       const response = await fetch(generateApiUrl, {
-        method: 'POST', 
-        headers: headers, 
+        method: 'POST',
+        headers: headers,
         body: JSON.stringify(requestBodyGenerate),
       });
-      
-      let responseData: any; 
-      try { 
-          if (response.status === 204) {
-              responseData = null; 
-          } else if (response.headers.get('content-type')?.includes('application/json')) {
-             responseData = await response.json(); 
-          } else {
+
+      // ... (Response parsing - same as before, but expect new structure inside responseData) ...
+      let responseData: any;
+      try {
+          if (response.status === 204) { responseData = null; }
+          else if (response.headers.get('content-type')?.includes('application/json')) { responseData = await response.json(); }
+          else {
              const textResponse = await response.text();
              console.warn(`Generation API returned non-JSON response (Status ${response.status}): ${textResponse}`);
-             responseData = null; 
+             responseData = null;
           }
-      } 
-      catch (jsonError) { 
+      }
+      catch (jsonError) {
           console.error("Error parsing JSON response from generation API:", jsonError);
-          throw new Error(`Failed to parse response from generation API (Status: ${response.status})`); 
+          throw new Error(`Failed to parse response from generation API (Status: ${response.status})`);
       }
 
-      if (!response.ok) { 
-          console.error("Generation API Error Response Body:", responseData);
-          let msg = `HTTP error! status: ${response.status}`;
-          if (responseData?.message && typeof responseData.message === 'string') { 
-              msg = responseData.message; 
-          } else if (response.status === 401) {
-              msg = "Unauthorized. Please ensure you are logged in.";
-          } else if (response.status === 400) {
-              if (responseData?.message && Array.isArray(responseData.message)) {
-                  msg = `Invalid input: ${responseData.message.join(', ')}`;
-              } else {
-                   msg = "Invalid input provided to generate details.";
-              }
-          }
-          throw new Error(msg); 
+
+      if (!response.ok) {
+          // ... (Error handling - same as before) ...
+           console.error("Generation API Error Response Body:", responseData);
+           let msg = `HTTP error! status: ${response.status}`;
+           if (responseData?.message && typeof responseData.message === 'string') { msg = responseData.message; }
+           // ... other status code checks ...
+           throw new Error(msg);
       }
 
       if (!responseData) {
@@ -825,71 +827,105 @@ const AddListingScreen = () => {
           throw new Error("Received no details from generation API.");
       }
 
-      // --- UPDATED Validation Logic --- 
-      // Only validate the structure we expect based on docs/actual response
-      const generationData = responseData as Partial<GenerateDetailsResponse>; // Use Partial since we don't expect productId/variantId
-      console.log("Generation Response:", JSON.stringify(generationData, null, 2));
-      
-      // Check if generatedDetails exists and is an object (can be empty {} which is valid)
-      if (typeof generationData.generatedDetails !== 'object' || generationData.generatedDetails === null) { 
-          console.error("Invalid or missing 'generatedDetails' object in generation API response:", generationData);
-          throw new Error("Invalid response structure from generation API (missing generatedDetails).");
-      }
-      // --- End UPDATED Validation Logic --- 
-      
-      // Cast to the expected type for state update (assuming the structure is now validated)
-      setGenerationResponse(generationData as GenerateDetailsResponse); 
-      setFormData(generationData.generatedDetails || {}); 
-      setActiveFormTab(selectedPlatforms[0] || null);
-      console.log("[triggerDetailsGeneration] Successfully processed response. Setting stage to FormReview.");
-      setCurrentStage(ListingStage.FormReview); 
+       // --- Validation Logic ---
+       // Backend now directly returns the details object { platform: GeneratedPlatformSpecificDetails }
+       // FIXED: Access the nested generatedDetails object from the response
+       const generatedData = responseData?.generatedDetails as GenerateDetailsResponse['generatedDetails'];
+       console.log("Generation Response (Details Map):", JSON.stringify(generatedData, null, 2));
+
+       // Check if generatedDetails is an object (can be empty {} which is valid)
+       if (typeof generatedData !== 'object' || generatedData === null) {
+           // Add check for the outer key as well
+           console.error("Invalid response structure from generation API (expected { generatedDetails: { ... } } ). Raw response:", responseData);
+           throw new Error("Invalid response structure from generation API.");
+       }
+
+       // Basic validation: Check if all requested platforms have a key
+       let allPlatformsPresent = true;
+       for (const platform of selectedPlatforms) {
+           const platformKey = platform.toLowerCase(); // Ensure lowercase comparison
+           if (!generatedData[platformKey]) {
+               console.warn(`Generation response missing expected top-level key for platform: ${platformKey}`);
+               allPlatformsPresent = false;
+               // Optionally create an empty object for robustness downstream
+               generatedData[platformKey] = {};
+           }
+       }
+       // --- End Validation Logic ---
+
+      // Update state with the received details map
+      setGenerationResponse(generatedData); // Set the map directly
+      setFormData(generatedData); // Initialize form data with the received map
+      // FIXED: Set active tab based on the actual keys received
+      const firstReceivedPlatformKey = Object.keys(generatedData)[0];
+      setActiveFormTab(firstReceivedPlatformKey || null); // Ensure tab key matches received data
+      console.log(`[triggerDetailsGeneration] Successfully processed response. Setting active tab to: ${firstReceivedPlatformKey}. Setting stage to FormReview.`);
+      setCurrentStage(ListingStage.FormReview);
       setError(null);
 
     } catch (err: any) {
         console.error("[triggerDetailsGeneration] Details generation failed:", err);
         setError(`Generation Failed: ${err.message || 'Unknown error'}`);
-        // Explicitly log BEFORE setting stage
         console.log("[triggerDetailsGeneration] Error occurred. Setting stage back to VisualMatch.");
         setCurrentStage(ListingStage.VisualMatch); // Fallback to VisualMatch
     } finally {
-         setIsLoading(false); 
+         setIsLoading(false);
          setLoadingMessage('');
-     } 
+     }
   };
-  
-  // UPDATED handleFormUpdate to handle nested price and potential arrays
+
+
+  // UPDATED handleFormUpdate to handle new structure and types
   const handleFormUpdate = (platform: string, field: keyof GeneratedPlatformDetails, value: any) => {
-    setFormData(prevData => { 
-      if (!prevData) return null;
-      const platformData = prevData[platform] || {};
-      let updatedValue = value;
+      setFormData(prevData => {
+          if (!prevData) return null;
+          const platformData = prevData[platform] || {};
+          let updatedValue = value;
 
-      // Handle nested Square price
-      if (platform === 'square' && field === 'price' && typeof platformData.price === 'object' && platformData.price !== null) {
-          // Attempt to parse the input as a number for amount
-          const amount = parseFloat(value);
-          updatedValue = { 
-              ...platformData.price, 
-              amount: isNaN(amount) ? undefined : amount // Store number or undefined
+          // --- Handle Specific Field Types ---
+          // Numeric fields
+          if (field === 'price' || field === 'compareAtPrice' || field === 'weight') {
+              const numValue = parseFloat(value);
+              updatedValue = isNaN(numValue) ? undefined : numValue;
+          }
+          // Array fields (from comma-separated string input)
+          else if (field === 'tags' || field === 'bullet_points' || field === 'search_terms') {
+              if (typeof value === 'string') {
+                  // Split by comma, trim whitespace, filter empty strings
+                  updatedValue = value.split(',').map(s => s.trim()).filter(s => s.length > 0);
+              } else {
+                  updatedValue = Array.isArray(value) ? value : []; // Keep as array if already is, else empty array
+              }
+          }
+          // Object field (itemSpecifics) - Handle as JSON string for now
+          else if (field === 'itemSpecifics') {
+              if (typeof value === 'string') {
+                   try {
+                        // Try to parse to ensure it's valid JSON, but store the string
+                        JSON.parse(value);
+                        updatedValue = value; // Store the string if it's valid JSON
+                    } catch (e) {
+                        // If invalid JSON string, maybe keep the invalid string or clear it?
+                        // Keeping the string allows user to fix it.
+                         updatedValue = value;
+                         console.warn("Invalid JSON entered for itemSpecifics:", value);
+                   }
+              } else if (typeof value === 'object' && value !== null) {
+                    updatedValue = JSON.stringify(value, null, 2); // Convert object back to string for input display
+              } else {
+                  updatedValue = '{}'; // Default to empty object string if invalid type
+              }
+          }
+          // --- End Handle Specific Field Types ---
+
+          return {
+              ...prevData,
+              [platform]: {
+                  ...(platformData),
+                  [field]: updatedValue
+              }
           };
-      } else if (field === 'price' || field === 'compareAtPrice' || field === 'weight') {
-          // Handle regular numeric fields
-          const numValue = parseFloat(value);
-          updatedValue = isNaN(numValue) ? undefined : numValue;
-      } else if (field === 'tags' && typeof value === 'string') {
-          // Keep tags as comma-separated string in the input, backend/publish logic will handle splitting
-          updatedValue = value;
-      }
-      // Add handling for other specific field types if necessary
-
-      return { 
-          ...prevData, 
-          [platform]: { 
-              ...(platformData), 
-              [field]: updatedValue 
-          } 
-      };
-    });
+      });
   };
 
   const handleSaveDraft = async () => { console.log("Saving Draft...", { productId, variantId, formData }); Alert.alert("Draft Saved (Logged)", "API call not implemented."); };
@@ -942,307 +978,309 @@ const AddListingScreen = () => {
 
   // --- Helper Render Functions ---
   const renderLoading = (message: string) => {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={'#294500'} />
-        <Text style={styles.loadingText}>{message}</Text>
-      </View>
-    );
+      // Restore original loading component
+      return (
+          <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={'#294500'} />
+              <Text style={styles.loadingText}>{message}</Text>
+          </View>
+      );
   };
+
+  // --- Temporary Debug Skip Function ---
+  const debugSkipToFormReview = () => {
+    console.log("[DEBUG] Skipping to Form Review with sample data...");
+    // FIXED: Explicitly cast sample data to the expected type
+    // NOTE: Casting might hide other subtle type issues, but needed here for state setter.
+    setFormData(DEBUG_SAMPLE_FORM_DATA as unknown as GenerateDetailsResponse['generatedDetails']);
+    // Set platforms that exist in sample data
+    setSelectedPlatforms(Object.keys(DEBUG_SAMPLE_FORM_DATA));
+    setActiveFormTab('shopify'); // Set initial tab to shopify from sample
+    setCurrentStage(ListingStage.FormReview);
+    setIsLoading(false); // Ensure loading is off
+    setError(null); // Clear any previous errors
+  };
+  // --- End Debug Skip Function ---
 
   // --- Main Stage Render Functions ---
   const renderPlatformSelection = () => {
-    console.log("[AddListingScreen] Rendering Platform Selection Stage");
-    return (
-      <Animated.View style={styles.stageContainer} entering={FadeIn}>
-        <Text style={styles.stageTitle}>Select Platforms</Text>
-        <Text style={styles.stageSubtitle}>Choose where you want to list this product.</Text>
-        <View style={styles.platformGrid}>
-          {AVAILABLE_PLATFORMS.map((platform) => {
-            const isSelected = selectedPlatforms.includes(platform.key);
-            const imageSource = platformImageMap[platform.key]; // Get image source from map
-            return (
-              <TouchableOpacity 
-                 key={platform.key} 
-                 style={[styles.platformCard, isSelected && styles.platformCardSelected]} 
-                 onPress={() => togglePlatformSelection(platform.key)}
-                 activeOpacity={0.7} // Add feedback
-              >
-                {/* Replace Icon with Image */}
-                {imageSource ? (
-                    <Image 
-                        source={imageSource} 
-                        style={[styles.platformImage, !isSelected && styles.platformImageDeselected]} // Apply base and conditional style
-                        resizeMode="contain" // Ensure image fits well
-                    />
-                 ) : (
-                    // Fallback if image not found
-                    <View style={styles.platformIconPlaceholder} />
-                 )}
-                <Text style={[styles.platformName, isSelected && styles.platformNameSelected]}>{platform.name}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-        <Button title={`Next: Add Media (${selectedPlatforms.length})`} onPress={handlePlatformsSelected} style={styles.bottomButton} disabled={selectedPlatforms.length === 0}/>
-      </Animated.View>
-    );
+      console.log("[AddListingScreen] Rendering Platform Selection Stage");
+      return (
+          <Animated.View style={styles.stageContainer} entering={FadeIn}>
+               {/* --- DEBUG BUTTON --- */}
+              <Button title="DEBUG: Skip to Form Review" onPress={debugSkipToFormReview} style={{ marginVertical: 10, backgroundColor: 'orange' }} />
+              {/* --- END DEBUG BUTTON --- */}
+              <Text style={styles.stageTitle}>Select Platforms</Text>
+              <Text style={styles.stageSubtitle}>Choose where you want to list this product.</Text>
+              <View style={styles.platformGrid}>
+                  {AVAILABLE_PLATFORMS.map((platform) => {
+                      const isSelected = selectedPlatforms.includes(platform.key);
+                      const imageSource = platformImageMap[platform.key]; // Get image source from map
+                      return (
+                          <TouchableOpacity
+                              key={platform.key}
+                              style={[styles.platformCard, isSelected && styles.platformCardSelected]}
+                              onPress={() => togglePlatformSelection(platform.key)}
+                              activeOpacity={0.7}
+                          >
+                              {imageSource ? (
+                                  <Image
+                                      source={imageSource}
+                                      style={[styles.platformImage, !isSelected && styles.platformImageDeselected]}
+                                      resizeMode="contain"
+                                  />
+                              ) : (
+                                  <View style={styles.platformIconPlaceholder} />
+                              )}
+                              <Text style={[styles.platformName, isSelected && styles.platformNameSelected]}>{platform.name}</Text>
+                          </TouchableOpacity>
+                      );
+                  })}
+              </View>
+              <Button title={`Next: Add Media (${selectedPlatforms.length})`} onPress={handlePlatformsSelected} style={styles.bottomButton} disabled={selectedPlatforms.length === 0}/>
+          </Animated.View>
+      );
   };
 
-  // REVISED renderImageInput (Camera Integrated)
   const renderImageInput = () => {
-    console.log("[AddListingScreen] Rendering Image Input Stage (Camera Integrated)");
-    // --- Permission Handling ---
-    if (!cameraPermission) {
-      return (
-        <View style={styles.centeredMessageContainer}>
-          <ActivityIndicator size="large" color={'#294500'} />
-          <Text style={styles.centeredMessageText}>Initializing Camera...</Text>
-        </View>
-      );
-    }
-    if (!cameraPermission.granted) {
-      return (
-        <View style={styles.centeredMessageContainer}>
-          <Icon name="camera-off-outline" size={50} color="#FF5252" />
-          <Text style={styles.centeredMessageText}>Camera permission is required to add media.</Text>
-          <Button title="Grant Permission" onPress={requestPermission} style={{marginTop: 20}} />
-          <Button title="Back to Platforms" onPress={() => setCurrentStage(ListingStage.PlatformSelection)} outlined style={{marginTop: 10}}/>
-        </View>
-      );
-    }
-
-    // --- Draggable Item Renderer ---
-    const renderDraggableMediaItem = ({ item, drag, isActive }: RenderItemParams<CapturedMediaItem>) => {
-      const isCover = capturedMedia[coverImageIndex]?.id === item.id;
-      return (
-        <ScaleDecorator>
-          <TouchableOpacity
-            style={[
-              styles.previewImageContainer, 
-              isActive && styles.previewImageContainerActive,
-              isCover && styles.previewImageCover 
-            ]}
-            onPress={() => handleSetCover(capturedMedia.findIndex(m => m.id === item.id))}
-            onLongPress={drag}
-            disabled={isActive}
-            activeOpacity={0.9}
-          >
-            <Image source={{ uri: item.uri }} style={styles.previewImage} />
-            {item.type === 'video' && (
-              <View style={styles.videoIndicatorPreview}><Icon name="play-circle" size={18} color={'white'} /></View>
-            )}
-            <TouchableOpacity style={styles.deleteMediaButton} onPress={() => handleRemoveMedia(item.id)}>
-              <Icon name="close-circle" size={20} color="#FF5252" />
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </ScaleDecorator>
-      );
-    };
-
-    // --- Main Camera View Layout ---
-    return (
-      <View style={styles.cameraStageContainer}>
-        <CameraView ref={cameraRef} style={styles.cameraPreview} facing={facing} flash={flash} mode={cameraMode}>
-          <View style={styles.cameraHeader}>
-            {/* ... flash/switch buttons ... */}
-            <TouchableOpacity onPress={toggleFlash} style={styles.headerButton} disabled={facing === 'front'}>
-              <Icon name={getFlashIcon()} size={24} color={facing === 'front' ? 'grey' : 'white'} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={toggleCameraFacing} style={styles.headerButton}>
-              <Icon name="camera-switch-outline" size={24} color="white" />
-            </TouchableOpacity>
+       // Restore original ImageInput rendering logic (Camera Integrated)
+       console.log("[AddListingScreen] Rendering Image Input Stage (Camera Integrated)");
+      // --- Permission Handling ---
+      if (!cameraPermission) {
+          return (
+          <View style={styles.centeredMessageContainer}>
+            <ActivityIndicator size="large" color={'#294500'} />
+            <Text style={styles.centeredMessageText}>Initializing Camera...</Text>
           </View>
-        </CameraView>
-        
-        {capturedMedia.length > 0 && (
-          <View style={styles.previewListContainer}>
-            <DraggableFlatList
-              data={capturedMedia}
-              onDragEnd={({ data }) => {
-                const oldCoverId = capturedMedia[coverImageIndex]?.id;
-                const newIndex = data.findIndex(item => item.id === oldCoverId);
-                setCoverImageIndex(newIndex >= 0 ? newIndex : (data.length > 0 ? 0 : -1));
-                setCapturedMedia(data);
-              }}
-              keyExtractor={(item) => item.id}
-              renderItem={renderDraggableMediaItem}
-              horizontal
-              contentContainerStyle={styles.previewScroll}
-              showsHorizontalScrollIndicator={false}
-            />
-          </View>
-        )}
-        
-        <View style={styles.bottomControlsContainer}>
-          {/* ... Upload, Capture, Barcode buttons ... */}
-          <TouchableOpacity style={styles.sideControlButton} onPress={pickImagesFromLibrary} disabled={capturedMedia.length >= 10}>
-            <Icon name="image-multiple-outline" size={30} color={capturedMedia.length >= 10 ? "grey" : "white"} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.captureButton} onPress={cameraMode === "picture" ? takePicture : (recording ? stopRecording : startRecording)} disabled={capturedMedia.length >= 10}>
-            <View style={[ styles.captureInner, recording && styles.recordingButton, capturedMedia.length >= 10 && styles.captureDisabledInner ]} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.sideControlButton} onPress={() => Alert.alert("Barcode Scanner", "Not implemented yet.")}>
-            <Icon name="barcode-scan" size={30} color="white" />
-          </TouchableOpacity>
-        </View>
+        );
+      }
+      if (!cameraPermission.granted) {
+          return (
+          <View style={styles.centeredMessageContainer}>
+            <Icon name="camera-off-outline" size={50} color="#FF5252" />
+            <Text style={styles.centeredMessageText}>Camera permission is required to add media.</Text>
+            <Button title="Grant Permission" onPress={requestPermission} style={{marginTop: 20}} />
+            <Button title="Back to Platforms" onPress={() => setCurrentStage(ListingStage.PlatformSelection)} outlined style={{marginTop: 10}}/>
+              </View>
+        );
+      }
 
-        <View style={styles.cameraStageHeader}>
-          {/* ... Title/Subtitle overlay ... */}
-          <Text style={styles.stageTitleCamera}>Add Product Media</Text> 
-          <Text style={styles.stageSubtitleCamera}>
-            {capturedMedia.length}/10 items. {capturedMedia.length > 0 ? 'Drag to reorder. Tap preview to set cover.' : 'Use camera or upload.'}
-          </Text>
-        </View>
+      // --- Draggable Item Renderer ---
+      const renderDraggableMediaItem = ({ item, drag, isActive }: RenderItemParams<CapturedMediaItem>) => {
+        const isCover = capturedMedia[coverImageIndex]?.id === item.id;
+        return (
+          <ScaleDecorator>
+            <TouchableOpacity
+                    style={[
+                styles.previewImageContainer,
+                isActive && styles.previewImageContainerActive,
+                isCover && styles.previewImageCover
+              ]}
+              onPress={() => handleSetCover(capturedMedia.findIndex(m => m.id === item.id))}
+              onLongPress={drag}
+              disabled={isActive}
+              activeOpacity={0.9}
+            >
+              <Image source={{ uri: item.uri }} style={styles.previewImage} />
+              {item.type === 'video' && (
+                <View style={styles.videoIndicatorPreview}><Icon name="play-circle" size={18} color={'white'} /></View>
+              )}
+              <TouchableOpacity style={styles.deleteMediaButton} onPress={() => handleRemoveMedia(item.id)}>
+                <Icon name="close-circle" size={20} color="#FF5252" />
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </ScaleDecorator>
+        );
+      };
 
-        <View style={styles.navigationButtonsCamera}>
-          {/* ... Back/Next buttons ... */}
-          <Button title="Back" onPress={() => setCurrentStage(ListingStage.PlatformSelection)} outlined style={styles.navButton} />
-          <Button
-            title={coverImageIndex < 0 && capturedMedia.length > 0 ? "Select Cover" : "Next: Analyze Media"}
-            onPress={triggerImageAnalysis}
-            disabled={capturedMedia.length === 0 || (coverImageIndex < 0 && capturedMedia.length > 0)}
-            style={StyleSheet.flatten([styles.navButton, (capturedMedia.length === 0 || (coverImageIndex < 0 && capturedMedia.length > 0)) ? styles.disabledButton : {}])}
-          />
-        </View>
-      </View>
-    );
+      // --- Main Camera View Layout ---
+          return (
+        <View style={styles.cameraStageContainer}>
+          <CameraView ref={cameraRef} style={styles.cameraPreview} facing={facing} flash={flash} mode={cameraMode}>
+            <View style={styles.cameraHeader}>
+              <TouchableOpacity onPress={toggleFlash} style={styles.headerButton} disabled={facing === 'front'}>
+                <Icon name={getFlashIcon()} size={24} color={facing === 'front' ? 'grey' : 'white'} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={toggleCameraFacing} style={styles.headerButton}>
+                <Icon name="camera-switch-outline" size={24} color="white" />
+              </TouchableOpacity>
+            </View>
+          </CameraView>
+
+          {capturedMedia.length > 0 && (
+            <View style={styles.previewListContainer}>
+              <DraggableFlatList
+                data={capturedMedia}
+                onDragEnd={({ data }) => {
+                  const oldCoverId = capturedMedia[coverImageIndex]?.id;
+                  const newIndex = data.findIndex(item => item.id === oldCoverId);
+                  setCoverImageIndex(newIndex >= 0 ? newIndex : (data.length > 0 ? 0 : -1));
+                  setCapturedMedia(data);
+                }}
+                keyExtractor={(item) => item.id}
+                renderItem={renderDraggableMediaItem}
+                horizontal
+                contentContainerStyle={styles.previewScroll}
+                showsHorizontalScrollIndicator={false}
+              />
+            </View>
+          )}
+
+          <View style={styles.bottomControlsContainer}>
+            <TouchableOpacity style={styles.sideControlButton} onPress={pickImagesFromLibrary} disabled={capturedMedia.length >= 10}>
+              <Icon name="image-multiple-outline" size={30} color={capturedMedia.length >= 10 ? "grey" : "white"} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.captureButton} onPress={cameraMode === "picture" ? takePicture : (recording ? stopRecording : startRecording)} disabled={capturedMedia.length >= 10}>
+              <View style={[ styles.captureInner, recording && styles.recordingButton, capturedMedia.length >= 10 && styles.captureDisabledInner ]} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.sideControlButton} onPress={() => Alert.alert("Barcode Scanner", "Not implemented yet.")}>
+              <Icon name="barcode-scan" size={30} color="white" />
+                          </TouchableOpacity>
+                        </View>
+
+          <View style={styles.cameraStageHeader}>
+            <Text style={styles.stageTitleCamera}>Add Product Media</Text>
+            <Text style={styles.stageSubtitleCamera}>
+              {capturedMedia.length}/10 items. {capturedMedia.length > 0 ? 'Drag to reorder. Tap preview to set cover.' : 'Use camera or upload.'}
+                          </Text>
+                </View>
+
+          <View style={styles.navigationButtonsCamera}>
+            <Button title="Back" onPress={() => setCurrentStage(ListingStage.PlatformSelection)} outlined style={styles.navButton} />
+            <Button
+              title={coverImageIndex < 0 && capturedMedia.length > 0 ? "Select Cover" : "Next: Analyze Media"}
+              onPress={triggerImageAnalysis}
+              disabled={capturedMedia.length === 0 || (coverImageIndex < 0 && capturedMedia.length > 0)}
+              style={StyleSheet.flatten([styles.navButton, (capturedMedia.length === 0 || (coverImageIndex < 0 && capturedMedia.length > 0)) ? styles.disabledButton : {}])}
+                      />
+                    </View>
+                  </View>
+      );
   };
 
-  // Updated RenderVisualMatch with corrected checks
   const renderVisualMatch = () => {
-    console.log("[AddListingScreen] Rendering Visual Match Stage");
-    
-    let visualMatches: VisualMatch[] = [];
-    let parseError: string | null = null;
+      // Restore original VisualMatch rendering logic
+      console.log("[AddListingScreen] Rendering Visual Match Stage");
 
-    // Parse logic (using serpApiResponse state set by triggerImageAnalysis)
-    if (serpApiResponse && Array.isArray(serpApiResponse.visual_matches)) {
-        visualMatches = serpApiResponse.visual_matches;
-    } else if (analysisResponse && analysisResponse.analysis && typeof analysisResponse.analysis.GeneratedText === 'string' && analysisResponse.analysis.GeneratedText !== '{}') {
-        // This case handles if parsing failed in triggerImageAnalysis or if serpApiResponse state update hasn't happened yet
-        // We might already have an error message to show from the parsing attempt
-        // If no prior error, maybe set one now? Or just rely on visualMatches being empty.
-        console.warn("[renderVisualMatch] serpApiResponse state is not set or invalid, but analysisResponse seems to have text.");
-    }
-     // Note: Explicit parsing error handling might be redundant if triggerImageAnalysis handles it,
-     // but keeping it for safety might be good.
-    
-     // Render Loading or Waiting state if analysisResponse is still null
-    if (!analysisResponse) {
-        return (
-            <Animated.View style={styles.stageContainer} entering={FadeIn}>
-                <Text style={styles.stageTitle}>Waiting for Analysis</Text>
-                <ActivityIndicator size="small" color="#666" />
-                <View style={styles.navigationButtons}>
-                    <Button title="Back to Media" onPress={() => setCurrentStage(ListingStage.ImageInput)} outlined style={styles.navButton}/>
-                </View>
-            </Animated.View>
-        );
-    }
+      let visualMatches: VisualMatch[] = [];
+      let parseError: string | null = null; // Keep for potential explicit parse error message
 
-    // Render Error state if parsing previously failed
-    if (parseError) { /* ... Error UI ... */ }
-    
-    const hasMatches = visualMatches.length > 0;
+      if (serpApiResponse && Array.isArray(serpApiResponse.visual_matches)) {
+          visualMatches = serpApiResponse.visual_matches;
+      } else if (analysisResponse && analysisResponse.analysis && typeof analysisResponse.analysis.GeneratedText === 'string' && analysisResponse.analysis.GeneratedText !== '{}') {
+          console.warn("[renderVisualMatch] serpApiResponse state is not set or invalid, but analysisResponse seems to have text.");
+      }
 
-    // --- Render Item for Grid --- 
-    const renderMatchItem = ({ item }: { item: VisualMatch }) => {
-        const isSelected = selectedMatchForGeneration?.position === item.position;
-        return (
-            <TouchableOpacity 
-                style={[styles.matchGridItem, isSelected && styles.matchCardSelected]} // Apply grid item and selected styles
-                onPress={() => handleSelectMatchForGeneration(item)} 
-                activeOpacity={0.7}
-            >
-                <Image source={{ uri: item.thumbnail }} style={styles.matchThumbnailGrid} resizeMode="contain"/>
-                <View style={styles.matchDetailsGrid}>
-                    <Text style={styles.matchTitleGrid} numberOfLines={2}>{item.title || 'No Title'}</Text>
-                    <Text style={styles.matchSourceGrid}>{item.source || 'Unknown Source'}</Text>
-                    {item.price?.value && <Text style={styles.matchPriceGrid}>{item.price.value}</Text>}
-                </View>
-            </TouchableOpacity>
-        );
-    };
-
-    return (
-        <Animated.View style={styles.stageContainer} entering={FadeIn}>
-             <Text style={styles.stageTitle}>{hasMatches ? "Select Best Visual Match" : "No Matches Found"}</Text>
-             <Text style={styles.stageSubtitle}>
-                 {hasMatches 
-                     ? "Tap an item below to select it for context." 
-                     : "We couldn't find similar products online."}
-             </Text>
- 
-             {/* Render Match Grid or No Matches Found Message */} 
-             {hasMatches ? (
-                 <FlatList
-                    data={visualMatches}
-                    renderItem={renderMatchItem}
-                    keyExtractor={(item) => `${item.position}-${item.link}`}
-                    numColumns={2}
-                    style={styles.visualMatchGrid}
-                    contentContainerStyle={styles.visualMatchGridContainer}
-                    ListEmptyComponent={ // Should not be reached if hasMatches is true, but for safety
-                        <View style={styles.centeredInfoContainer}> 
-                            <Icon name="image-search-outline" size={60} color="#ccc" />
-                            <Text style={styles.noMatchText}>No similar items found.</Text>
-                        </View>
-                    }
-                 />
-             ) : (
-                  <View style={styles.centeredInfoContainer}> 
-                      <Icon name="image-search-outline" size={60} color="#ccc" />
-                      <Text style={styles.noMatchText}>No similar items found.</Text>
+      if (!analysisResponse) {
+          return (
+              <Animated.View style={styles.stageContainer} entering={FadeIn}>
+                  <Text style={styles.stageTitle}>Waiting for Analysis</Text>
+                  <ActivityIndicator size="small" color="#666" />
+                  <View style={styles.navigationButtons}>
+                      <Button title="Back to Media" onPress={() => setCurrentStage(ListingStage.ImageInput)} outlined style={styles.navButton}/>
                   </View>
-             )}
-             
-             {/* --- NEW Navigation Buttons --- */} 
-             <View style={styles.navigationButtons}>
-                 {/* Back Button - Always Visible */} 
-                 <Button 
-                      title="Back to Media" 
-                      onPress={() => setCurrentStage(ListingStage.ImageInput)} 
-                      outlined 
-                      style={styles.navButton}
-                 />
-                 
-                 {/* Conditional Buttons based on matches and selection */}
-                 {hasMatches ? (
-                    <> 
-                        <Button 
-                            title="No Matches / Use Images" 
-                            onPress={handleProceedWithoutMatch} 
-                            disabled={!!selectedMatchForGeneration} // Disabled if something IS selected
-                            outlined 
-                            style={StyleSheet.flatten([styles.navButton, !!selectedMatchForGeneration && styles.disabledButton])}
-                        />
-                        <Button 
-                            title={`Generate w/ Selection${selectedMatchForGeneration ? ' (1)' : ''}`}
-                            onPress={triggerDetailsGeneration} 
-                            disabled={!selectedMatchForGeneration} // Disabled if nothing IS selected
-                            style={StyleSheet.flatten([styles.navButton, !selectedMatchForGeneration && styles.disabledButton])}
-                         />
-                    </> 
-                 ) : ( 
-                    // Only show Generate button if NO matches were found initially
-                    <Button 
-                         title="Generate Details from Images" 
-                         onPress={handleProceedWithoutMatch} // Still calls proceed without match
-                         style={styles.navButton} 
-                    />
-                 )}
-             </View>
-         </Animated.View>
-     );
-};
+              </Animated.View>
+          );
+      }
 
-  // --- UPDATED renderFormReview --- 
+      if (parseError) { /* ... Optional Explicit Error UI ... */ }
+
+      const hasMatches = visualMatches.length > 0;
+
+      const renderMatchItem = ({ item }: { item: VisualMatch }) => {
+          const isSelected = selectedMatchForGeneration?.position === item.position;
+          return (
+              <TouchableOpacity
+                  style={[styles.matchGridItem, isSelected && styles.matchCardSelected]}
+                  onPress={() => handleSelectMatchForGeneration(item)}
+                  activeOpacity={0.7}
+              >
+                  <Image source={{ uri: item.thumbnail }} style={styles.matchThumbnailGrid} resizeMode="contain"/>
+                  <View style={styles.matchDetailsGrid}>
+                      <Text style={styles.matchTitleGrid} numberOfLines={2}>{item.title || 'No Title'}</Text>
+                      <Text style={styles.matchSourceGrid}>{item.source || 'Unknown Source'}</Text>
+                      {item.price?.value && <Text style={styles.matchPriceGrid}>{item.price.value}</Text>}
+                  </View>
+              </TouchableOpacity>
+          );
+      };
+
+      return (
+          <Animated.View style={styles.stageContainer} entering={FadeIn}>
+               <Text style={styles.stageTitle}>{hasMatches ? "Select Best Visual Match" : "No Matches Found"}</Text>
+               <Text style={styles.stageSubtitle}>
+                   {hasMatches
+                       ? "Tap an item below to select it for context."
+                       : "We couldn't find similar products online."}
+               </Text>
+
+               {hasMatches ? (
+                   <FlatList
+                      data={visualMatches}
+                      renderItem={renderMatchItem}
+                      keyExtractor={(item) => `${item.position}-${item.link}`}
+                      numColumns={2}
+                      style={styles.visualMatchGrid}
+                      contentContainerStyle={styles.visualMatchGridContainer}
+                      ListEmptyComponent={ (
+                          <View style={styles.centeredInfoContainer}>
+                              <Icon name="image-search-outline" size={60} color="#ccc" />
+                              <Text style={styles.noMatchText}>No similar items found.</Text>
+                          </View>
+                      )}
+                   />
+               ) : (
+                    <View style={styles.centeredInfoContainer}>
+                        <Icon name="image-search-outline" size={60} color="#ccc" />
+                        <Text style={styles.noMatchText}>No similar items found.</Text>
+                  </View>
+               )}
+
+               <View style={styles.navigationButtons}>
+                   <Button
+                        title="Back to Media"
+                        onPress={() => setCurrentStage(ListingStage.ImageInput)}
+                        outlined
+                        style={styles.navButton}
+                   />
+
+                   {hasMatches ? (
+                      <>
+                          <Button
+                              title="No Matches / Use Images"
+                              onPress={handleProceedWithoutMatch}
+                              disabled={!!selectedMatchForGeneration} // Disabled if something IS selected
+                              outlined
+                              style={StyleSheet.flatten([styles.navButton, !!selectedMatchForGeneration && styles.disabledButton])}
+                          />
+                          <Button
+                              title={`Generate w/ Selection${selectedMatchForGeneration ? ' (1)' : ''}`}
+                              onPress={triggerDetailsGeneration}
+                              disabled={!selectedMatchForGeneration} // Disabled if nothing IS selected
+                              style={StyleSheet.flatten([styles.navButton, !selectedMatchForGeneration && styles.disabledButton])}
+                           />
+                      </>
+                   ) : (
+                      <Button
+                           title="Generate Details from Images"
+                           onPress={handleProceedWithoutMatch} // Still calls proceed without match
+                           style={styles.navButton}
+                      />
+                   )}
+                    </View>
+           </Animated.View>
+       );
+  };
+
+  // --- UPDATED renderFormReview --- (Keep updated version)
   const renderFormReview = () => {
     console.log(`[AddListingScreen] Rendering Form Review Stage for tab: ${activeFormTab}`);
-    
-    if (!formData || !activeFormTab || !formData[activeFormTab]) {
-        // ... loading/error state ...
+
+    const currentPlatformKey = activeFormTab?.toLowerCase();
+
+    if (!formData || !currentPlatformKey || !formData[currentPlatformKey]) {
+        // ... (Detailed logging remains) ...
+        // Return loading/error state
         return (
              <Animated.View style={styles.stageContainer} entering={FadeIn}>
                  <Text style={styles.stageTitle}>Loading Details...</Text>
@@ -1253,254 +1291,254 @@ const AddListingScreen = () => {
              </Animated.View>
          );
     }
+    // Add log if check passes
+    console.log(`[renderFormReview] Check passed. Rendering form for key: ${currentPlatformKey}`);
 
-    const currentPlatformData = formData[activeFormTab] || {}; 
-    
-    // Define field structure
-    const coreFields: (keyof GeneratedPlatformDetails)[] = ['title', 'description', 'price', 'compareAtPrice', 'weight', 'weightUnit']; // Removed SKU/Barcode for now, add back if needed via variant data
-    const platformSpecificFields: { [key: string]: (keyof GeneratedPlatformDetails)[] } = {
-        shopify: ['status', 'vendor', 'category', 'tags'], 
-        square: ['category', 'locations', 'gtin'],
-        ebay: ['condition', 'category', 'listingFormat', 'duration', 'dispatchTime', 'returnPolicy', 'shippingService', 'itemLocationPostalCode'],
-        amazon: ['productType', 'condition', 'brand', 'productIdType'], // productId is complex (ASIN match)
-        facebook: ['category', 'brand', 'condition', 'availability'],
-    };
+    const currentPlatformData = formData[currentPlatformKey] || {};
 
-    const fieldsToShow = [ ...coreFields, ...(platformSpecificFields[activeFormTab!] || []) ];
-
-    // --- RESTORED getKeyboardType --- 
-    const getKeyboardType = (field: string): 'default' | 'numeric' | 'email-address' | 'phone-pad' => {
-        const lowerField = field.toLowerCase();
-        if (lowerField === 'price' || lowerField.includes('quantity') || lowerField.includes('weight') || lowerField === 'compareatprice') {
-            return 'numeric';
-        }
-        return 'default';
-    }; // Ensure this closing brace is here
-    // --- End RESTORED ---
-
-    // --- REFINED getFieldValue --- 
-    const getFieldValue = (field: keyof GeneratedPlatformDetails): string => {
-        const value = currentPlatformData[field];
-        
-        // Handle Square Price object specifically and safely
-        if (activeFormTab === 'square' && field === 'price' && typeof value === 'object' && value !== null && 'amount' in value) {
-             // Ensure value.amount is not undefined before String()
-             return String(value.amount ?? ''); 
-        }
-        
-        // Handle Tags array
-        if (field === 'tags' && Array.isArray(value)) {
-            return value.join(', ');
-        }
-        
-         // Handle other numbers
-         if (typeof value === 'number') {
-             return String(value);
-         }
-         
-        // Handle strings
-        if (typeof value === 'string') {
-            return value;
-        }
-        
-        // Fallback for null, undefined, or other unexpected types
-        return ''; 
-    };
-    // --- End REFINED --- 
-    
-    const getCurrencySymbol = () => {
-       if (activeFormTab === 'square' && typeof currentPlatformData.price === 'object' && currentPlatformData.price !== null) {
-           return currentPlatformData.price.currency === 'USD' ? '$' : (currentPlatformData.price.currency || '');
-       }
-       return ''; // Or determine currency based on user settings?
-    };
-
-    // --- Draggable Media Preview Renderer --- 
-    const renderDraggableMediaItem = ({ item, drag, isActive }: RenderItemParams<CapturedMediaItem>) => {
-        const isCover = capturedMedia[coverImageIndex]?.id === item.id;
-          return (
-          <ScaleDecorator>
-                        <TouchableOpacity 
-                          style={[styles.mediaPreviewItemContainer, isActive && styles.previewImageContainerActive, isCover && styles.previewImageCover ]}
-                          onPress={() => handleSetCover(capturedMedia.findIndex(m => m.id === item.id))}
-                          onLongPress={drag}
-                          disabled={isActive}
-                          activeOpacity={0.9}
-            >
-              <Image source={{ uri: item.uri }} style={styles.mediaPreviewImage} />
-              {item.type === 'video' && (
-                <View style={styles.videoIndicatorPreview}><Icon name="play-circle" size={18} color={'white'} /></View>
-              )}
-              {/* Delete button maybe not needed here? Or smaller? */} 
-               <TouchableOpacity style={styles.deleteMediaButtonSmall} onPress={() => handleRemoveMedia(item.id)}>
-                 <Icon name="close-circle" size={18} color="#FF5252" />
-               </TouchableOpacity>
-               {isCover && <View style={styles.coverLabelSmall}><Text style={styles.coverLabelText}>Cover</Text></View>}
-            </TouchableOpacity>
-          </ScaleDecorator>
-        );
-      };
-
+    // --- Restore original complex JSX --- 
     return (
-        <GestureHandlerRootView style={{ flex: 1 }}> 
-            <KeyboardAvoidingView 
-                behavior={Platform.OS === "ios" ? "padding" : "height"} 
-                style={styles.stageContainer} 
-                keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0} // Adjust offset
-            >
-                <Animated.View style={{flex: 1}} entering={FadeIn}>
-                    <Text style={styles.stageTitle}>Review & Edit Details</Text>
-                    
-                    {/* --- Media Management Section --- */}
-                    <View style={styles.mediaSectionContainer}>
-                        <Text style={styles.sectionTitle}>Media ({capturedMedia.length}/10)</Text>
-                        {capturedMedia.length > 0 ? (
-                            <DraggableFlatList
-                                data={capturedMedia}
-                                onDragEnd={({ data }) => {
-                                    const oldCoverId = capturedMedia[coverImageIndex]?.id;
-                                    const newIndex = data.findIndex(item => item.id === oldCoverId);
-                                    setCoverImageIndex(newIndex >= 0 ? newIndex : (data.length > 0 ? 0 : -1));
-                                    setCapturedMedia(data);
-                                }}
-                                keyExtractor={(item) => item.id}
-                                renderItem={renderDraggableMediaItem}
-                                horizontal
-                                contentContainerStyle={styles.mediaPreviewScrollContent}
-                                showsHorizontalScrollIndicator={false}
-                            />
-                        ) : (
-                             <Text style={styles.noMediaText}>No media added yet.</Text>
-                        )}
-                         <View style={styles.mediaButtonsContainer}>
-                            <Button title="Add from Library" onPress={pickImagesFromLibrary} icon="image-multiple-outline" outlined disabled={capturedMedia.length >= 10} style={styles.mediaButton} />
-                             <Button title="Open Camera" onPress={() => setShowCameraSection(true)} icon="camera-outline" outlined disabled={capturedMedia.length >= 10} style={styles.mediaButton} /> 
-                         </View>
-                    </View>
-                    {/* --- End Media Management --- */}
+        <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={{ flex: 1 }}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0} // Adjust as needed
+        >
+            <Animated.View style={styles.stageContainer} entering={FadeIn}>
+                <Text style={styles.stageTitle}>Review & Edit Details</Text>
 
-                    {/* --- Platform Tabs --- */ }
-                    <View style={styles.tabContainer}>
-                         {/* ... tab rendering logic ... */} 
-                         {selectedPlatforms.map(platform => (
-                            <TouchableOpacity 
-                                key={platform} 
-                                style={[styles.tabButton, activeFormTab === platform && styles.tabButtonActive]} 
-                                onPress={() => setActiveFormTab(platform)}
-                            >
-                                <Text style={[styles.tabButtonText, activeFormTab === platform && styles.tabButtonTextActive]}>
-                                    {AVAILABLE_PLATFORMS.find(p => p.key === platform)?.name || platform} 
-                                </Text>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
-                    
-                    {/* --- Form Fields --- */}
-                    <ScrollView style={styles.formScrollView} keyboardShouldPersistTaps="handled">
-                         <Text style={styles.sectionTitle}>Details for {AVAILABLE_PLATFORMS.find(p => p.key === activeFormTab)?.name || activeFormTab}</Text>
-                        {fieldsToShow.map(field => (
-                            <View key={field} style={styles.formInputContainer}>
-                                <Text style={styles.formLabel}>{field.replace(/([A-Z])/g, ' $1')}</Text> {/* Add spaces for camelCase */} 
-                                 {/* Special handling for price to show currency */}
-                                 {field === 'price' && activeFormTab === 'square' && 
-                                     <Text style={styles.currencyLabel}>{getCurrencySymbol()}</Text>
-                                 }
-                                <TextInput
-                                    style={[styles.formInput, field === 'description' && styles.formInputMultiline, field === 'price' && activeFormTab === 'square' && styles.priceInputWithCurrency]}
-                                    value={getFieldValue(field)}
-                                    onChangeText={(text) => handleFormUpdate(activeFormTab, field, text)}
-                                    placeholder={field.replace(/([A-Z])/g, ' $1')} // Basic placeholder
-                                    placeholderTextColor="#aaa"
-                                    multiline={field === 'description'}
-                                    keyboardType={getKeyboardType(field)}
-                                    autoCapitalize="none"
-                                />
-                            </View>
-                        ))}
-                         {/* Regenerate Button */} 
-                         <Button 
-                            title="Regenerate Details with AI" 
-                            onPress={handleRegenerateConfirm} 
-                            icon="brain" 
-                            outlined 
-                            style={{marginTop: 15, marginBottom: 10}}
-                         /> 
+                {/* Media Preview Section */}
+                <View style={styles.mediaSectionContainer}>
+                  <Text style={styles.sectionTitle}>Media ({capturedMedia.length}/10)</Text>
+                  {capturedMedia.length > 0 ? (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mediaPreviewScrollContent}>
+                      {capturedMedia.map((item, index) => (
+                        <TouchableOpacity 
+                            key={item.id} 
+                            style={[styles.mediaPreviewItemContainer, coverImageIndex === index && styles.previewImageCover]}
+                            onPress={() => handleSetCover(index)}
+                            activeOpacity={0.8}
+                        >
+                           <Image source={{ uri: item.uri }} style={styles.mediaPreviewImage} />
+                           {item.type === 'video' && (
+                               <View style={styles.videoIndicatorPreview}><Icon name="play-circle" size={18} color={'white'} /></View>
+                           )}
+                           {coverImageIndex === index && (
+                               <View style={styles.coverLabelSmall}><Text style={styles.coverLabelText}>COVER</Text></View>
+                           )}
+                           <TouchableOpacity style={styles.deleteMediaButtonSmall} onPress={() => handleRemoveMedia(item.id)}>
+                               <Icon name="close-circle" size={20} color="#FF5252" />
+                           </TouchableOpacity>
+                        </TouchableOpacity>
+                      ))}
                     </ScrollView>
-                    
-                    {/* --- Bottom Navigation Buttons --- */} 
-                    <View style={styles.navigationButtons}>
-                         <Button title="Back" onPress={() => setCurrentStage(ListingStage.VisualMatch)} outlined style={styles.navButton}/> 
-                        <Button title="Save Draft" onPress={handleSaveDraft} outlined style={styles.navButton}/>
-                        <Button title="Publish..." onPress={handlePublish} style={styles.navButton}/>
-                    </View>
-                </Animated.View>
-            </KeyboardAvoidingView>
+                  ) : (
+                    <Text style={styles.noMediaText}>No media added yet.</Text>
+                  )}
+                  <View style={styles.mediaButtonsContainer}>
+                    <Button title="Add From Library" onPress={pickImagesFromLibrary} outlined style={styles.mediaButton} iconName="image-multiple-outline"/>
+                    <Button title="Use Camera" onPress={() => setShowCameraSection(true)} outlined style={styles.mediaButton} iconName="camera-outline"/>
+                  </View>
+                </View>
 
-            {/* --- Publish Modal --- */} 
-             <Modal
+                {/* Platform Tabs */}
+                <View style={styles.tabContainer}>
+                    {selectedPlatforms.map(platformKey => (
+                        <TouchableOpacity
+                            key={platformKey}
+                            style={[styles.tabButton, activeFormTab === platformKey && styles.tabButtonActive]}
+                            onPress={() => setActiveFormTab(platformKey)}
+                        >
+                            <Text style={[styles.tabButtonText, activeFormTab === platformKey && styles.tabButtonTextActive]}>
+                                {AVAILABLE_PLATFORMS.find(p => p.key === platformKey)?.name || platformKey}
+                            </Text>
+                        </TouchableOpacity>
+                    ))}
+                </View>
+
+                {/* Form Fields - Scrollable */}
+                <ScrollView style={styles.formScrollView} showsVerticalScrollIndicator={false}>
+                    {Object.entries(currentPlatformData).map(([field, value]) => (
+                        <View key={field} style={styles.formInputContainer}>
+                            <Text style={styles.formLabel}>{field.replace(/_/g, ' ')}</Text>
+                            {field === 'price' || field === 'compareAtPrice' ? (
+                              <View>
+                                  <TextInput
+                                      style={[styles.formInput, styles.priceInputWithCurrency]}
+                                      value={value !== undefined && value !== null ? String(value) : ''} 
+                                      onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
+                                      keyboardType="numeric"
+                                      placeholder={`Enter ${field === 'price' ? 'Price' : 'Compare At Price'}`}
+                                  />
+                                <Text style={styles.currencyLabel}>$</Text>
+                                </View>
+                             ) : field === 'description' || field === 'returnPolicy' ? (
+                                <TextInput
+                                    style={styles.formInputMultiline}
+                                    value={String(value || '')} 
+                                    onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
+                                    multiline
+                                    numberOfLines={4}
+                                    placeholder={`Enter ${field.replace(/_/g, ' ')}`}
+                                />
+                            ) : typeof value === 'boolean' ? (
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                   <Switch
+                                       value={value} 
+                                       onValueChange={(newValue) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, newValue)}
+                                       trackColor={{ false: "#767577", true: "#81b0ff" }} 
+                                       thumbColor={value ? "#4CAF50" : "#f4f3f4"}
+                                   />
+                                   <Text style={{ marginLeft: 8 }}>{value ? 'Enabled' : 'Disabled'}</Text>
+                                </View>
+                            ) : Array.isArray(value) ? (
+                                <>
+                                  <TextInput
+                                    style={styles.formInput}
+                                    value={value.join(', ')} 
+                                    onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
+                                    placeholder={`Enter ${field.replace(/_/g, ' ')} (comma-separated)`}
+                                  />
+                                  <Text style={styles.arrayHint}>Separate items with commas</Text>
+                                </>
+                            ) : typeof value === 'object' && value !== null && field === 'itemSpecifics' ? (
+                                <>
+                                    <TextInput
+                                        style={styles.formInputMultiline} 
+                                        value={typeof value === 'string' ? value : JSON.stringify(value, null, 2)} 
+                                        onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
+                                        multiline
+                                        numberOfLines={5}
+                                        placeholder={`Enter ${field.replace(/_/g, ' ')} as JSON (e.g., { "Size": "Large", "Color": "Red" })`}
+                                        autoCapitalize="none"
+                                        autoCorrect={false}
+                                     />
+                                     <Text style={styles.readOnlyHint}>Edit as JSON object string</Text>
+                                 </>
+                            ) : (
+                                <TextInput
+                                    style={styles.formInput}
+                                    value={String(value || '')} 
+                                    onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
+                                    placeholder={`Enter ${field.replace(/_/g, ' ')}`}
+                                />
+                            )}
+                        </View>
+                    ))}
+                </ScrollView>
+
+                {/* Navigation/Action Buttons */}
+                <View style={styles.navigationButtons}>
+                     <Button 
+                         title="Back to Matches" 
+                         onPress={() => setCurrentStage(ListingStage.VisualMatch)} 
+                         outlined 
+                         style={styles.navButton} 
+                     />
+                     <Button 
+                         title="Save Draft" 
+                         onPress={handleSaveDraft} 
+                         outlined 
+                         style={styles.navButton} 
+                         iconName="content-save-outline"
+                     />
+                     <Button 
+                         title="Publish..." 
+                         onPress={handlePublish} 
+                         style={styles.navButton} 
+                         iconName="publish"
+                     />
+                 </View>
+
+            </Animated.View>
+            {/* Publish Modal */}
+            <Modal
                 animationType="fade"
                 transparent={true}
                 visible={isPublishModalVisible}
                 onRequestClose={() => setIsPublishModalVisible(false)}
-             >
+            >
                 <Pressable style={styles.modalOverlay} onPress={() => setIsPublishModalVisible(false)}> 
-                    <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}> 
-                        <Text style={styles.modalTitle}>Publish Options</Text>
-                        <Text style={styles.modalSubtitle}>How would you like to publish to the selected platforms?</Text>
+                    <Pressable style={styles.modalContent} onPress={() => {}}> 
+                        <Text style={styles.modalTitle}>Confirm Publish</Text>
+                        <Text style={styles.modalSubtitle}>Choose how you want to publish the listing(s).</Text>
                         <View style={styles.modalButtonContainer}>
-                            <Button title="Publish as DRAFT" onPress={() => handlePublishAction('draft')} style={styles.modalButton} outlined/>
-                            <Button title="Publish LIVE" onPress={() => handlePublishAction('live')} style={styles.modalButton}/>
+                            <Button 
+                                title="Publish as Draft" 
+                                onPress={() => handlePublishAction('draft')} 
+                                outlined 
+                                style={styles.modalButton} 
+                                iconName="pencil-outline"
+                            />
+                            <Button 
+                                title="Publish Live" 
+                                onPress={() => handlePublishAction('live')} 
+                                style={styles.modalButton} 
+                                iconName="rocket-launch-outline"
+                            />
                         </View>
-                        <Button title="Cancel" onPress={() => setIsPublishModalVisible(false)} style={styles.modalCancelButton}/>
+                        <Button 
+                            title="Cancel" 
+                            onPress={() => setIsPublishModalVisible(false)} 
+                            textOnly 
+                            style={styles.modalCancelButton} 
+                        />
                     </Pressable>
-                 </Pressable>
-             </Modal>
-        </GestureHandlerRootView>
+                </Pressable>
+            </Modal>
+        </KeyboardAvoidingView>
     );
+    // --- End original complex JSX --- 
   };
 
-  // --- Current Stage Logic --- //
+  // --- Current Stage Logic (Unchanged) --- //
   const renderCurrentStage = () => {
-    // Added logging here
     console.log(`[renderCurrentStage] Rendering stage: ${currentStage}`);
 
     if (error) return (<View style={styles.errorContainer}><Icon name="alert-circle-outline" size={40} color="#D8000C" /><Text style={styles.errorText}>{error}</Text><Button title="Try Again" onPress={() => { setError(null); setCurrentStage(ListingStage.ImageInput); }} /></View>);
-    
+
     // Handle Loading states explicitly
     if (isLoading) {
+        // Use the restored renderLoading function
         if (currentStage === ListingStage.Analyzing) return renderLoading('Analyzing Media...');
         if (currentStage === ListingStage.Generating) return renderLoading('Generating Details...');
         if (currentStage === ListingStage.Publishing) return renderLoading('Publishing...');
-        // Generic loading for other transitions if needed, or could be handled by the loading overlay
-        return renderLoading(loadingMessage || 'Loading...'); 
+        return renderLoading(loadingMessage || 'Loading...');
     }
 
+    // Restore original switch statement
     switch (currentStage) {
         case ListingStage.PlatformSelection: return renderPlatformSelection();
         case ListingStage.ImageInput: return renderImageInput();
         case ListingStage.VisualMatch: return renderVisualMatch();
-        case ListingStage.FormReview: return renderFormReview();
+        case ListingStage.FormReview: return renderFormReview(); // Still points to the simplified debug version
         // Analyzing, Generating, Publishing are handled by the isLoading check above
         default:
             console.warn("[renderCurrentStage] Unhandled stage:", currentStage);
             return <Text>Unknown Stage: {currentStage}</Text>;
     }
   };
-  
-  // If camera section is active, render it fullscreen
-  if (showCameraSection) {
-    return (<CameraSection 
-        onCapture={handleMediaCaptured} 
-        onClose={() => setShowCameraSection(false)} 
-        styles={styles} // Pass styles down
-        initialMedia={capturedMedia} // Pass current media down
-    />);
-  }
 
-  // Otherwise, render the normal screen content
-  console.log("[AddListingScreen] Rendering main SafeAreaView");
+  // --- Camera Section Show Logic (Unchanged - Render CameraSection if showCameraSection is true) --- //
+  if (showCameraSection) {
+       console.log("[AddListingScreen] Rendering CameraSection");
+       // This assumes CameraSection is defined correctly elsewhere or imported
+       // If it was previously defined inline and removed, it needs to be restored/imported.
+       // For now, assuming it exists:
+       return (<CameraSection
+            onCapture={handleMediaCaptured}
+            onClose={() => setShowCameraSection(false)}
+            styles={styles} // Pass styles down
+            initialMedia={capturedMedia} // Pass current media down
+         />);
+   }
+
+  // --- Main Render (Ensure this is the final return) --- //
+  // Restore original return statement
+  console.log("[AddListingScreen] Rendering main SafeAreaView with renderCurrentStage");
   return (<SafeAreaView style={styles.container}>{renderCurrentStage()}</SafeAreaView>);
-}; 
+  // REMOVE any return null placeholders below this point
+
+};
 
 export default AddListingScreen;
 
@@ -1853,7 +1891,12 @@ const styles = StyleSheet.create({
   formInputContainer: { marginBottom: 18, position: 'relative' }, // Added relative positioning for currency
   formLabel: { fontSize: 14, color: '#333', fontWeight: '500', marginBottom: 6, textTransform: 'capitalize' }, 
   formInput: { borderWidth: 1, borderColor: '#DDE2E7', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15, color: '#333', },
-  formInputMultiline: { minHeight: 100, textAlignVertical: 'top', borderWidth: 1, borderColor: '#DDE2E7', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15, color: '#333', }, 
+  formInputMultiline: {
+      minHeight: 80, // Slightly smaller default multiline height
+      textAlignVertical: 'top',
+      // Inherit other styles from formInput
+      borderWidth: 1, borderColor: '#DDE2E7', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15, color: '#333',
+  },
   priceInputWithCurrency: {
       paddingLeft: 25, // Add padding for currency symbol
   },
@@ -2001,10 +2044,21 @@ const styles = StyleSheet.create({
       marginBottom: 10,
   },
   // --- End Platform Image Style ---
+  readOnlyHint: {
+      fontSize: 10,
+      color: '#888',
+      marginTop: 2,
+      marginLeft: 5,
+  },
+   arrayHint: {
+      fontSize: 10,
+      color: '#888',
+      marginTop: 2,
+      marginLeft: 5,
+  },
 });
 
-// --- Platform Images Map --- 
-// Adjust paths based on your actual asset location
+// --- Platform Images Map (Unchanged, Ensure it's defined) --- //
 const platformImageMap: { [key: string]: any } = {
     shopify: require('../../src/assets/shopify.png'),
     amazon: require('../../src/assets/amazon.png'),
@@ -2013,4 +2067,3 @@ const platformImageMap: { [key: string]: any } = {
     clover: require('../../src/assets/clover.png'),
     square: require('../../src/assets/square.png'),
 };
-// --- End Platform Images Map ---
