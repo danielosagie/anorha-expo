@@ -1,5 +1,5 @@
 import React, { useState, useContext } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, TextInput, Pressable, StyleProp, ViewStyle } from 'react-native';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -10,10 +10,13 @@ import { useNavigation } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CommonActions } from '@react-navigation/native';
+import InAppBrowser from 'react-native-inappbrowser-reborn';
 
 import { AuthContext } from '../context/AuthContext';
 
-const getPlatformColor = (platformId) => {
+type PlatformId = 'shopify' | 'amazon' | 'clover' | 'square' | string;
+
+const getPlatformColor = (platformId: PlatformId): string => {
   switch (platformId) {
     case 'shopify':
       return '#0E8F7F';
@@ -28,7 +31,7 @@ const getPlatformColor = (platformId) => {
   }
 };
 
-const getIconForPlatform = (platform) => {
+const getIconForPlatform = (platform: PlatformId): string => {
   switch (platform) {
     case 'shopify':
       return 'shopping';
@@ -79,6 +82,43 @@ const ProfileScreen = () => {
     },
   ];
   
+  const handleConnectShopify = async () => {
+    console.log("[ProfileScreen] Initiating Shopify connection via Store Login...");
+    
+    const backendStoreLoginCallbackUri = 'https://api.sssync.app/auth/shopify/store-login-callback';
+    const finalAppRedirectUri = 'sssyncapp://auth-callback';
+    
+    const encodedBackendCallback = encodeURIComponent(backendStoreLoginCallbackUri);
+    const shopifyStoreLoginUrl = `https://accounts.shopify.com/store-login?redirect_uri=${encodedBackendCallback}`;
+
+    console.log(`[ProfileScreen] Opening Shopify Store Login URL: ${shopifyStoreLoginUrl}`);
+
+    try {
+      if (await InAppBrowser.isAvailable()) {
+        console.log(`[ProfileScreen] Calling InAppBrowser.openAuth with URL: ${shopifyStoreLoginUrl} and Redirect URI: ${finalAppRedirectUri}`);
+        const result = await InAppBrowser.openAuth(shopifyStoreLoginUrl, finalAppRedirectUri, {
+          ephemeralWebSession: false, 
+          showTitle: false,
+          enableUrlBarHiding: true,
+          enableDefaultShare: false,
+        });
+
+        console.log('[ProfileScreen] InAppBrowser Auth Result (browser dismissed): ', result);
+        if (result.type === 'cancel') {
+           Alert.alert('Connection Cancelled', 'You cancelled the Shopify connection process.');
+        }
+
+      } else {
+        console.error('[ProfileScreen] InAppBrowser is not available');
+        Alert.alert('Error', 'Could not open secure browser. Please try again later.');
+      }
+    } catch (error: unknown) {
+       console.error('[ProfileScreen] InAppBrowser Error:', error);
+       const message = error instanceof Error ? error.message : String(error);
+       Alert.alert('Connection Error', `An error occurred: ${message}`);
+     }
+  };
+
   const handleLogout = async () => {
     try {
       const { error } = await supabase.auth.signOut();
@@ -90,9 +130,10 @@ const ProfileScreen = () => {
         await authContext.signOut();
       }
       
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Logout Error:', error);
-      Alert.alert('Logout Error', error.message);
+      const message = error instanceof Error ? error.message : String(error);
+      Alert.alert('Logout Error', message);
     }
   };
   
@@ -106,19 +147,22 @@ const ProfileScreen = () => {
   ];
   
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false} paddingTop={60}>
+    <ScrollView 
+      style={styles.container}
+      contentContainerStyle={styles.scrollViewContent}
+      showsVerticalScrollIndicator={false}
+    >
       <Animated.View entering={FadeInUp.delay(100).duration(500)}>
         <Text style={[styles.title, { color: theme.colors.text }]}>Profile</Text>
         
         {/* Account Card */}
-        <Card>
+        <Card style={styles.card}>
           <View style={styles.accountHeader}>
             <PlaceholderImage 
               size={64} 
               borderRadius={32} 
               color="#6A5ACD"
               type="gradient"
-              gradientColors={['#6A5ACD', '#4B0082']}
               text="AC"
             />
             <View style={styles.accountInfo}>
@@ -154,7 +198,7 @@ const ProfileScreen = () => {
       
       {/* Integrations Card */}
       <Animated.View entering={FadeInUp.delay(200).duration(500)}>
-        <Card>
+        <Card style={styles.card}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Connected Platforms</Text>
             <TouchableOpacity>
@@ -181,6 +225,7 @@ const ProfileScreen = () => {
                   <Button 
                     title="Connect" 
                     outlined 
+                    onPress={handleConnectShopify} 
                     style={styles.connectButton} 
                     textStyle={styles.connectButtonText}
                   />
@@ -193,7 +238,7 @@ const ProfileScreen = () => {
       
       {/* Settings Card */}
       <Animated.View entering={FadeInUp.delay(300).duration(500)}>
-        <Card>
+        <Card style={styles.card}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Settings</Text>
           </View>
@@ -230,7 +275,7 @@ const ProfileScreen = () => {
       
       {/* Menu Card */}
       <Animated.View entering={FadeInUp.delay(400).duration(500)}>
-        <Card>
+        <Card style={styles.card}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>More</Text>
           </View>
@@ -286,7 +331,13 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F8F9FB',
+  },
+  scrollViewContent: {
     padding: 16,
+    paddingTop: 60,
+  },
+  card: {
+    marginBottom: 16,
   },
   title: {
     fontSize: 28,
@@ -459,6 +510,10 @@ const styles = StyleSheet.create({
   versionText: {
     fontSize: 12,
     color: '#999',
+  },
+  settingsContainer: {
+  },
+  menuContainer: {
   },
 });
 
