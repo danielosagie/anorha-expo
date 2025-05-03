@@ -1,5 +1,5 @@
 import React, { useState, useContext, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput } from 'react-native';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -11,6 +11,7 @@ import { supabase } from '../../lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CommonActions } from '@react-navigation/native';
 import * as WebBrowser from 'expo-web-browser';
+import * as Clipboard from 'expo-clipboard';
 
 import { AuthContext } from '../context/AuthContext';
 
@@ -79,6 +80,13 @@ const ProfileScreen = () => {
   // --- NEW: State for Add Connection Modal ---
   const [isAddConnectionModalVisible, setIsAddConnectionModalVisible] = useState(false);
   // --- END State ---
+
+  // --- REVISED State for Guided Shopify Flow ---
+  type ShopifyFlowStep = 'idle' | 'enterInfo'; // Simplified states
+  const [shopifyFlowStep, setShopifyFlowStep] = useState<ShopifyFlowStep>('idle');
+  const [pastedShopifyUrl, setPastedShopifyUrl] = useState('');
+  const [manualShopName, setManualShopName] = useState('');
+  // --- END REVISED Guided Shopify Flow State ---
 
   const accountInfo = {
     name: 'African Caribbean Seafood',
@@ -159,47 +167,140 @@ const ProfileScreen = () => {
   );
   // --- END Fetch Connections Logic ---
 
-  const handleConnectShopify = async () => {
-    console.log("[ProfileScreen] Initiating Shopify connection via Backend Store Picker...");
-    
+  // --- NEW: Logic for Guided Shopify Flow Step 4 (Open Browser) ---
+  const openShopifyForCopy = async () => {
+    console.log("[ProfileScreen] Opening Shopify for user to copy URL...");
     // Get User ID directly from Supabase auth
     const { data: { user }, error: userError } = await supabase.auth.getUser();
-    
+
     if (userError || !user) {
       Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
       console.error("[ProfileScreen] Error getting user from Supabase:", userError);
       return;
     }
     const userId = user.id;
-    console.log(`[ProfileScreen] User ID: ${userId}`);
 
+    // This URL still initiates the backend picker, which will eventually lead the user
+    // to their Shopify dashboard after login/selection if needed.
+    // The user just needs to copy the URL *from* that dashboard.
     const backendInitiationUrlBase = 'https://api.sssync.app/auth/shopify/initiate-store-picker';
-    const appRedirectUri = 'sssyncapp://auth-callback';
-    
-    const encodedFinalAppRedirectUri = encodeURIComponent(appRedirectUri);
-    const backendInitiationUrl = `${backendInitiationUrlBase}?userId=${userId}&finalRedirectUri=${encodedFinalAppRedirectUri}`;
-    
-    console.log(`[ProfileScreen] Opening Backend Initiation URL with Expo WebBrowser: ${backendInitiationUrl}`);
+    // Define and encode the final redirect URI needed by the backend
+    const finalRedirectUri = 'sssyncapp://auth-callback';
+    const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
+
+    // Append BOTH userId and finalRedirectUri
+    const backendInitiationUrl = `${backendInitiationUrlBase}?userId=${userId}&finalRedirectUri=${encodedFinalRedirectUri}`;
+
+    console.log(`[ProfileScreen] Opening URL with Expo WebBrowser: ${backendInitiationUrl}`);
+    try {
+      await WebBrowser.openBrowserAsync(backendInitiationUrl);
+    } catch (error: unknown) {
+       console.error('[ProfileScreen] WebBrowser Error opening for copy:', error);
+       const message = error instanceof Error ? error.message : String(error);
+       Alert.alert('Browser Error', `An error occurred opening the browser: ${message}`);
+    }
+  };
+  // --- END Guided Shopify Flow Logic ---
+
+  // --- NEW: Logic for Guided Shopify Flow Step 5 (Paste) ---
+  const handlePasteFromClipboard = async () => {
+    const text = await Clipboard.getStringAsync();
+    setPastedShopifyUrl(text);
+  };
+  // --- END Guided Shopify Flow Logic ---
+
+  // --- NEW: Logic for Guided Shopify Flow Steps 6 & 7 (Confirm/Connect) ---
+  const connectWithExtractedShopName = async (extractedShopName: string) => {
+    console.log(`[ProfileScreen] Connecting with extracted shop name: ${extractedShopName}`);
+    // Get User ID
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
+      Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
+      console.error("[ProfileScreen] Error getting user:", userError);
+      return;
+    }
+    const userId = user.id;
+
+    // Backend endpoint for direct login/authorization with shop name
+    const directLoginUrlBase = 'https://api.sssync.app/auth/shopify/login';
+    const finalRedirectUri = 'sssyncapp://auth-callback';
+    const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
+
+    const directLoginUrl = `${directLoginUrlBase}?userId=${userId}&shop=${extractedShopName}&finalRedirectUri=${encodedFinalRedirectUri}`;
+    console.log(`[ProfileScreen] Opening Final Auth URL: ${directLoginUrl}`);
 
     try {
       const result = await WebBrowser.openAuthSessionAsync(
-        backendInitiationUrl,
-        appRedirectUri
+        directLoginUrl,
+        finalRedirectUri
       );
-
-      console.log('[ProfileScreen] WebBrowser Auth Result: ', result);
-
-      if (result.type === 'success' && result.url) {
-        console.log("[ProfileScreen] WebBrowser successful redirect URL:", result.url);
-      } else if (result.type === 'cancel' || result.type === 'dismiss') {
-        Alert.alert('Connection Cancelled', 'You cancelled or dismissed the Shopify connection process.');
+      console.log('[ProfileScreen] Final WebBrowser Auth Result: ', result);
+      // Success is handled by the deep link handler in App.tsx refreshing state
+      // You might want to add a user-facing confirmation here or after the deep link handler works
+      if (result.type === 'cancel' || result.type === 'dismiss') {
+        Alert.alert('Connection Cancelled', 'You cancelled or dismissed the final Shopify connection step.');
+      } else if (result.type !== 'success') { 
+        // Log the actual result type for debugging if it's not success/cancel/dismiss
+        console.warn('[ProfileScreen] Unexpected WebBrowser Auth Result type:', result.type, result);
+        // Provide a generic error, or handle specific types like 'locked' if necessary
+        Alert.alert('Connection Issue', `The connection process returned an unexpected status: ${result.type}. Please try again.`);
       }
 
     } catch (error: unknown) {
-       console.error('[ProfileScreen] WebBrowser Error:', error);
+       console.error('[ProfileScreen] Final WebBrowser Auth Error:', error);
        const message = error instanceof Error ? error.message : String(error);
-       Alert.alert('Connection Error', `An error occurred opening the browser: ${message}`);
+       Alert.alert('Connection Error', `An error occurred opening the browser for final auth: ${message}`);
      }
+  };
+
+  // REVISED: Single handler for confirm button in the combined modal
+  const handleConfirmInput = () => {
+    console.log(`[ProfileScreen] Confirming input: URL='${pastedShopifyUrl}', Manual='${manualShopName}'`);
+    let shopNameToConnect: string | null = null;
+    let isValid = false;
+
+    // Prioritize pasted URL if both are entered
+    if (pastedShopifyUrl) {
+      const shopNameRegex = /admin\.shopify\.com\/store\/([a-zA-Z0-9\-]+)/;
+      const match = pastedShopifyUrl.match(shopNameRegex);
+      if (match && match[1]) {
+        shopNameToConnect = match[1];
+        isValid = true;
+        console.log(`[ProfileScreen] Extracted shop name from URL: ${shopNameToConnect}`);
+      } else {
+        Alert.alert(
+          "Invalid URL Format",
+          "Could not automatically extract the shop name from the pasted URL. Please ensure it looks like 'https://admin.shopify.com/store/your-shop-name' or enter the name manually."
+        );
+        return; // Stop processing if URL is present but invalid
+      }
+    } else if (manualShopName) {
+      // Basic validation for manual name (e.g., non-empty, maybe no spaces)
+      const trimmedName = manualShopName.trim();
+      if (trimmedName && !trimmedName.includes(' ')) { // Example validation
+         shopNameToConnect = trimmedName;
+         isValid = true;
+         console.log(`[ProfileScreen] Using manual shop name: ${shopNameToConnect}`);
+      } else {
+          Alert.alert(
+             "Invalid Shop Name",
+             "Please enter a valid shop name (usually contains letters, numbers, hyphens, no spaces)."
+           );
+          return; // Stop processing if manual name is invalid
+      }
+    }
+
+    if (isValid && shopNameToConnect) {
+      // Reset state and close modal *before* calling connection function
+      setShopifyFlowStep('idle');
+      setPastedShopifyUrl('');
+      setManualShopName('');
+      // Call the connection function
+      connectWithExtractedShopName(shopNameToConnect);
+    } else {
+       // This case should ideally not be reached if button disable logic is correct, but good fallback.
+      Alert.alert("Missing Input", "Please paste the Shopify URL or enter the shop name.");
+    }
   };
 
   const handleLogout = async () => {
@@ -228,6 +329,9 @@ const ProfileScreen = () => {
     { icon: 'information', title: 'About' },
     { icon: 'logout', title: 'Logout', isDestructive: true, onPress: handleLogout },
   ];
+  
+  // Add this log to see the state value during each render
+  console.log('[ProfileScreen] Rendering with shopifyFlowStep:', shopifyFlowStep);
   
   return (
     <ScrollView 
@@ -471,7 +575,11 @@ const ProfileScreen = () => {
                     onPress={() => {
                       setIsAddConnectionModalVisible(false); // Close modal
                       if (platform.key === 'shopify') {
-                        handleConnectShopify();
+                        // Set state to show the combined input modal
+                        setShopifyFlowStep('enterInfo');
+                        // Clear previous inputs when starting fresh
+                        setPastedShopifyUrl('');
+                        setManualShopName('');
                       } else {
                         Alert.alert('Connect', `Connect logic for ${platform.name} not implemented.`);
                       }
@@ -504,6 +612,92 @@ const ProfileScreen = () => {
         </Pressable>
       </Modal>
       {/* --- END Add Connection Modal --- */}
+
+      {/* --- REVISED: Guided Shopify Flow UI (Single Modal) --- */}
+      <Modal
+          transparent={true}
+          animationType="fade"
+          visible={shopifyFlowStep === 'enterInfo'} // Modal visible when in 'enterInfo' state
+          onRequestClose={() => setShopifyFlowStep('idle')} // Allow closing via back button etc.
+      >
+          <Pressable style={styles.modalOverlay} onPress={() => setShopifyFlowStep('idle')}>
+            <Pressable style={styles.modalContent} onPress={() => {}}> {/* Prevent closing on inner press */}
+              <Text style={styles.modalTitle}>Connect Shopify</Text>
+
+              {/* --- Option A: Guided Copy/Paste --- */}
+              <View style={styles.inputSection}>
+                 <Text style={styles.sectionTitle}>Option 1: Guided Setup (Recommended)</Text>
+                 <Text style={styles.sectionDescription}>
+                   1. Tap below to open Shopify. Log in if needed.{"\\n"} {/* Correct newline syntax */}
+                   2. Copy the URL from your Shopify Admin dashboard address bar.{"\\n"} {/* Correct newline syntax */}
+                   3. Return here and paste the URL below.
+                 </Text>
+                 <Button
+                   title="Open Shopify & Copy URL"
+                   onPress={openShopifyForCopy}
+                   style={styles.modalButton}
+                   // Optional: Add icon
+                 />
+                 <View style={styles.pasteContainer}>
+                    <TextInput
+                      style={styles.pasteInput}
+                      placeholder="Paste full Shopify URL here..."
+                      value={pastedShopifyUrl}
+                      onChangeText={(text) => { setPastedShopifyUrl(text); if (text) setManualShopName(''); }} // Clear manual if pasting URL
+                      autoCapitalize="none"
+                      keyboardType="url"
+                      selectTextOnFocus
+                    />
+                    <Button
+                      title="Paste"
+                      onPress={handlePasteFromClipboard}
+                      style={styles.pasteButton}
+                      textStyle={styles.pasteButtonText}
+                    />
+                 </View>
+              </View>
+
+              {/* --- REVISED Option B: Manual Input (Integrated) --- */}
+              <View style={styles.inputSectionManualOnly}>
+                 <Text style={styles.manualInputLabel}>Or, enter shop name directly:</Text>
+                 {/* <Text style={styles.sectionDescription}>
+                   Enter your shop's unique name (e.g., <Text style={{fontWeight: 'bold'}}>your-store-name</Text> from your *.myshopify.com URL or admin URL).
+                 </Text> */}
+                 <TextInput
+                   style={styles.manualInputSingle} // Use existing style
+                   placeholder="your-shop-name"
+                   value={manualShopName}
+                   onChangeText={(text) => { setManualShopName(text); if (text) setPastedShopifyUrl(''); }} // Clear URL if typing name
+                   autoCapitalize="none"
+                   autoCorrect={false}
+                 />
+              </View>
+
+              {/* --- Action Buttons --- */}
+              <View style={styles.actionButtonContainer}>
+                <Button
+                    title="Cancel"
+                    outlined
+                    onPress={() => {
+                      setShopifyFlowStep('idle');
+                      setPastedShopifyUrl('');
+                      setManualShopName('');
+                    }}
+                    style={[styles.modalButton, styles.cancelButton]}
+                  />
+                 <Button
+                   title="Connect Shopify"
+                   onPress={handleConfirmInput} // Use the single confirm handler
+                   // Disable if BOTH URL and manual name are empty or invalid (basic check)
+                   disabled={!pastedShopifyUrl && !manualShopName.trim()}
+                   style={[styles.modalButton, styles.connectButtonModal]} // Added connectButtonModal for specific styling if needed
+                 />
+              </View>
+
+            </Pressable>
+          </Pressable>
+        </Modal>
+      {/* --- END REVISED Guided Shopify Flow UI --- */}
 
       <View style={styles.footer}>
         <Text style={styles.versionText}>sssync v1.0.0</Text>
@@ -804,12 +998,145 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   // --- END Modal Platform Item Styles ---
+  // --- NEW: Styles for Guided Flow --- 
+  guidedFlowText: {
+    // This style might be replaced by sectionDescription or removed
+  },
+  // --- END Guided Flow Styles ---
+  // --- NEW: Styles for Paste UI ---
+  pasteContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    marginBottom: 15, // Space before confirm button
+  },
+  pasteInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    marginRight: 8,
+    backgroundColor: '#fff',
+  },
+  pasteButton: {
+    paddingHorizontal: 12,
+    height: 42, // Match input height approximately
+    flex: 0, // Don't expand
+  },
+  pasteButtonText: {
+    fontSize: 14, 
+  },
+  // --- END Paste UI Styles ---
   noConnectionsText: { 
     textAlign: 'center',
     color: '#888',
     paddingVertical: 20,
     fontStyle: 'italic',
   },
+  promptPasteContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+  },
+  promptPasteText: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginRight: 10,
+  },
+  pasteSectionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 8, // Adjusted spacing
+    color: '#333',
+    alignSelf: 'flex-start', // Align title left
+    width: '100%', // Take full width
+  },
+  manualInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    marginBottom: 10,
+    backgroundColor: '#fff',
+  },
+  // --- NEW Styles for Combined Modal & Shadcn feel ---
+  inputSection: {
+    width: '100%',
+    paddingBottom: 20,
+  },
+  inputSectionManualOnly: { // Style for the container of the manual input only
+    width: '100%',
+    paddingTop: 15, // Add some space above
+    marginTop: -10, // Adjust spacing relative to section above if needed
+  },
+  manualInputLabel: { // Style for the label above the manual input
+    fontSize: 14,
+    color: '#555',
+    marginBottom: 8,
+    fontWeight: '500',
+  },
+  sectionDescription: {
+    fontSize: 14,
+    color: '#555',
+    marginBottom: 15,
+    lineHeight: 20,
+  },
+  modalButton: {
+    alignSelf: 'stretch', // Make buttons take full width within their container
+    marginTop: 10,
+    // height: 45, // Slightly larger buttons
+  },
+  manualInputSingle: { // Style for the single manual input field
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    backgroundColor: '#fff',
+    width: '100%', // Take full width
+  },
+  dividerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '90%',
+    marginVertical: 15,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#ddd',
+  },
+  dividerText: {
+    marginHorizontal: 10,
+    color: '#777',
+    fontWeight: '500',
+  },
+  actionButtonContainer: {
+    flexDirection: 'row-reverse', // Put primary action (Connect) on the right
+    justifyContent: 'space-between', // Spread buttons
+    width: '100%',
+    marginTop: 20,
+    paddingTop: 20,
+    borderTopWidth: 1, // Separator line above actions
+    borderTopColor: '#eee',
+  },
+  cancelButton: {
+    // Specific styles for cancel button if needed, e.g., width
+    // flex: 0.4, // Example: make it slightly smaller
+  },
+  connectButtonModal: {
+    // Specific styles for connect button if needed
+    // flex: 0.6, // Example: make it slightly larger
+  },
+  // --- END NEW Styles ---
 });
 
 export default ProfileScreen; 
