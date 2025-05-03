@@ -107,7 +107,7 @@ const CreateAccountScreen = () => {
                 Occupation: occupation,
                 Currency: currency,
                 isOnboardingComplete: true 
-            }, { onConflict: 'Id' });
+        }, { onConflict: 'Id' });
             if (fallbackUpsertError) throw fallbackUpsertError; // Throw if fallback fails too
         } else {
              throw userUpdateError; // Throw other update errors
@@ -190,7 +190,7 @@ const CreateAccountScreen = () => {
             <DropDownPicker
               open={openRegion}
               value={region}
-              items={regionItems}
+                items={regionItems}
               setOpen={setOpenRegion}
               setValue={setRegion}
               setItems={setRegionItems}
@@ -241,7 +241,7 @@ const CreateAccountScreen = () => {
               zIndexInverse={2000}
               maxHeight={150}
               onOpen={() => setOpenRegion(false)}
-            />
+              />
             <Text style={styles.inputHint}>Primary currency for your transactions</Text>
 
             <Button

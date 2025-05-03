@@ -221,7 +221,7 @@ const AppNavigator = () => {
         await AsyncStorage.removeItem('userToken');
       } catch (e) {
         console.log(e);
-      } 
+      }
       // isLoading and initialStackName are handled by the useEffect hook watching userToken
     },
     signUp: async (token: string) => {
@@ -247,7 +247,7 @@ const AppNavigator = () => {
         token = await AsyncStorage.getItem('userToken');
         const alreadyLaunched = await AsyncStorage.getItem('alreadyLaunched');
         firstLaunch = alreadyLaunched === null;
-
+        
         if (firstLaunch) {
           await AsyncStorage.setItem('alreadyLaunched', 'true');
         }
@@ -262,12 +262,12 @@ const AppNavigator = () => {
         console.log("Bootstrap Error:", e);
         stackName = 'AuthStack'; // Default to Auth on error
       } finally {
-        setUserToken(token);
-        setIsFirstLaunch(firstLaunch);
+      setUserToken(token);
+      setIsFirstLaunch(firstLaunch);
         setInitialStackName(stackName);
 
         if (!token) {
-           setIsLoading(false);
+      setIsLoading(false);
         }
       }
     };
@@ -365,9 +365,9 @@ const AppNavigator = () => {
   return (
     <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
       <AuthContext.Provider value={authContext}>
-        <Stack.Navigator
+        <Stack.Navigator 
           initialRouteName={initialStackName}
-          screenOptions={{
+          screenOptions={{ 
             headerShown: false,
             headerShadowVisible: false,
             headerBackTitleVisible: false,
@@ -386,7 +386,7 @@ const AppNavigator = () => {
                   <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator /></View>
                 )
              }
-          </Stack.Screen>
+            </Stack.Screen>
 
         </Stack.Navigator>
       </AuthContext.Provider>

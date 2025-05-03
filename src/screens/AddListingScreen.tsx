@@ -403,9 +403,9 @@ const AddListingScreen = () => {
               const photo = await cameraRef.current.takePictureAsync({ quality: 0.8 });
               if (photo) {
                   const newItem: CapturedMediaItem = {
-                      uri: photo.uri,
-                      width: photo.width,
-                      height: photo.height,
+          uri: photo.uri,
+          width: photo.width,
+          height: photo.height,
                       type: 'image',
                       number: capturedMedia.length + 1, // Maintain number if needed elsewhere
                       id: photo.uri + Date.now(),
@@ -416,7 +416,7 @@ const AddListingScreen = () => {
           } catch (error) { console.error('Error taking picture', error); Alert.alert("Capture Error", "Could not take picture."); }
       } else if (capturedMedia.length >= 10) {
           Alert.alert("Limit Reached", "You can add a maximum of 10 media items.");
-      }
+    }
   };
 
   const startRecording = async () => {
@@ -428,8 +428,8 @@ const AddListingScreen = () => {
       }
       
       if (cameraRef.current && capturedMedia.length < 10) {
-          setRecording(true);
-          try {
+      setRecording(true);
+      try {
               const videoData = await cameraRef.current.recordAsync({ maxDuration: 60 });
               if (videoData) {
                   const newItem: CapturedMediaItem = {
@@ -439,7 +439,7 @@ const AddListingScreen = () => {
                   setCapturedMedia((prev) => [...prev, newItem].slice(0, 10)); // Ensure limit
                   if (capturedMedia.length === 0) setCoverImageIndex(0); // Set cover if first item
               }
-              setRecording(false);
+        setRecording(false);
           } catch (error) { console.error('Error recording video', error); setRecording(false); Alert.alert("Recording Error", "Could not record video."); }
       } else if (capturedMedia.length >= 10) {
           Alert.alert("Limit Reached", "You can add a maximum of 10 media items.");
@@ -492,7 +492,7 @@ const AddListingScreen = () => {
         quality: 0.8, 
         orderedSelection: true 
     });
-    if (!result.canceled && result.assets) { 
+    if (!result.canceled && result.assets) {
         const currentCount = capturedMedia.length;
         const spaceAvailable = 10 - currentCount;
         const itemsToAdd = result.assets.slice(0, spaceAvailable);
@@ -502,10 +502,10 @@ const AddListingScreen = () => {
         }
 
         const newItems: CapturedMediaItem[] = itemsToAdd.map((asset, index) => ({ 
-            uri: asset.uri, 
+        uri: asset.uri,
             type: (asset.type === 'video' ? 'video' : 'image') as 'video' | 'image',
-            width: asset.width, 
-            height: asset.height,
+        width: asset.width,
+        height: asset.height,
             number: currentCount + index + 1,
             id: asset.uri + Date.now() + index
         })); 
@@ -1005,7 +1005,7 @@ const AddListingScreen = () => {
   // --- Main Stage Render Functions ---
   const renderPlatformSelection = () => {
       console.log("[AddListingScreen] Rendering Platform Selection Stage");
-      return (
+        return (
           <Animated.View style={styles.stageContainer} entering={FadeIn}>
                {/* --- DEBUG BUTTON --- */}
               <Button title="DEBUG: Skip to Form Review" onPress={debugSkipToFormReview} style={{ marginVertical: 10, backgroundColor: 'orange' }} />
@@ -1036,10 +1036,10 @@ const AddListingScreen = () => {
                           </TouchableOpacity>
                       );
                   })}
-              </View>
+            </View>
               <Button title={`Next: Add Media (${selectedPlatforms.length})`} onPress={handlePlatformsSelected} style={styles.bottomButton} disabled={selectedPlatforms.length === 0}/>
           </Animated.View>
-      );
+        );
   };
 
   const renderImageInput = () => {
@@ -1047,7 +1047,7 @@ const AddListingScreen = () => {
        console.log("[AddListingScreen] Rendering Image Input Stage (Camera Integrated)");
       // --- Permission Handling ---
       if (!cameraPermission) {
-          return (
+        return (
           <View style={styles.centeredMessageContainer}>
             <ActivityIndicator size="large" color={'#294500'} />
             <Text style={styles.centeredMessageText}>Initializing Camera...</Text>
@@ -1055,13 +1055,13 @@ const AddListingScreen = () => {
         );
       }
       if (!cameraPermission.granted) {
-          return (
+        return (
           <View style={styles.centeredMessageContainer}>
             <Icon name="camera-off-outline" size={50} color="#FF5252" />
             <Text style={styles.centeredMessageText}>Camera permission is required to add media.</Text>
             <Button title="Grant Permission" onPress={requestPermission} style={{marginTop: 20}} />
             <Button title="Back to Platforms" onPress={() => setCurrentStage(ListingStage.PlatformSelection)} outlined style={{marginTop: 10}}/>
-              </View>
+            </View>
         );
       }
 
@@ -1070,8 +1070,8 @@ const AddListingScreen = () => {
         const isCover = capturedMedia[coverImageIndex]?.id === item.id;
         return (
           <ScaleDecorator>
-            <TouchableOpacity
-                    style={[
+                      <TouchableOpacity 
+                        style={[
                 styles.previewImageContainer,
                 isActive && styles.previewImageContainerActive,
                 isCover && styles.previewImageCover
@@ -1104,7 +1104,7 @@ const AddListingScreen = () => {
               <TouchableOpacity onPress={toggleCameraFacing} style={styles.headerButton}>
                 <Icon name="camera-switch-outline" size={24} color="white" />
               </TouchableOpacity>
-            </View>
+                  </View>
           </CameraView>
 
           {capturedMedia.length > 0 && (
@@ -1122,8 +1122,8 @@ const AddListingScreen = () => {
                 horizontal
                 contentContainerStyle={styles.previewScroll}
                 showsHorizontalScrollIndicator={false}
-              />
-            </View>
+                  />
+                </View>
           )}
 
           <View style={styles.bottomControlsContainer}>
@@ -1136,15 +1136,15 @@ const AddListingScreen = () => {
             <TouchableOpacity style={styles.sideControlButton} onPress={() => Alert.alert("Barcode Scanner", "Not implemented yet.")}>
               <Icon name="barcode-scan" size={30} color="white" />
                           </TouchableOpacity>
-                        </View>
-
+                </View>
+                
           <View style={styles.cameraStageHeader}>
             <Text style={styles.stageTitleCamera}>Add Product Media</Text>
             <Text style={styles.stageSubtitleCamera}>
               {capturedMedia.length}/10 items. {capturedMedia.length > 0 ? 'Drag to reorder. Tap preview to set cover.' : 'Use camera or upload.'}
                           </Text>
                 </View>
-
+                
           <View style={styles.navigationButtonsCamera}>
             <Button title="Back" onPress={() => setCurrentStage(ListingStage.PlatformSelection)} outlined style={styles.navButton} />
             <Button
@@ -1152,8 +1152,8 @@ const AddListingScreen = () => {
               onPress={triggerImageAnalysis}
               disabled={capturedMedia.length === 0 || (coverImageIndex < 0 && capturedMedia.length > 0)}
               style={StyleSheet.flatten([styles.navButton, (capturedMedia.length === 0 || (coverImageIndex < 0 && capturedMedia.length > 0)) ? styles.disabledButton : {}])}
-                      />
-                    </View>
+                  />
+                </View>
                   </View>
       );
   };
@@ -1178,7 +1178,7 @@ const AddListingScreen = () => {
                   <ActivityIndicator size="small" color="#666" />
                   <View style={styles.navigationButtons}>
                       <Button title="Back to Media" onPress={() => setCurrentStage(ListingStage.ImageInput)} outlined style={styles.navButton}/>
-                  </View>
+                </View>
               </Animated.View>
           );
       }
@@ -1190,7 +1190,7 @@ const AddListingScreen = () => {
       const renderMatchItem = ({ item }: { item: VisualMatch }) => {
           const isSelected = selectedMatchForGeneration?.position === item.position;
           return (
-              <TouchableOpacity
+                <TouchableOpacity 
                   style={[styles.matchGridItem, isSelected && styles.matchCardSelected]}
                   onPress={() => handleSelectMatchForGeneration(item)}
                   activeOpacity={0.7}
@@ -1201,7 +1201,7 @@ const AddListingScreen = () => {
                       <Text style={styles.matchSourceGrid}>{item.source || 'Unknown Source'}</Text>
                       {item.price?.value && <Text style={styles.matchPriceGrid}>{item.price.value}</Text>}
                   </View>
-              </TouchableOpacity>
+                </TouchableOpacity>
           );
       };
 
@@ -1212,7 +1212,7 @@ const AddListingScreen = () => {
                    {hasMatches
                        ? "Tap an item below to select it for context."
                        : "We couldn't find similar products online."}
-               </Text>
+                  </Text>
 
                {hasMatches ? (
                    <FlatList
@@ -1287,17 +1287,17 @@ const AddListingScreen = () => {
                  <ActivityIndicator size="small" color="#666" />
                   <View style={styles.navigationButtons}>
                       <Button title="Back to Matches" onPress={() => setCurrentStage(ListingStage.VisualMatch)} outlined style={styles.navButton}/>
-                  </View>
-             </Animated.View>
-         );
+              </View>
+          </Animated.View>
+        );
     }
     // Add log if check passes
     console.log(`[renderFormReview] Check passed. Rendering form for key: ${currentPlatformKey}`);
-
+  
     const currentPlatformData = formData[currentPlatformKey] || {};
 
     // --- Restore original complex JSX --- 
-    return (
+  return (
         <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             style={{ flex: 1 }}
@@ -1312,7 +1312,7 @@ const AddListingScreen = () => {
                   {capturedMedia.length > 0 ? (
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mediaPreviewScrollContent}>
                       {capturedMedia.map((item, index) => (
-                        <TouchableOpacity 
+            <TouchableOpacity 
                             key={item.id} 
                             style={[styles.mediaPreviewItemContainer, coverImageIndex === index && styles.previewImageCover]}
                             onPress={() => handleSetCover(index)}
@@ -1327,7 +1327,7 @@ const AddListingScreen = () => {
                            )}
                            <TouchableOpacity style={styles.deleteMediaButtonSmall} onPress={() => handleRemoveMedia(item.id)}>
                                <Icon name="close-circle" size={20} color="#FF5252" />
-                           </TouchableOpacity>
+            </TouchableOpacity>
                         </TouchableOpacity>
                       ))}
                     </ScrollView>
@@ -1338,21 +1338,21 @@ const AddListingScreen = () => {
                     <Button title="Add From Library" onPress={pickImagesFromLibrary} outlined style={styles.mediaButton} iconName="image-multiple-outline"/>
                     <Button title="Use Camera" onPress={() => setShowCameraSection(true)} outlined style={styles.mediaButton} iconName="camera-outline"/>
                   </View>
-                </View>
-
+          </View>
+          
                 {/* Platform Tabs */}
                 <View style={styles.tabContainer}>
                     {selectedPlatforms.map(platformKey => (
-                        <TouchableOpacity
+                <TouchableOpacity
                             key={platformKey}
                             style={[styles.tabButton, activeFormTab === platformKey && styles.tabButtonActive]}
                             onPress={() => setActiveFormTab(platformKey)}
                         >
                             <Text style={[styles.tabButtonText, activeFormTab === platformKey && styles.tabButtonTextActive]}>
                                 {AVAILABLE_PLATFORMS.find(p => p.key === platformKey)?.name || platformKey}
-                            </Text>
-                        </TouchableOpacity>
-                    ))}
+                  </Text>
+                </TouchableOpacity>
+              ))}
                 </View>
 
                 {/* Form Fields - Scrollable */}
@@ -1370,7 +1370,7 @@ const AddListingScreen = () => {
                                       placeholder={`Enter ${field === 'price' ? 'Price' : 'Compare At Price'}`}
                                   />
                                 <Text style={styles.currencyLabel}>$</Text>
-                                </View>
+        </View>
                              ) : field === 'description' || field === 'returnPolicy' ? (
                                 <TextInput
                                     style={styles.formInputMultiline}
@@ -1421,8 +1421,8 @@ const AddListingScreen = () => {
                                     onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
                                     placeholder={`Enter ${field.replace(/_/g, ' ')}`}
                                 />
-                            )}
-                        </View>
+      )}
+    </View>
                     ))}
                 </ScrollView>
 
@@ -1550,8 +1550,8 @@ const styles = StyleSheet.create({
       position: 'absolute',
       left: 0, right: 0, top: 0, bottom: 0,
       backgroundColor: 'rgba(0, 0, 0, 0.6)',
-      justifyContent: 'center', 
-      alignItems: 'center',
+    justifyContent: 'center',
+    alignItems: 'center',
       zIndex: 10 // Ensure it's on top
   },
   loadingText: { marginTop: 15, fontSize: 16, color: '#FFFFFF', fontWeight: '500' },
@@ -1584,14 +1584,14 @@ const styles = StyleSheet.create({
 
   // Styles FOR Camera Input Stage 
   cameraStageContainer: {
-      flex: 1,
+    flex: 1,
       backgroundColor: 'black',
   },
   cameraPreview: {
       flex: 1, // Takes space between header and preview/controls
   },
   cameraHeader: {
-      flexDirection: 'row',
+    flexDirection: 'row',
       justifyContent: 'flex-end',
       alignItems: 'center',
       paddingHorizontal: 15,
@@ -1652,9 +1652,9 @@ const styles = StyleSheet.create({
       alignItems: 'center'
   },
   bottomControlsContainer: {
-      flexDirection: 'row',
-      justifyContent: 'space-around',
-      alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
       paddingBottom: Platform.OS === 'ios' ? 10 : 5, // Reduced bottom padding
       paddingTop: 10,
       backgroundColor: 'black',
@@ -1666,11 +1666,11 @@ const styles = StyleSheet.create({
       justifyContent: 'center', alignItems: 'center',
       marginHorizontal: 20,
       borderWidth: 2,
-      borderColor: 'white',
+    borderColor: 'white',
   },
   captureInner: {
       width: 58, height: 58, borderRadius: 29,
-      backgroundColor: 'white',
+    backgroundColor: 'white',
   },
   recordingButton: {
       backgroundColor: 'red'
@@ -1680,27 +1680,27 @@ const styles = StyleSheet.create({
   },
   sideControlButton: {
       padding: 15,
-      justifyContent: 'center',
+    justifyContent: 'center',
       alignItems: 'center'
   },
   centeredMessageContainer: {
-      flex: 1,
-      justifyContent: 'center',
-      alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
       backgroundColor: 'black',
       padding: 20,
   },
   centeredMessageText: {
-      color: 'white',
+    color: 'white',
       marginTop: 15,
       textAlign: 'center',
       fontSize: 16,
   },
   cameraStageHeader: {
-      position: 'absolute',
+    position: 'absolute',
       top: Platform.OS === 'android' ? 80 : 100, // Position below header controls
       left: 15, right: 15, // Add padding
-      alignItems: 'center',
+    alignItems: 'center',
       zIndex: 2, // Above camera view/preview
       backgroundColor: 'rgba(0,0,0,0.3)', // Semi-transparent background
       borderRadius: 8,
@@ -1719,7 +1719,7 @@ const styles = StyleSheet.create({
       marginTop: 3,
   },
   navigationButtonsCamera: {
-      flexDirection: 'row',
+    flexDirection: 'row',
       justifyContent: 'space-between',
       paddingVertical: 10,
       paddingBottom: Platform.OS === 'ios' ? 25 : 15, // More padding at bottom
@@ -1730,7 +1730,7 @@ const styles = StyleSheet.create({
 
   // --- Styles for Visual Match GRID ---
   visualMatchGrid: { 
-      flex: 1, 
+    flex: 1,
       marginHorizontal: -5, // Counteract item margin
   },
   visualMatchGridContainer: {
@@ -1779,14 +1779,14 @@ const styles = StyleSheet.create({
     marginBottom: 4 
   },
   matchPriceGrid: { 
-    fontSize: 12, 
+    fontSize: 12,
     color: '#2E7D32', 
     fontWeight: '500'
   },
   
   // --- General Navigation Buttons --- 
   navigationButtons: { 
-      flexDirection: 'row', 
+    flexDirection: 'row',
       justifyContent: 'space-between', 
       borderTopWidth: 1, 
       borderTopColor: '#eee', 
@@ -1819,15 +1819,15 @@ const styles = StyleSheet.create({
   coverIndicatorText: { marginLeft: 4, fontSize: 10, fontWeight: 'bold', color: '#2E7D32' },
   videoIndicator: { position: 'absolute', bottom: 5, right: 5, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10, padding: 2 },
   removeIcon: { 
-    position: 'absolute', 
+    position: 'absolute',
     top: 4,
     right: 4,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     borderRadius: 11, 
     width: 22, 
     height: 22, 
-    justifyContent: 'center', 
-    alignItems: 'center', 
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   addButtonsContainer: {
     flexDirection: 'row',
@@ -1853,7 +1853,7 @@ const styles = StyleSheet.create({
 
   // --- RESTORED Styles for No Match/Empty State ---
   centeredInfoContainer: {
-    flex: 1, 
+    flex: 1,
     justifyContent: 'center', 
     alignItems: 'center', 
     paddingBottom: 50,
@@ -1893,7 +1893,7 @@ const styles = StyleSheet.create({
   formInput: { borderWidth: 1, borderColor: '#DDE2E7', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15, color: '#333', },
   formInputMultiline: {
       minHeight: 80, // Slightly smaller default multiline height
-      textAlignVertical: 'top',
+    textAlignVertical: 'top',
       // Inherit other styles from formInput
       borderWidth: 1, borderColor: '#DDE2E7', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15, color: '#333',
   },
@@ -1936,7 +1936,7 @@ const styles = StyleSheet.create({
     color: '#333',
   },
    modalSubtitle: {
-     fontSize: 14,
+    fontSize: 14,
      color: '#666',
      textAlign: 'center',
      marginBottom: 25,
@@ -1978,7 +1978,7 @@ const styles = StyleSheet.create({
         width: 80, 
         height: 80, 
         borderRadius: 6, 
-        marginHorizontal: 4,
+    marginHorizontal: 4,
         position: 'relative', 
         overflow: 'hidden', // Keep overflow hidden
         borderWidth: 1.5,
@@ -1995,7 +1995,7 @@ const styles = StyleSheet.create({
         borderRadius: 10,
         width: 20,
         height: 20,
-        justifyContent: 'center',
+    justifyContent: 'center',
         alignItems: 'center'
     },
     coverLabelSmall: {
@@ -2007,7 +2007,7 @@ const styles = StyleSheet.create({
     coverLabelText: {
         color: 'white',
         fontSize: 10,
-        fontWeight: 'bold',
+    fontWeight: 'bold',
         textAlign: 'center'
     },
     noMediaText: {
@@ -2018,13 +2018,13 @@ const styles = StyleSheet.create({
         paddingHorizontal: 5,
     },
     mediaButtonsContainer: {
-        flexDirection: 'row',
+    flexDirection: 'row',
         justifyContent: 'space-around',
         marginTop: 10,
         paddingHorizontal: 5,
-    },
+  },
     mediaButton: {
-        flex: 1,
+    flex: 1,
         marginHorizontal: 5,
     },
    // --- Style for Platform Image (Added by previous edit, keep this) --- 

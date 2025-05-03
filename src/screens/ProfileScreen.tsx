@@ -1,20 +1,39 @@
-import React, { useState, useContext } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, TextInput, Pressable, StyleProp, ViewStyle } from 'react-native';
+import React, { useState, useContext, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator } from 'react-native';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import PlaceholderImage from '../components/Placeholder';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CommonActions } from '@react-navigation/native';
-import InAppBrowser from 'react-native-inappbrowser-reborn';
+import * as WebBrowser from 'expo-web-browser';
 
 import { AuthContext } from '../context/AuthContext';
 
-type PlatformId = 'shopify' | 'amazon' | 'clover' | 'square' | string;
+// Define available platforms centrally (or import if moved)
+const AVAILABLE_PLATFORMS = [
+  { key: 'shopify', name: 'Shopify', icon: 'shopping' },
+  { key: 'amazon', name: 'Amazon', icon: 'package' },
+  { key: 'clover', name: 'Clover', icon: 'leaf' },
+  { key: 'square', name: 'Square', icon: 'square-outline' },
+  // Add other platforms here as needed
+];
+
+type PlatformId = typeof AVAILABLE_PLATFORMS[number]['key'];
+
+// --- Backend Connection Type (ASSUMPTION - Adjust as needed) ---
+interface PlatformConnection {
+  id: string; // Connection ID
+  platformType: PlatformId; // e.g., 'shopify', 'amazon'
+  displayName: string; // User-given name for the connection, or default
+  status: string; // e.g., 'active', 'inactive', 'error', 'pending'
+  // Add other relevant fields from your backend, like createdAt, lastSync etc.
+}
+// --- End Backend Connection Type ---
 
 const getPlatformColor = (platformId: PlatformId): string => {
   switch (platformId) {
@@ -53,6 +72,14 @@ const ProfileScreen = () => {
   const [darkModeEnabled, setDarkModeEnabled] = useState(false);
   const authContext = useContext(AuthContext);
   
+  // --- NEW State for Connections ---
+  const [connections, setConnections] = useState<PlatformConnection[]>([]);
+  const [isLoadingConnections, setIsLoadingConnections] = useState(true);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  // --- NEW: State for Add Connection Modal ---
+  const [isAddConnectionModalVisible, setIsAddConnectionModalVisible] = useState(false);
+  // --- END State ---
+
   const accountInfo = {
     name: 'African Caribbean Seafood',
     email: 'support@theacsm.com',
@@ -82,40 +109,96 @@ const ProfileScreen = () => {
     },
   ];
   
-  const handleConnectShopify = async () => {
-    console.log("[ProfileScreen] Initiating Shopify connection via Store Login...");
-    
-    const backendStoreLoginCallbackUri = 'https://api.sssync.app/auth/shopify/store-login-callback';
-    const finalAppRedirectUri = 'sssyncapp://auth-callback';
-    
-    const encodedBackendCallback = encodeURIComponent(backendStoreLoginCallbackUri);
-    const shopifyStoreLoginUrl = `https://accounts.shopify.com/store-login?redirect_uri=${encodedBackendCallback}`;
-
-    console.log(`[ProfileScreen] Opening Shopify Store Login URL: ${shopifyStoreLoginUrl}`);
+  // --- Fetch Connections Logic ---
+  const fetchConnections = useCallback(async () => {
+    console.log("[ProfileScreen] Fetching platform connections...");
+    setIsLoadingConnections(true);
+    setConnectionError(null);
 
     try {
-      if (await InAppBrowser.isAvailable()) {
-        console.log(`[ProfileScreen] Calling InAppBrowser.openAuth with URL: ${shopifyStoreLoginUrl} and Redirect URI: ${finalAppRedirectUri}`);
-        const result = await InAppBrowser.openAuth(shopifyStoreLoginUrl, finalAppRedirectUri, {
-          ephemeralWebSession: false, 
-          showTitle: false,
-          enableUrlBarHiding: true,
-          enableDefaultShare: false,
-        });
-
-        console.log('[ProfileScreen] InAppBrowser Auth Result (browser dismissed): ', result);
-        if (result.type === 'cancel') {
-           Alert.alert('Connection Cancelled', 'You cancelled the Shopify connection process.');
-        }
-
-      } else {
-        console.error('[ProfileScreen] InAppBrowser is not available');
-        Alert.alert('Error', 'Could not open secure browser. Please try again later.');
+      // 1. Get Auth Token
+      const session = await supabase.auth.getSession();
+      const token = session?.data.session?.access_token;
+      if (!token) {
+        throw new Error("Authentication token not found.");
       }
+
+      // 2. Make API Call (ASSUMED ENDPOINT - Update if needed)
+      const response = await fetch('https://api.sssync.app/platform-connections', { // <-- UPDATE THIS URL
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
+        throw new Error(errorData.message || `Failed to fetch connections. Status: ${response.status}`);
+      }
+
+      const data: PlatformConnection[] = await response.json();
+      console.log("[ProfileScreen] Fetched connections:", data);
+      setConnections(data || []); // Ensure it's an array
+
     } catch (error: unknown) {
-       console.error('[ProfileScreen] InAppBrowser Error:', error);
+      console.error("[ProfileScreen] Error fetching connections:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      setConnectionError(message);
+      setConnections([]); // Clear connections on error
+    } finally {
+      setIsLoadingConnections(false);
+    }
+  }, []); // Add dependencies if needed, e.g., userId if not using token
+
+  // Fetch connections on initial mount and when screen focuses
+  useFocusEffect(
+    useCallback(() => {
+      fetchConnections();
+    }, [fetchConnections])
+  );
+  // --- END Fetch Connections Logic ---
+
+  const handleConnectShopify = async () => {
+    console.log("[ProfileScreen] Initiating Shopify connection via Backend Store Picker...");
+    
+    // Get User ID directly from Supabase auth
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    
+    if (userError || !user) {
+      Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
+      console.error("[ProfileScreen] Error getting user from Supabase:", userError);
+      return;
+    }
+    const userId = user.id;
+    console.log(`[ProfileScreen] User ID: ${userId}`);
+
+    const backendInitiationUrlBase = 'https://api.sssync.app/auth/shopify/initiate-store-picker';
+    const appRedirectUri = 'sssyncapp://auth-callback';
+    
+    const encodedFinalAppRedirectUri = encodeURIComponent(appRedirectUri);
+    const backendInitiationUrl = `${backendInitiationUrlBase}?userId=${userId}&finalRedirectUri=${encodedFinalAppRedirectUri}`;
+    
+    console.log(`[ProfileScreen] Opening Backend Initiation URL with Expo WebBrowser: ${backendInitiationUrl}`);
+
+    try {
+      const result = await WebBrowser.openAuthSessionAsync(
+        backendInitiationUrl,
+        appRedirectUri
+      );
+
+      console.log('[ProfileScreen] WebBrowser Auth Result: ', result);
+
+      if (result.type === 'success' && result.url) {
+        console.log("[ProfileScreen] WebBrowser successful redirect URL:", result.url);
+      } else if (result.type === 'cancel' || result.type === 'dismiss') {
+        Alert.alert('Connection Cancelled', 'You cancelled or dismissed the Shopify connection process.');
+      }
+
+    } catch (error: unknown) {
+       console.error('[ProfileScreen] WebBrowser Error:', error);
        const message = error instanceof Error ? error.message : String(error);
-       Alert.alert('Connection Error', `An error occurred: ${message}`);
+       Alert.alert('Connection Error', `An error occurred opening the browser: ${message}`);
      }
   };
 
@@ -206,33 +289,72 @@ const ProfileScreen = () => {
             </TouchableOpacity>
           </View>
           
-          <View style={styles.integrationsContainer}>
-            {integrations.map((integration, index) => (
-              <View key={integration.name} style={styles.integrationItem}>
-                <PlaceholderImage 
-                  size={32} 
-                  borderRadius={4} 
-                  color={getPlatformColor(integration.id)}
-                  type="icon"
-                  icon={getIconForPlatform(integration.id)}
-                />
-                <Text style={styles.integrationName}>{integration.name}</Text>
-                {integration.isConnected ? (
-                  <View style={[styles.connectedBadge, { backgroundColor: theme.colors.success + '20' }]}>
-                    <Text style={[styles.connectedText, { color: theme.colors.success }]}>Connected</Text>
-                  </View>
-                ) : (
-                  <Button 
-                    title="Connect" 
-                    outlined 
-                    onPress={handleConnectShopify} 
-                    style={styles.connectButton} 
-                    textStyle={styles.connectButtonText}
-                  />
-                )}
-              </View>
-            ))}
-          </View>
+          {/* --- UPDATED Integrations Rendering --- */}
+          {isLoadingConnections ? (
+             <ActivityIndicator size="large" color={theme.colors.primary} style={{ marginVertical: 20 }}/>
+          ) : connectionError ? (
+            <View style={[styles.errorContainer, { backgroundColor: theme.colors.error + '15' }]}>
+              <Icon name="alert-circle-outline" size={24} color={theme.colors.error} />
+              <Text style={[styles.errorText, { color: '#FFFFFF' }]}>
+                Error loading connections: {' '}
+                <Text style={{ color: theme.colors.error, fontWeight: 'bold' }}>
+                  {connectionError}
+                </Text>
+              </Text>
+              <Button title="Retry" onPress={fetchConnections} outlined style={{ alignSelf: 'center' }}/>
+            </View>
+          ) : (
+            <View style={styles.integrationsContainer}>
+              {/* Map over FETCHED connections, not AVAILABLE_PLATFORMS */}
+              {connections.length > 0 ? (
+                 connections
+                   .filter(conn => conn.status === 'active') // Ensure we only show active connections
+                   .map((connection) => {
+                      // Find the matching platform config from AVAILABLE_PLATFORMS
+                      const platformConfig = AVAILABLE_PLATFORMS.find(p => p.key === connection.platformType);
+                      if (!platformConfig) return null; // Skip if config not found
+
+                      return (
+                        <View key={connection.id} style={styles.integrationItem}>
+                          <PlaceholderImage 
+                            size={32} 
+                            borderRadius={4} 
+                            color={getPlatformColor(platformConfig.key)}
+                            type="icon"
+                            icon={getIconForPlatform(platformConfig.key)}
+                          />
+                          {/* Use display name from connection or fallback to config name */}
+                          <Text style={styles.integrationName}>{connection.displayName || platformConfig.name}</Text>
+                          
+                          {/* Keep Connected/Manage/Disconnect logic */}
+                          <View style={styles.connectedContainer}> 
+                            <Icon name="check-circle" size={18} color={theme.colors.success} style={styles.connectedIcon} />
+                            <Text style={[styles.connectedText, { color: theme.colors.success, fontWeight: '600' }]}>Connected</Text>
+                            <TouchableOpacity style={styles.manageButton} onPress={() => Alert.alert('Manage', `Manage ${platformConfig.name}`)}>
+                              <Icon name="cog-outline" size={18} color={theme.colors.textSecondary || '#888'} />
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.disconnectButton} onPress={() => Alert.alert('Disconnect', `Disconnect ${platformConfig.name}?`)}>
+                              <Icon name="close-circle-outline" size={18} color={theme.colors.error} />
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      );
+                 })
+              ) : (
+                  <Text style={styles.noConnectionsText}>No active connections yet.</Text>
+              )}
+             
+              {/* --- NEW: Add Connection Button --- */}    
+              <Button 
+                title="Add Connection" 
+                onPress={() => setIsAddConnectionModalVisible(true)}
+                style={styles.addConnectionButton} 
+              />
+              {/* --- END Add Connection Button --- */}
+
+            </View>
+          )}
+          {/* --- END UPDATED Integrations Rendering --- */}
         </Card>
       </Animated.View>
       
@@ -320,6 +442,69 @@ const ProfileScreen = () => {
         </Card>
       </Animated.View>
       
+      {/* --- NEW: Add Connection Modal --- */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={isAddConnectionModalVisible}
+        onRequestClose={() => setIsAddConnectionModalVisible(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setIsAddConnectionModalVisible(false)}>
+          <Pressable style={styles.modalContent} onPress={() => {}}> 
+            <Text style={styles.modalTitle}>Add New Platform Connection</Text>
+            
+            <View style={styles.modalPlatformGrid}> 
+              {AVAILABLE_PLATFORMS.map((platform) => {
+                // Check if this platform is already connected and active
+                const isAlreadyConnected = connections.some(
+                  (conn) => conn.platformType === platform.key && conn.status === 'active'
+                );
+
+                return (
+                  <TouchableOpacity
+                    key={platform.key}
+                    style={[
+                      styles.modalPlatformCard,
+                      isAlreadyConnected && styles.modalPlatformCardDisabled // Style for disabled/connected
+                    ]}
+                    disabled={isAlreadyConnected} // Disable button if already connected
+                    onPress={() => {
+                      setIsAddConnectionModalVisible(false); // Close modal
+                      if (platform.key === 'shopify') {
+                        handleConnectShopify();
+                      } else {
+                        Alert.alert('Connect', `Connect logic for ${platform.name} not implemented.`);
+                      }
+                    }}
+                    activeOpacity={isAlreadyConnected ? 1 : 0.7} // Reduce opacity feedback if disabled
+                  >
+                    <PlaceholderImage 
+                      size={40} // Smaller icon for modal grid
+                      borderRadius={4} 
+                      color={getPlatformColor(platform.key)}
+                      type="icon"
+                      icon={getIconForPlatform(platform.key)}
+                    />
+                    <Text style={styles.modalPlatformName}>{platform.name}</Text>
+                    {isAlreadyConnected && (
+                        <Icon name="check-circle" size={16} color={theme.colors.success} style={styles.modalConnectedIcon} />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <Button
+              title="Close"
+              outlined
+              onPress={() => setIsAddConnectionModalVisible(false)}
+              style={{ marginTop: 15, alignSelf: 'stretch' }} // Stretch close button
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
+      {/* --- END Add Connection Modal --- */}
+
       <View style={styles.footer}>
         <Text style={styles.versionText}>sssync v1.0.0</Text>
       </View>
@@ -446,7 +631,8 @@ const styles = StyleSheet.create({
   },
   connectedText: {
     fontSize: 12,
-    fontWeight: '500',
+    marginRight: 8,
+    fontWeight: '600',
   },
   connectButton: {
     height: 32,
@@ -455,6 +641,7 @@ const styles = StyleSheet.create({
   },
   connectButtonText: {
     fontSize: 12,
+    color: '#FFFFFF',
   },
   settingItem: {
     flexDirection: 'row',
@@ -514,6 +701,114 @@ const styles = StyleSheet.create({
   settingsContainer: {
   },
   menuContainer: {
+  },
+  errorContainer: {
+    padding: 15,
+    marginVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  errorText: {
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 5,
+    marginBottom: 10,
+  },
+  connectedContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 4,
+  },
+  connectedIcon: {
+    marginRight: 4,
+  },
+  manageButton: {
+    padding: 4, 
+    marginLeft: 8,
+  },
+  disconnectButton: {
+    padding: 4,
+    marginLeft: 4,
+  },
+  addConnectionButton: {
+    marginTop: 20,
+    marginBottom: 10,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20, 
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 25,
+    width: '100%', 
+    maxWidth: 500,
+    maxHeight: '80%',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 20,
+    color: '#333',
+    textAlign: 'center',
+  },
+  modalPlatformGrid: { 
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      justifyContent: 'space-around', // Better spacing for grid items
+      alignItems: 'center',
+      width: '100%',
+      maxHeight: '70%', 
+      marginBottom: 20, // Add space before close button
+  },
+  // --- NEW: Styles for Modal Platform Items ---
+  modalPlatformCard: {
+    width: '40%', // Adjust width for grid layout
+    aspectRatio: 1.2, // Adjust aspect ratio
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    margin: 10, 
+    borderRadius: 12, 
+    borderWidth: 1.5, 
+    borderColor: '#ddd', 
+    backgroundColor: '#fff', 
+    padding: 10, 
+    position: 'relative', // For the checkmark icon positioning
+  },
+  modalPlatformCardDisabled: {
+    opacity: 0.5, // Make disabled cards faded
+    backgroundColor: '#f5f5f5',
+  },
+  modalPlatformName: {
+      fontSize: 13, 
+      fontWeight: '500', 
+      color: '#555', 
+      textAlign: 'center', 
+      marginTop: 8, 
+  },
+  modalConnectedIcon: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)', // Slight background for visibility
+    borderRadius: 10,
+  },
+  // --- END Modal Platform Item Styles ---
+  noConnectionsText: { 
+    textAlign: 'center',
+    color: '#888',
+    paddingVertical: 20,
+    fontStyle: 'italic',
   },
 });
 

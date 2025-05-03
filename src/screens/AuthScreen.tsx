@@ -79,7 +79,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
             }
           }
         });
-
+        
         if (signUpError) {
             // Handle specific errors, e.g., user already exists
              if (signUpError.message.includes('User already registered')) {
@@ -281,10 +281,10 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
               countryPickerButtonStyle={styles.phoneCountryPickerButton}
               placeholder="Phone Number"
               withShadow
-            />
+          />
         )} */}
         {/* ----------------------------------- */}
-
+        
         <TextInput
           style={styles.input}
           placeholder="Email"
@@ -352,8 +352,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
             onPress={() => navigation.navigate('PhoneAuthScreen')}
             disabled={loading}
           >
-            <Text style={styles.socialButtonText}>Continue with Phone Number</Text>
-          </TouchableOpacity>
+          <Text style={styles.socialButtonText}>Continue with Phone Number</Text>
+        </TouchableOpacity>
         )} */}
         {/* --------------------------------------------------- */}
       </Animated.View>
