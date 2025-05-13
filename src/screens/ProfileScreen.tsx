@@ -6,14 +6,20 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import PlaceholderImage from '../components/Placeholder';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CommonActions } from '@react-navigation/native';
 import * as WebBrowser from 'expo-web-browser';
 import * as Clipboard from 'expo-clipboard';
+import { RealtimeChannel } from '@supabase/supabase-js';
 
 import { AuthContext } from '../context/AuthContext';
+
+// Define route param types (add other screens/params if needed)
+type ProfileScreenRouteParams = {
+  Profile: { refresh?: number }; // Define the refresh param as optional number
+};
 
 // Define available platforms centrally (or import if moved)
 const AVAILABLE_PLATFORMS = [
@@ -28,11 +34,16 @@ type PlatformId = typeof AVAILABLE_PLATFORMS[number]['key'];
 
 // --- Backend Connection Type (ASSUMPTION - Adjust as needed) ---
 interface PlatformConnection {
-  id: string; // Connection ID
-  platformType: PlatformId; // e.g., 'shopify', 'amazon'
-  displayName: string; // User-given name for the connection, or default
-  status: string; // e.g., 'active', 'inactive', 'error', 'pending'
-  // Add other relevant fields from your backend, like createdAt, lastSync etc.
+  Id: string; // Connection ID - Match case from data
+  PlatformType: PlatformId; // e.g., 'shopify', 'amazon' - Match case from data
+  DisplayName: string; // User-given name for the connection, or default - Match case from data
+  Status: string; // e.g., 'active', 'inactive', 'error', 'pending' - Match case from data
+  // Add other fields matching the case from fetched data if needed
+  UserId: string; 
+  IsEnabled: boolean;
+  LastSyncSuccessAt: string | null;
+  CreatedAt: string;
+  UpdatedAt: string;
 }
 // --- End Backend Connection Type ---
 
@@ -69,6 +80,7 @@ const getIconForPlatform = (platform: PlatformId): string => {
 const ProfileScreen = () => {
   const theme = useTheme();
   const navigation = useNavigation();
+  const route = useRoute<RouteProp<ProfileScreenRouteParams, 'Profile'>>();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [darkModeEnabled, setDarkModeEnabled] = useState(false);
   const authContext = useContext(AuthContext);
@@ -79,6 +91,8 @@ const ProfileScreen = () => {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   // --- NEW: State for Add Connection Modal ---
   const [isAddConnectionModalVisible, setIsAddConnectionModalVisible] = useState(false);
+  // --- NEW: State for Edit Mode ---
+  const [isEditMode, setIsEditMode] = useState(false);
   // --- END State ---
 
   // --- REVISED State for Guided Shopify Flow ---
@@ -87,7 +101,7 @@ const ProfileScreen = () => {
   const [pastedShopifyUrl, setPastedShopifyUrl] = useState('');
   const [manualShopName, setManualShopName] = useState('');
   // --- END REVISED Guided Shopify Flow State ---
-
+  
   const accountInfo = {
     name: 'African Caribbean Seafood',
     email: 'support@theacsm.com',
@@ -119,12 +133,35 @@ const ProfileScreen = () => {
   
   // --- Fetch Connections Logic ---
   const fetchConnections = useCallback(async () => {
-    console.log("[ProfileScreen] Fetching platform connections...");
+    // Get user ID inside the function directly
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
+      console.warn("[ProfileScreen] Fetch connections called without user ID.", userError);
+      setConnectionError("User not available.");
+      setIsLoadingConnections(false);
+      return;
+    }
+    const currentUserId = user.id;
+    console.log("[ProfileScreen] Fetching platform connections for user:", currentUserId);
     setIsLoadingConnections(true);
     setConnectionError(null);
 
     try {
-      // 1. Get Auth Token
+      // --- TEMPORARY: Direct Supabase Query for Debugging --- 
+      console.log("[ProfileScreen DEBUG] Querying Supabase directly for connections...");
+      const { data: directData, error: directError } = await supabase
+        .from('PlatformConnections') // Assuming table name is PlatformConnections
+        .select('*')
+        .eq('UserId', currentUserId); // Assuming column name is UserId (case-sensitive)
+
+      if (directError) {
+        console.error("[ProfileScreen DEBUG] Direct Supabase query error:", directError);
+      } else {
+        console.log("[ProfileScreen DEBUG] Direct Supabase query result:", JSON.stringify(directData, null, 2));
+      }
+      // --- END TEMPORARY DEBUG --- 
+
+      // 1. Get Auth Token (Still good practice for API calls)
       const session = await supabase.auth.getSession();
       const token = session?.data.session?.access_token;
       if (!token) {
@@ -157,15 +194,134 @@ const ProfileScreen = () => {
     } finally {
       setIsLoadingConnections(false);
     }
-  }, []); // Add dependencies if needed, e.g., userId if not using token
+  }, []); // Remove user.id dependency, it's fetched inside
 
-  // Fetch connections on initial mount and when screen focuses
+  // --- DEBUG: Add useEffect to log connections state changes ---
+  useEffect(() => {
+    console.log('[ProfileScreen STATE DEBUG] Connections state updated:', JSON.stringify(connections, null, 2));
+  }, [connections]);
+  // --- END DEBUG ---
+
+  // Fetch connections on initial mount/focus (kept for initial load)
   useFocusEffect(
     useCallback(() => {
+      console.log("[ProfileScreen] Focus effect triggered");
       fetchConnections();
+      // Dependency array now only includes fetchConnections
     }, [fetchConnections])
   );
-  // --- END Fetch Connections Logic ---
+
+  // --- REVISED: Realtime Subscription for Connections ---
+  useEffect(() => {
+    let channel: RealtimeChannel | null = null;
+
+    const initializeSubscription = async () => {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      
+      if (userError || !user) {
+        console.error("[ProfileScreen] Cannot setup realtime subscription without user.", userError);
+        return;
+      }
+
+      const currentUserId = user.id;
+      const tableName = 'PlatformConnections'; // Match DB schema (PascalCase)
+      const userIdColumn = 'UserId';       // Match DB schema (PascalCase)
+      console.log(`[ProfileScreen] Setting up realtime subscription for ${tableName} table, user: ${currentUserId}`);
+
+      channel = supabase
+        .channel(`public:${tableName}:${currentUserId}`) // Unique channel name per user
+        .on(
+          'postgres_changes',
+          { 
+            event: '*', 
+            schema: 'public',
+            table: tableName, // Use correct table name
+            filter: `${userIdColumn}=eq.${currentUserId}` // Use correct column name
+          },
+          (payload) => {
+            console.log('[ProfileScreen] Realtime change received:', payload);
+            // Re-fetch with a slight delay
+            setTimeout(() => fetchConnections(), 500); 
+          }
+        )
+        .subscribe((status, err) => {
+          if (status === 'SUBSCRIBED') {
+            console.log('[ProfileScreen] Realtime subscribed!');
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            // Use string concatenation to avoid syntax issues
+            console.error('[ProfileScreen] Realtime subscription error/closed: ' + status, err);
+          } else {
+            // Log other statuses for debugging if needed
+            console.log(`[ProfileScreen] Realtime status: ${status}`);
+          }
+        });
+    };
+    
+    initializeSubscription();
+
+    // Cleanup function
+    return () => {
+      if (channel) {
+        const channelToRemove = channel; // Capture channel in closure
+        channel = null; // Set to null immediately
+        console.log('[ProfileScreen] Removing realtime subscription');
+        supabase.removeChannel(channelToRemove)
+          .then(() => console.log('[ProfileScreen] Realtime channel removed successfully.'))
+          .catch(err => console.error('[ProfileScreen] Error removing realtime channel:', err));
+      }
+    };
+  }, [fetchConnections]);
+  // --- END Realtime Subscription ---
+
+  // --- NEW: Delete Connection Logic ---
+  const handleDisconnectPlatform = async (connectionId: string, platformName: string) => {
+    Alert.alert(
+      `Disconnect ${platformName}`, 
+      `Are you sure you want to disconnect your ${platformName} account? This will stop syncing products.`, 
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Disconnect",
+          style: "destructive",
+          onPress: async () => {
+            console.log(`[ProfileScreen] Attempting to disconnect connection ID: ${connectionId}`);
+            try {
+              // 1. Get Auth Token
+              const session = await supabase.auth.getSession();
+              const token = session?.data.session?.access_token;
+              if (!token) {
+                throw new Error("Authentication token not found.");
+              }
+
+              // 2. Make API Call (ASSUMED ENDPOINT - Backend needs to implement this)
+              const response = await fetch(`https://api.sssync.app/platform-connections/${connectionId}`, { // <-- BACKEND NEEDS THIS ROUTE
+                method: 'DELETE',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                },
+              });
+
+              if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
+                throw new Error(errorData.message || `Failed to disconnect. Status: ${response.status}`);
+              }
+              
+              console.log(`[ProfileScreen] Successfully disconnected connection ID: ${connectionId}`);
+              Alert.alert('Disconnected', `${platformName} connection removed.`);
+              // 3. Refresh the connections list
+              fetchConnections(); 
+
+            } catch (error: unknown) {
+              console.error("[ProfileScreen] Error disconnecting platform:", error);
+              const message = error instanceof Error ? error.message : String(error);
+              Alert.alert('Error', `Failed to disconnect ${platformName}: ${message}`);
+            }
+          },
+        },
+      ]
+    );
+  };
+  // --- END Delete Connection Logic ---
 
   // --- NEW: Logic for Guided Shopify Flow Step 4 (Open Browser) ---
   const openShopifyForCopy = async () => {
@@ -304,18 +460,32 @@ const ProfileScreen = () => {
   };
 
   const handleLogout = async () => {
+    console.log("[ProfileScreen] handleLogout initiated..."); // Add log
     try {
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
-      
-      await AsyncStorage.removeItem('userToken');
-      
+      // Call context signOut first (now synchronous state update)
       if (authContext) {
-        await authContext.signOut();
+        authContext.signOut(); 
+        console.log("[ProfileScreen] authContext.signOut() called."); // Add log
+      } else {
+        console.warn("[ProfileScreen] AuthContext not available during logout.");
       }
       
+      // Then sign out from Supabase
+      console.log("[ProfileScreen] Calling Supabase signOut..."); // Add log
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        console.error("[ProfileScreen] Supabase signOut error:", error); // Log specific error
+        throw error; // Re-throw to be caught below
+      }
+      console.log("[ProfileScreen] Supabase signOut successful."); // Add log
+      
+      // Then remove local token
+      console.log("[ProfileScreen] Removing userToken from AsyncStorage..."); // Add log
+      await AsyncStorage.removeItem('userToken');
+      console.log("[ProfileScreen] AsyncStorage token removed."); // Add log
+      
     } catch (error: unknown) {
-      console.error('Logout Error:', error);
+      console.error('Logout Error in handleLogout:', error); // Change console message
       const message = error instanceof Error ? error.message : String(error);
       Alert.alert('Logout Error', message);
     }
@@ -332,6 +502,28 @@ const ProfileScreen = () => {
   
   // Add this log to see the state value during each render
   console.log('[ProfileScreen] Rendering with shopifyFlowStep:', shopifyFlowStep);
+  
+  const logCurrentUserToken = async () => {
+    try {
+      const { data: { session }, error } = await supabase.auth.getSession();
+
+      if (error) {
+        console.error("Error getting session:", error.message);
+        return;
+      }
+
+      if (session) {
+        const accessToken = session.access_token;
+        console.log("Current User Access Token:", accessToken);
+        // Now you can copy this logged token and paste it into Postman's
+        // "Bearer Token" field under the Authorization tab.
+      } else {
+        console.log("No active user session found.");
+      }
+    } catch (catchError: any) {
+      console.error("Caught unexpected error getting session:", catchError.message);
+    }
+  };
   
   return (
     <ScrollView 
@@ -388,8 +580,10 @@ const ProfileScreen = () => {
         <Card style={styles.card}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Connected Platforms</Text>
-            <TouchableOpacity>
-              <Text style={[styles.sectionAction, { color: theme.colors.primary }]}>Manage</Text>
+            <TouchableOpacity onPress={() => setIsEditMode(!isEditMode)}> 
+              <Text style={[styles.sectionAction, { color: theme.colors.primary }]}>
+                {isEditMode ? 'Done' : 'Edit'}
+              </Text>
             </TouchableOpacity>
           </View>
           
@@ -408,47 +602,108 @@ const ProfileScreen = () => {
               <Button title="Retry" onPress={fetchConnections} outlined style={{ alignSelf: 'center' }}/>
             </View>
           ) : (
-            <View style={styles.integrationsContainer}>
+          <View style={styles.integrationsContainer}>
               {/* Map over FETCHED connections, not AVAILABLE_PLATFORMS */}
-              {connections.length > 0 ? (
-                 connections
-                   .filter(conn => conn.status === 'active') // Ensure we only show active connections
-                   .map((connection) => {
-                      // Find the matching platform config from AVAILABLE_PLATFORMS
-                      const platformConfig = AVAILABLE_PLATFORMS.find(p => p.key === connection.platformType);
-                      if (!platformConfig) return null; // Skip if config not found
+              {(() => {
+                // Calculate filteredConnections first
+                
+                // --- DEBUG: Log connections right before filter --- 
+                // console.log(`[ProfileScreen PRE-FILTER DEBUG] connections at filter time: ${JSON.stringify(connections)}`);
+                // --- END DEBUG ---
 
+                // --- REMOVE THE FILTER BASED ON STATUS ---
+                const filteredConnections = connections; // Display all connections
+                // --- END REMOVAL ---
+
+                // Perform logging and return JSX
+                if (!(connections.length > 0)) {
+                  // console.log("[ProfileScreen RENDER DEBUG] connections.length is NOT > 0");
+                   // Note: This case might be redundant if filteredConnections handles it, but keep for explicit logging
+                } else {
+                  // console.log(`[ProfileScreen RENDER DEBUG] connections.length > 0 ? true`);
+                }
+
+                // console.log(`[ProfileScreen FILTERED DEBUG] Filtered connections count: ${filteredConnections.length}`);
+                // console.log(`[ProfileScreen FILTERED DEBUG] Filtered connections data: ${JSON.stringify(filteredConnections)}`);
+
+                if (filteredConnections.length === 0) {
+                   // console.log("[ProfileScreen RENDER DEBUG] No connections after filtering.");
+                   // Return null here, the text below will handle the message
+                   return null; 
+                } else {
+                   // console.log("[ProfileScreen RENDER DEBUG] Mapping filtered connections...");
+                   // Now map the filtered array
+                   return filteredConnections.map((connection) => {
+                      const platformConfig = AVAILABLE_PLATFORMS.find(p => p.key === connection.PlatformType);
+                      if (!platformConfig) {
+                          // console.log(`[ProfileScreen MAP DEBUG] Skipping connection ID: ${connection.Id} - No platform config found for type: ${connection.PlatformType}`);
+                          return null;
+                      } 
+
+                      // console.log(`[ProfileScreen MAP DEBUG] Rendering item for connection ID: ${connection.Id}, Name: ${connection.DisplayName || platformConfig.name}`);
+
+                      // --- NEW: Parse Shopify Display Name ---
+                      let displayShopName = connection.DisplayName || platformConfig.name;
+                      if (connection.PlatformType === 'shopify' && connection.DisplayName.includes('.myshopify.com')) {
+                         displayShopName = connection.DisplayName.replace('.myshopify.com', '');
+                      }
+                      // --- END Parsing ---
+
+                      // --- Restore Original Code & Add Edit Mode Logic ---
                       return (
-                        <View key={connection.id} style={styles.integrationItem}>
-                          <PlaceholderImage 
+                        <View key={connection.Id} style={styles.integrationItem}>
+                          {/* --- Conditional Delete Button (Edit Mode) --- */}
+                          {isEditMode && (
+                            <TouchableOpacity 
+                              style={styles.deleteButton} // Add this style
+                              onPress={() => handleDisconnectPlatform(connection.Id, platformConfig.name)} 
+                            >
+                              <Icon name="minus-circle-outline" size={24} color={theme.colors.error} />
+                            </TouchableOpacity>
+                          )}
+                          {/* --- Platform Icon (using Placeholder for now) --- */}
+                           <PlaceholderImage 
                             size={32} 
                             borderRadius={4} 
                             color={getPlatformColor(platformConfig.key)}
                             type="icon"
-                            icon={getIconForPlatform(platformConfig.key)}
+                            icon={getIconForPlatform(platformConfig.key)} // Keep using this function
                           />
-                          {/* Use display name from connection or fallback to config name */}
-                          <Text style={styles.integrationName}>{connection.displayName || platformConfig.name}</Text>
+                          {/* --- Display Name (Parsed) --- */}
+                          <Text style={styles.integrationName}>{displayShopName}</Text> 
                           
-                          {/* Keep Connected/Manage/Disconnect logic */}
-                          <View style={styles.connectedContainer}> 
-                            <Icon name="check-circle" size={18} color={theme.colors.success} style={styles.connectedIcon} />
-                            <Text style={[styles.connectedText, { color: theme.colors.success, fontWeight: '600' }]}>Connected</Text>
-                            <TouchableOpacity style={styles.manageButton} onPress={() => Alert.alert('Manage', `Manage ${platformConfig.name}`)}>
-                              <Icon name="cog-outline" size={18} color={theme.colors.textSecondary || '#888'} />
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.disconnectButton} onPress={() => Alert.alert('Disconnect', `Disconnect ${platformConfig.name}?`)}>
-                              <Icon name="close-circle-outline" size={18} color={theme.colors.error} />
-                            </TouchableOpacity>
-                          </View>
+                          {/* --- Conditional Right-Side Elements (Not Edit Mode) --- */}
+                          {!isEditMode && (
+                            <View style={styles.connectedContainer}> 
+                              <Icon name="check-circle" size={18} color={theme.colors.success} style={styles.connectedIcon} />
+                              <Text style={[styles.connectedText, { color: theme.colors.success, fontWeight: '600' }]}>Connected</Text>
+                              {/* --- REMOVED Manage/Disconnect Buttons from Default View --- */}
+                              {/* 
+                              <TouchableOpacity style={styles.manageButton} onPress={() => Alert.alert('Manage', `Manage ${platformConfig.name} (Not Implemented)`)}>
+                                <Icon name="cog-outline" size={18} color={theme.colors.textSecondary || '#888'} />
+                              </TouchableOpacity>
+                              <TouchableOpacity 
+                                style={styles.disconnectButton} 
+                                onPress={() => handleDisconnectPlatform(connection.Id, platformConfig.name)} // Original disconnect still here if needed outside edit mode
+                              >
+                                <Icon name="close-circle-outline" size={18} color={theme.colors.error} />
+                              </TouchableOpacity>
+                              */}
+                            </View>
+                          )}
                         </View>
                       );
-                 })
-              ) : (
-                  <Text style={styles.noConnectionsText}>No active connections yet.</Text>
+                   });
+                }
+              })()} 
+
+              {/* Render "No active connections yet" text if needed */}
+              {/* --- ADJUSTED CONDITION: Show text only if the connections array is truly empty --- */}
+              {connections.length === 0 && (
+                  <Text style={styles.noConnectionsText}>No connections yet.</Text>
               )}
-             
-              {/* --- NEW: Add Connection Button --- */}    
+              {/* --- END ADJUSTED CONDITION --- */}
+              {/* Always render Add Connection Button (unless error/loading) */} 
               <Button 
                 title="Add Connection" 
                 onPress={() => setIsAddConnectionModalVisible(true)}
@@ -456,7 +711,7 @@ const ProfileScreen = () => {
               />
               {/* --- END Add Connection Button --- */}
 
-            </View>
+              </View>
           )}
           {/* --- END UPDATED Integrations Rendering --- */}
         </Card>
@@ -514,7 +769,7 @@ const ProfileScreen = () => {
                   styles.menuItem,
                   index < menuItems.length - 1 ? styles.menuItemBorder : null
                 ]}
-                onPress={item.onPress || (() => {})}
+                onPress={logCurrentUserToken}
               >
                 <View style={styles.menuItemLeft}>
                   <Icon 
@@ -561,7 +816,7 @@ const ProfileScreen = () => {
               {AVAILABLE_PLATFORMS.map((platform) => {
                 // Check if this platform is already connected and active
                 const isAlreadyConnected = connections.some(
-                  (conn) => conn.platformType === platform.key && conn.status === 'active'
+                  (conn) => conn.PlatformType === platform.key && conn.Status === 'active'
                 );
 
                 return (
@@ -648,13 +903,16 @@ const ProfileScreen = () => {
                       keyboardType="url"
                       selectTextOnFocus
                     />
-                    <Button
-                      title="Paste"
-                      onPress={handlePasteFromClipboard}
-                      style={styles.pasteButton}
-                      textStyle={styles.pasteButtonText}
-                    />
+                    {/* Replace Text Button with Icon Button */}
+                    <TouchableOpacity 
+                      onPress={handlePasteFromClipboard} 
+                      style={styles.pasteButton} // Reuse/adjust style for Touchable area
+                    >
+                      <Icon name="content-paste" size={24} color={theme.colors.primary} style={styles.pasteIcon} />
+                    </TouchableOpacity>
                  </View>
+                 {/* Add clarification text */}
+                 <Text style={styles.pasteHintText}>(Paste URL then tap 'Connect Shopify' below)</Text>
               </View>
 
               {/* --- REVISED Option B: Manual Input (Integrated) --- */}
@@ -683,14 +941,24 @@ const ProfileScreen = () => {
                       setPastedShopifyUrl('');
                       setManualShopName('');
                     }}
-                    style={[styles.modalButton, styles.cancelButton]}
+                    style={{
+                      alignSelf: 'stretch',
+                      marginTop: 10,
+                      flex: 0.48,
+                      backgroundColor: '#f5f5f5'
+                    }}
                   />
                  <Button
                    title="Connect Shopify"
                    onPress={handleConfirmInput} // Use the single confirm handler
                    // Disable if BOTH URL and manual name are empty or invalid (basic check)
                    disabled={!pastedShopifyUrl && !manualShopName.trim()}
-                   style={[styles.modalButton, styles.connectButtonModal]} // Added connectButtonModal for specific styling if needed
+                   style={{
+                      alignSelf: 'stretch',
+                      marginTop: 10,
+                      flex: 0.48,
+                      marginLeft: 10
+                    }}
                  />
               </View>
 
@@ -698,7 +966,7 @@ const ProfileScreen = () => {
           </Pressable>
         </Modal>
       {/* --- END REVISED Guided Shopify Flow UI --- */}
-
+      
       <View style={styles.footer}>
         <Text style={styles.versionText}>sssync v1.0.0</Text>
       </View>
@@ -1024,10 +1292,22 @@ const styles = StyleSheet.create({
   pasteButton: {
     paddingHorizontal: 12,
     height: 42, // Match input height approximately
-    flex: 0, // Don't expand
+    justifyContent: 'center', // Center icon vertically if needed
+    alignItems: 'center', // Center icon horizontally if needed
+    paddingLeft: 10, // Adjust padding for icon spacing
   },
   pasteButtonText: {
     fontSize: 14, 
+  },
+  pasteIcon: {
+    // Specific styles for the icon itself if needed
+  },
+  pasteHintText: {
+    fontSize: 12,
+    color: '#777',
+    marginTop: 4,
+    width: '100%', // Take full width
+    textAlign: 'right', // Align hint text right below input
   },
   // --- END Paste UI Styles ---
   noConnectionsText: { 
@@ -1083,9 +1363,10 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   sectionDescription: {
+
     fontSize: 14,
     color: '#555',
-    marginBottom: 15,
+    marginBottom: 40,
     lineHeight: 20,
   },
   modalButton: {
@@ -1129,14 +1410,23 @@ const styles = StyleSheet.create({
     borderTopColor: '#eee',
   },
   cancelButton: {
-    // Specific styles for cancel button if needed, e.g., width
-    // flex: 0.4, // Example: make it slightly smaller
+    // Properly define as a ViewStyle object with real properties
+    flex: 0.48, // Take slightly less than half the space
+    backgroundColor: '#f5f5f5', // Light gray background
   },
   connectButtonModal: {
-    // Specific styles for connect button if needed
-    // flex: 0.6, // Example: make it slightly larger
+    // Properly define as a ViewStyle object with real properties
+    flex: 0.48, // Take slightly less than half the space
+    marginLeft: 10, // Add some space between buttons
   },
-  // --- END NEW Styles ---
+  // --- NEW: Style for Delete Button in Edit Mode ---
+  deleteButton: {
+    paddingHorizontal: 10, // Add padding to make it easier to tap
+    marginRight: 8, // Add some space between delete button and platform icon
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  // --- END Style ---
 });
 
 export default ProfileScreen; 

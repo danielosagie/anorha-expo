@@ -213,16 +213,12 @@ const AppNavigator = () => {
         console.log(e);
       }
     },
-    signOut: async () => {
-      // --- SIMPLIFIED: Only clear token state and storage --- 
-      setUserToken(null);
-      setInitialAppScreen(null); // Clear specific app screen state too
-      try {
-        await AsyncStorage.removeItem('userToken');
-      } catch (e) {
-        console.log(e);
-      }
-      // isLoading and initialStackName are handled by the useEffect hook watching userToken
+    // Make signOut effectively synchronous for state update, but return Promise for type compatibility
+    signOut: () => { 
+      console.log("[AuthContext] signOut called, setting userToken to null.")
+      setUserToken(null); 
+      // Removal of AsyncStorage token will happen in handleLogout
+      return Promise.resolve(); // Satisfy AuthContextType
     },
     signUp: async (token: string) => {
       // Don't set isLoading false here
@@ -292,15 +288,20 @@ const AppNavigator = () => {
 
     } else {
       // --- LOGOUT ---
-      // This block now handles all state changes for logout
-       if (initialStackName !== null) { // Avoid setting state before bootstrap finishes initial check
-           setInitialStackName('AuthStack');
-           setInitialAppScreen(null); // Ensure app screen is reset
-           setIsLoading(false);       // Explicitly set loading false
+       if (initialStackName !== null && navigation) { // Check ref is ready
+           console.log("[AppNavigator] User token is null, resetting navigation to AuthStack"); 
+           // Explicitly reset navigation state to the Auth stack
+           navigation.reset({ 
+             index: 0, 
+             routes: [{ name: 'AuthStack', params: { screen: 'Auth' } }], // Reset to AuthStack -> Auth screen
+           });
+           // Set state *after* reset is dispatched (might help avoid conflicts)
+           setInitialAppScreen(null);        
+           setInitialStackName('AuthStack');  
+           setIsLoading(false); // Set loading false directly now
        }
-       // If bootstrap hasn't finished, it will set the correct state upon completion
     }
-  }, [userToken]); // Re-run only when userToken changes
+  }, [userToken, initialStackName]); // Add initialStackName dependency
 
   // Add AppState listener for session expiry
   useEffect(() => {
@@ -366,7 +367,7 @@ const AppNavigator = () => {
     <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
       <AuthContext.Provider value={authContext}>
         <Stack.Navigator 
-          initialRouteName={initialStackName}
+          initialRouteName={initialStackName ?? 'AuthStack'}
           screenOptions={{ 
             headerShown: false,
             headerShadowVisible: false,

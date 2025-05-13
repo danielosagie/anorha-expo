@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import React, { useEffect, useRef } from 'react';
+import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
 import { StatusBar, Linking, Alert } from 'react-native';
 import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
@@ -8,6 +8,7 @@ import 'react-native-get-random-values';
 
 
 const App: React.FC = () => {
+  const navigationRef = useRef<NavigationContainerRef<any>>(null);
 
   // --- Deep Link Handling ---
   useEffect(() => {
@@ -48,11 +49,16 @@ const App: React.FC = () => {
       console.log("[App.tsx] Auth Callback Parsed Params:", { status, platform, message });
 
       if (status === 'success') {
-        // TODO: Update global state (e.g., mark platform as connected)
-        // TODO: Potentially navigate to Profile screen
+        // Navigate to Profile screen with a refresh param
+        console.log("[App.tsx] Navigating to Profile with refresh param");
+        navigationRef.current?.navigate('MainTabs', { 
+          screen: 'Profile', 
+          params: { refresh: Date.now() } // Use timestamp to force update
+        }); 
+        // Optional: Show a briefer success message or remove alert
         Alert.alert(
           'Connection Successful',
-          `Successfully connected ${platform || 'platform'}! You might need to refresh the profile screen to see the updated status.`
+          `Successfully connected ${platform || 'platform'}!`
         );
       } else if (status === 'error') {
         // TODO: Handle error state appropriately
@@ -71,7 +77,7 @@ const App: React.FC = () => {
   return (
     <ThemeProvider>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-      <NavigationContainer>
+      <NavigationContainer ref={navigationRef}>
         <AppNavigator />
       </NavigationContainer>
     </ThemeProvider>
