@@ -13,6 +13,7 @@
     "@expo/metro-runtime": "~5.0.4",
     "@johnn-e/react-mesh-gradient": "^1.1.1",
     "@react-native-google-signin/google-signin": "^13.2.0",
+    "@react-native-picker/picker": "^2.11.0",
     "@react-native/assets-registry": "^0.79.0",
     "@react-navigation/bottom-tabs": "^6.6.1",
     "@react-navigation/native": "^6.1.18",

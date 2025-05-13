@@ -16,7 +16,8 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Modal,
-  Pressable
+  Pressable,
+  Keyboard
 } from 'react-native';
 import { CameraView, useCameraPermissions, Camera, CameraType, FlashMode } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
@@ -24,7 +25,7 @@ import Animated, {
   FadeIn, 
   FadeOut
 } from 'react-native-reanimated';
-// import { useTheme } from '../context/ThemeContext'; // DEBUG: Commented out
+import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Button from '../components/Button';
 import Card from '../components/Card';
@@ -33,10 +34,9 @@ import { supabase } from '../../lib/supabase';
 import * as FileSystem from 'expo-file-system';
 import { Buffer } from 'buffer';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-// @ts-ignore
-import { decode } from 'base64-arraybuffer'; // Keep for potential fallback or other uses, but primary upload will use Buffer
 import DraggableFlatList, { ScaleDecorator, RenderItemParams } from 'react-native-draggable-flatlist';
-import { GestureHandlerRootView } from 'react-native-gesture-handler'; // Import GestureHandlerRootView
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { useNavigation } from '@react-navigation/native';
 
 // Define available platforms with icons
 const AVAILABLE_PLATFORMS = [
@@ -130,6 +130,10 @@ interface GeneratedPlatformDetails { // Keep frontend name consistent for now, m
   availability?: 'in stock' | 'limited stock' | 'out of stock'; // Suggest 'in stock'
   // Allow for other potential fields
   [key: string]: any;
+  // Add Shopify-specific fields
+  productOptions?: ShopifyOption[];
+  variants?: ShopifyVariant[];
+  inventoryItem?: ShopifyInventoryItem;
 }
 
 // UPDATED Frontend interface to match Backend's GeneratedDetails
@@ -208,23 +212,130 @@ const DEBUG_SAMPLE_FORM_DATA = {
 };
 // --- End Sample Data ---
 
+// --- NEW Interfaces for Shopify Integration ---
+interface ShopifyLocation {
+  id: string;
+  name: string;
+  address1: string;
+  address2: string | null;
+  city: string;
+  province: string;
+  country: string;
+  zip: string;
+  phone: string | null;
+  provinceCode: string;
+  countryCode: string;
+  countryName: string;
+  legacy: boolean;
+  active: boolean;
+  adminGraphqlApiId: string;
+  localizedCountryName: string;
+  localizedProvinceName: string;
+}
+
+interface ShopifyLocationWithQuantity extends ShopifyLocation {
+  quantity: number;
+}
+
+interface ShopifyPublishResponse {
+  success: boolean;
+  productId: string;
+  operationId: string;
+}
+// --- End NEW Interfaces ---
+
+// Add new interfaces for Shopify schema
+interface ShopifyOption {
+  name: string;
+  values: { name: string }[];
+}
+
+interface ShopifyInventoryItem {
+  cost?: number;
+  tracked: boolean;
+  measurement?: {
+    weight?: {
+      value: number;
+      unit: 'POUNDS' | 'KILOGRAMS' | 'GRAMS' | 'OUNCES';
+    };
+  };
+}
+
+interface ShopifyInventoryQuantity {
+  locationId: string;
+  name: string;
+  quantity: number;
+}
+
+interface ShopifyVariant {
+  optionValues: { optionName: string; name: string }[];
+  price: string;
+  sku: string;
+  inventoryItem: ShopifyInventoryItem;
+  inventoryQuantities: ShopifyInventoryQuantity[];
+  taxable?: boolean;
+  barcode?: string;
+  file?: {
+    originalSource: string;
+    alt: string;
+    filename: string;
+    contentType: string;
+  };
+}
+
+interface ShopifyProductInput {
+  title: string;
+  descriptionHtml?: string;
+  vendor?: string;
+  productType?: string;
+  status: 'ACTIVE' | 'DRAFT' | 'ARCHIVED';
+  tags?: string[];
+  productOptions?: ShopifyOption[];
+  files?: {
+    originalSource: string;
+    alt: string;
+    filename: string;
+    contentType: string;
+  }[];
+  variants: ShopifyVariant[];
+}
+
+// Add to the interface for route params
+interface AddListingScreenProps {
+  route: {
+    params?: {
+      initialData?: {
+        title: string;
+        description: string;
+        price: number;
+        sku: string;
+        barcode: string;
+        images: string[];
+        platformDetails: any;
+        status: 'draft' | 'active' | 'archived';
+        initialStage?: ListingStage; // Add this
+        productId?: string; // Add this
+        variantId?: string; // Add this
+        uploadedImageUrls?: string[]; // Add this
+      };
+    };
+  };
+}
+
 // --- Main Component --- //
-const AddListingScreen = () => {
+const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   console.log("[AddListingScreen] Component Mounted");
-  // const theme = useTheme(); // DEBUG: Commented out
+  const theme = useTheme();
   const [currentStage, setCurrentStage] = useState<ListingStage>(ListingStage.PlatformSelection);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
-  // const [images, setImages] = useState<ImageInfo[]>([]); // Keep commented out if not used
   const [capturedMedia, setCapturedMedia] = useState<CapturedMediaItem[]>([]);
   const [coverImageIndex, setCoverImageIndex] = useState<number>(-1);
   const [showCameraSection, setShowCameraSection] = useState(false);
   const [analysisResponse, setAnalysisResponse] = useState<BackendAnalysisResponse | null>(null);
-  // UPDATED State type
   const [generationResponse, setGenerationResponse] = useState<GenerateDetailsResponse['generatedDetails'] | null>(null); // Store only the details part
-  // UPDATED State type
   const [formData, setFormData] = useState<GenerateDetailsResponse['generatedDetails'] | null>(null); // Holds the editable form data based on the new structure
   const [productId, setProductId] = useState<string | null>(null);
   const [variantId, setVariantId] = useState<string | null>(null);
@@ -247,7 +358,96 @@ const AddListingScreen = () => {
   // --- NEW State for Publish Modal ---
   const [isPublishModalVisible, setIsPublishModalVisible] = useState(false);
 
+  // --- NEW State for Shopify Integration ---
+  const [shopifyLocations, setShopifyLocations] = useState<ShopifyLocation[]>([]);
+  const [selectedLocations, setSelectedLocations] = useState<ShopifyLocationWithQuantity[]>([]);
+  const [platformConnectionId, setPlatformConnectionId] = useState<string | null>(null);
+  const [isLoadingLocations, setIsLoadingLocations] = useState(false);
+  // --- End NEW State ---
+
   const IMAGE_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
+
+  // Add navigation
+  const navigation = useNavigation();
+
+  // Add useEffect to handle initial data and stage
+  useEffect(() => {
+    if (route.params?.initialData) {
+      const { initialData } = route.params;
+      console.log("[AddListingScreen] Received initial data:", JSON.stringify(initialData, null, 2));
+      
+      // Set initial stage if provided
+      if (initialData.initialStage) {
+        console.log("[AddListingScreen] Setting initial stage to:", initialData.initialStage);
+        setCurrentStage(initialData.initialStage as ListingStage);
+      }
+
+      // Set product and variant IDs if provided
+      if (initialData.productId) {
+        console.log("[AddListingScreen] Setting product ID:", initialData.productId);
+        setProductId(initialData.productId);
+      }
+      if (initialData.variantId) {
+        console.log("[AddListingScreen] Setting variant ID:", initialData.variantId);
+        setVariantId(initialData.variantId);
+      }
+
+      // Set uploaded image URLs if provided
+      if (initialData.uploadedImageUrls && initialData.uploadedImageUrls.length > 0) {
+        console.log("[AddListingScreen] Setting uploaded image URLs:", initialData.uploadedImageUrls.length);
+        setUploadedImageUrls(initialData.uploadedImageUrls);
+        
+        // Also set captured media from the images
+        const mediaItems: CapturedMediaItem[] = initialData.uploadedImageUrls.map((uri, index) => ({
+          uri,
+          type: 'image',
+          number: index + 1,
+          id: uri + Date.now() + index,
+        }));
+        setCapturedMedia(mediaItems);
+        setCoverImageIndex(0); // Set first image as cover
+      }
+
+      // Initialize form data with at least basic product information
+      const basicFormData = {
+        shopify: { // Default to shopify as the first platform
+          title: initialData.title || '',
+          description: initialData.description || '',
+          price: initialData.price || 0,
+          sku: initialData.sku || '',
+          barcode: initialData.barcode || '',
+          status: initialData.status || 'draft',
+          // Add any other basic fields that should be initialized
+        }
+      };
+
+      // Merge with any existing platform details
+      const mergedFormData = {
+        ...basicFormData,
+        ...(initialData.platformDetails || {})
+      };
+
+      console.log("[AddListingScreen] Setting form data:", JSON.stringify(mergedFormData, null, 2));
+      setFormData(mergedFormData);
+      
+      // Set the first platform as active tab (default to shopify if no platforms in details)
+      const firstPlatform = Object.keys(mergedFormData)[0];
+      console.log("[AddListingScreen] Setting active tab to:", firstPlatform);
+      setActiveFormTab(firstPlatform);
+      
+      // Set selected platforms based on available data
+      const platforms = Object.keys(mergedFormData);
+      console.log("[AddListingScreen] Setting selected platforms:", platforms);
+      setSelectedPlatforms(platforms);
+
+      // Clear any existing loading states
+      setIsLoading(false);
+      setLoadingMessage('');
+      setError(null);
+    } else {
+      console.log("[AddListingScreen] No initial data provided in route params");
+    }
+  }, [route.params?.initialData]);
 
   // --- Upload Function --- //
   const uploadImagesToSupabase = async (
@@ -929,27 +1129,179 @@ const AddListingScreen = () => {
   };
 
   const handleSaveDraft = async () => { console.log("Saving Draft...", { productId, variantId, formData }); Alert.alert("Draft Saved (Logged)", "API call not implemented."); };
-  const handlePublish = async () => {
-      console.log("Attempting to publish...");
-      // Add validation here if needed before showing modal
-      setIsPublishModalVisible(true); 
+
+  // --- NEW Function to Fetch Shopify Locations ---
+  const fetchShopifyLocations = async () => {
+    if (!platformConnectionId) {
+      console.error("[fetchShopifyLocations] No platform connection ID available");
+      return;
+    }
+
+    setIsLoadingLocations(true);
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+
+      if (userError || !user || sessionError || !sessionData?.session?.access_token) {
+        throw new Error("Authentication error. Please log out and back in.");
+      }
+
+      const token = sessionData.session.access_token;
+      const response = await fetch(
+        `https://sssync-bknd-production.up.railway.app/products/shopify/locations?platformConnectionId=${platformConnectionId}`,
+        {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      setShopifyLocations(data.locations || []);
+      
+      // Initialize selected locations with quantity 0
+      setSelectedLocations((data.locations || []).map((loc: ShopifyLocation) => ({ ...loc, quantity: 0 })));
+    } catch (err: any) {
+      console.error("[fetchShopifyLocations] Error:", err);
+      Alert.alert("Error", `Failed to fetch Shopify locations: ${err.message}`);
+    } finally {
+      setIsLoadingLocations(false);
+    }
   };
 
-  // ADDED handlers for modal buttons
-  const handlePublishAction = (publishMode: 'draft' | 'live') => {
-    setIsPublishModalVisible(false);
-    console.log(`Publishing as ${publishMode}...`, { productId, variantId, formData }); 
-    // Replace with actual API call later
-    setCurrentStage(ListingStage.Publishing); // Show loading indicator
-    setIsLoading(true);
-    setLoadingMessage(`Publishing as ${publishMode}...`);
+  // --- NEW Function to Update Location Quantity ---
+  const updateLocationQuantity = (locationId: string, quantity: number) => {
+    setSelectedLocations(prev => 
+      prev.map((loc: ShopifyLocationWithQuantity) => 
+        loc.id === locationId 
+          ? { ...loc, quantity: Math.max(0, quantity) } // Ensure non-negative
+          : loc
+      )
+    );
+  };
 
-    setTimeout(() => { 
-        setIsLoading(false);
-        Alert.alert(`Published as ${publishMode} (Simulated)`, "API call not implemented yet."); 
-        // Reset state or navigate away after successful publish
-        // setCurrentStage(ListingStage.PlatformSelection); // Example reset
-    }, 2000); 
+  // --- UPDATED handlePublish to Fetch Locations ---
+  const handlePublish = async () => {
+    if (selectedPlatforms.includes('shopify')) {
+      try {
+        // TODO: Get platformConnectionId from user's connections
+        // For now, using a placeholder
+        setPlatformConnectionId("conn-123");
+        await fetchShopifyLocations();
+      } catch (err: any) {
+        Alert.alert("Error", `Failed to prepare for publishing: ${err.message}`);
+        return;
+      }
+    }
+    setIsPublishModalVisible(true);
+  };
+
+  // --- UPDATED handlePublishAction with Actual API Call ---
+  const handlePublishAction = async (status: 'draft' | 'active' | 'archived') => {
+    setCurrentStage(ListingStage.Publishing);
+    setIsLoading(true);
+    setLoadingMessage(`Publishing as ${status}...`);
+
+    try {
+      // Get auth token
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+
+      if (userError || !user || sessionError || !sessionData?.session?.access_token) {
+        throw new Error("Authentication error. Please log out and back in.");
+      }
+
+      const token = sessionData.session.access_token;
+
+      // Handle Shopify publish if selected
+      if (selectedPlatforms.includes('shopify') && productId && platformConnectionId) {
+        // Validate locations
+        const locations = selectedLocations
+          .filter(loc => loc.quantity > 0)
+          .map(loc => ({
+            locationId: loc.id,
+            quantity: loc.quantity
+          }));
+
+        if (locations.length === 0) {
+          throw new Error("Please set inventory quantity for at least one location");
+        }
+
+        // Get Shopify-specific data from form
+        const shopifyData = formData?.shopify || {};
+        
+        // Make the API call
+        const response = await fetch(
+          `https://sssync-bknd-production.up.railway.app/products/${productId}/publish/shopify`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              platformConnectionId,
+              locations,
+              options: {
+                status: status.toUpperCase(),
+                vendor: shopifyData.vendor || undefined,
+                productType: shopifyData.productType || undefined,
+                tags: Array.isArray(shopifyData.tags) ? shopifyData.tags : []
+              }
+            })
+          }
+        );
+
+        // Handle response
+        if (!response.ok) {
+          const errorData = await response.json();
+          if (response.status === 403) {
+            throw new Error("Shopify publishing is not enabled for your subscription");
+          } else if (response.status === 400) {
+            throw new Error(errorData.message || "Invalid request data");
+          } else {
+            throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+          }
+        }
+
+        const publishResponse: ShopifyPublishResponse = await response.json();
+        if (!publishResponse.success) {
+          throw new Error("Publish operation failed");
+        }
+
+        Alert.alert(
+          "Success", 
+          `Product published to Shopify as ${status}.\nOperation ID: ${publishResponse.operationId}`
+        );
+
+        // Reset state and navigate back
+        setCurrentStage(ListingStage.PlatformSelection);
+        setSelectedPlatforms([]);
+        setFormData(null);
+        setCapturedMedia([]);
+        setCoverImageIndex(-1);
+        setProductId(null);
+        setVariantId(null);
+      } else {
+        // Handle other platforms or fallback
+        console.log(`Publishing as ${status} for other platforms...`);
+        Alert.alert("Not Implemented", "Publishing to other platforms is not implemented yet.");
+      }
+    } catch (err: any) {
+      console.error("[handlePublishAction] Error:", err);
+      Alert.alert("Publish Error", err.message);
+      setCurrentStage(ListingStage.FormReview);
+    } finally {
+      setIsLoading(false);
+      setLoadingMessage('');
+    }
   };
 
   // --- ADDED handleRegenerateConfirm --- 
@@ -1004,42 +1356,60 @@ const AddListingScreen = () => {
 
   // --- Main Stage Render Functions ---
   const renderPlatformSelection = () => {
-      console.log("[AddListingScreen] Rendering Platform Selection Stage");
-        return (
-          <Animated.View style={styles.stageContainer} entering={FadeIn}>
-               {/* --- DEBUG BUTTON --- */}
-              <Button title="DEBUG: Skip to Form Review" onPress={debugSkipToFormReview} style={{ marginVertical: 10, backgroundColor: 'orange' }} />
-              {/* --- END DEBUG BUTTON --- */}
-              <Text style={styles.stageTitle}>Select Platforms</Text>
-              <Text style={styles.stageSubtitle}>Choose where you want to list this product.</Text>
-              <View style={styles.platformGrid}>
-                  {AVAILABLE_PLATFORMS.map((platform) => {
-                      const isSelected = selectedPlatforms.includes(platform.key);
-                      const imageSource = platformImageMap[platform.key]; // Get image source from map
-                      return (
-                          <TouchableOpacity
-                              key={platform.key}
-                              style={[styles.platformCard, isSelected && styles.platformCardSelected]}
-                              onPress={() => togglePlatformSelection(platform.key)}
-                              activeOpacity={0.7}
-                          >
-                              {imageSource ? (
-                                  <Image
-                                      source={imageSource}
-                                      style={[styles.platformImage, !isSelected && styles.platformImageDeselected]}
-                                      resizeMode="contain"
-                                  />
-                              ) : (
-                                  <View style={styles.platformIconPlaceholder} />
-                              )}
-                              <Text style={[styles.platformName, isSelected && styles.platformNameSelected]}>{platform.name}</Text>
-                          </TouchableOpacity>
-                      );
-                  })}
-            </View>
-              <Button title={`Next: Add Media (${selectedPlatforms.length})`} onPress={handlePlatformsSelected} style={styles.bottomButton} disabled={selectedPlatforms.length === 0}/>
-          </Animated.View>
-        );
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Select Platform</Text>
+          <TouchableOpacity 
+            style={styles.pastScansButton}
+            onPress={() => {
+              // @ts-ignore - Navigation type will be fixed when navigation types are properly set up
+              navigation.navigate('PastScans');
+            }}
+          >
+            <Icon name="history" size={24} color={theme.colors.primary} />
+          </TouchableOpacity>
+        </View>
+        
+        <Animated.View style={styles.stageContainer} entering={FadeIn}>
+          <Text style={styles.stageTitle}>Select Platforms</Text>
+          <Text style={styles.stageSubtitle}>Choose where you want to list this product.</Text>
+          <View style={styles.platformGrid}>
+            {AVAILABLE_PLATFORMS.map((platform) => {
+              const isSelected = selectedPlatforms.includes(platform.key);
+              const imageSource = platformImageMap[platform.key];
+              return (
+                <TouchableOpacity
+                  key={platform.key}
+                  style={[styles.platformCard, isSelected && styles.platformCardSelected]}
+                  onPress={() => togglePlatformSelection(platform.key)}
+                  activeOpacity={0.7}
+                >
+                  {imageSource ? (
+                    <Image
+                      source={imageSource}
+                      style={[styles.platformImage, !isSelected && styles.platformImageDeselected]}
+                      resizeMode="contain"
+                    />
+                  ) : (
+                    <View style={styles.platformIconPlaceholder} />
+                  )}
+                  <Text style={[styles.platformName, isSelected && styles.platformNameSelected]}>
+                    {platform.name}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <Button 
+            title={`Next: Add Media (${selectedPlatforms.length})`} 
+            onPress={handlePlatformsSelected} 
+            style={styles.bottomButton} 
+            disabled={selectedPlatforms.length === 0}
+          />
+        </Animated.View>
+      </View>
+    );
   };
 
   const renderImageInput = () => {
@@ -1274,220 +1644,250 @@ const AddListingScreen = () => {
 
   // --- UPDATED renderFormReview --- (Keep updated version)
   const renderFormReview = () => {
-    console.log(`[AddListingScreen] Rendering Form Review Stage for tab: ${activeFormTab}`);
+    console.log(`[renderFormReview] Starting render with active tab: ${activeFormTab}`);
+    console.log("[renderFormReview] Current form data:", JSON.stringify(formData, null, 2));
+    console.log("[renderFormReview] Selected platforms:", selectedPlatforms);
+    console.log("[renderFormReview] Route params:", JSON.stringify(route.params, null, 2));
 
     const currentPlatformKey = activeFormTab?.toLowerCase();
 
+    // Only show loading if we're actually waiting for data
     if (!formData || !currentPlatformKey || !formData[currentPlatformKey]) {
-        // ... (Detailed logging remains) ...
-        // Return loading/error state
+      console.warn("[renderFormReview] Missing form data:", {
+        hasFormData: !!formData,
+        currentPlatformKey,
+        hasPlatformData: currentPlatformKey ? !!formData?.[currentPlatformKey] : false,
+        initialData: route.params?.initialData
+      });
+
+      // If we have initial data but no form data, something went wrong
+      if (route.params?.initialData?.platformDetails) {
+        console.error("[renderFormReview] Form data not set despite having initial data. Initial data:", 
+          JSON.stringify(route.params.initialData.platformDetails, null, 2));
+        setError("Failed to load product data. Please try again.");
         return (
-             <Animated.View style={styles.stageContainer} entering={FadeIn}>
-                 <Text style={styles.stageTitle}>Loading Details...</Text>
-                 <ActivityIndicator size="small" color="#666" />
-                  <View style={styles.navigationButtons}>
-                      <Button title="Back to Matches" onPress={() => setCurrentStage(ListingStage.VisualMatch)} outlined style={styles.navButton}/>
-              </View>
-          </Animated.View>
+          <View style={styles.errorContainer}>
+            <Icon name="alert-circle-outline" size={40} color="#D8000C" />
+            <Text style={styles.errorText}>{error || "Failed to load product data"}</Text>
+            <Button 
+              title="Back to Past Scans" 
+              onPress={() => navigation.goBack()} 
+              style={styles.retryButton}
+            />
+          </View>
         );
+      }
+
+      return (
+        <Animated.View style={styles.stageContainer} entering={FadeIn}>
+          <Text style={styles.stageTitle}>Loading Details...</Text>
+          <ActivityIndicator size="small" color="#666" />
+          <View style={styles.navigationButtons}>
+            <Button 
+              title="Back to Past Scans" 
+              onPress={() => navigation.goBack()} 
+              outlined 
+              style={styles.navButton}
+            />
+          </View>
+        </Animated.View>
+      );
     }
-    // Add log if check passes
-    console.log(`[renderFormReview] Check passed. Rendering form for key: ${currentPlatformKey}`);
-  
+
     const currentPlatformData = formData[currentPlatformKey] || {};
 
-    // --- Restore original complex JSX --- 
-  return (
-        <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            style={{ flex: 1 }}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0} // Adjust as needed
-        >
-            <Animated.View style={styles.stageContainer} entering={FadeIn}>
-                <Text style={styles.stageTitle}>Review & Edit Details</Text>
-
-                {/* Media Preview Section */}
-                <View style={styles.mediaSectionContainer}>
-                  <Text style={styles.sectionTitle}>Media ({capturedMedia.length}/10)</Text>
-                  {capturedMedia.length > 0 ? (
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mediaPreviewScrollContent}>
-                      {capturedMedia.map((item, index) => (
-            <TouchableOpacity 
-                            key={item.id} 
-                            style={[styles.mediaPreviewItemContainer, coverImageIndex === index && styles.previewImageCover]}
-                            onPress={() => handleSetCover(index)}
-                            activeOpacity={0.8}
-                        >
-                           <Image source={{ uri: item.uri }} style={styles.mediaPreviewImage} />
-                           {item.type === 'video' && (
-                               <View style={styles.videoIndicatorPreview}><Icon name="play-circle" size={18} color={'white'} /></View>
-                           )}
-                           {coverImageIndex === index && (
-                               <View style={styles.coverLabelSmall}><Text style={styles.coverLabelText}>COVER</Text></View>
-                           )}
-                           <TouchableOpacity style={styles.deleteMediaButtonSmall} onPress={() => handleRemoveMedia(item.id)}>
-                               <Icon name="close-circle" size={20} color="#FF5252" />
-            </TouchableOpacity>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  ) : (
-                    <Text style={styles.noMediaText}>No media added yet.</Text>
-                  )}
-                  <View style={styles.mediaButtonsContainer}>
-                    <Button title="Add From Library" onPress={pickImagesFromLibrary} outlined style={styles.mediaButton} iconName="image-multiple-outline"/>
-                    <Button title="Use Camera" onPress={() => setShowCameraSection(true)} outlined style={styles.mediaButton} iconName="camera-outline"/>
+    return (
+      <View style={styles.formReviewContainer}>
+        {/* Media Preview Section */}
+        <View style={styles.mediaPreviewContainer}>
+          <ScrollView 
+            horizontal 
+            showsHorizontalScrollIndicator={false} 
+            contentContainerStyle={styles.mediaPreviewScrollContent}
+          >
+            {uploadedImageUrls.map((uri, index) => (
+              <TouchableOpacity 
+                key={uri} 
+                style={[styles.mediaPreviewItem, coverImageIndex === index && styles.mediaPreviewItemCover]}
+                onPress={() => handleSetCover(index)}
+                activeOpacity={0.8}
+              >
+                <Image source={{ uri }} style={styles.mediaPreviewImage} />
+                {coverImageIndex === index && (
+                  <View style={styles.coverBadge}>
+                    <Icon name="star" size={12} color="white" />
                   </View>
-          </View>
-          
-                {/* Platform Tabs */}
-                <View style={styles.tabContainer}>
-                    {selectedPlatforms.map(platformKey => (
-                <TouchableOpacity
-                            key={platformKey}
-                            style={[styles.tabButton, activeFormTab === platformKey && styles.tabButtonActive]}
-                            onPress={() => setActiveFormTab(platformKey)}
-                        >
-                            <Text style={[styles.tabButtonText, activeFormTab === platformKey && styles.tabButtonTextActive]}>
-                                {AVAILABLE_PLATFORMS.find(p => p.key === platformKey)?.name || platformKey}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-                </View>
-
-                {/* Form Fields - Scrollable */}
-                <ScrollView style={styles.formScrollView} showsVerticalScrollIndicator={false}>
-                    {Object.entries(currentPlatformData).map(([field, value]) => (
-                        <View key={field} style={styles.formInputContainer}>
-                            <Text style={styles.formLabel}>{field.replace(/_/g, ' ')}</Text>
-                            {field === 'price' || field === 'compareAtPrice' ? (
-                              <View>
-                                  <TextInput
-                                      style={[styles.formInput, styles.priceInputWithCurrency]}
-                                      value={value !== undefined && value !== null ? String(value) : ''} 
-                                      onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
-                                      keyboardType="numeric"
-                                      placeholder={`Enter ${field === 'price' ? 'Price' : 'Compare At Price'}`}
-                                  />
-                                <Text style={styles.currencyLabel}>$</Text>
+                )}
+              </TouchableOpacity>
+            ))}
+            {uploadedImageUrls.length < 10 && (
+              <TouchableOpacity 
+                style={styles.addMediaButton}
+                onPress={() => {
+                  Alert.alert(
+                    "Add Media",
+                    "Choose how to add media",
+                    [
+                      { text: "Camera", onPress: () => setShowCameraSection(true) },
+                      { text: "Library", onPress: pickImagesFromLibrary },
+                      { text: "Cancel", style: "cancel" }
+                    ]
+                  );
+                }}
+              >
+                <Icon name="plus" size={24} color="#666" />
+              </TouchableOpacity>
+            )}
+          </ScrollView>
+          <Text style={styles.mediaHint}>Tap to set cover image</Text>
         </View>
-                             ) : field === 'description' || field === 'returnPolicy' ? (
-                                <TextInput
-                                    style={styles.formInputMultiline}
-                                    value={String(value || '')} 
-                                    onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
-                                    multiline
-                                    numberOfLines={4}
-                                    placeholder={`Enter ${field.replace(/_/g, ' ')}`}
-                                />
-                            ) : typeof value === 'boolean' ? (
-                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                   <Switch
-                                       value={value} 
-                                       onValueChange={(newValue) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, newValue)}
-                                       trackColor={{ false: "#767577", true: "#81b0ff" }} 
-                                       thumbColor={value ? "#4CAF50" : "#f4f3f4"}
-                                   />
-                                   <Text style={{ marginLeft: 8 }}>{value ? 'Enabled' : 'Disabled'}</Text>
-                                </View>
-                            ) : Array.isArray(value) ? (
-                                <>
-                                  <TextInput
-                                    style={styles.formInput}
-                                    value={value.join(', ')} 
-                                    onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
-                                    placeholder={`Enter ${field.replace(/_/g, ' ')} (comma-separated)`}
-                                  />
-                                  <Text style={styles.arrayHint}>Separate items with commas</Text>
-                                </>
-                            ) : typeof value === 'object' && value !== null && field === 'itemSpecifics' ? (
-                                <>
-                                    <TextInput
-                                        style={styles.formInputMultiline} 
-                                        value={typeof value === 'string' ? value : JSON.stringify(value, null, 2)} 
-                                        onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
-                                        multiline
-                                        numberOfLines={5}
-                                        placeholder={`Enter ${field.replace(/_/g, ' ')} as JSON (e.g., { "Size": "Large", "Color": "Red" })`}
-                                        autoCapitalize="none"
-                                        autoCorrect={false}
-                                     />
-                                     <Text style={styles.readOnlyHint}>Edit as JSON object string</Text>
-                                 </>
-                            ) : (
-                                <TextInput
-                                    style={styles.formInput}
-                                    value={String(value || '')} 
-                                    onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
-                                    placeholder={`Enter ${field.replace(/_/g, ' ')}`}
-                                />
-      )}
-    </View>
-                    ))}
-                </ScrollView>
 
-                {/* Navigation/Action Buttons */}
-                <View style={styles.navigationButtons}>
-                     <Button 
-                         title="Back to Matches" 
-                         onPress={() => setCurrentStage(ListingStage.VisualMatch)} 
-                         outlined 
-                         style={styles.navButton} 
-                     />
-                     <Button 
-                         title="Save Draft" 
-                         onPress={handleSaveDraft} 
-                         outlined 
-                         style={styles.navButton} 
-                         iconName="content-save-outline"
-                     />
-                     <Button 
-                         title="Publish..." 
-                         onPress={handlePublish} 
-                         style={styles.navButton} 
-                         iconName="publish"
-                     />
-                 </View>
-
-            </Animated.View>
-            {/* Publish Modal */}
-            <Modal
-                animationType="fade"
-                transparent={true}
-                visible={isPublishModalVisible}
-                onRequestClose={() => setIsPublishModalVisible(false)}
+        {/* Platform Selection Tabs */}
+        <View style={styles.platformTabsContainer}>
+          <ScrollView 
+            horizontal 
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.platformTabsScroll}
+          >
+            {selectedPlatforms.map(platformKey => (
+              <TouchableOpacity
+                key={platformKey}
+                style={[styles.platformTab, activeFormTab === platformKey && styles.platformTabActive]}
+                onPress={() => setActiveFormTab(platformKey)}
+              >
+                <Image 
+                  source={platformImageMap[platformKey]} 
+                  style={styles.platformTabIcon} 
+                />
+                <Text style={[styles.platformTabText, activeFormTab === platformKey && styles.platformTabTextActive]}>
+                  {AVAILABLE_PLATFORMS.find(p => p.key === platformKey)?.name || platformKey}
+                </Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity
+              style={styles.addPlatformButton}
+              onPress={() => setCurrentStage(ListingStage.PlatformSelection)}
             >
-                <Pressable style={styles.modalOverlay} onPress={() => setIsPublishModalVisible(false)}> 
-                    <Pressable style={styles.modalContent} onPress={() => {}}> 
-                        <Text style={styles.modalTitle}>Confirm Publish</Text>
-                        <Text style={styles.modalSubtitle}>Choose how you want to publish the listing(s).</Text>
-                        <View style={styles.modalButtonContainer}>
-                            <Button 
-                                title="Publish as Draft" 
-                                onPress={() => handlePublishAction('draft')} 
-                                outlined 
-                                style={styles.modalButton} 
-                                iconName="pencil-outline"
-                            />
-                            <Button 
-                                title="Publish Live" 
-                                onPress={() => handlePublishAction('live')} 
-                                style={styles.modalButton} 
-                                iconName="rocket-launch-outline"
-                            />
-                        </View>
-                        <Button 
-                            title="Cancel" 
-                            onPress={() => setIsPublishModalVisible(false)} 
-                            textOnly 
-                            style={styles.modalCancelButton} 
-                        />
-                    </Pressable>
-                </Pressable>
-            </Modal>
+              <Icon name="plus" size={20} color="#666" />
+              <Text style={styles.addPlatformText}>Add Platform</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+
+        {/* Form Content */}
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.formKeyboardAvoid}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
+        >
+          <ScrollView 
+            style={styles.formScrollView}
+            contentContainerStyle={styles.formScrollContent}
+            showsVerticalScrollIndicator={true}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={styles.formFieldsContainer}>
+              {Object.entries(currentPlatformData).map(([field, value]) => (
+                <View key={field} style={styles.formField}>
+                  <Text style={styles.formLabel}>
+                    {field.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
+                  </Text>
+                  
+                  {/* Special handling for quantity fields */}
+                  {field.toLowerCase().includes('quantity') ? (
+                    <View style={styles.quantityInputContainer}>
+                      <TextInput
+                        style={styles.quantityInput}
+                        value={String(value || '')}
+                        onChangeText={(text) => {
+                          const num = parseInt(text.replace(/[^0-9]/g, ''));
+                          handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, isNaN(num) ? 0 : num);
+                        }}
+                        keyboardType="number-pad"
+                        placeholder="0"
+                      />
+                      <View style={styles.quantityControls}>
+                        <TouchableOpacity 
+                          style={styles.quantityButton}
+                          onPress={() => {
+                            const current = Number(value) || 0;
+                            handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, Math.max(0, current - 1));
+                          }}
+                        >
+                          <Icon name="minus" size={16} color="#666" />
+                        </TouchableOpacity>
+                        <TouchableOpacity 
+                          style={styles.quantityButton}
+                          onPress={() => {
+                            const current = Number(value) || 0;
+                            handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, current + 1);
+                          }}
+                        >
+                          <Icon name="plus" size={16} color="#666" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ) : field === 'description' || field === 'returnPolicy' ? (
+                    <TextInput
+                      style={styles.formInputMultiline}
+                      value={String(value || '')}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
+                      multiline
+                      numberOfLines={4}
+                      placeholder={`Enter ${field.replace(/_/g, ' ')}`}
+                    />
+                  ) : typeof value === 'boolean' ? (
+                    <Switch
+                      value={value}
+                      onValueChange={(newValue) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, newValue)}
+                      trackColor={{ false: "#767577", true: "#81b0ff" }}
+                      thumbColor={value ? "#4CAF50" : "#f4f3f4"}
+                    />
+                  ) : Array.isArray(value) ? (
+                    <TextInput
+                      style={styles.formInput}
+                      value={value.join(', ')}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
+                      placeholder={`Enter ${field.replace(/_/g, ' ')} (comma-separated)`}
+                    />
+                  ) : (
+                    <TextInput
+                      style={styles.formInput}
+                      value={String(value || '')}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
+                      placeholder={`Enter ${field.replace(/_/g, ' ')}`}
+                    />
+                  )}
+                </View>
+              ))}
+            </View>
+          </ScrollView>
         </KeyboardAvoidingView>
+
+        {/* Bottom Action Buttons */}
+        <View style={styles.formActions}>
+          <Button 
+            title="Back to Matches" 
+            onPress={() => setCurrentStage(ListingStage.VisualMatch)} 
+            outlined 
+            style={styles.actionButton} 
+          />
+          <Button 
+            title="Save Draft" 
+            onPress={() => handlePublishAction('draft')} 
+            outlined 
+            style={styles.actionButton}
+            icon="content-save-outline"
+          />
+          <Button 
+            title="Publish Live" 
+            onPress={() => handlePublishAction('active')} 
+            style={styles.actionButton}
+            icon="rocket-launch-outline"
+          />
+        </View>
+      </View>
     );
-    // --- End original complex JSX --- 
   };
 
   // --- Current Stage Logic (Unchanged) --- //
@@ -1817,7 +2217,6 @@ const styles = StyleSheet.create({
   imageThumbnail: { width: '100%', height: '100%' },
   coverIndicator: { position: 'absolute', top: 5, left: 5, backgroundColor: 'rgba(255, 255, 255, 0.9)', borderRadius: 12, paddingVertical: 2, paddingHorizontal: 6, flexDirection: 'row', alignItems: 'center', },
   coverIndicatorText: { marginLeft: 4, fontSize: 10, fontWeight: 'bold', color: '#2E7D32' },
-  videoIndicator: { position: 'absolute', bottom: 5, right: 5, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10, padding: 2 },
   removeIcon: { 
     position: 'absolute',
     top: 4,
@@ -1889,14 +2288,8 @@ const styles = StyleSheet.create({
   tabButtonTextActive: { color: '#2E7D32'},
   formScrollView: { flex: 1, marginBottom: 10, paddingHorizontal: 5 },
   formInputContainer: { marginBottom: 18, position: 'relative' }, // Added relative positioning for currency
-  formLabel: { fontSize: 14, color: '#333', fontWeight: '500', marginBottom: 6, textTransform: 'capitalize' }, 
-  formInput: { borderWidth: 1, borderColor: '#DDE2E7', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15, color: '#333', },
-  formInputMultiline: {
-      minHeight: 80, // Slightly smaller default multiline height
-    textAlignVertical: 'top',
-      // Inherit other styles from formInput
-      borderWidth: 1, borderColor: '#DDE2E7', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15, color: '#333',
-  },
+  //formInput: { borderWidth: 1, borderColor: '#DDE2E7', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15, color: '#333', },
+  //formInputMultiline: { minHeight: 80, textAlignVertical: 'top', borderWidth: 1, borderColor: '#DDE2E7', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15, color: '#333',
   priceInputWithCurrency: {
       paddingLeft: 25, // Add padding for currency symbol
   },
@@ -2055,6 +2448,302 @@ const styles = StyleSheet.create({
       color: '#888',
       marginTop: 2,
       marginLeft: 5,
+  },
+
+  // --- NEW Styles for Location Selection ---
+  locationsContainer: {
+    width: '100%',
+    marginBottom: 20,
+    maxHeight: 300,
+  },
+  locationsTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 10,
+  },
+  locationsList: {
+    maxHeight: 250,
+  },
+  locationItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  locationInfo: {
+    flex: 1,
+    marginRight: 10,
+  },
+  locationName: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#333',
+  },
+  locationAddress: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  quantityInputField: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 4,
+    padding: 8,
+    textAlign: 'center',
+    fontSize: 14,
+  },
+  // --- End NEW Styles ---
+
+  modalScrollView: {
+    maxHeight: '80%',
+  },
+  shopifyFormContainer: {
+    width: '100%',
+    marginBottom: 20,
+  },
+  formSection: {
+    marginBottom: 20,
+    padding: 15,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+  },
+  subsectionTitle: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#444',
+    marginBottom: 10,
+  },
+  variantsContainer: {
+    marginTop: 15,
+  },
+  addVariantButton: {
+    marginTop: 10,
+  },
+  publishOptionsContainer: {
+    marginTop: 20,
+    padding: 15,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+  },
+
+  formReviewContainer: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  stickyHeader: {
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+    paddingBottom: 10,
+  },
+  mediaPreviewContainer: {
+    paddingVertical: 15,
+  },
+  mediaPreviewItem: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+    marginRight: 10,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  mediaPreviewItemCover: {
+    borderColor: '#4CAF50',
+  },
+  videoIndicator: {
+    position: 'absolute',
+    bottom: 5,
+    right: 5,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 10,
+    padding: 2,
+  },
+  coverBadge: {
+    position: 'absolute',
+    top: 5,
+    left: 5,
+    backgroundColor: '#4CAF50',
+    borderRadius: 10,
+    padding: 4,
+  },
+  addMediaButton: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#ddd',
+    borderStyle: 'dashed',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8f9fa',
+  },
+  mediaHint: {
+    fontSize: 12,
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  platformTabsContainer: {
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+    paddingTop: 10,
+  },
+  platformTabsScroll: {
+    paddingHorizontal: 15,
+  },
+  platformTab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginRight: 10,
+    borderRadius: 20,
+    backgroundColor: '#f8f9fa',
+    borderWidth: 1,
+    borderColor: '#eee',
+  },
+  platformTabActive: {
+    backgroundColor: '#E8F5E9',
+    borderColor: '#4CAF50',
+  },
+  platformTabIcon: {
+    width: 20,
+    height: 20,
+    marginRight: 6,
+  },
+  platformTabText: {
+    fontSize: 14,
+    color: '#666',
+  },
+  platformTabTextActive: {
+    color: '#2E7D32',
+    fontWeight: '500',
+  },
+  addPlatformButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#f8f9fa',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderStyle: 'dashed',
+  },
+  addPlatformText: {
+    fontSize: 14,
+    color: '#666',
+    marginLeft: 4,
+  },
+
+  quantityInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  quantityInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 6,
+    padding: 10,
+    fontSize: 16,
+    textAlign: 'center',
+    marginRight: 10,
+  },
+  quantityControls: {
+    flexDirection: 'row',
+  },
+  quantityButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#f8f9fa',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 5,
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  actionButton: {
+    flex: 1,
+    marginHorizontal: 5,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  pastScansButton: {
+    padding: 8,
+  },
+  formKeyboardAvoid: {
+    flex: 1,
+  },
+  formScrollContent: {
+    paddingBottom: 100, // Add padding for the bottom buttons
+  },
+  formFieldsContainer: {
+    padding: 15,
+  },
+  formField: {
+    marginBottom: 20, // Increase spacing between fields
+  },
+  formLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+    textTransform: 'capitalize',
+  },
+  formInput: {
+    borderWidth: 1,
+    borderColor: '#DDE2E7',
+    backgroundColor: '#fff',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    fontSize: 15,
+    color: '#333',
+    minHeight: 44, // Ensure minimum height for touch targets
+  },
+  formInputMultiline: {
+    minHeight: 100,
+    textAlignVertical: 'top',
+    paddingTop: 10,
+    paddingBottom: 10,
+  },
+  formActions: {
+    flexDirection: 'row',
+    padding: 15,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+    backgroundColor: '#fff',
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+  },
+  retryButton: {
+    marginTop: 10,
+    marginHorizontal: 15,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: '#ccc',
+    backgroundColor: '#f8f9fa',
   },
 });
 

@@ -35,6 +35,7 @@ import ProfileScreen from '../screens/ProfileScreen';
 import ProductDetailScreen from '../screens/ProductDetail';
 import PhoneAuthScreen from '../screens/PhoneAuthScreen';
 import CreateAccountScreen from '../screens/CreateAccountScreen';
+import PastScansScreen from '../screens/PastScansScreen';
 
 // --- Define Param Lists for Type Safety --- //
 type AuthStackParamList = {
@@ -44,11 +45,13 @@ type AuthStackParamList = {
   // PhoneAuthScreen: { phoneNumber: string } | undefined; // Commented out
 };
 
-type AppStackParamList = {
-  CreateAccountScreen: undefined; // Screen after phone verification
-  TabNavigator: undefined; // Your main tab navigator
-  ProductDetail: { productId: string }; // Example param for ProductDetail
-  // Add other App related screens here
+// Export the type
+export type AppStackParamList = {
+  CreateAccountScreen: undefined;
+  TabNavigator: undefined;
+  ProductDetail: { productId: string };
+  PastScans: undefined;
+  AddListing: { initialData?: any };
 };
 
 type RootStackParamList = {
@@ -151,6 +154,8 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="CreateAccountScreen" component={CreateAccountScreen} />
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />
     <AppStackNav.Screen name="ProductDetail" component={ProductDetailScreen} />
+    <AppStackNav.Screen name="PastScans" component={PastScansScreen} />
+    <AppStackNav.Screen name="AddListing" component={AddListingScreen} />
   </AppStackNav.Navigator>
 );
 
