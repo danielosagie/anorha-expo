@@ -37,6 +37,8 @@ import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import DraggableFlatList, { ScaleDecorator, RenderItemParams } from 'react-native-draggable-flatlist';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useNavigation } from '@react-navigation/native';
+import { Checkbox } from 'react-native-paper';
+import { useAuth } from '../contexts/AuthContext';
 
 // Define available platforms with icons
 const AVAILABLE_PLATFORMS = [
@@ -172,9 +174,267 @@ interface CameraSectionProps {
 
 // --- UN-NESTED CameraSection Component (Placeholder) --- //
 const CameraSection = ({ onCapture, onClose, styles, initialMedia = [] }: CameraSectionProps) => {
+  const [cameraPermission, requestPermission] = useCameraPermissions();
+  const [facing, setFacing] = useState<CameraType>("back");
+  const [cameraMode, setCameraMode] = useState<"picture" | "video">("picture");
+  const [recording, setRecording] = useState(false);
+  const [flash, setFlash] = useState<FlashMode>("off");
+  const [localMedia, setLocalMedia] = useState<CapturedMediaItem[]>(initialMedia);
+  const [coverImageIndex, setCoverImageIndex] = useState<number>(-1);
+  const cameraRef = useRef<CameraView>(null);
+
+  // Camera control functions
+  const takePicture = async () => {
+    if (cameraRef.current && localMedia.length < 10) {
+      try {
+        const photo = await cameraRef.current.takePictureAsync({ quality: 0.8 });
+        if (photo) {
+          const newItem: CapturedMediaItem = {
+            uri: photo.uri,
+            width: photo.width,
+            height: photo.height,
+            type: 'image',
+            number: localMedia.length + 1,
+            id: photo.uri + Date.now(),
+          };
+          const newMedia = [...localMedia, newItem].slice(0, 10);
+          setLocalMedia(newMedia);
+          if (localMedia.length === 0) setCoverImageIndex(0);
+        }
+      } catch (error) {
+        console.error('Error taking picture', error);
+        Alert.alert("Capture Error", "Could not take picture.");
+      }
+    } else if (localMedia.length >= 10) {
+      Alert.alert("Limit Reached", "You can add a maximum of 10 media items.");
+    }
+  };
+
+  const startRecording = async () => {
+    const micPermission = await Camera.requestMicrophonePermissionsAsync();
+    if (!micPermission.granted) {
+      Alert.alert("Permission Required", "Microphone permission is needed to record video.");
+      return;
+    }
+    
+    if (cameraRef.current && localMedia.length < 10) {
+      setRecording(true);
+      try {
+        const videoData = await cameraRef.current.recordAsync({ maxDuration: 60 });
+        if (videoData) {
+          const newItem: CapturedMediaItem = {
+            uri: videoData.uri,
+            type: 'video',
+            width: undefined,
+            height: undefined,
+            number: localMedia.length + 1,
+            id: videoData.uri + Date.now(),
+          };
+          const newMedia = [...localMedia, newItem].slice(0, 10);
+          setLocalMedia(newMedia);
+          if (localMedia.length === 0) setCoverImageIndex(0);
+        }
+        setRecording(false);
+      } catch (error) {
+        console.error('Error recording video', error);
+        setRecording(false);
+        Alert.alert("Recording Error", "Could not record video.");
+      }
+    } else if (localMedia.length >= 10) {
+      Alert.alert("Limit Reached", "You can add a maximum of 10 media items.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (cameraRef.current && recording) {
+      cameraRef.current.stopRecording();
+    }
+  };
+
+  const toggleCameraMode = () => setCameraMode(current => current === "picture" ? "video" : "picture");
+  const toggleFlash = () => setFlash(current => current === 'off' ? 'on' : current === 'on' ? 'auto' : 'off');
+  const toggleCameraFacing = () => setFacing(current => current === "back" ? "front" : "back");
+  const getFlashIcon = () => flash === 'on' ? 'flash' : flash === 'auto' ? 'flash-auto' : 'flash-off';
+
+  const pickImagesFromLibrary = async () => {
+    if (localMedia.length >= 10) {
+      Alert.alert("Limit Reached", "You can add a maximum of 10 media items.");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      allowsMultipleSelection: true,
+      quality: 0.8,
+      orderedSelection: true
+    });
+    if (!result.canceled && result.assets) {
+      const currentCount = localMedia.length;
+      const spaceAvailable = 10 - currentCount;
+      const itemsToAdd = result.assets.slice(0, spaceAvailable);
+
+      if (result.assets.length > spaceAvailable) {
+        Alert.alert("Limit Reached", `You can only add ${spaceAvailable} more items.`);
+      }
+
+      const newItems: CapturedMediaItem[] = itemsToAdd.map((asset, index) => ({
+        uri: asset.uri,
+        type: (asset.type === 'video' ? 'video' : 'image') as 'video' | 'image',
+        width: asset.width,
+        height: asset.height,
+        number: currentCount + index + 1,
+        id: asset.uri + Date.now() + index
+      }));
+      const combined = [...localMedia, ...newItems];
+      setLocalMedia(combined);
+      if (currentCount === 0 && combined.length > 0) {
+        setCoverImageIndex(0);
+      }
+    }
+  };
+
+  const handleSetCover = (index: number) => {
+    if (index >= 0 && index < localMedia.length) {
+      setCoverImageIndex(index);
+    }
+  };
+
+  const handleRemoveMedia = (idToRemove: string) => {
+    const indexToRemove = localMedia.findIndex(item => item.id === idToRemove);
+    if (indexToRemove === -1) return;
+
+    const newMedia = localMedia.filter(item => item.id !== idToRemove);
+    
+    const oldCoverIndex = coverImageIndex;
+    let newCoverIndex = -1;
+    if (newMedia.length > 0) {
+      if (indexToRemove === oldCoverIndex) {
+        newCoverIndex = 0;
+      } else if (indexToRemove < oldCoverIndex) {
+        newCoverIndex = oldCoverIndex - 1;
+      } else {
+        newCoverIndex = oldCoverIndex;
+      }
+    }
+    setCoverImageIndex(newCoverIndex);
+    setLocalMedia(newMedia);
+  };
+
+  const handleSave = () => {
+    onCapture(localMedia);
+  };
+
+  // Permission handling
+  if (!cameraPermission) {
     return (
-        <View><Text>Camera Section Placeholder</Text></View> 
+      <View style={styles.centeredMessageContainer}>
+        <ActivityIndicator size="large" color={'#294500'} />
+        <Text style={styles.centeredMessageText}>Initializing Camera...</Text>
+      </View>
     );
+  }
+
+  if (!cameraPermission.granted) {
+    return (
+      <View style={styles.centeredMessageContainer}>
+        <Icon name="camera-off-outline" size={50} color="#FF5252" />
+        <Text style={styles.centeredMessageText}>Camera permission is required to add media.</Text>
+        <Button title="Grant Permission" onPress={requestPermission} style={{marginTop: 20}} />
+        <Button title="Close" onPress={onClose} outlined style={{marginTop: 10}} />
+      </View>
+    );
+  }
+
+  // Render draggable media item
+  const renderDraggableMediaItem = ({ item, drag, isActive }: RenderItemParams<CapturedMediaItem>) => {
+    const isCover = localMedia[coverImageIndex]?.id === item.id;
+    return (
+      <ScaleDecorator>
+        <TouchableOpacity
+          style={[
+            styles.previewImageContainer,
+            isActive && styles.previewImageContainerActive,
+            isCover && styles.previewImageCover
+          ]}
+          onPress={() => handleSetCover(localMedia.findIndex(m => m.id === item.id))}
+          onLongPress={drag}
+          disabled={isActive}
+          activeOpacity={0.9}
+        >
+          <Image source={{ uri: item.uri }} style={styles.previewImage} />
+          {item.type === 'video' && (
+            <View style={styles.videoIndicatorPreview}>
+              <Icon name="play-circle" size={18} color={'white'} />
+            </View>
+          )}
+          <TouchableOpacity style={styles.deleteMediaButton} onPress={() => handleRemoveMedia(item.id)}>
+            <Icon name="close-circle" size={20} color="#FF5252" />
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </ScaleDecorator>
+    );
+  };
+
+  return (
+    <View style={styles.cameraStageContainer}>
+      <CameraView ref={cameraRef} style={styles.cameraPreview} facing={facing} flash={flash} mode={cameraMode}>
+        <View style={styles.cameraHeader}>
+          <TouchableOpacity onPress={toggleFlash} style={styles.headerButton} disabled={facing === 'front'}>
+            <Icon name={getFlashIcon()} size={24} color={facing === 'front' ? 'grey' : 'white'} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={toggleCameraFacing} style={styles.headerButton}>
+            <Icon name="camera-switch-outline" size={24} color="white" />
+          </TouchableOpacity>
+        </View>
+      </CameraView>
+
+      {localMedia.length > 0 && (
+        <View style={styles.previewListContainer}>
+          <DraggableFlatList
+            data={localMedia}
+            onDragEnd={({ data }) => {
+              const oldCoverId = localMedia[coverImageIndex]?.id;
+              const newIndex = data.findIndex(item => item.id === oldCoverId);
+              setCoverImageIndex(newIndex >= 0 ? newIndex : (data.length > 0 ? 0 : -1));
+              setLocalMedia(data);
+            }}
+            keyExtractor={(item) => item.id}
+            renderItem={renderDraggableMediaItem}
+            horizontal
+            contentContainerStyle={styles.previewScroll}
+            showsHorizontalScrollIndicator={false}
+          />
+        </View>
+      )}
+
+      <View style={styles.bottomControlsContainer}>
+        <TouchableOpacity style={styles.sideControlButton} onPress={pickImagesFromLibrary} disabled={localMedia.length >= 10}>
+          <Icon name="image-multiple-outline" size={30} color={localMedia.length >= 10 ? "grey" : "white"} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.captureButton} onPress={cameraMode === "picture" ? takePicture : (recording ? stopRecording : startRecording)} disabled={localMedia.length >= 10}>
+          <View style={[styles.captureInner, recording && styles.recordingButton, localMedia.length >= 10 && styles.captureDisabledInner]} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.sideControlButton} onPress={toggleCameraMode}>
+          <Icon name={cameraMode === "picture" ? "video-outline" : "camera-outline"} size={30} color="white" />
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.cameraStageHeader}>
+        <Text style={styles.stageTitleCamera}>Add More Media</Text>
+        <Text style={styles.stageSubtitleCamera}>
+          {localMedia.length}/10 items. {localMedia.length > 0 ? 'Drag to reorder. Tap preview to set cover.' : 'Use camera or upload.'}
+        </Text>
+      </View>
+
+      <View style={styles.navigationButtonsCamera}>
+        <Button title="Cancel" onPress={onClose} outlined style={styles.navButton} />
+        <Button
+          title="Save"
+          onPress={handleSave}
+          style={styles.navButton}
+        />
+      </View>
+    </View>
+  );
 };
 
 // --- Sample Data for Debugging ---
@@ -346,6 +606,12 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   // --- NEW State for Visual Match Selection ---
   const [selectedMatchForGeneration, setSelectedMatchForGeneration] = useState<VisualMatch | null>(null);
 
+  // --- State for platformConnectionId ---
+  const [platformConnectionId, setPlatformConnectionId] = useState<string | null>(null);
+
+  // --- NEW: State for all platform connections ---
+  const [userPlatformConnections, setUserPlatformConnections] = useState<any[]>([]); // Using any[] for now, replace with actual PlatformConnection type
+
   // --- Camera State (Moved from CameraSection) ---
   const [cameraPermission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState<CameraType>("back");
@@ -361,7 +627,6 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   // --- NEW State for Shopify Integration ---
   const [shopifyLocations, setShopifyLocations] = useState<ShopifyLocation[]>([]);
   const [selectedLocations, setSelectedLocations] = useState<ShopifyLocationWithQuantity[]>([]);
-  const [platformConnectionId, setPlatformConnectionId] = useState<string | null>(null);
   const [isLoadingLocations, setIsLoadingLocations] = useState(false);
   // --- End NEW State ---
 
@@ -813,7 +1078,8 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
     const token = sessionData.session.access_token;
     console.log(`User ID fetched for analysis: ${userId}`);
 
-    const analyzeApiUrl = `https://sssync-bknd-production.up.railway.app/products/analyze?userId=${userId}`;
+    // Corrected API URL: Removed userId query parameter
+    const analyzeApiUrl = `https://sssync-bknd-production.up.railway.app/api/products/analyze`;
     const requestBodyAnalyze = { imageUris: urls, selectedPlatforms: selectedPlatforms };
     
     // Define headers including the Authorization token
@@ -872,6 +1138,34 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                  setProductId(responseData.product.Id); // <-- SET PRODUCT ID
                  setVariantId(responseData.variant.Id); // <-- SET VARIANT ID
                  console.log(`Product/Variant IDs set: ${responseData.product.Id} / ${responseData.variant.Id}`);
+                 
+                 // --- NEW: Save images to ProductImages table ---
+                 if (responseData.variant.Id && uploadedImageUrls.length > 0) {
+                   const imagesToInsert = uploadedImageUrls.map((url, index) => ({
+                     ProductVariantId: responseData.variant.Id,
+                     ImageUrl: url,
+                     Position: index,
+                     // AltText: null, // Optional: Add logic for AltText if available
+                     // PlatformMappingId: null, // Optional: Add logic if needed
+                   }));
+
+                   try {
+                     const { error: imageInsertError } = await supabase
+                       .from('ProductImages')
+                       .insert(imagesToInsert);
+
+                     if (imageInsertError) {
+                       console.error('[triggerImageAnalysis] Error inserting product images:', imageInsertError);
+                       // Non-critical error, so we might not want to throw and stop the flow
+                       // Alert.alert("Image Save Error", "Could not save all product images to the database.");
+                     } else {
+                       console.log('[triggerImageAnalysis] Successfully inserted product images to database.');
+                     }
+                   } catch (dbError) {
+                     console.error('[triggerImageAnalysis] Unexpected error inserting product images:', dbError);
+                   }
+                 }
+                 // --- END NEW ---
                  
                  // Attempt to parse SerpApi response from GeneratedText
                  try {
@@ -969,7 +1263,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
      }
 
     // ... (Prepare Request Body - same as before) ...
-     const generateApiUrl = `https://sssync-bknd-production.up.railway.app/products/generate-details?userId=${userId}`;
+     const generateApiUrl = `https://sssync-bknd-production.up.railway.app/api/products/generate-details`;
      const requestBodyGenerate = {
          productId: productId,
          variantId: variantId,
@@ -1190,18 +1484,81 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   // --- UPDATED handlePublish to Fetch Locations ---
   const handlePublish = async () => {
     if (selectedPlatforms.includes('shopify')) {
+      // --- NEW: Fetch connections and find Shopify connection ID ---
       try {
-        // TODO: Get platformConnectionId from user's connections
-        // For now, using a placeholder
-        setPlatformConnectionId("conn-123");
-        await fetchShopifyLocations();
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+        const session = await supabase.auth.getSession();
+        const token = session?.data.session?.access_token;
+
+        if (userError || !user || !token) {
+          Alert.alert("Authentication Error", "Could not fetch connections. Please ensure you are logged in.");
+          return;
+        }
+
+        console.log("[handlePublish] Fetching platform connections for user:", user.id);
+        const response = await fetch('https://api.sssync.app/platform-connections', { // Ensure this is your correct API endpoint
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
+          throw new Error(errorData.message || `Failed to fetch connections. Status: ${response.status}`);
+        }
+
+        const connections: any[] = await response.json(); // Use your PlatformConnection type here
+        setUserPlatformConnections(connections); // Store all connections if needed elsewhere
+
+        const shopifyConnection = connections.find(
+          (conn: any) => conn.PlatformType === 'shopify' && conn.IsEnabled // Assuming these fields exist
+        );
+
+        if (shopifyConnection && shopifyConnection.Id) {
+          console.log("[handlePublish] Found Shopify connection ID:", shopifyConnection.Id);
+          setPlatformConnectionId(shopifyConnection.Id);
+          // Now that platformConnectionId is set, call fetchShopifyLocations
+          // await fetchShopifyLocations(); // This will be called after platformConnectionId is set and modal opens
+        } else {
+          Alert.alert("Shopify Not Connected", "No active Shopify connection found. Please connect Shopify in your profile to publish.");
+          return; // Stop if no Shopify connection
+        }
       } catch (err: any) {
-        Alert.alert("Error", `Failed to prepare for publishing: ${err.message}`);
+        console.error("[handlePublish] Error fetching or finding Shopify connection:", err);
+        Alert.alert("Connection Error", `Could not prepare for Shopify publishing: ${err.message}`);
         return;
       }
+      // --- END NEW ---
+
+      // Original logic to fetch locations will now use the fetched platformConnectionId
+      // We need to ensure fetchShopifyLocations is called *after* platformConnectionId is set.
+      // One way is to await the setPlatformConnectionId, but state updates can be tricky.
+      // A better approach might be to trigger fetchShopifyLocations if platformConnectionId becomes available and modal is about to be shown.
+      // For now, let's assume fetchShopifyLocations in the modal opening logic will pick up the new ID.
+      // OR, we can call it directly here IF setPlatformConnectionId was synchronous (which it isn't always)
+      // The most robust way is to call fetchShopifyLocations from a useEffect that watches platformConnectionId,
+      // or directly if we pass the found ID to it.
+
+      // Let's try calling it directly here for now, but be mindful of state update timing.
+      // This relies on setPlatformConnectionId having an effect before fetchShopifyLocations uses it.
+      // This might require fetchShopifyLocations to accept an ID as a parameter.
+      // For simplicity now, we set the state and fetchShopifyLocations will use the state.
+      // The fetchShopifyLocations function already checks if platformConnectionId is available.
+      
+      // We will call fetchShopifyLocations when the modal becomes visible and platformConnectionId is set.
     }
-    setIsPublishModalVisible(true);
+    setIsPublishModalVisible(true); // Show modal, locations will load if Shopify is selected and ID is found
   };
+
+  // --- useEffect to fetch locations when publish modal becomes visible and shopify is selected ---
+  useEffect(() => {
+    if (isPublishModalVisible && selectedPlatforms.includes('shopify') && platformConnectionId) {
+      fetchShopifyLocations();
+    }
+  }, [isPublishModalVisible, platformConnectionId, selectedPlatforms]);
+  
 
   // --- UPDATED handlePublishAction with Actual API Call ---
   const handlePublishAction = async (status: 'draft' | 'active' | 'archived') => {
@@ -1501,7 +1858,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
               <Icon name="image-multiple-outline" size={30} color={capturedMedia.length >= 10 ? "grey" : "white"} />
             </TouchableOpacity>
             <TouchableOpacity style={styles.captureButton} onPress={cameraMode === "picture" ? takePicture : (recording ? stopRecording : startRecording)} disabled={capturedMedia.length >= 10}>
-              <View style={[ styles.captureInner, recording && styles.recordingButton, capturedMedia.length >= 10 && styles.captureDisabledInner ]} />
+              <View style={[ styles.captureInner, recording && styles.recordingButton, capturedMedia.length >= 10 && styles.captureDisabledInner]} />
             </TouchableOpacity>
             <TouchableOpacity style={styles.sideControlButton} onPress={() => Alert.alert("Barcode Scanner", "Not implemented yet.")}>
               <Icon name="barcode-scan" size={30} color="white" />
@@ -1696,6 +2053,91 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
 
     const currentPlatformData = formData[currentPlatformKey] || {};
 
+    // Add after the fetchShopifyLocations function
+    const handleLocationToggle = (location: ShopifyLocation) => {
+      setSelectedLocations(prev => {
+        const isSelected = prev.some(l => l.id === location.id);
+        if (isSelected) {
+          return prev.filter(l => l.id !== location.id);
+        } else {
+          return [...prev, { ...location, quantity: 0 }];
+        }
+      });
+    };
+
+    const handleLocationQuantityChange = (locationId: string, quantity: string) => {
+      setSelectedLocations(prev => 
+        prev.map(loc => 
+          loc.id === locationId 
+            ? { ...loc, quantity: parseInt(quantity) || 0 }
+            : loc
+        )
+      );
+    };
+
+    const renderLocationsSection = () => {
+      if (currentPlatformKey !== 'shopify') return null;
+
+      // Removed nested fetchShopifyLocations.
+      // This section now relies on the main fetchShopifyLocations function (called by handlePublish)
+      // and the state variables: shopifyLocations, isLoadingLocations, selectedLocations.
+
+      console.log("[renderLocationsSection] Rendering locations section");
+      console.log("[renderLocationsSection] Current platform key:", currentPlatformKey);
+      console.log("[renderLocationsSection] Shopify locations from state:", shopifyLocations);
+      console.log("[renderLocationsSection] Selected locations from state:", selectedLocations);
+      console.log("[renderLocationsSection] Is loading locations:", isLoadingLocations);
+
+
+      return (
+        <View style={styles.formSection}>
+          <Text style={styles.sectionTitle}>Inventory Locations</Text>
+          {isLoadingLocations ? (
+            <ActivityIndicator size="small" color="#666" style={{ marginVertical: 10 }} />
+          ) : shopifyLocations.length === 0 ? (
+            <Text style={styles.noLocationsText}>No locations available for the selected connection.</Text>
+          ) : (
+            <View style={styles.locationsDropdown}>
+              {shopifyLocations.map((location: ShopifyLocation) => {
+                const isSelected = selectedLocations.some(l => l.id === location.id);
+                const selectedLocation = selectedLocations.find(l => l.id === location.id) as ShopifyLocationWithQuantity | undefined;
+                
+                return (
+                  <View key={location.id} style={styles.locationItem}>
+                    <View style={styles.locationHeader}>
+                      <Checkbox
+                        status={isSelected ? 'checked' : 'unchecked'}
+                        onPress={() => handleLocationToggle(location)}
+                        color="#4CAF50"
+                      />
+                      <View style={styles.locationInfo}>
+                        <Text style={styles.locationName}>{location.name}</Text>
+                        <Text style={styles.locationAddress}>
+                          {[location.address1, location.city, location.province, location.zip].filter(Boolean).join(', ')}
+                        </Text>
+                      </View>
+                    </View>
+                    {isSelected && selectedLocation && (
+                      <View style={styles.quantityInputContainer}>
+                        <Text style={styles.quantityLabel}>Quantity:</Text>
+                        <TextInput
+                          style={styles.quantityInput}
+                          keyboardType="numeric"
+                          value={selectedLocation.quantity.toString()}
+                          onChangeText={(value) => handleLocationQuantityChange(location.id, value)}
+                          placeholder="0"
+                        />
+                      </View>
+                    )}
+                  </View>
+                );
+              })}
+            </View>
+          )}
+        </View>
+      );
+    };
+
     return (
       <View style={styles.formReviewContainer}>
         {/* Media Preview Section */}
@@ -1787,51 +2229,195 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
             keyboardShouldPersistTaps="handled"
           >
             <View style={styles.formFieldsContainer}>
+              {/* Add locations field first - This remains if needed for Shopify */}
+              {currentPlatformKey === 'shopify' && renderLocationsSection()}
+              
+              {/* --- NEW: Explicit Form Fields --- */}
+              {currentPlatformData && (
+                <>
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Title</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      value={String(currentPlatformData.title || '')}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey!, 'title', text)}
+                      placeholder="Enter product title"
+                    />
+                  </View>
+
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Description</Text>
+                    <TextInput
+                      style={styles.formInputMultiline}
+                      value={String(currentPlatformData.description || '')}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey!, 'description', text)}
+                      multiline
+                      numberOfLines={4}
+                      placeholder="Enter product description"
+                    />
+                  </View>
+
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Price</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      value={String(currentPlatformData.price === undefined ? '' : currentPlatformData.price)}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey!, 'price', text)}
+                      placeholder="0.00"
+                      keyboardType="numeric"
+                    />
+                  </View>
+
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Compare At Price</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      value={String(currentPlatformData.compareAtPrice === undefined ? '' : currentPlatformData.compareAtPrice)}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey!, 'compareAtPrice', text)}
+                      placeholder="0.00"
+                      keyboardType="numeric"
+                    />
+                  </View>
+
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>SKU (Stock Keeping Unit)</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      value={String(currentPlatformData.sku || '')}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey!, 'sku', text)}
+                      placeholder="Enter SKU"
+                    />
+                  </View>
+
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Barcode (GTIN, UPC, EAN, ISBN)</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      value={String(currentPlatformData.barcode || '')}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey!, 'barcode', text)}
+                      placeholder="Enter barcode"
+                    />
+                  </View>
+                  
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Status</Text>
+                    {/* TODO: Consider a Picker/Switch for status: active, draft, archived */}
+                    <TextInput
+                      style={styles.formInput}
+                      value={String(currentPlatformData.status || '')}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey!, 'status', text)}
+                      placeholder="e.g., active, draft"
+                    />
+                  </View>
+
+                  {currentPlatformKey === 'shopify' && (
+                    <>
+                      <View style={styles.formField}>
+                        <Text style={styles.formLabel}>Vendor (Shopify)</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          value={String(currentPlatformData.vendor || '')}
+                          onChangeText={(text) => handleFormUpdate(currentPlatformKey!, 'vendor', text)}
+                          placeholder="Enter vendor"
+                        />
+                      </View>
+
+                      <View style={styles.formField}>
+                        <Text style={styles.formLabel}>Product Type (Shopify)</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          value={String(currentPlatformData.productType || '')}
+                          onChangeText={(text) => handleFormUpdate(currentPlatformKey!, 'productType', text)}
+                          placeholder="Enter product type"
+                        />
+                      </View>
+
+                      <View style={styles.formField}>
+                        <Text style={styles.formLabel}>Tags (Shopify, comma-separated)</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          value={Array.isArray(currentPlatformData.tags) ? currentPlatformData.tags.join(', ') : String(currentPlatformData.tags || '')}
+                          onChangeText={(text) => handleFormUpdate(currentPlatformKey!, 'tags', text)}
+                          placeholder="e.g., vintage, cotton, summer"
+                        />
+                      </View>
+                    </>
+                  )}
+
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Category Suggestion</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      value={String(currentPlatformData.categorySuggestion || '')}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey!, 'categorySuggestion', text)}
+                      placeholder="e.g., Electronics > TV"
+                    />
+                  </View>
+
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Brand</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      value={String(currentPlatformData.brand || '')}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey!, 'brand', text)}
+                      placeholder="Enter brand name"
+                    />
+                  </View>
+
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Condition</Text>
+                     {/* TODO: Consider a Picker for condition */}
+                    <TextInput
+                      style={styles.formInput}
+                      value={String(currentPlatformData.condition || '')}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey!, 'condition', text)}
+                      placeholder="e.g., New, Used - Like New"
+                    />
+                  </View>
+
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Weight</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      value={String(currentPlatformData.weight === undefined ? '' : currentPlatformData.weight)}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey!, 'weight', text)}
+                      placeholder="e.g., 0.5"
+                      keyboardType="numeric"
+                    />
+                  </View>
+
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Weight Unit</Text>
+                     {/* TODO: Consider a Picker for weightUnit: kg, lb, oz, g */}
+                    <TextInput
+                      style={styles.formInput}
+                      value={String(currentPlatformData.weightUnit || '')}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey!, 'weightUnit', text)}
+                      placeholder="e.g., kg, lb, oz, g"
+                    />
+                  </View>
+                </>
+              )}
+              {/* --- END NEW: Explicit Form Fields --- */}
+
+              {/* Fallback for any other fields, or remove if all fields are explicit now */}
+              {/* 
               {Object.entries(currentPlatformData).map(([field, value]) => (
+                // This old loop might render fields already explicitly handled above
+                // Or it might render fields not yet explicitly handled, review carefully.
+                // Consider removing if all desired fields are now explicitly laid out.
                 <View key={field} style={styles.formField}>
                   <Text style={styles.formLabel}>
                     {field.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
                   </Text>
                   
-                  {/* Special handling for quantity fields */}
                   {field.toLowerCase().includes('quantity') ? (
-                    <View style={styles.quantityInputContainer}>
-                      <TextInput
-                        style={styles.quantityInput}
-                        value={String(value || '')}
-                        onChangeText={(text) => {
-                          const num = parseInt(text.replace(/[^0-9]/g, ''));
-                          handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, isNaN(num) ? 0 : num);
-                        }}
-                        keyboardType="number-pad"
-                        placeholder="0"
-                      />
-                      <View style={styles.quantityControls}>
-                        <TouchableOpacity 
-                          style={styles.quantityButton}
-                          onPress={() => {
-                            const current = Number(value) || 0;
-                            handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, Math.max(0, current - 1));
-                          }}
-                        >
-                          <Icon name="minus" size={16} color="#666" />
-                        </TouchableOpacity>
-                        <TouchableOpacity 
-                          style={styles.quantityButton}
-                          onPress={() => {
-                            const current = Number(value) || 0;
-                            handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, current + 1);
-                          }}
-                        >
-                          <Icon name="plus" size={16} color="#666" />
-                        </TouchableOpacity>
-                      </View>
-                    </View>
+                    // ... quantity input ... (already handled by locations section if this refers to inventory quantity)
                   ) : field === 'description' || field === 'returnPolicy' ? (
                     <TextInput
                       style={styles.formInputMultiline}
                       value={String(value || '')}
-                      onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey!, field as keyof GeneratedPlatformDetails, text)}
                       multiline
                       numberOfLines={4}
                       placeholder={`Enter ${field.replace(/_/g, ' ')}`}
@@ -1839,7 +2425,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                   ) : typeof value === 'boolean' ? (
                     <Switch
                       value={value}
-                      onValueChange={(newValue) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, newValue)}
+                      onValueChange={(newValue) => handleFormUpdate(currentPlatformKey!, field as keyof GeneratedPlatformDetails, newValue)}
                       trackColor={{ false: "#767577", true: "#81b0ff" }}
                       thumbColor={value ? "#4CAF50" : "#f4f3f4"}
                     />
@@ -1847,45 +2433,23 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                     <TextInput
                       style={styles.formInput}
                       value={value.join(', ')}
-                      onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey!, field as keyof GeneratedPlatformDetails, text)}
                       placeholder={`Enter ${field.replace(/_/g, ' ')} (comma-separated)`}
                     />
                   ) : (
                     <TextInput
                       style={styles.formInput}
                       value={String(value || '')}
-                      onChangeText={(text) => handleFormUpdate(currentPlatformKey, field as keyof GeneratedPlatformDetails, text)}
+                      onChangeText={(text) => handleFormUpdate(currentPlatformKey!, field as keyof GeneratedPlatformDetails, text)}
                       placeholder={`Enter ${field.replace(/_/g, ' ')}`}
                     />
                   )}
                 </View>
               ))}
+              */}
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
-
-        {/* Bottom Action Buttons */}
-        <View style={styles.formActions}>
-          <Button 
-            title="Back to Matches" 
-            onPress={() => setCurrentStage(ListingStage.VisualMatch)} 
-            outlined 
-            style={styles.actionButton} 
-          />
-          <Button 
-            title="Save Draft" 
-            onPress={() => handlePublishAction('draft')} 
-            outlined 
-            style={styles.actionButton}
-            icon="content-save-outline"
-          />
-          <Button 
-            title="Publish Live" 
-            onPress={() => handlePublishAction('active')} 
-            style={styles.actionButton}
-            icon="rocket-launch-outline"
-          />
-        </View>
       </View>
     );
   };
@@ -2193,17 +2757,14 @@ const styles = StyleSheet.create({
       paddingTop: 15, 
       paddingBottom: Platform.OS === 'ios' ? 15 : 10,
       paddingHorizontal: 15,
-      backgroundColor: '#F8F9FB' // Match stage background
+      backgroundColor: '#F8F9FB' 
   },
   navButton: { flex: 1, marginHorizontal: 5 },
-  disabledButton: { backgroundColor: '#ccc', borderColor: '#bbb' },
+
   
-  // Add previously missing styles (if needed by restored logic or camera preview)
   imageGridScrollView: { flex: 1, marginBottom: 15, },
   imageGridContainer: { 
     paddingBottom: 20,
-    // Example: If needed for a grid layout somewhere else
-    // flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start', paddingHorizontal: '1.66%' 
   },
   imageThumbnailWrapper: {
     position: 'relative', 
@@ -2287,9 +2848,7 @@ const styles = StyleSheet.create({
   tabButtonText: { color: '#666', fontWeight: '500'},
   tabButtonTextActive: { color: '#2E7D32'},
   formScrollView: { flex: 1, marginBottom: 10, paddingHorizontal: 5 },
-  formInputContainer: { marginBottom: 18, position: 'relative' }, // Added relative positioning for currency
-  //formInput: { borderWidth: 1, borderColor: '#DDE2E7', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15, color: '#333', },
-  //formInputMultiline: { minHeight: 80, textAlignVertical: 'top', borderWidth: 1, borderColor: '#DDE2E7', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, fontSize: 15, color: '#333',
+  formInputContainer: { marginBottom: 18, position: 'relative' }, 
   priceInputWithCurrency: {
       paddingLeft: 25, // Add padding for currency symbol
   },
@@ -2451,11 +3010,6 @@ const styles = StyleSheet.create({
   },
 
   // --- NEW Styles for Location Selection ---
-  locationsContainer: {
-    width: '100%',
-    marginBottom: 20,
-    maxHeight: 300,
-  },
   locationsTitle: {
     fontSize: 16,
     fontWeight: '600',
@@ -2465,28 +3019,13 @@ const styles = StyleSheet.create({
   locationsList: {
     maxHeight: 250,
   },
-  locationItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  locationInfo: {
-    flex: 1,
-    marginRight: 10,
-  },
-  locationName: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#333',
-  },
+  /*
   locationAddress: {
     fontSize: 12,
     color: '#666',
     marginTop: 2,
   },
+  */
   quantityInputField: {
     borderWidth: 1,
     borderColor: '#ddd',
@@ -2640,20 +3179,6 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
 
-  quantityInputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  quantityInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 6,
-    padding: 10,
-    fontSize: 16,
-    textAlign: 'center',
-    marginRight: 10,
-  },
   quantityControls: {
     flexDirection: 'row',
   },
@@ -2669,8 +3194,20 @@ const styles = StyleSheet.create({
     borderColor: '#ddd',
   },
   actionButton: {
-    flex: 1,
-    marginHorizontal: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+    borderRadius: 20,
+    borderWidth: 1,
+    minWidth: 120,
+  },
+  actionButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    marginLeft: 6,
+    color: '#666',
   },
   header: {
     flexDirection: 'row',
@@ -2692,13 +3229,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   formScrollContent: {
-    paddingBottom: 100, // Add padding for the bottom buttons
+    paddingBottom: 100, 
   },
   formFieldsContainer: {
     padding: 15,
   },
   formField: {
-    marginBottom: 20, // Increase spacing between fields
+    marginBottom: 20, 
   },
   formLabel: {
     fontSize: 14,
@@ -2744,6 +3281,159 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#ccc',
     backgroundColor: '#f8f9fa',
+  },
+  locationsContainer: {
+    marginTop: 10,
+  },
+  /*
+  locationItem: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    marginBottom: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#eee',
+  },
+  locationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  
+  locationInfo: {
+    marginLeft: 8,
+    flex: 1,
+  },
+  locationName: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#333',
+    marginBottom: 2,
+  },
+  quantityInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    marginLeft: 36, // Align with location name
+  },
+  quantityLabel: {
+    fontSize: 14,
+    color: '#666',
+    marginRight: 8,
+  },
+  quantityInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 4,
+    padding: 8,
+    width: 80,
+    textAlign: 'center',
+    fontSize: 14,
+  },
+  */
+  emptyStateText: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginVertical: 10,
+  },
+  formActionButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+    backgroundColor: '#fff',
+  },
+  backButton: {
+    backgroundColor: '#fff',
+    borderColor: '#ddd',
+  },
+  generateButton: {
+    backgroundColor: '#4CAF50',
+    borderColor: '#4CAF50',
+  },
+  draftButton: {
+    backgroundColor: '#fff',
+    borderColor: '#ddd',
+  },
+  publishButton: {
+    backgroundColor: '#4CAF50',
+    borderColor: '#4CAF50',
+  },
+  modalActionButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+    backgroundColor: '#fff',
+  },
+  nextButton: {
+    backgroundColor: '#4CAF50',
+    borderColor: '#4CAF50',
+  },
+  
+  disabledButton: {
+    backgroundColor: '#ccc',
+    borderColor: '#bbb',
+  },
+  locationsDropdown: {
+    borderWidth: 1,
+    borderColor: '#DDE2E7',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    maxHeight: 300,
+  },
+  locationItem: {
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  locationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  locationInfo: {
+    flex: 1,
+    marginLeft: 10,
+  },
+  locationName: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#333',
+  },
+  locationAddress: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  quantityInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    marginLeft: 34,
+  },
+  quantityLabel: {
+    fontSize: 14,
+    color: '#666',
+    marginRight: 8,
+  },
+  quantityInput: {
+    borderWidth: 1,
+    borderColor: '#DDE2E7',
+    borderRadius: 4,
+    padding: 8,
+    width: 80,
+    textAlign: 'center',
+  },
+  noLocationsText: {
+    fontSize: 14,
+    color: '#666',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    padding: 10,
   },
 });
 

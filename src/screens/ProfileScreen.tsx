@@ -150,9 +150,9 @@ const ProfileScreen = () => {
       // --- TEMPORARY: Direct Supabase Query for Debugging --- 
       console.log("[ProfileScreen DEBUG] Querying Supabase directly for connections...");
       const { data: directData, error: directError } = await supabase
-        .from('PlatformConnections') // Assuming table name is PlatformConnections
+        .from('PlatformConnections') 
         .select('*')
-        .eq('UserId', currentUserId); // Assuming column name is UserId (case-sensitive)
+        .eq('UserId', currentUserId); 
 
       if (directError) {
         console.error("[ProfileScreen DEBUG] Direct Supabase query error:", directError);
@@ -168,8 +168,8 @@ const ProfileScreen = () => {
         throw new Error("Authentication token not found.");
       }
 
-      // 2. Make API Call (ASSUMED ENDPOINT - Update if needed)
-      const response = await fetch('https://api.sssync.app/platform-connections', { // <-- UPDATE THIS URL
+      // 2. Make API Call 
+      const response = await fetch('https://api.sssync.app/platform-connections', { 
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
