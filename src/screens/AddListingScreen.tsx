@@ -603,6 +603,57 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   const [activeFormTab, setActiveFormTab] = useState<string | null>(null);
   const [serpApiResponse, setSerpApiResponse] = useState<SerpApiLensResponse | null>(null);
 
+  // --- NEW: Ref for debounce timer ---
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const inventoryDebounceTimerRef = useRef<NodeJS.Timeout | null>(null); // For inventory specific debouncing
+
+  // --- NEW: Handler for selecting a platform in the AddPlatformModal ---
+  const handleAddPlatformFromModal = (platformKey: string) => {
+    if (!selectedPlatforms.includes(platformKey)) {
+      // Add to selected platforms
+      const newSelectedPlatforms = [...selectedPlatforms, platformKey];
+      setSelectedPlatforms(newSelectedPlatforms);
+
+      // Add to formData with a default structure
+      setFormData(prevData => {
+        const existingFormData = prevData || {};
+        let title = 'New Product';
+        let description = '';
+        let price = 0;
+        let status: 'draft' | 'active' | 'archived' = 'draft';
+
+        const firstExistingPlatformKey = Object.keys(existingFormData).find(key => existingFormData[key]);
+        if (firstExistingPlatformKey && existingFormData[firstExistingPlatformKey]) {
+            const firstPlatformData = existingFormData[firstExistingPlatformKey];
+            title = firstPlatformData.title || title;
+            description = firstPlatformData.description || description;
+            price = firstPlatformData.price === undefined ? price : firstPlatformData.price;
+            // status = firstPlatformData.status || status; // Let new platforms default to draft
+        }
+
+        return {
+          ...existingFormData,
+          [platformKey]: {
+            title,
+            description,
+            price,
+            status,
+            // Add other common/default fields if necessary for a new platform entry
+          }
+        };
+      });
+
+      // Set the new platform as the active tab
+      setActiveFormTab(platformKey);
+      console.log(`[handleAddPlatformFromModal] Added platform: ${platformKey} and set as active tab.`);
+    } else {
+      console.warn(`[handleAddPlatformFromModal] Platform ${platformKey} already selected.`);
+      // Optionally, still switch to it if it was already selected but not active
+      setActiveFormTab(platformKey);
+    }
+    setIsAddPlatformModalVisible(false); // Close modal
+  };
+
   // --- NEW State for Visual Match Selection ---
   const [selectedMatchForGeneration, setSelectedMatchForGeneration] = useState<VisualMatch | null>(null);
 
@@ -629,6 +680,30 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   const [selectedLocations, setSelectedLocations] = useState<ShopifyLocationWithQuantity[]>([]);
   const [isLoadingLocations, setIsLoadingLocations] = useState(false);
   // --- End NEW State ---
+
+  // --- NEW: useEffect to initialize/update selectedLocations based on shopifyLocations and preserve quantities ---
+  useEffect(() => {
+    if (shopifyLocations.length > 0) {
+      setSelectedLocations(prevSelectedLocations => {
+        const newSelectedLocations = shopifyLocations.map(fetchedLocation => {
+          const existingSelection = prevSelectedLocations.find(sl => sl.id === fetchedLocation.id);
+          return {
+            ...fetchedLocation,
+            quantity: existingSelection ? existingSelection.quantity : 0, // Preserve existing quantity or default to 0
+          };
+        });
+        // If there were locations in prevSelectedLocations that are no longer in shopifyLocations,
+        // they will be implicitly removed here. This is generally desired if shopifyLocations is the source of truth for *available* locations.
+        return newSelectedLocations;
+      });
+    } else {
+      // If shopifyLocations is empty, clear selectedLocations too, unless you have a reason to keep them (e.g. offline mode)
+      // setSelectedLocations([]);
+    }
+  }, [shopifyLocations]); // Re-run when the list of available shopifyLocations changes
+
+  // --- NEW: State for Add Platform Modal from Form Review ---
+  const [isAddPlatformModalVisible, setIsAddPlatformModalVisible] = useState(false);
 
   const IMAGE_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
 
@@ -673,37 +748,76 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
         setCoverImageIndex(0); // Set first image as cover
       }
 
-      // Initialize form data with at least basic product information
-      const basicFormData = {
-        shopify: { // Default to shopify as the first platform
+      // --- Refined logic for setting formData ---
+      let newFormData: GenerateDetailsResponse['generatedDetails'] = {};
+      const platformDetails = initialData.platformDetails;
+      const knownPlatformKeysInDetails = platformDetails && typeof platformDetails === 'object'
+        ? Object.keys(platformDetails).filter(key => AVAILABLE_PLATFORMS.some(p => p.key === key))
+        : [];
+
+      if (knownPlatformKeysInDetails.length > 0) {
+        // Case 1: platformDetails is already platform-keyed (e.g., { shopify: {...}, amazon: {...} })
+        newFormData = { ...platformDetails };
+        // Ensure essential fields are present for each platform derived from platformDetails
+        knownPlatformKeysInDetails.forEach(pk => {
+          newFormData[pk] = {
+            title: initialData.title || '', // Fallback to root initialData.title if not in platformDetails[pk].title
+            description: initialData.description || '',
+            price: initialData.price === undefined ? 0 : initialData.price,
+            sku: initialData.sku || '',
+            barcode: initialData.barcode || '',
+            status: initialData.status || 'draft',
+            ...(newFormData[pk] || {}) // Spread existing platform-specific details from platformDetails
+          };
+        });
+        console.log("[AddListingScreen] Initialized formData from platform-keyed platformDetails:", newFormData);
+      } else {
+        // Case 2: platformDetails is flat, or not present, or not platform-keyed.
+        // Default to 'shopify' and merge flat details if they exist.
+        const defaultPlatformKey = AVAILABLE_PLATFORMS[0]?.key || 'shopify'; // Use first available or fallback
+        newFormData[defaultPlatformKey] = {
           title: initialData.title || '',
           description: initialData.description || '',
-          price: initialData.price || 0,
+          price: initialData.price === undefined ? 0 : initialData.price,
           sku: initialData.sku || '',
           barcode: initialData.barcode || '',
           status: initialData.status || 'draft',
-          // Add any other basic fields that should be initialized
+          ...(platformDetails && typeof platformDetails === 'object' ? platformDetails : {}) // Spread flat details
+        };
+        console.log(`[AddListingScreen] Initialized formData for default platform ('${defaultPlatformKey}') merging flat platformDetails:`, newFormData);
+      }
+      // --- End of Refined logic ---
+
+      console.log("[AddListingScreen] Setting form data:", JSON.stringify(newFormData, null, 2));
+      setFormData(newFormData);
+      
+      const validPlatformKeysInForm = Object.keys(newFormData).filter(key => 
+        AVAILABLE_PLATFORMS.some(p => p.key === key)
+      );
+
+      setSelectedPlatforms(validPlatformKeysInForm);
+      console.log("[AddListingScreen] Setting selected platforms:", validPlatformKeysInForm);
+
+      if (validPlatformKeysInForm.length > 0) {
+        setActiveFormTab(validPlatformKeysInForm[0]);
+        console.log("[AddListingScreen] Setting active tab to:", validPlatformKeysInForm[0]);
+      } else if (AVAILABLE_PLATFORMS.length > 0) {
+        // Fallback if somehow no valid platforms ended up in formData but we have available ones
+        setActiveFormTab(AVAILABLE_PLATFORMS[0].key);
+        console.log("[AddListingScreen] Fallback: Setting active tab to first available platform:", AVAILABLE_PLATFORMS[0].key);
+        if (!newFormData[AVAILABLE_PLATFORMS[0].key]) { // Ensure tab has data
+            newFormData[AVAILABLE_PLATFORMS[0].key] = {
+                title: initialData.title || '',
+                description: initialData.description || '',
+                price: initialData.price === undefined ? 0 : initialData.price,
+                sku: initialData.sku || '',
+                barcode: initialData.barcode || '',
+                status: initialData.status || 'draft',
+            };
+            setFormData(newFormData);
         }
-      };
 
-      // Merge with any existing platform details
-      const mergedFormData = {
-        ...basicFormData,
-        ...(initialData.platformDetails || {})
-      };
-
-      console.log("[AddListingScreen] Setting form data:", JSON.stringify(mergedFormData, null, 2));
-      setFormData(mergedFormData);
-      
-      // Set the first platform as active tab (default to shopify if no platforms in details)
-      const firstPlatform = Object.keys(mergedFormData)[0];
-      console.log("[AddListingScreen] Setting active tab to:", firstPlatform);
-      setActiveFormTab(firstPlatform);
-      
-      // Set selected platforms based on available data
-      const platforms = Object.keys(mergedFormData);
-      console.log("[AddListingScreen] Setting selected platforms:", platforms);
-      setSelectedPlatforms(platforms);
+      }
 
       // Clear any existing loading states
       setIsLoading(false);
@@ -713,6 +827,64 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
       console.log("[AddListingScreen] No initial data provided in route params");
     }
   }, [route.params?.initialData]);
+
+  // --- NEW: useEffect to fetch connections and set platformConnectionId for FormReview stage ---
+  useEffect(() => {
+    const fetchConnectionsForFormReview = async () => {
+      // Only attempt if we are in FormReview, Shopify is selected, and we don't have an ID yet.
+      if (currentStage === ListingStage.FormReview && selectedPlatforms.includes('shopify') && !platformConnectionId) {
+        console.log('[FormReview Effect] Shopify selected, attempting to set platformConnectionId.');
+        try {
+          const { data: { user }, error: userError } = await supabase.auth.getUser();
+          const session = await supabase.auth.getSession();
+          const token = session?.data.session?.access_token;
+
+          if (userError || !user || !token) {
+            console.warn('[FormReview Effect] Auth error, cannot fetch connections.');
+            // Potentially set an error state here to inform the user
+            return;
+          }
+
+          const response = await fetch('https://api.sssync.app/api/platform-connections', {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
+            console.error('[FormReview Effect] Failed to fetch platform connections:', errorData.message);
+            // Potentially set an error state here
+            return;
+          }
+
+          const connections: any[] = await response.json();
+          // Ensure you have your PlatformConnection type defined for better type safety
+          // For example: const connections: PlatformConnection[] = await response.json();
+
+          const validShopifyStatuses = ['connected', 'active', 'needs_review', 'syncing', 'active_sync', 'ready'];
+          const shopifyConnection = connections.find(
+            (conn: any) => conn.PlatformType === 'shopify' &&
+                           validShopifyStatuses.includes(conn.Status) &&
+                           conn.IsEnabled === true
+          );
+
+          if (shopifyConnection && shopifyConnection.Id) {
+            console.log(`[FormReview Effect] Found Shopify connection ID: ${shopifyConnection.Id}, Status: ${shopifyConnection.Status}, Enabled: ${shopifyConnection.IsEnabled}`);
+            setPlatformConnectionId(shopifyConnection.Id);
+            setUserPlatformConnections(connections); // Store all connections
+          } else {
+            console.warn('[FormReview Effect] No suitable Shopify connection found. Locations might not load.');
+            // Alert the user or show an indicator in the UI that Shopify locations couldn't be pre-fetched.
+            // Alert.alert("Shopify Connection Issue", "Could not find an active and enabled Shopify connection to pre-fetch locations. Please check your profile settings.");
+          }
+        } catch (err: any) {
+          console.error('[FormReview Effect] Error processing Shopify connection for FormReview:', err);
+          // Potentially set an error state here
+        }
+      }
+    };
+    fetchConnectionsForFormReview();
+  }, [currentStage, selectedPlatforms, platformConnectionId, supabase.auth]); // Add supabase.auth to deps if using it directly for user/session.
 
   // --- Upload Function --- //
   const uploadImagesToSupabase = async (
@@ -1140,8 +1312,8 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                  console.log(`Product/Variant IDs set: ${responseData.product.Id} / ${responseData.variant.Id}`);
                  
                  // --- NEW: Save images to ProductImages table ---
-                 if (responseData.variant.Id && uploadedImageUrls.length > 0) {
-                   const imagesToInsert = uploadedImageUrls.map((url, index) => ({
+                 if (responseData.variant.Id && uploadedImageUrls.length > 0) { // (A)
+                   const imagesToInsert = uploadedImageUrls.map((url, index) => ({ // (B)
                      ProductVariantId: responseData.variant.Id,
                      ImageUrl: url,
                      Position: index,
@@ -1149,21 +1321,33 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                      // PlatformMappingId: null, // Optional: Add logic if needed
                    }));
 
+                   console.log('[triggerImageAnalysis] Attempting to insert product images:', JSON.stringify(imagesToInsert, null, 2)); // (C) NEW LOG
+
                    try {
                      const { error: imageInsertError } = await supabase
                        .from('ProductImages')
-                       .insert(imagesToInsert);
+                       .insert(imagesToInsert); // (D)
 
-                     if (imageInsertError) {
-                       console.error('[triggerImageAnalysis] Error inserting product images:', imageInsertError);
-                       // Non-critical error, so we might not want to throw and stop the flow
-                       // Alert.alert("Image Save Error", "Could not save all product images to the database.");
+                     if (imageInsertError) { // (E)
+                       console.error('[triggerImageAnalysis] Error inserting product images into DB:', imageInsertError);
+                       Alert.alert(
+                        "Image Save Warning (DB)", 
+                        `Could not save product image records to the database. Please check console. Error: ${imageInsertError.message}`
+                       );
                      } else {
-                       console.log('[triggerImageAnalysis] Successfully inserted product images to database.');
+                       console.log('[triggerImageAnalysis] Successfully inserted product images records to database.'); // (F)
                      }
-                   } catch (dbError) {
-                     console.error('[triggerImageAnalysis] Unexpected error inserting product images:', dbError);
+                   } catch (dbError: any) { // (G)
+                     console.error('[triggerImageAnalysis] Unexpected exception inserting product images into DB:', dbError);
+                     Alert.alert("Image Save Exception (DB)", `An unexpected error occurred while saving image records: ${dbError.message}`);
                    }
+                 } else { // (H) NEW LOG
+                  console.warn('[triggerImageAnalysis] Skipping ProductImages insert. Details:', {
+                    hasVariantId: !!responseData?.variant?.Id,
+                    variantId: responseData?.variant?.Id,
+                    uploadedImageUrlsCount: uploadedImageUrls?.length,
+                    uploadedImageUrls: uploadedImageUrls
+                  });
                  }
                  // --- END NEW ---
                  
@@ -1347,6 +1531,45 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
        }
        // --- End Validation Logic ---
 
+      // --- NEW: Update ProductVariant in Database ---
+      if (variantId) {
+        const updateObject: any = {
+          Options: generatedData, // Store all generated platform details
+          UpdatedAt: new Date().toISOString(),
+        };
+
+        // Try to get some primary details from Shopify if it exists in generatedData
+        const shopifyDetails = generatedData?.shopify;
+        if (shopifyDetails) {
+          if (shopifyDetails.title) updateObject.Title = shopifyDetails.title;
+          if (shopifyDetails.description) updateObject.Description = shopifyDetails.description;
+          if (shopifyDetails.price !== undefined) updateObject.Price = shopifyDetails.price;
+          if (shopifyDetails.sku) updateObject.Sku = shopifyDetails.sku;
+          if (shopifyDetails.barcode) updateObject.Barcode = shopifyDetails.barcode;
+          if (shopifyDetails.status) updateObject.Status = shopifyDetails.status;
+          if (shopifyDetails.inventoryQuantity) updateObject.InventoryQuantity = shopifyDetails.inventoryQuantity;
+          if (shopifyDetails.inventoryUnit) updateObject.InventoryUnit = shopifyDetails.inventoryUnit;
+          // Add other primary fields if needed, e.g., Sku, Barcode, if AI can change them
+        }
+
+        console.log(`[triggerDetailsGeneration] Attempting to update ProductVariant ${variantId} with:`, updateObject);
+        const { error: variantUpdateError } = await supabase
+          .from('ProductVariants')
+          .update(updateObject)
+          .eq('Id', variantId);
+
+        if (variantUpdateError) {
+          console.error(`[triggerDetailsGeneration] Error updating ProductVariant ${variantId}:`, variantUpdateError);
+          // Decide if this is a critical error. For now, we'll log and continue to update UI state.
+          // Alert.alert("Save Error", "Could not save all generated details to the database.");
+        } else {
+          console.log(`[triggerDetailsGeneration] Successfully updated ProductVariant ${variantId} in database.`);
+        }
+      } else {
+        console.warn("[triggerDetailsGeneration] variantId is null, skipping database update for ProductVariant.");
+      }
+      // --- END NEW --- 
+
       // Update state with the received details map
       setGenerationResponse(generatedData); // Set the map directly
       setFormData(generatedData); // Initialize form data with the received map
@@ -1369,8 +1592,156 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   };
 
 
+  // --- NEW: Debounced function to save form data to DB ---
+  const debouncedSaveToDB = useCallback(async (currentFormData: GenerateDetailsResponse['generatedDetails'] | null) => {
+    if (!variantId || !activeFormTab || !currentFormData) {
+      console.log("[debouncedSaveToDB] Missing variantId, activeFormTab, or formData. Skipping auto-save.");
+      return;
+    }
+
+    const platformKey = activeFormTab; // activeFormTab is the current platform key
+    const platformDataToSave = currentFormData[platformKey];
+
+    if (!platformDataToSave) {
+      console.warn(`[debouncedSaveToDB] No data found for platform ${platformKey} in formData. Skipping auto-save.`);
+      return;
+    }
+
+    const updateObject: any = {
+      Options: currentFormData, // Save the whole formData (all platforms) to Options
+      UpdatedAt: new Date().toISOString(),
+    };
+
+    // Map relevant fields from the current platform's data to direct ProductVariants columns
+    if (platformDataToSave.title !== undefined) updateObject.Title = platformDataToSave.title;
+    if (platformDataToSave.description !== undefined) updateObject.Description = platformDataToSave.description;
+    if (platformDataToSave.price !== undefined) updateObject.Price = platformDataToSave.price;
+    if (platformDataToSave.sku !== undefined) updateObject.Sku = platformDataToSave.sku;
+    if (platformDataToSave.barcode !== undefined) updateObject.Barcode = platformDataToSave.barcode;
+    if (platformDataToSave.compareAtPrice !== undefined) updateObject.CompareAtPrice = platformDataToSave.compareAtPrice;
+    if (platformDataToSave.weight !== undefined) updateObject.Weight = platformDataToSave.weight;
+    if (platformDataToSave.weightUnit !== undefined) updateObject.WeightUnit = platformDataToSave.weightUnit;
+    // Note: 'status' is not a direct column in ProductVariants, it will be saved within Options.
+
+    console.log(`[debouncedSaveToDB] Auto-saving ProductVariant ${variantId} with:`, updateObject);
+    try {
+      const { error: variantUpdateError } = await supabase
+        .from('ProductVariants')
+        .update(updateObject)
+        .eq('Id', variantId);
+
+      if (variantUpdateError) {
+        console.error(`[debouncedSaveToDB] Error auto-saving ProductVariant ${variantId}:`, variantUpdateError);
+        // Optional: Add a subtle error indicator to the UI
+      } else {
+        console.log(`[debouncedSaveToDB] Successfully auto-saved ProductVariant ${variantId}.`);
+        // Optional: Add a subtle success indicator (e.g., "Saved")
+      }
+
+      // --- NEW: Sync ProductImages with uploadedImageUrls state ---
+      if (uploadedImageUrls && uploadedImageUrls.length > 0) {
+        console.log(`[debouncedSaveToDB] Syncing ${uploadedImageUrls.length} ProductImages for Variant ${variantId}...`);
+        try {
+          // 1. Delete existing images for this variant
+          const { error: deleteError } = await supabase
+            .from('ProductImages')
+            .delete()
+            .eq('ProductVariantId', variantId);
+          
+          if (deleteError) {
+            console.error(`[debouncedSaveToDB] Error deleting existing product images for Variant ${variantId}:`, deleteError);
+            // Optionally alert or handle, but proceed to insert new ones if any
+          }
+
+          // 2. Insert current images
+          const imagesToInsert = uploadedImageUrls.map((url, index) => ({
+            ProductVariantId: variantId, // Ensure variantId is not null here
+            ImageUrl: url,
+            Position: index,
+          }));
+
+          const { error: insertError } = await supabase
+            .from('ProductImages')
+            .insert(imagesToInsert);
+
+          if (insertError) {
+            console.error(`[debouncedSaveToDB] Error inserting new product images for Variant ${variantId}:`, insertError);
+            Alert.alert("Image Sync Warning", `Could not fully sync product images: ${insertError.message}`);
+          } else {
+            console.log(`[debouncedSaveToDB] Successfully synced ProductImages for Variant ${variantId}.`);
+          }
+        } catch (syncError) {
+          console.error(`[debouncedSaveToDB] Exception during ProductImages sync for Variant ${variantId}:`, syncError);
+          Alert.alert("Image Sync Error", "An unexpected error occurred while syncing images.");
+        }
+      } else if (variantId) { // If there are no uploadedImageUrls, but we have a variantId, ensure no images are associated
+        console.log(`[debouncedSaveToDB] No images in uploadedImageUrls, ensuring no ProductImages for Variant ${variantId}.`);
+        try {
+            const { error: deleteError } = await supabase
+            .from('ProductImages')
+            .delete()
+            .eq('ProductVariantId', variantId);
+            if (deleteError) {
+                console.error(`[debouncedSaveToDB] Error clearing product images for Variant ${variantId}:`, deleteError);
+            }
+        } catch (clearError) {
+            console.error(`[debouncedSaveToDB] Exception clearing product images for Variant ${variantId}:`, clearError);
+        }
+      }
+      // --- END NEW --- 
+
+    } catch (e) {
+      console.error(`[debouncedSaveToDB] Exception during auto-save for ProductVariant ${variantId}:`, e);
+    }
+  }, [variantId, activeFormTab, uploadedImageUrls]); // Dependencies for useCallback // Added uploadedImageUrls
+
+  // --- NEW: Debounced function to save INVENTORY LEVELS to DB ---
+  const debouncedSaveInventoryLevelsToDB = useCallback(async (
+    currentSelectedLocations: ShopifyLocationWithQuantity[], 
+    currentVariantId: string | null,
+    shopifyConnectionId: string | null // Specifically the Shopify connection ID
+  ) => {
+    if (!currentVariantId || !shopifyConnectionId || currentSelectedLocations.length === 0) {
+      console.log("[debouncedSaveInventoryLevelsToDB] Missing IDs or no locations to save. Skipping.");
+      return;
+    }
+
+    console.log(`[debouncedSaveInventoryLevelsToDB] Auto-saving InventoryLevels for Variant ${currentVariantId}, Connection ${shopifyConnectionId}`);
+
+    for (const location of currentSelectedLocations) {
+      if (location.id && typeof location.quantity === 'number') { // Ensure locationId and quantity are valid
+        const inventoryRecord = {
+          ProductVariantId: currentVariantId,
+          PlatformConnectionId: shopifyConnectionId,
+          PlatformLocationId: location.id, // This is the Shopify Location GID
+          Quantity: location.quantity,
+          UpdatedAt: new Date().toISOString(),
+        };
+
+        console.log("[debouncedSaveInventoryLevelsToDB] Upserting: ", inventoryRecord);
+        try {
+          const { error } = await supabase
+            .from('InventoryLevels')
+            .upsert(inventoryRecord, {
+              onConflict: 'ProductVariantId,PlatformConnectionId,PlatformLocationId', // Specify conflict target
+            });
+
+          if (error) {
+            console.error(`[debouncedSaveInventoryLevelsToDB] Error upserting inventory for location ${location.id}:`, error);
+            // Optionally, collect errors and show a single alert
+          } else {
+            console.log(`[debouncedSaveInventoryLevelsToDB] Successfully upserted inventory for location ${location.id}.`);
+          }
+        } catch (e) {
+          console.error(`[debouncedSaveInventoryLevelsToDB] Exception during upsert for location ${location.id}:`, e);
+        }
+      }
+    }
+  }, [supabase]); // Dependency: supabase client
+
   // UPDATED handleFormUpdate to handle new structure and types
   const handleFormUpdate = (platform: string, field: keyof GeneratedPlatformDetails, value: any) => {
+      let newFormDataState: GenerateDetailsResponse['generatedDetails'] | null = null;
       setFormData(prevData => {
           if (!prevData) return null;
           const platformData = prevData[platform] || {};
@@ -1412,17 +1783,100 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
           }
           // --- End Handle Specific Field Types ---
 
-          return {
-              ...prevData,
-              [platform]: {
-                  ...(platformData),
-                  [field]: updatedValue
-              }
+          const newPlatformData = {
+              ...(platformData),
+              [field]: updatedValue
           };
+          newFormDataState = {
+              ...prevData,
+              [platform]: newPlatformData
+          };
+          return newFormDataState;
       });
+
+      // --- Auto-save with debounce ---
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+      debounceTimerRef.current = setTimeout(() => {
+        // We need to pass the latest formData state to the debounced function.
+        // The 'newFormDataState' captured in the outer scope of setFormData's callback
+        // will be the most up-to-date version.
+        if (newFormDataState) { // Check if it was set
+            debouncedSaveToDB(newFormDataState);
+        }
+      }, 1500); // 1.5-second debounce
   };
 
-  const handleSaveDraft = async () => { console.log("Saving Draft...", { productId, variantId, formData }); Alert.alert("Draft Saved (Logged)", "API call not implemented."); };
+  const handleSaveDraft = async () => {
+    console.log("[handleSaveDraft] Initiated. Saving current form data...");
+    const wasExistingEntity = !!variantId; // Check before clearing variantId
+
+    // 1. Attempt to save data to backend or acknowledge local state for new items
+    let proceedWithResetAndNav = false;
+    if (formData && activeFormTab) {
+      if (variantId) { // Existing entity with a variantId
+        if (debounceTimerRef.current) {
+          clearTimeout(debounceTimerRef.current);
+        }
+        await debouncedSaveToDB(formData); // This function handles its own console logs/errors
+        Alert.alert("Draft Saved", "Your changes have been persisted to the server.");
+        proceedWithResetAndNav = true;
+      } else { // New entity, formData exists, but no variantId yet.
+        // "Save Draft" for a new, unpersisted item means clearing the form to start over.
+        // The data in `formData` is not saved to the backend as there's no ID.
+        Alert.alert("Draft Cleared", "Current entries cleared. You can start a new listing.");
+        proceedWithResetAndNav = true;
+      }
+    } else {
+      Alert.alert("Save Incomplete", "No data to save or missing critical information (e.g., active tab or form data).");
+      console.warn("[handleSaveDraft] Save incomplete due to missing formData or activeFormTab.");
+      // Do not reset state or navigate if save was effectively a no-op or error
+      proceedWithResetAndNav = false; 
+    }
+
+    if (!proceedWithResetAndNav) {
+      return; // Stop if save was incomplete or no action taken
+    }
+
+    // 2. Reset state comprehensively
+    console.log("[handleSaveDraft] Resetting state comprehensively.");
+    setCapturedMedia([]);
+    setCoverImageIndex(-1);
+    setUploadedImageUrls([]);
+    setAnalysisResponse(null);
+    setGenerationResponse(null);
+    setSerpApiResponse(null);
+    setFormData(null);
+    setProductId(null);
+    setVariantId(null);
+    setSelectedPlatforms([]); // Clear selected platforms for a truly fresh start
+    setActiveFormTab(null);   // Clear active tab as well
+    setPlatformConnectionId(null);
+    setUserPlatformConnections([]);
+    setShopifyLocations([]);
+    setSelectedLocations([]);
+    setError(null); 
+    setIsLoading(false);
+    setLoadingMessage('');
+
+    // 3. Navigate based on context
+    if (wasExistingEntity) {
+      console.log("[handleSaveDraft] Navigating back as it was an existing entity.");
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+      } else {
+        // Edge case: Was an existing entity (e.g., from deep link) but cannot go back.
+        // Resetting to platform selection on the current screen.
+        console.warn("[handleSaveDraft] Was existing entity but cannot go back. Resetting to PlatformSelection.");
+        setCurrentStage(ListingStage.PlatformSelection);
+      }
+    } else {
+      // For new entities, stay on the screen and reset to the beginning of the flow.
+      console.log("[handleSaveDraft] Setting stage to PlatformSelection for a new entity draft.");
+      setCurrentStage(ListingStage.PlatformSelection);
+    }
+  };
 
   // --- NEW Function to Fetch Shopify Locations ---
   const fetchShopifyLocations = async () => {
@@ -1442,7 +1896,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
 
       const token = sessionData.session.access_token;
       const response = await fetch(
-        `https://sssync-bknd-production.up.railway.app/products/shopify/locations?platformConnectionId=${platformConnectionId}`,
+        `https://sssync-bknd-production.up.railway.app/api/products/shopify/locations?platformConnectionId=${platformConnectionId}`,
         {
           method: 'GET',
           headers: {
@@ -1460,8 +1914,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
       const data = await response.json();
       setShopifyLocations(data.locations || []);
       
-      // Initialize selected locations with quantity 0
-      setSelectedLocations((data.locations || []).map((loc: ShopifyLocation) => ({ ...loc, quantity: 0 })));
+      // Initialization of selectedLocations will be handled by a new useEffect hook watching shopifyLocations
     } catch (err: any) {
       console.error("[fetchShopifyLocations] Error:", err);
       Alert.alert("Error", `Failed to fetch Shopify locations: ${err.message}`);
@@ -1471,93 +1924,57 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   };
 
   // --- NEW Function to Update Location Quantity ---
-  const updateLocationQuantity = (locationId: string, quantity: number) => {
-    setSelectedLocations(prev => 
-      prev.map((loc: ShopifyLocationWithQuantity) => 
+  const updateLocationQuantity = (locationId: string, quantityText: string) => {
+    const newQuantity = parseInt(quantityText);
+    const actualQuantity = isNaN(newQuantity) ? 0 : Math.max(0, newQuantity);
+    let updatedSelectedLocations: ShopifyLocationWithQuantity[] = []; // To capture the updated state
+
+    setSelectedLocations(prev => {
+      updatedSelectedLocations = prev.map((loc: ShopifyLocationWithQuantity) => 
         loc.id === locationId 
-          ? { ...loc, quantity: Math.max(0, quantity) } // Ensure non-negative
+          ? { ...loc, quantity: actualQuantity } 
           : loc
-      )
-    );
+      );
+      return updatedSelectedLocations;
+    });
+
+    // --- Auto-save inventory levels with debounce ---
+    if (inventoryDebounceTimerRef.current) {
+      clearTimeout(inventoryDebounceTimerRef.current);
+    }
+    inventoryDebounceTimerRef.current = setTimeout(() => {
+      // Ensure platformConnectionId is the Shopify-specific one for this context
+      // We assume that when this form section is active, platformConnectionId holds the Shopify connection ID.
+      if (variantId && platformConnectionId && updatedSelectedLocations.length > 0) {
+         debouncedSaveInventoryLevelsToDB(updatedSelectedLocations, variantId, platformConnectionId);
+      } else {
+        console.warn("[updateLocationQuantity] Could not call debouncedSaveInventoryLevelsToDB due to missing IDs or empty locations state.", 
+          { variantId, platformConnectionId, count: updatedSelectedLocations.length }
+        );
+      }
+    }, 1500); // 1.5-second debounce, same as other form fields
   };
 
   // --- UPDATED handlePublish to Fetch Locations ---
   const handlePublish = async () => {
-    if (selectedPlatforms.includes('shopify')) {
-      // --- NEW: Fetch connections and find Shopify connection ID ---
-      try {
-        const { data: { user }, error: userError } = await supabase.auth.getUser();
-        const session = await supabase.auth.getSession();
-        const token = session?.data.session?.access_token;
-
-        if (userError || !user || !token) {
-          Alert.alert("Authentication Error", "Could not fetch connections. Please ensure you are logged in.");
-          return;
-        }
-
-        console.log("[handlePublish] Fetching platform connections for user:", user.id);
-        const response = await fetch('https://api.sssync.app/platform-connections', { // Ensure this is your correct API endpoint
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
-          throw new Error(errorData.message || `Failed to fetch connections. Status: ${response.status}`);
-        }
-
-        const connections: any[] = await response.json(); // Use your PlatformConnection type here
-        setUserPlatformConnections(connections); // Store all connections if needed elsewhere
-
-        const shopifyConnection = connections.find(
-          (conn: any) => conn.PlatformType === 'shopify' && conn.IsEnabled // Assuming these fields exist
-        );
-
-        if (shopifyConnection && shopifyConnection.Id) {
-          console.log("[handlePublish] Found Shopify connection ID:", shopifyConnection.Id);
-          setPlatformConnectionId(shopifyConnection.Id);
-          // Now that platformConnectionId is set, call fetchShopifyLocations
-          // await fetchShopifyLocations(); // This will be called after platformConnectionId is set and modal opens
-        } else {
-          Alert.alert("Shopify Not Connected", "No active Shopify connection found. Please connect Shopify in your profile to publish.");
-          return; // Stop if no Shopify connection
-        }
-      } catch (err: any) {
-        console.error("[handlePublish] Error fetching or finding Shopify connection:", err);
-        Alert.alert("Connection Error", `Could not prepare for Shopify publishing: ${err.message}`);
-        return;
-      }
-      // --- END NEW ---
-
-      // Original logic to fetch locations will now use the fetched platformConnectionId
-      // We need to ensure fetchShopifyLocations is called *after* platformConnectionId is set.
-      // One way is to await the setPlatformConnectionId, but state updates can be tricky.
-      // A better approach might be to trigger fetchShopifyLocations if platformConnectionId becomes available and modal is about to be shown.
-      // For now, let's assume fetchShopifyLocations in the modal opening logic will pick up the new ID.
-      // OR, we can call it directly here IF setPlatformConnectionId was synchronous (which it isn't always)
-      // The most robust way is to call fetchShopifyLocations from a useEffect that watches platformConnectionId,
-      // or directly if we pass the found ID to it.
-
-      // Let's try calling it directly here for now, but be mindful of state update timing.
-      // This relies on setPlatformConnectionId having an effect before fetchShopifyLocations uses it.
-      // This might require fetchShopifyLocations to accept an ID as a parameter.
-      // For simplicity now, we set the state and fetchShopifyLocations will use the state.
-      // The fetchShopifyLocations function already checks if platformConnectionId is available.
-      
-      // We will call fetchShopifyLocations when the modal becomes visible and platformConnectionId is set.
-    }
-    setIsPublishModalVisible(true); // Show modal, locations will load if Shopify is selected and ID is found
+    // REMOVED: The block that fetched connections and set platformConnectionId.
+    // This function will now only be responsible for showing the modal.
+    // The useEffect hooks listening to currentStage === ListingStage.FormReview 
+    // and platformConnectionId are responsible for loading connections and locations.
+    
+    // If Shopify is selected, the modal will show loading/location states 
+    // based on what the useEffects have populated.
+    setIsPublishModalVisible(true); 
   };
 
   // --- useEffect to fetch locations when publish modal becomes visible and shopify is selected ---
   useEffect(() => {
-    if (isPublishModalVisible && selectedPlatforms.includes('shopify') && platformConnectionId) {
+    if (platformConnectionId && selectedPlatforms.includes('shopify') && 
+        (isPublishModalVisible || currentStage === ListingStage.FormReview)) {
+      console.log('[useEffect fetchShopifyLocations] Conditions met, calling fetchShopifyLocations. Modal visible:', isPublishModalVisible, 'Stage:', currentStage);
       fetchShopifyLocations();
     }
-  }, [isPublishModalVisible, platformConnectionId, selectedPlatforms]);
+  }, [isPublishModalVisible, currentStage, platformConnectionId, selectedPlatforms]);
   
 
   // --- UPDATED handlePublishAction with Actual API Call ---
@@ -1579,6 +1996,11 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
 
       // Handle Shopify publish if selected
       if (selectedPlatforms.includes('shopify') && productId && platformConnectionId) {
+        // Get the original Shopify connection details to check its status later
+        const originalShopifyConnection = userPlatformConnections.find(
+          (conn: any) => conn.Id === platformConnectionId && conn.PlatformType === 'shopify'
+        );
+
         // Validate locations
         const locations = selectedLocations
           .filter(loc => loc.quantity > 0)
@@ -1594,25 +2016,32 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
         // Get Shopify-specific data from form
         const shopifyData = formData?.shopify || {};
         
+        // --- NEW: Log the request payload ---
+        const apiUrl = `https://api.sssync.app/api/products/${productId}/publish/shopify`;
+        const requestBody = {
+          platformConnectionId,
+          locations,
+          options: {
+            status: status.toUpperCase(),
+            vendor: shopifyData.vendor || undefined,
+            productType: shopifyData.productType || undefined,
+            tags: Array.isArray(shopifyData.tags) ? shopifyData.tags : []
+          }
+        };
+        console.log('[handlePublishAction] Attempting to POST to URL:', apiUrl);
+        console.log('[handlePublishAction] Request Body:', JSON.stringify(requestBody, null, 2));
+        // --- END NEW LOG ---
+
         // Make the API call
         const response = await fetch(
-          `https://sssync-bknd-production.up.railway.app/products/${productId}/publish/shopify`,
+          apiUrl, // Use the logged apiUrl
           {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${token}`,
               'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-              platformConnectionId,
-              locations,
-              options: {
-                status: status.toUpperCase(),
-                vendor: shopifyData.vendor || undefined,
-                productType: shopifyData.productType || undefined,
-                tags: Array.isArray(shopifyData.tags) ? shopifyData.tags : []
-              }
-            })
+            body: JSON.stringify(requestBody)
           }
         );
 
@@ -1633,10 +2062,23 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
           throw new Error("Publish operation failed");
         }
 
+        let successMessage = `Product queued for publishing to Shopify as ${status}.`;
+        if (publishResponse.operationId) {
+          successMessage += `\nOperation ID: ${publishResponse.operationId}`;
+        }
+
         Alert.alert(
-          "Success", 
-          `Product published to Shopify as ${status}.\nOperation ID: ${publishResponse.operationId}`
+          "Publish Queued", 
+          successMessage
         );
+
+        // NEW: Additional check for 'needs_review' status
+        if (originalShopifyConnection && originalShopifyConnection.Status === 'needs_review') {
+          Alert.alert(
+            "Connection Review Needed",
+            "Your Shopify connection status is still 'needs_review'. The product is queued for publishing, but you may need to complete the connection setup or mapping process in your profile for it to fully publish to Shopify."
+          );
+        }
 
         // Reset state and navigate back
         setCurrentStage(ListingStage.PlatformSelection);
@@ -1685,7 +2127,127 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   };
   // --- End ADDED --- 
 
-  // --- Helper Render Functions ---
+  // --- NEW: Render function for Add Platform Modal ---
+  const renderAddPlatformModal = () => {
+    const availableToAdd = AVAILABLE_PLATFORMS.filter(p => !selectedPlatforms.includes(p.key));
+
+    return (
+      <Modal
+        transparent={true}
+        visible={isAddPlatformModalVisible}
+        onRequestClose={() => setIsAddPlatformModalVisible(false)}
+        animationType="fade"
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setIsAddPlatformModalVisible(false)}>
+          {/* Use Pressable for the content area to stop propagation if user clicks inside modal content */}
+          <Pressable style={styles.addPlatformModalContent} onPress={(e) => e.stopPropagation()}> 
+            <Text style={styles.modalTitle}>Add Another Platform</Text>
+            {availableToAdd.length > 0 ? (
+              <FlatList
+                data={availableToAdd}
+                keyExtractor={item => item.key}
+                renderItem={({ item }) => (
+                  <TouchableOpacity 
+                    style={styles.addPlatformModalItem}
+                    onPress={() => handleAddPlatformFromModal(item.key)}
+                  >
+                    {/* Assuming platformImageMap is available and contains image sources */}
+                    <Image source={platformImageMap[item.key]} style={styles.addPlatformModalIcon} />
+                    <Text style={styles.addPlatformModalText}>{item.name}</Text>
+                  </TouchableOpacity>
+                )}
+                ItemSeparatorComponent={() => <View style={styles.addPlatformModalSeparator} />}
+              />
+            ) : (
+              <Text style={styles.addPlatformModalEmptyText}>All available platforms are already selected.</Text>
+            )}
+            <Button 
+              title="Close" 
+              onPress={() => setIsAddPlatformModalVisible(false)} 
+              style={styles.modalCancelButton} 
+              outlined // Assuming 'outlined' is a valid prop for your Button component
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
+    );
+  };
+  // --- End NEW --- 
+
+  // --- NEW: Render function for Publish Modal ---
+  const renderPublishModal = () => {
+    // Determine status for publishing. For now, use Shopify form status or default to active.
+    const shopifyFormData = formData?.shopify;
+    const publishStatus = shopifyFormData?.status && ['active', 'draft', 'archived'].includes(shopifyFormData.status)
+                          ? shopifyFormData.status
+                          : 'active'; // Default to 'active'
+
+    return (
+      <Modal
+        transparent={true}
+        visible={isPublishModalVisible} // Controlled by state
+        onRequestClose={() => setIsPublishModalVisible(false)}
+        animationType="fade"
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setIsPublishModalVisible(false)}>
+          {/* Use Pressable for the content area to stop propagation if user clicks inside modal content */}
+          <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.modalTitle}>Confirm Publish Options</Text>
+
+            {selectedPlatforms.includes('shopify') && (
+              <View style={styles.formSection}> {/* Re-use formSection style for consistency */}
+                <Text style={styles.sectionTitle}>Shopify Details</Text>
+                <Text style={styles.modalSubtitle}>
+                  Product will be published to Shopify with status: <Text style={{fontWeight: 'bold'}}>{publishStatus.toUpperCase()}</Text>
+                </Text>
+                <Text style={styles.sectionTitle}>Locations to Publish:</Text>
+                {isLoadingLocations ? (
+                  <ActivityIndicator size="small" color={theme.colors.primary} style={{marginVertical: 10}} />
+                ) : selectedLocations.filter(l => l.quantity > 0).length > 0 ? (
+                  <FlatList
+                    data={selectedLocations.filter(l => l.quantity > 0)}
+                    keyExtractor={item => item.id}
+                    renderItem={({ item }) => (
+                      <View style={styles.locationItemModal}>
+                        <Text style={styles.locationNameModal}>{item.name}</Text>
+                        <Text style={styles.locationQuantityModal}>Quantity: {item.quantity}</Text>
+                      </View>
+                    )}
+                    style={{maxHeight: 150, marginBottom: 10}} // Limit height and add margin
+                  />
+                ) : (
+                  <Text style={styles.noLocationsText}>No locations selected with quantity for Shopify.</Text>
+                )}
+              </View>
+            )}
+            {/* TODO: Add sections for other platforms if needed when publishing to them */}
+
+            <View style={styles.modalButtonContainerPublish}>
+              <Button
+                title="Cancel"
+                onPress={() => setIsPublishModalVisible(false)}
+                outlined
+                style={StyleSheet.flatten([styles.modalButton, styles.modalCancelButton])} // Ensure these styles exist or adjust
+              />
+              <Button
+                title={`Confirm & Publish`}
+                onPress={() => {
+                  handlePublishAction(publishStatus as 'active' | 'draft' | 'archived');
+                  setIsPublishModalVisible(false); // Close modal after action
+                }}
+                // Disable if Shopify is selected but no locations have quantity > 0
+                disabled={selectedPlatforms.includes('shopify') && selectedLocations.filter(l => l.quantity > 0).length === 0 && !isLoadingLocations}
+                style={StyleSheet.flatten([styles.modalButton, styles.modalConfirmButton])} // Ensure these styles exist or adjust
+              />
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    );
+  };
+  // --- End NEW ---
+
+   // --- Helper Render Functions ---
   const renderLoading = (message: string) => {
       // Restore original loading component
       return (
@@ -2123,8 +2685,8 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                         <TextInput
                           style={styles.quantityInput}
                           keyboardType="numeric"
-                          value={selectedLocation.quantity.toString()}
-                          onChangeText={(value) => handleLocationQuantityChange(location.id, value)}
+                          value={selectedLocation.quantity === 0 ? '' : String(selectedLocation.quantity)} // Display blank if 0
+                          onChangeText={(value) => updateLocationQuantity(location.id, value)} // Use updated function
                           placeholder="0"
                         />
                       </View>
@@ -2208,7 +2770,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
             ))}
             <TouchableOpacity
               style={styles.addPlatformButton}
-              onPress={() => setCurrentStage(ListingStage.PlatformSelection)}
+              onPress={() => setIsAddPlatformModalVisible(true)} // <-- UPDATED
             >
               <Icon name="plus" size={20} color="#666" />
               <Text style={styles.addPlatformText}>Add Platform</Text>
@@ -2450,6 +3012,42 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
+
+        {/* --- NEW Bottom Action Buttons --- */}
+        <View style={styles.formReviewBottomActionsContainer}>
+          <TouchableOpacity
+            style={[styles.formReviewActionButton, styles.formReviewBackButton]}
+            onPress={() => {
+              // Simplified back logic: always go to VisualMatch if available, else PlatformSelection
+              if (analysisResponse) { // analysisResponse is set when VisualMatch stage was reached
+                setCurrentStage(ListingStage.VisualMatch);
+              } else {
+                setCurrentStage(ListingStage.PlatformSelection);
+              }
+            }}
+          >
+            <Icon name="arrow-left" size={20} color={theme.colors.text} />
+            <Text style={styles.formReviewActionButtonText}>Back</Text>
+          </TouchableOpacity>
+
+            <TouchableOpacity
+            style={[styles.formReviewActionButton, styles.formReviewSaveButton]}
+            onPress={handleSaveDraft} // Assuming handleSaveDraft is implemented
+          >
+            <Icon name="content-save-outline" size={20} color={theme.colors.primary} />
+            <Text style={[styles.formReviewActionButtonText, { color: theme.colors.primary }]}>Save Draft</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.formReviewActionButton, styles.formReviewPublishButton]}
+            onPress={handlePublish} // This opens the publish modal
+            >
+            <Icon name="cloud-upload-outline" size={20} color='#FFFFFF' />
+            <Text style={[styles.formReviewActionButtonText, { color: '#FFFFFF' }]}>Publish</Text>
+            </TouchableOpacity>
+        </View>
+        {/* --- END NEW Bottom Action Buttons --- */}
+
       </View>
     );
   };
@@ -2499,7 +3097,14 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   // --- Main Render (Ensure this is the final return) --- //
   // Restore original return statement
   console.log("[AddListingScreen] Rendering main SafeAreaView with renderCurrentStage");
-  return (<SafeAreaView style={styles.container}>{renderCurrentStage()}</SafeAreaView>);
+  return (
+    <SafeAreaView style={styles.container}>
+      {renderCurrentStage()}
+      {renderAddPlatformModal()} 
+      {/* NEW: Render the Publish Modal */}
+      {isPublishModalVisible && renderPublishModal()} 
+    </SafeAreaView>
+  );
   // REMOVE any return null placeholders below this point
 
 };
@@ -3285,51 +3890,6 @@ const styles = StyleSheet.create({
   locationsContainer: {
     marginTop: 10,
   },
-  /*
-  locationItem: {
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    marginBottom: 10,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#eee',
-  },
-  locationHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  
-  locationInfo: {
-    marginLeft: 8,
-    flex: 1,
-  },
-  locationName: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#333',
-    marginBottom: 2,
-  },
-  quantityInputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 8,
-    marginLeft: 36, // Align with location name
-  },
-  quantityLabel: {
-    fontSize: 14,
-    color: '#666',
-    marginRight: 8,
-  },
-  quantityInput: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 4,
-    padding: 8,
-    width: 80,
-    textAlign: 'center',
-    fontSize: 14,
-  },
-  */
   emptyStateText: {
     fontSize: 14,
     color: '#666',
@@ -3425,7 +3985,7 @@ const styles = StyleSheet.create({
     borderColor: '#DDE2E7',
     borderRadius: 4,
     padding: 8,
-    width: 80,
+    width: 80, // Increased width
     textAlign: 'center',
   },
   noLocationsText: {
@@ -3435,6 +3995,120 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     padding: 10,
   },
+  // --- NEW Styles for FormReview Bottom Actions ---
+  formReviewBottomActionsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0', // Slightly softer border
+    backgroundColor: '#f8f9fa', // Light background
+    marginTop: 10,
+    marginBottom: 10,
+  },
+  formReviewActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 15, // Balanced padding
+    paddingVertical: 10,
+    borderRadius: 20, // Rounded like platform tabs
+    borderWidth: 1,
+    borderColor: '#ccc', // Default border
+    minWidth: 100, // Ensure decent tap target
+    justifyContent: 'center',
+    marginTop: 30,
+    marginBottom: 30,
+  },
+  formReviewBackButton: {
+    backgroundColor: '#fff',
+    borderColor: '#ccc',
+  },
+  formReviewSaveButton: {
+    backgroundColor: '#e8f5e9', // Light green, similar to active tab
+    borderColor: '#4CAF50',
+  },
+  formReviewPublishButton: {
+    backgroundColor: '#4CAF50', // Using a common primary color, adjust if needed
+    borderColor: '#4CAF50', 
+  },
+  formReviewActionButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    marginLeft: 8,
+    color: '#333333', // Using a common default text color
+  },
+  // --- END NEW Styles ---
+
+  // --- NEW Styles for AddPlatformModal ---
+  addPlatformModalContent: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 25,
+    width: '85%',
+    maxWidth: 350, // Slightly smaller than publish modal
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  addPlatformModalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    width: '100%',
+  },
+  addPlatformModalIcon: {
+    width: 24, 
+    height: 24,
+    marginRight: 15,
+  },
+  addPlatformModalText: {
+    fontSize: 16,
+    color: '#333',
+  },
+  addPlatformModalSeparator: {
+    height: 1,
+    backgroundColor: '#eee',
+    width: '100%',
+  },
+  addPlatformModalEmptyText: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    paddingVertical: 20,
+  },
+  // --- END Styles for AddPlatformModal ---
+
+  // --- Styles for Publish Modal (NEW, can be refined) ---
+  modalButtonContainerPublish: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginTop: 20,
+  },
+  modalConfirmButton: {
+    // Add specific styles for the confirm button if needed, e.g.:
+    // backgroundColor: theme.colors.primary, // Or your theme's success color
+  },
+  locationItemModal: {
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  locationNameModal: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  locationQuantityModal: {
+    fontSize: 13,
+    color: '#555',
+  },
+  // --- End Publish Modal Styles ---
 });
 
 // --- Platform Images Map (Unchanged, Ensure it's defined) --- //

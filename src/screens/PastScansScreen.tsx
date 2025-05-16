@@ -47,7 +47,8 @@ const PastScansScreen = () => {
         throw new Error('No authenticated user');
       }
 
-      // Query Products with their variants and AI content
+      // Query Products with their variants
+      // AiGeneratedContent is no longer the primary source for listing details here
       const { data: products, error: productsError } = await supabase
         .from('Products')
         .select(`
@@ -65,21 +66,13 @@ const PastScansScreen = () => {
             Barcode,
             Weight,
             WeightUnit,
-            Options,
+            Options, 
             CreatedAt,
             UpdatedAt,
             ProductImages (
               ImageUrl,
               Position
             )
-          ),
-          AiGeneratedContent (
-            Id,
-            ContentType,
-            GeneratedText,
-            IsActive,
-            CreatedAt,
-            UpdatedAt
           )
         `)
         .eq('UserId', user.id)
@@ -96,58 +89,55 @@ const PastScansScreen = () => {
       }
 
       // Transform the data to match our PastScan interface
-      const transformedScans = products.map(product => {
-        // Get the first variant (we'll need to handle multiple variants later)
+      const transformedScans = products.reduce((acc: PastScan[], product) => {
         const variant = product.ProductVariants?.[0];
         if (!variant) {
-          console.warn(`Product ${product.Id} has no variants`);
-          return null;
+          console.warn(`[PastScansScreen] Product ${product.Id} has no variants, skipping.`);
+          return acc;
         }
 
-        // Get the most recent AI content
-        const aiContent = product.AiGeneratedContent?.[0];
-        
-        // Sort images by position and get URLs
+        // Images are still sourced the same way
         const sortedImages = variant.ProductImages
           ?.sort((a, b) => (a.Position || 0) - (b.Position || 0))
           ?.map(img => img.ImageUrl) || [];
 
-        // Determine status based on both IsArchived and AI content
+        // Determine status
         let status: 'draft' | 'active' | 'archived' = 'draft';
         if (product.IsArchived) {
           status = 'archived';
-        } else if (aiContent?.IsActive) {
+        } else if (variant.Title) { // If there's a title, consider it active enough for this view
           status = 'active';
         }
 
-        // Get platform details from AI content if available
+        // Get platform details directly from variant.Options
         let platformDetails = {};
-        if (aiContent?.GeneratedText) {
-          try {
-            const parsedContent = JSON.parse(aiContent.GeneratedText);
-            // Only include the generated details if they exist
-            if (parsedContent?.generatedDetails) {
-              platformDetails = parsedContent.generatedDetails;
-            }
-          } catch (e) {
-            console.warn(`Failed to parse AI generated content for product ${product.Id}:`, e);
-          }
+        if (variant.Options && typeof variant.Options === 'object') {
+          platformDetails = variant.Options;
+          console.log(`[PastScansScreen] Product ${product.Id}: Loaded platformDetails from variant.Options.`);
+        } else if (variant.Options) {
+          console.warn(`[PastScansScreen] Product ${product.Id}: variant.Options was present but not an object:`, variant.Options);
+          // Optionally try to parse if it might be a JSON string, though it should be an object from Supabase (JSONB)
+        } else {
+          console.log(`[PastScansScreen] Product ${product.Id}: No variant.Options found.`);
         }
+        
+        // Remove the AiGeneratedContent logic here as primary data comes from ProductVariants
 
-        return {
+        acc.push({
           id: product.Id,
           variantId: variant.Id,
-          created_at: product.CreatedAt,
+          created_at: product.CreatedAt, // Use product's CreatedAt for the scan list
           title: variant.Title || 'Untitled Product',
           description: variant.Description || '',
           price: variant.Price || 0,
           sku: variant.Sku || '',
           barcode: variant.Barcode || '',
           images: sortedImages,
-          platform_details: platformDetails,
+          platform_details: platformDetails, // Sourced from variant.Options
           status
-        };
-      }).filter((scan): scan is PastScan => scan !== null); // Remove any null entries
+        });
+        return acc;
+      }, []);
 
       setScans(transformedScans);
     } catch (err: any) {
