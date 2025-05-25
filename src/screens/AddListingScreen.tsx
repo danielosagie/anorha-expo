@@ -607,6 +607,9 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const inventoryDebounceTimerRef = useRef<NodeJS.Timeout | null>(null); // For inventory specific debouncing
 
+  // --- NEW: State to track if editing an existing draft ---
+  const [isEditingExistingDraft, setIsEditingExistingDraft] = useState(false);
+
   // --- NEW: Handler for selecting a platform in the AddPlatformModal ---
   const handleAddPlatformFromModal = (platformKey: string) => {
     if (!selectedPlatforms.includes(platformKey)) {
@@ -730,6 +733,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
       if (initialData.variantId) {
         console.log("[AddListingScreen] Setting variant ID:", initialData.variantId);
         setVariantId(initialData.variantId);
+        setIsEditingExistingDraft(true); // Mark that we are editing an item loaded from params
       }
 
       // Set uploaded image URLs if provided
@@ -823,6 +827,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
       setIsLoading(false);
       setLoadingMessage('');
       setError(null);
+      setIsEditingExistingDraft(false); // Reset for the next potential flow
     } else {
       console.log("[AddListingScreen] No initial data provided in route params");
     }
@@ -1204,15 +1209,29 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
 
     try {
         // Upload images and get the URLs directly
-        urls = await uploadImagesToSupabase(mediaToUpload);
+        let rawUrls = await uploadImagesToSupabase(mediaToUpload);
+        console.log('[triggerImageAnalysis] URLs received from uploadImagesToSupabase:', JSON.stringify(rawUrls, null, 2)); // Log 1
+
+        // Clean the URLs: ensure no trailing semicolons if they are strings
+        urls = rawUrls.map(url => { // Assign to the outer scope 'urls'
+          if (typeof url === 'string') {
+            const trimmedUrl = url.trim(); // Trim whitespace first
+            if (trimmedUrl.endsWith(';')) {
+              console.warn('[triggerImageAnalysis] Cleaning trailing semicolon from URL:', url);
+              return trimmedUrl.slice(0, -1);
+            }
+            return trimmedUrl; // Return trimmed URL even if no semicolon
+          }
+          return url; // Return as-is if not a string (though it should be)
+        });
+        console.log('[triggerImageAnalysis] Cleaned URLs (assigned to outer urls): ', JSON.stringify(urls, null, 2)); // Log 2
+
         if (urls.length === 0 && mediaToUpload.length > 0) {
-             // Check if any items were supposed to be uploaded but failed silently in the loop
-             console.error("[triggerImageAnalysis] Upload function returned empty URLs despite having media items. Check upload logs.")
+             console.error("[triggerImageAnalysis] Upload function returned empty or all-null URLs despite having media items. Check upload logs.")
             throw new Error("Media upload failed or all items were skipped. Check logs and file sizes.");
         }
-        // Update state (optional here, mainly for other parts of UI if needed)
         setUploadedImageUrls(urls); 
-        console.log(`[triggerImageAnalysis] Upload successful. Got ${urls.length} URLs.`);
+        console.log(`[triggerImageAnalysis] Upload successful. Set uploadedImageUrls with ${urls.length} URLs.`);
         setLoadingMessage('Analyzing Media...');
 
     } catch (uploadErr: any) {
@@ -1250,11 +1269,10 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
     const token = sessionData.session.access_token;
     console.log(`User ID fetched for analysis: ${userId}`);
 
-    // Corrected API URL: Removed userId query parameter
     const analyzeApiUrl = `https://sssync-bknd-production.up.railway.app/api/products/analyze`;
+    // Now 'urls' from the outer scope (which has been cleaned) is used here implicitly by requestBodyAnalyze's definition later
     const requestBodyAnalyze = { imageUris: urls, selectedPlatforms: selectedPlatforms };
     
-    // Define headers including the Authorization token
     const headers = { 
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`
@@ -1312,8 +1330,8 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                  console.log(`Product/Variant IDs set: ${responseData.product.Id} / ${responseData.variant.Id}`);
                  
                  // --- NEW: Save images to ProductImages table ---
-                 if (responseData.variant.Id && uploadedImageUrls.length > 0) { // (A)
-                   const imagesToInsert = uploadedImageUrls.map((url, index) => ({ // (B)
+                 if (responseData.variant.Id && urls.length > 0) { // (A) CHANGED: Use local 'urls' variable
+                   const imagesToInsert = urls.map((url, index) => ({ // (B) CHANGED: Use local 'urls' variable
                      ProductVariantId: responseData.variant.Id,
                      ImageUrl: url,
                      Position: index,
@@ -1345,8 +1363,8 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                   console.warn('[triggerImageAnalysis] Skipping ProductImages insert. Details:', {
                     hasVariantId: !!responseData?.variant?.Id,
                     variantId: responseData?.variant?.Id,
-                    uploadedImageUrlsCount: uploadedImageUrls?.length,
-                    uploadedImageUrls: uploadedImageUrls
+                    uploadedImageUrlsCount: urls.length, // CHANGED: Use local 'urls' variable for count
+                    uploadedImageUrls: urls // CHANGED: Log local 'urls' variable
                   });
                  }
                  // --- END NEW ---
@@ -1839,6 +1857,11 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
       return; // Stop if save was incomplete or no action taken
     }
 
+    // --- Log navigation decision variables ---
+    const canGoBack = navigation.canGoBack();
+    console.log(`[handleSaveDraft] Navigation decision: isEditingExistingDraft = ${isEditingExistingDraft}, navigation.canGoBack() = ${canGoBack}`);
+    // ---
+
     // 2. Reset state comprehensively
     console.log("[handleSaveDraft] Resetting state comprehensively.");
     setCapturedMedia([]);
@@ -1861,20 +1884,21 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
     setLoadingMessage('');
 
     // 3. Navigate based on context
-    if (wasExistingEntity) {
-      console.log("[handleSaveDraft] Navigating back as it was an existing entity.");
-      if (navigation.canGoBack()) {
+    if (isEditingExistingDraft) { // Use the new state here
+      console.log("[handleSaveDraft] Navigating back as it was an existing entity from Past Scans.");
+      if (canGoBack) { // Use the logged variable
         navigation.goBack();
       } else {
-        // Edge case: Was an existing entity (e.g., from deep link) but cannot go back.
-        // Resetting to platform selection on the current screen.
-        console.warn("[handleSaveDraft] Was existing entity but cannot go back. Resetting to PlatformSelection.");
+        // This case should be rare if isEditingExistingDraft is true
+        console.warn("[handleSaveDraft] Was editing existing draft but cannot go back. Resetting to PlatformSelection.");
         setCurrentStage(ListingStage.PlatformSelection);
+        // isEditingExistingDraft is already set to false in the comprehensive reset
       }
     } else {
-      // For new entities, stay on the screen and reset to the beginning of the flow.
-      console.log("[handleSaveDraft] Setting stage to PlatformSelection for a new entity draft.");
+      // For new entities created in this session, or if route.params didn't mark it as existing
+      console.log("[handleSaveDraft] Resetting to PlatformSelection for a new/current entity draft.");
       setCurrentStage(ListingStage.PlatformSelection);
+      // isEditingExistingDraft is already set to false in the comprehensive reset
     }
   };
 
@@ -1947,7 +1971,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
       // We assume that when this form section is active, platformConnectionId holds the Shopify connection ID.
       if (variantId && platformConnectionId && updatedSelectedLocations.length > 0) {
          debouncedSaveInventoryLevelsToDB(updatedSelectedLocations, variantId, platformConnectionId);
-      } else {
+        } else {
         console.warn("[updateLocationQuantity] Could not call debouncedSaveInventoryLevelsToDB due to missing IDs or empty locations state.", 
           { variantId, platformConnectionId, count: updatedSelectedLocations.length }
         );
@@ -1991,88 +2015,230 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
       if (userError || !user || sessionError || !sessionData?.session?.access_token) {
         throw new Error("Authentication error. Please log out and back in.");
       }
-
       const token = sessionData.session.access_token;
+
+      // Ensure essential IDs are present
+      if (!productId || !variantId) {
+        throw new Error("Product or Variant ID is missing. Cannot publish.");
+      }
+      if (!activeFormTab || !formData || !formData[activeFormTab]) {
+        throw new Error("Active form tab or form data is missing. Cannot publish.");
+      }
+
+      // --- Step 1: Save/Update Canonical Product Details via generic /products/publish ---
+      console.log("[handlePublishAction] Step 1: Saving canonical product details...");
+      
+      // --- NEW: Log the state of uploadedImageUrls before using it ---
+      console.log("[handlePublishAction] Current state of uploadedImageUrls before cleaning for payload:", JSON.stringify(uploadedImageUrls, null, 2));
+      // --- END NEW LOG ---
+
+      // --- NEW: Defensive cleaning of image URLs for the payload ---
+      const cleanedImageUrisForPayload = uploadedImageUrls.map((url, index) => {
+        console.log(`[handlePublishAction] Cleaning URL ${index} - Original: '${url}' (Type: ${typeof url})`);
+        if (typeof url === 'string') {
+          let currentUrl = url.trim();
+          if (currentUrl.endsWith(';')) {
+            console.log(`[handlePublishAction] URL ${index} ('${currentUrl}') ends with semicolon. Slicing.`);
+            currentUrl = currentUrl.slice(0, -1);
+          }
+          console.log(`[handlePublishAction] URL ${index} - After cleaning attempt: '${currentUrl}'`);
+          return currentUrl;
+        }
+        console.log(`[handlePublishAction] URL ${index} - Not a string or encountered issue, returning original: '${url}'`);
+        return url; // Pass through if not a string or if logic failed.
+      }).filter(urlOutputFromMap => {
+        // Now filter based on the result from the map
+        const isValid = typeof urlOutputFromMap === 'string' && urlOutputFromMap.length > 0 && !urlOutputFromMap.includes(';');
+        if (!isValid) {
+            console.warn(`[handlePublishAction] Filtering out URL after map: '${urlOutputFromMap}' (Type: ${typeof urlOutputFromMap}, Length: ${typeof urlOutputFromMap === 'string' ? urlOutputFromMap.length : 'N/A'}, Includes Semicolon: ${typeof urlOutputFromMap === 'string' ? urlOutputFromMap.includes(';') : 'N/A'})`);
+        }
+        return isValid;
+      });
+
+      console.log("[handlePublishAction] Cleaned image URIs for canonical payload (after map and filter):", JSON.stringify(cleanedImageUrisForPayload, null, 2));
+
+      let finalCoverImageIndex = 0;
+      if (cleanedImageUrisForPayload.length > 0) {
+        if (coverImageIndex >= 0 && coverImageIndex < cleanedImageUrisForPayload.length) {
+          finalCoverImageIndex = coverImageIndex;
+        } else {
+          // If original coverImageIndex is out of bounds for the cleaned list, default to 0
+          // This also handles the case where coverImageIndex might have been -1
+          finalCoverImageIndex = 0; 
+        }
+      }
+      // --- END NEW: Defensive cleaning --- 
+
+      const canonicalDetailsPayload = {
+        productId: productId,
+        variantId: variantId,
+        publishIntent: "SAVE_SSSYNC_DRAFT", 
+        platformDetails: {
+          canonical: {
+            ...formData[activeFormTab],
+            title: formData[activeFormTab]?.title || 'Untitled Product',
+            description: formData[activeFormTab]?.description || '',
+            price: formData[activeFormTab]?.price === undefined ? 0 : formData[activeFormTab]?.price,
+            sku: formData[activeFormTab]?.sku || ('DRAFT-' + (productId?.substring(0, 8) || 'temp')), // Ensure SKU is not empty
+          }
+        },
+        media: {
+          imageUris: cleanedImageUrisForPayload, // Use the cleaned version
+          coverImageIndex: finalCoverImageIndex, // Use the adjusted cover index
+        },
+        selectedPlatformsToPublish: null, 
+      };
+
+      // --- AGGRESSIVE LAST-MINUTE CLEANING ---
+      if (canonicalDetailsPayload.media && Array.isArray(canonicalDetailsPayload.media.imageUris)) {
+        console.log("[handlePublishAction] About to perform AGGRESSIVE last-minute cleaning on payload's imageUris. Current value:", JSON.stringify(canonicalDetailsPayload.media.imageUris));
+        
+        const aggressivelyCleanedUris: string[] = [];
+        for (const url of canonicalDetailsPayload.media.imageUris) {
+          if (typeof url === 'string') {
+            let cleanedUrl = url.trim();
+            if (cleanedUrl.endsWith(';')) {
+              console.warn(`[handlePublishAction] AGGRESSIVE CLEAN: Removing trailing semicolon from URL: ${cleanedUrl}`);
+              cleanedUrl = cleanedUrl.slice(0, -1);
+            }
+            if (cleanedUrl.length > 0) { // Ensure non-empty string after cleaning
+              aggressivelyCleanedUris.push(cleanedUrl);
+            }
+          } else {
+            // If somehow a non-string made it this far, log and skip it
+            console.warn(`[handlePublishAction] AGGRESSIVE CLEAN: Found non-string in imageUris, skipping:`, url);
+          }
+        }
+        canonicalDetailsPayload.media.imageUris = aggressivelyCleanedUris;
+        console.log("[handlePublishAction] AGGRESSIVE last-minute cleaning complete. New value:", JSON.stringify(canonicalDetailsPayload.media.imageUris));
+      }
+      // --- END AGGRESSIVE CLEANING ---
+
+      console.log("[handlePublishAction] Canonical Details Payload for /products/publish (FINAL just before stringify):", JSON.stringify(canonicalDetailsPayload, null, 2));
+      
+      // --- HYPER-FOCUSED STRINGIFY TEST ---
+      let bodyAsString: string;
+      try {
+        if (canonicalDetailsPayload.media && canonicalDetailsPayload.media.imageUris && canonicalDetailsPayload.media.imageUris[0]) {
+            console.log(`[handlePublishAction] Directly accessing payload.media.imageUris[0] before any stringify: '${canonicalDetailsPayload.media.imageUris[0]}' (Length: ${canonicalDetailsPayload.media.imageUris[0].length})`);
+        }
+        const stringifiedMediaUris = JSON.stringify(canonicalDetailsPayload.media.imageUris);
+        console.log(`[handlePublishAction] Separately stringified media.imageUris: ${stringifiedMediaUris}`);
+        
+        // Construct body by embedding the pre-stringified media URIs
+        const payloadCopy = { ...canonicalDetailsPayload };
+        // @ts-ignore
+        delete payloadCopy.media; // Remove original media to avoid conflict, we'll add it back as a string part
+
+        bodyAsString = `{
+          "productId": ${JSON.stringify(payloadCopy.productId)},
+          "variantId": ${JSON.stringify(payloadCopy.variantId)},
+          "publishIntent": ${JSON.stringify(payloadCopy.publishIntent)},
+          "platformDetails": ${JSON.stringify(payloadCopy.platformDetails)},
+          "media": {"imageUris": ${stringifiedMediaUris}, "coverImageIndex": ${JSON.stringify(canonicalDetailsPayload.media.coverImageIndex)}},
+          "selectedPlatformsToPublish": ${JSON.stringify(payloadCopy.selectedPlatformsToPublish)}
+        }`;
+        console.log("[handlePublishAction] Manually constructed body string with pre-stringified imageUris:", bodyAsString);
+      } catch (stringifyError: any) {
+        console.error("[handlePublishAction] Error during HYPER-FOCUSED STRINGIFY TEST:", stringifyError);
+        // Fallback to direct stringification if manual construction fails
+        bodyAsString = JSON.stringify(canonicalDetailsPayload);
+        console.log("[handlePublishAction] Falling back to direct JSON.stringify(canonicalDetailsPayload) for body.");
+      }
+      // --- END HYPER-FOCUSED STRINGIFY TEST ---
+
+      console.log("[handlePublishAction] FINAL bodyAsString for /api/products/publish:", bodyAsString);
+
+      const saveResponse = await fetch(`https://api.sssync.app/api/products/publish`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: bodyAsString, // Use the potentially manually constructed string
+      });
+
+      if (!saveResponse.ok) {
+        let errorMsg = `Failed to save canonical product details. Status: ${saveResponse.status}`;
+        try {
+          const errorData = await saveResponse.json();
+          errorMsg = errorData.message || errorMsg;
+        } catch (e) { /* ignore if response is not json */ }
+        console.error("[handlePublishAction] Error saving canonical details:", errorMsg);
+        throw new Error(errorMsg);
+      }
+      console.log("[handlePublishAction] Step 1: Canonical product details saved successfully.");
+      // --- End Step 1 ---
 
       // Handle Shopify publish if selected
       if (selectedPlatforms.includes('shopify') && productId && platformConnectionId) {
-        // Get the original Shopify connection details to check its status later
+        console.log("[handlePublishAction] Step 2: Proceeding to publish to Shopify...");
         const originalShopifyConnection = userPlatformConnections.find(
           (conn: any) => conn.Id === platformConnectionId && conn.PlatformType === 'shopify'
         );
 
-        // Validate locations
-        const locations = selectedLocations
+        const locationsToPublish = selectedLocations
           .filter(loc => loc.quantity > 0)
           .map(loc => ({
             locationId: loc.id,
             quantity: loc.quantity
           }));
 
-        if (locations.length === 0) {
-          throw new Error("Please set inventory quantity for at least one location");
+        if (locationsToPublish.length === 0) {
+          // This check might still be relevant if user deselects all quantities after canonical save but before this point.
+          throw new Error("Please set inventory quantity for at least one location for Shopify.");
         }
 
-        // Get Shopify-specific data from form
         const shopifyData = formData?.shopify || {};
         
-        // --- NEW: Log the request payload ---
         const apiUrl = `https://api.sssync.app/api/products/${productId}/publish/shopify`;
         const requestBody = {
-          platformConnectionId,
-          locations,
-          options: {
-            status: status.toUpperCase(),
-            vendor: shopifyData.vendor || undefined,
-            productType: shopifyData.productType || undefined,
-            tags: Array.isArray(shopifyData.tags) ? shopifyData.tags : []
-          }
+              platformConnectionId,
+          locations: locationsToPublish, // Use the filtered and mapped locations
+              options: {
+                status: status.toUpperCase(),
+                vendor: shopifyData.vendor || undefined,
+                productType: shopifyData.productType || undefined,
+                tags: Array.isArray(shopifyData.tags) ? shopifyData.tags : []
+              }
         };
-        console.log('[handlePublishAction] Attempting to POST to URL:', apiUrl);
-        console.log('[handlePublishAction] Request Body:', JSON.stringify(requestBody, null, 2));
-        // --- END NEW LOG ---
+        console.log('[handlePublishAction] Attempting to POST to Shopify URL:', apiUrl);
+        console.log('[handlePublishAction] Shopify Request Body:', JSON.stringify(requestBody, null, 2));
 
-        // Make the API call
-        const response = await fetch(
-          apiUrl, // Use the logged apiUrl
-          {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(requestBody)
-          }
-        );
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(requestBody)
+        });
 
-        // Handle response
         if (!response.ok) {
           const errorData = await response.json();
+          // ... existing error handling for Shopify publish ...
           if (response.status === 403) {
             throw new Error("Shopify publishing is not enabled for your subscription");
           } else if (response.status === 400) {
-            throw new Error(errorData.message || "Invalid request data");
+            throw new Error(errorData.message || "Invalid request data for Shopify publish");
           } else {
-            throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+            throw new Error(errorData.message || `Shopify publish HTTP error! status: ${response.status}`);
           }
         }
 
         const publishResponse: ShopifyPublishResponse = await response.json();
         if (!publishResponse.success) {
-          throw new Error("Publish operation failed");
+          // This case might be redundant if !response.ok already caught it, 
+          // but good to have if backend can return 200 OK with success: false.
+          throw new Error("Shopify publish operation reported failure."); 
         }
 
         let successMessage = `Product queued for publishing to Shopify as ${status}.`;
         if (publishResponse.operationId) {
           successMessage += `\nOperation ID: ${publishResponse.operationId}`;
         }
+        Alert.alert("Publish Queued", successMessage);
 
-        Alert.alert(
-          "Publish Queued", 
-          successMessage
-        );
-
-        // NEW: Additional check for 'needs_review' status
         if (originalShopifyConnection && originalShopifyConnection.Status === 'needs_review') {
           Alert.alert(
             "Connection Review Needed",
@@ -2080,26 +2246,42 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
           );
         }
 
-        // Reset state and navigate back
+        // Reset state and navigate back (or to a success screen)
+        // Consider moving this reset logic to a separate function if it gets too repetitive
         setCurrentStage(ListingStage.PlatformSelection);
         setSelectedPlatforms([]);
         setFormData(null);
         setCapturedMedia([]);
         setCoverImageIndex(-1);
-        setProductId(null);
-        setVariantId(null);
+        // ProductId and VariantId might need to be cleared or handled based on whether this was a new creation or an edit.
+        // For now, let's keep them if we intend to allow further edits or re-publishing without starting over.
+        // setProductId(null); 
+        // setVariantId(null);
+        // setUploadedImageUrls([]); // Keep if you want to re-use images for another platform quickly
+        // setPlatformConnectionId(null); // Might be needed if user changes store
+
+      } else if (selectedPlatforms.includes('shopify') && (!productId || !platformConnectionId)) {
+        // This case would be if Shopify is selected but prerequisites are missing (should be caught earlier)
+        throw new Error("Cannot publish to Shopify: Missing Product ID or Shopify Connection ID.");
+      } else if (selectedPlatforms.length > 0) {
+        // Handle other platforms or a general success message if no specific platform publish was done here
+        console.log(`Publishing as ${status} for other selected platforms... (Not implemented for direct API call yet)`);
+        Alert.alert("Save Successful", `Product details saved. Publishing to other platforms is not yet implemented via this direct flow.`);
+        // Potentially reset or navigate as above
       } else {
-        // Handle other platforms or fallback
-        console.log(`Publishing as ${status} for other platforms...`);
-        Alert.alert("Not Implemented", "Publishing to other platforms is not implemented yet.");
+        // No platforms selected, but canonical save was done.
+        Alert.alert("Save Successful", "Product details saved to your account.");
       }
+
     } catch (err: any) {
       console.error("[handlePublishAction] Error:", err);
       Alert.alert("Publish Error", err.message);
+      // Revert to FormReview so user can see the form and try again or save draft
       setCurrentStage(ListingStage.FormReview);
     } finally {
       setIsLoading(false);
       setLoadingMessage('');
+      // Modal is closed by the Confirm button's onPress in renderPublishModal
     }
   };
 
@@ -2245,9 +2427,9 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
       </Modal>
     );
   };
-  // --- End NEW ---
+  // --- End NEW --- 
 
-   // --- Helper Render Functions ---
+  // --- Helper Render Functions ---
   const renderLoading = (message: string) => {
       // Restore original loading component
       return (
@@ -2564,9 +2746,9 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   // --- UPDATED renderFormReview --- (Keep updated version)
   const renderFormReview = () => {
     console.log(`[renderFormReview] Starting render with active tab: ${activeFormTab}`);
-    console.log("[renderFormReview] Current form data:", JSON.stringify(formData, null, 2));
-    console.log("[renderFormReview] Selected platforms:", selectedPlatforms);
-    console.log("[renderFormReview] Route params:", JSON.stringify(route.params, null, 2));
+    // console.log("[renderFormReview] Current form data:", JSON.stringify(formData, null, 2));
+    // console.log("[renderFormReview] Selected platforms:", selectedPlatforms);
+    // console.log("[renderFormReview] Route params:", JSON.stringify(route.params, null, 2));
 
     const currentPlatformKey = activeFormTab?.toLowerCase();
 
@@ -2645,9 +2827,9 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
       // and the state variables: shopifyLocations, isLoadingLocations, selectedLocations.
 
       console.log("[renderLocationsSection] Rendering locations section");
-      console.log("[renderLocationsSection] Current platform key:", currentPlatformKey);
-      console.log("[renderLocationsSection] Shopify locations from state:", shopifyLocations);
-      console.log("[renderLocationsSection] Selected locations from state:", selectedLocations);
+      // console.log("[renderLocationsSection] Current platform key:", currentPlatformKey); // Can be verbose
+      // console.log("[renderLocationsSection] Shopify locations from state:", shopifyLocations); // Very verbose
+      // console.log("[renderLocationsSection] Selected locations from state:", selectedLocations); // Very verbose
       console.log("[renderLocationsSection] Is loading locations:", isLoadingLocations);
 
 

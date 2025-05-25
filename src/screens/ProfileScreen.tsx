@@ -13,8 +13,24 @@ import { CommonActions } from '@react-navigation/native';
 import * as WebBrowser from 'expo-web-browser';
 import * as Clipboard from 'expo-clipboard';
 import { RealtimeChannel } from '@supabase/supabase-js';
+import * as Crypto from 'expo-crypto'; // For generating random string
 
 import { AuthContext } from '../context/AuthContext';
+
+// --- BEGIN Re-inlined Constants ---
+// TODO: Replace placeholder values with your actual credentials and URLs
+const CLOVER_APP_ID = "YOUR_CLOVER_APP_ID";
+const CLOVER_FRONTEND_REDIRECT_URI = "sssyncapp://clover-auth-callback"; // Or your specific deep link
+const CLOVER_AUTHORIZE_URL = "https://sandbox.dev.clover.com/oauth/authorize"; // Or production URL
+const SSSYNC_CLOVER_CALLBACK_URL = "https://api.sssync.app/api/auth/clover/callback"; // Your backend callback
+
+const SQUARE_APP_ID = "YOUR_SQUARE_APP_ID";
+const SQUARE_FRONTEND_REDIRECT_URI = "sssyncapp://square-auth-callback"; // Or your specific deep link
+const SQUARE_AUTHORIZE_URL = "https://connect.squareup.com/oauth2/authorize"; // Or production URL
+const SSSYNC_SQUARE_CALLBACK_URL = "https://api.sssync.app/api/auth/square/callback"; // Your backend callback
+
+// const SSSYNC_API_BASE_URL = "https://api.sssync.app"; // Example, if needed elsewhere for constructing URLs
+// --- END Re-inlined Constants ---
 
 // Define route param types (add other screens/params if needed)
 type ProfileScreenRouteParams = {
@@ -46,6 +62,35 @@ interface PlatformConnection {
   UpdatedAt: string;
 }
 // --- End Backend Connection Type ---
+
+// Get User ID directly from Supabase auth
+const { data: { user }, error: userError } = await supabase.auth.getUser();
+console.log("[ProfileScreen] User ID:", user?.id);
+
+if (userError || !user) {
+  Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
+  console.error("[ProfileScreen] Error getting user from Supabase:", userError);
+}
+const userId = user?.id;
+
+
+const SQUARE_SCOPES = [
+  'ITEMS_READ', 
+  'ITEMS_WRITE', 
+  'MERCHANT_PROFILE_READ', 
+  'ORDERS_READ', 
+  'ORDERS_WRITE',
+  'INVENTORY_READ',
+  'INVENTORY_WRITE'
+].join(' '); // Space-separated string
+// --- End Square OAuth Constants ---
+
+// Helper function to generate a random string for OAuth state using expo-crypto
+const generateRandomString = (length: number): string => {
+  const byteArray = Crypto.getRandomValues(new Uint8Array(length));
+  // Convert byte array to hex string
+  return Array.from(byteArray, (byte: number) => byte.toString(16).padStart(2, '0')).join('');
+};
 
 const getPlatformColor = (platformId: PlatformId): string => {
   switch (platformId) {
@@ -169,7 +214,7 @@ const ProfileScreen = () => {
       }
 
       // 2. Make API Call 
-      const response = await fetch('https://api.sssync.app/platform-connections', { 
+      const response = await fetch('https://api.sssync.app/api/platform-connections', { 
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -294,7 +339,7 @@ const ProfileScreen = () => {
               }
 
               // 2. Make API Call (ASSUMED ENDPOINT - Backend needs to implement this)
-              const response = await fetch(`https://api.sssync.app/platform-connections/${connectionId}`, { // <-- BACKEND NEEDS THIS ROUTE
+              const response = await fetch(`https://api.sssync.app/api/platform-connections/${connectionId}`, { // <-- BACKEND NEEDS THIS ROUTE
                 method: 'DELETE',
                 headers: {
                   'Authorization': `Bearer ${token}`,
@@ -339,7 +384,7 @@ const ProfileScreen = () => {
     // This URL still initiates the backend picker, which will eventually lead the user
     // to their Shopify dashboard after login/selection if needed.
     // The user just needs to copy the URL *from* that dashboard.
-    const backendInitiationUrlBase = 'https://api.sssync.app/auth/shopify/initiate-store-picker';
+    const backendInitiationUrlBase = 'https://api.sssync.app/api/auth/shopify/initiate-store-picker';
     // Define and encode the final redirect URI needed by the backend
     const finalRedirectUri = 'sssyncapp://auth-callback';
     const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
@@ -378,7 +423,7 @@ const ProfileScreen = () => {
     const userId = user.id;
 
     // Backend endpoint for direct login/authorization with shop name
-    const directLoginUrlBase = 'https://api.sssync.app/auth/shopify/login';
+    const directLoginUrlBase = 'https://api.sssync.app/api/auth/shopify/login';
     const finalRedirectUri = 'sssyncapp://auth-callback';
     const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
 
@@ -459,6 +504,226 @@ const ProfileScreen = () => {
     }
   };
 
+  // --- NEW: Clover Connection Logic ---
+  const handleCloverConnect = async () => {
+    console.log("[ProfileScreen] Initiating Clover connection...");
+    try {
+      // 1. Get SSSync User ID
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) {
+        Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
+        console.error("[ProfileScreen] Clover Connect: Error getting user:", userError);
+        return;
+      }
+      const sssyncUserId = user.id;
+
+      // 2. Generate and store state for CSRF protection
+      const state = generateRandomString(32);
+      await AsyncStorage.setItem('cloverOAuthState', state);
+      console.log("[ProfileScreen] Clover Connect: Stored state:", state);
+
+      // 3. Construct Clover Authorization URL
+      const encodedRedirectUri = encodeURIComponent(CLOVER_FRONTEND_REDIRECT_URI);
+      const cloverAuthUrl = `${CLOVER_AUTHORIZE_URL}?client_id=${CLOVER_APP_ID}&redirect_uri=${encodedRedirectUri}&state=${state}`;
+      console.log("[ProfileScreen] Clover Connect: Auth URL:", cloverAuthUrl);
+
+      // 4. Open WebBrowser for OAuth flow
+      const result = await WebBrowser.openAuthSessionAsync(cloverAuthUrl, CLOVER_FRONTEND_REDIRECT_URI);
+      console.log("[ProfileScreen] Clover Connect: WebBrowser result:", result);
+
+      // 5. Handle Callback
+      if (result.type === 'success' && result.url) {
+        const urlParams = new URLSearchParams(result.url.split('?')[1]); // Extract query params from the full URL
+        const receivedState = urlParams.get('state');
+        const storedState = await AsyncStorage.getItem('cloverOAuthState');
+        
+        console.log("[ProfileScreen] Clover Connect: Received state:", receivedState);
+        console.log("[ProfileScreen] Clover Connect: Expected state:", storedState);
+
+        if (receivedState !== storedState) {
+          Alert.alert("Security Alert", "OAuth state mismatch. Connection aborted.");
+          console.error("[ProfileScreen] Clover Connect: Invalid OAuth state.");
+          return;
+        }
+
+        const authorizationCode = urlParams.get('code');
+        const merchantId = urlParams.get('merchant_id');
+
+        if (!authorizationCode || !merchantId) {
+          Alert.alert("Connection Error", "Clover authorization failed or was denied. Code or Merchant ID missing.");
+          console.error("[ProfileScreen] Clover Connect: Auth code or merchant_id missing from callback.", { authorizationCode, merchantId });
+          return;
+        }
+
+        console.log("[ProfileScreen] Clover Connect: Auth code:", authorizationCode, "Merchant ID:", merchantId);
+
+        // c. Send Code to Your Backend
+        const session = await supabase.auth.getSession(); 
+        const token = session?.data.session?.access_token;
+        if (!token) {
+            Alert.alert("Authentication Error", "Cannot get access token for backend call.");
+            return;
+        }
+
+        const backendResponse = await fetch(SSSYNC_CLOVER_CALLBACK_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}` 
+          },
+          body: JSON.stringify({
+            code: authorizationCode,
+            merchantId: merchantId,
+            userId: sssyncUserId, 
+          }),
+        });
+
+        const backendData = await backendResponse.json();
+
+        if (backendResponse.ok && backendData.success) {
+          Alert.alert("Success", "Clover account connected successfully!");
+          console.log("[ProfileScreen] Clover Connect: Successfully connected via backend.");
+          fetchConnections(); 
+        } else {
+          Alert.alert("Connection Failed", backendData.message || "Failed to finalize Clover connection with backend.");
+          console.error("[ProfileScreen] Clover Connect: Backend finalization failed:", backendData);
+        }
+
+      } else if (result.type === 'cancel' || result.type === 'dismiss') {
+        Alert.alert("Cancelled", "Clover connection process was cancelled.");
+        console.log("[ProfileScreen] Clover Connect: User cancelled or dismissed flow.");
+      } else {
+        let errorMessage = "An unexpected error occurred during Clover authentication.";
+        if (result.type === 'locked') {
+            errorMessage = "The authentication session is locked. Please try again or use another method.";
+        }
+        Alert.alert("Connection Error", errorMessage);
+        console.warn("[ProfileScreen] Clover Connect: Unexpected WebBrowser result type:", result.type, result);
+      }
+    } catch (error: unknown) {
+      console.error("[ProfileScreen] Clover Connect: General error:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      Alert.alert("Error", `Failed to connect Clover: ${message}`);
+    } finally {
+      await AsyncStorage.removeItem('cloverOAuthState');
+      console.log("[ProfileScreen] Clover Connect: Cleaned up OAuth state.");
+    }
+  };
+  // --- END Clover Connection Logic ---
+
+  // --- NEW: Square Connection Logic ---
+  const handleSquareConnect = async () => {
+    console.log("[ProfileScreen] Initiating Square connection...");
+    try {
+      // 1. Get SSSync User ID
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) {
+        Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
+        console.error("[ProfileScreen] Square Connect: Error getting user:", userError);
+        return;
+      }
+      const sssyncUserId = user.id;
+
+      // 2. Generate and store state for CSRF protection
+      const state = generateRandomString(32);
+      await AsyncStorage.setItem('squareOAuthState', state);
+      console.log("[ProfileScreen] Square Connect: Stored state:", state);
+
+      // 3. Construct Square Authorization URL
+      const encodedRedirectUri = encodeURIComponent(SQUARE_FRONTEND_REDIRECT_URI);
+      // Square uses 'session=false' for the standard auth code flow for web-based apps / server-side token exchange
+      const squareAuthUrl = `${SQUARE_AUTHORIZE_URL}?client_id=${SQUARE_APP_ID}&redirect_uri=${encodedRedirectUri}&scope=${encodeURIComponent(SQUARE_SCOPES)}&state=${state}&session=false`;
+      console.log("[ProfileScreen] Square Connect: Auth URL:", squareAuthUrl);
+
+      // 4. Open WebBrowser for OAuth flow
+      const result = await WebBrowser.openAuthSessionAsync(squareAuthUrl, SQUARE_FRONTEND_REDIRECT_URI);
+      console.log("[ProfileScreen] Square Connect: WebBrowser result:", result);
+
+      // 5. Handle Callback
+      if (result.type === 'success' && result.url) {
+        const urlParams = new URLSearchParams(result.url.split('?')[1]); // Extract query params
+        const receivedState = urlParams.get('state');
+        const storedState = await AsyncStorage.getItem('squareOAuthState');
+
+        console.log("[ProfileScreen] Square Connect: Received state:", receivedState);
+        console.log("[ProfileScreen] Square Connect: Expected state:", storedState);
+
+        if (receivedState !== storedState) {
+          Alert.alert("Security Alert", "OAuth state mismatch. Square connection aborted.");
+          console.error("[ProfileScreen] Square Connect: Invalid OAuth state.");
+          return;
+        }
+
+        const authorizationCode = urlParams.get('code');
+
+        if (!authorizationCode) {
+          const errorParam = urlParams.get('error');
+          const errorDescription = urlParams.get('error_description');
+          Alert.alert(
+            "Connection Error", 
+            `Square authorization failed or was denied. ${errorDescription || errorParam || 'Unknown reason'}`
+          );
+          console.error("[ProfileScreen] Square Connect: Auth code missing from callback.", { errorParam, errorDescription });
+          return;
+        }
+
+        console.log("[ProfileScreen] Square Connect: Auth code:", authorizationCode);
+
+        // c. Send Code to Your Backend
+        const session = await supabase.auth.getSession();
+        const token = session?.data.session?.access_token;
+        if (!token) {
+          Alert.alert("Authentication Error", "Cannot get access token for backend call.");
+          return;
+        }
+
+        const backendResponse = await fetch(SSSYNC_SQUARE_CALLBACK_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            code: authorizationCode,
+            userId: sssyncUserId, // SSSync User ID
+            // Square backend callback might also need the original redirect_uri if it verifies it for token exchange
+            // frontendRedirectUri: SQUARE_FRONTEND_REDIRECT_URI 
+          }),
+        });
+
+        const backendData = await backendResponse.json();
+
+        if (backendResponse.ok && backendData.success) {
+          Alert.alert("Success", "Square account connected successfully!");
+          console.log("[ProfileScreen] Square Connect: Successfully connected via backend.");
+          fetchConnections(); // Refresh connections list
+        } else {
+          Alert.alert("Connection Failed", backendData.message || "Failed to finalize Square connection with backend.");
+          console.error("[ProfileScreen] Square Connect: Backend finalization failed:", backendData);
+        }
+
+      } else if (result.type === 'cancel' || result.type === 'dismiss') {
+        Alert.alert("Cancelled", "Square connection process was cancelled.");
+        console.log("[ProfileScreen] Square Connect: User cancelled or dismissed flow.");
+      } else {
+        let errorMessage = "An unexpected error occurred during Square authentication.";
+        if (result.type === 'locked') {
+          errorMessage = "The authentication session is locked. Please try again or use another method.";
+        }
+        Alert.alert("Connection Error", errorMessage);
+        console.warn("[ProfileScreen] Square Connect: Unexpected WebBrowser result type:", result.type, result);
+      }
+    } catch (error: unknown) {
+      console.error("[ProfileScreen] Square Connect: General error:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      Alert.alert("Error", `Failed to connect Square: ${message}`);
+    } finally {
+      await AsyncStorage.removeItem('squareOAuthState');
+      console.log("[ProfileScreen] Square Connect: Cleaned up OAuth state.");
+    }
+  };
+  // --- END Square Connection Logic ---
+
   const handleLogout = async () => {
     console.log("[ProfileScreen] handleLogout initiated..."); // Add log
     try {
@@ -490,19 +755,7 @@ const ProfileScreen = () => {
       Alert.alert('Logout Error', message);
     }
   };
-  
-  const menuItems = [
-    { icon: 'credit-card', title: 'Subscription & Billing', badge: 'Pro' },
-    { icon: 'shield-check', title: 'Privacy & Security' },
-    { icon: 'bell', title: 'Notifications' },
-    { icon: 'help-circle', title: 'Help & Support' },
-    { icon: 'information', title: 'About' },
-    { icon: 'logout', title: 'Logout', isDestructive: true, onPress: handleLogout },
-  ];
-  
-  // Add this log to see the state value during each render
-  console.log('[ProfileScreen] Rendering with shopifyFlowStep:', shopifyFlowStep);
-  
+
   const logCurrentUserToken = async () => {
     try {
       const { data: { session }, error } = await supabase.auth.getSession();
@@ -525,6 +778,110 @@ const ProfileScreen = () => {
     }
   };
   
+  // Add state for dev mode
+  const [isDevMode, setIsDevMode] = useState(false);
+
+  // Load dev mode setting on component mount
+  useEffect(() => {
+    const loadDevMode = async () => {
+      try {
+        const devMode = await AsyncStorage.getItem('devMode');
+        setIsDevMode(devMode === 'true');
+      } catch (error) {
+        console.error('Error loading dev mode setting:', error);
+      }
+    };
+    loadDevMode();
+  }, []);
+
+  // Toggle dev mode and persist it
+  const toggleDevMode = async (value: boolean) => {
+    try {
+      await AsyncStorage.setItem('devMode', value.toString());
+      setIsDevMode(value);
+    } catch (error) {
+      console.error('Error saving dev mode setting:', error);
+    }
+  };
+
+  // Modify the menuItems array to be dynamic based on dev mode
+  const menuItems = [
+    { icon: 'credit-card', title: 'Subscription & Billing', badge: 'Pro' },
+    { icon: 'shield-check', title: 'Privacy & Security' },
+    { icon: 'bell', title: 'Notifications' },
+    { icon: 'help-circle', title: 'Help & Support' },
+    // Developer Mode switch - its state is independent of the token button now
+    {
+      icon: 'code',
+      title: 'Developer Mode Switch', // Renamed for clarity in this context
+      customComponent: (
+        <View style={styles.devModeContainer}>
+          <Text style={styles.devModeText}>Developer Mode</Text>
+          <Switch
+            value={isDevMode}
+            onValueChange={toggleDevMode}
+            trackColor={{ false: '#767577', true: theme.colors.primary }}
+          />
+        </View>
+      )
+    },
+    // "Show Auth Token" button is now always present
+    {
+      icon: 'key',
+      title: 'Show Auth Token',
+      onPress: logCurrentUserToken,
+    },
+    { icon: 'logout', title: 'Logout', isDestructive: true, onPress: handleLogout },
+  ];
+
+  // Modify the menu item rendering to handle custom components
+  const renderMenuItem = (item: any, index: number) => (
+    <TouchableOpacity 
+      key={item.title} 
+      style={[
+        styles.menuItem,
+        index < menuItems.length - 1 ? styles.menuItemBorder : null
+      ]}
+      onPress={item.onPress}
+    >
+      <View style={styles.menuItemLeft}>
+        <Icon 
+          name={item.icon} 
+          size={24} 
+          color={item.isDestructive ? theme.colors.error : '#555'} 
+          style={styles.menuIcon} 
+        />
+        {item.customComponent || (
+          <Text 
+            style={[
+              styles.menuText, 
+              item.isDestructive ? { color: theme.colors.error } : null
+            ]}
+          >
+            {item.title}
+          </Text>
+        )}
+      </View>
+      
+      {item.badge ? (
+        <View style={[styles.menuBadge, { backgroundColor: theme.colors.primary + '20' }]}>
+          <Text style={[styles.menuBadgeText, { color: theme.colors.primary }]}>{item.badge}</Text>
+        </View>
+      ) : !item.customComponent && (
+        <Icon name="chevron-right" size={20} color="#999" />
+      )}
+    </TouchableOpacity>
+  );
+  
+  // Add this log to see the state value during each render
+  console.log('[ProfileScreen] Rendering with shopifyFlowStep:', shopifyFlowStep);
+  
+  // Add these logs to check the state and menuItems content
+  console.log('[ProfileScreen] Rendering - isDevMode:', isDevMode);
+  console.log('[ProfileScreen] Rendering - menuItems:', JSON.stringify(menuItems.map(item => ({ title: item.title, hasCustomComponent: !!item.customComponent }))));
+  
+  // Return statement will be below
+
   return (
     <ScrollView 
       style={styles.container}
@@ -762,41 +1119,7 @@ const ProfileScreen = () => {
           </View>
           
           <View style={styles.menuContainer}>
-            {menuItems.map((item, index) => (
-              <TouchableOpacity 
-                key={item.title} 
-                style={[
-                  styles.menuItem,
-                  index < menuItems.length - 1 ? styles.menuItemBorder : null
-                ]}
-                onPress={logCurrentUserToken}
-              >
-                <View style={styles.menuItemLeft}>
-                  <Icon 
-                    name={item.icon} 
-                    size={24} 
-                    color={item.isDestructive ? theme.colors.error : '#555'} 
-                    style={styles.menuIcon} 
-                  />
-                  <Text 
-                    style={[
-                      styles.menuText, 
-                      item.isDestructive ? { color: theme.colors.error } : null
-                    ]}
-                  >
-                    {item.title}
-                  </Text>
-                </View>
-                
-                {item.badge ? (
-                  <View style={[styles.menuBadge, { backgroundColor: theme.colors.primary + '20' }]}>
-                    <Text style={[styles.menuBadgeText, { color: theme.colors.primary }]}>{item.badge}</Text>
-                  </View>
-                ) : (
-                  <Icon name="chevron-right" size={20} color="#999" />
-                )}
-              </TouchableOpacity>
-            ))}
+            {menuItems.map((item, index) => renderMenuItem(item, index))}
           </View>
         </Card>
       </Animated.View>
@@ -836,7 +1159,15 @@ const ProfileScreen = () => {
                         setPastedShopifyUrl('');
                         setManualShopName('');
                       } else {
-                        Alert.alert('Connect', `Connect logic for ${platform.name} not implemented.`);
+                        // --- NEW: Call Clover Connect Logic ---
+                        if (platform.key === 'clover') {
+                          handleCloverConnect();
+                        } else if (platform.key === 'square') { // --- NEW: Call Square Connect Logic ---
+                          handleSquareConnect();
+                        } else {
+                           Alert.alert('Connect', `Connect logic for ${platform.name} not implemented yet.`);
+                        }
+                        // --- END NEW ---                       
                       }
                     }}
                     activeOpacity={isAlreadyConnected ? 1 : 0.7} // Reduce opacity feedback if disabled
@@ -1427,6 +1758,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   // --- END Style ---
+  devModeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flex: 1,
+  },
+  devModeText: {
+    fontSize: 16,
+    color: '#555',
+  },
 });
 
 export default ProfileScreen; 

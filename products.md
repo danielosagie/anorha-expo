@@ -1516,3 +1516,222 @@ This testing plan should help thoroughly vet the implemented synchronization fea
     *   **"Google Docs" Style Versioning/Restore (Advanced):** This implies a much finer-grained audit trail, potentially using Event Sourcing. While powerful, it's a significant architectural addition. Periodic snapshots are a more immediate and achievable first step for application-level backups.
 
 This provides a comprehensive view of data flows, testing, and areas for enhancement.
+
+# Frontend Integration Guide for sssync Backend
+
+This guide outlines how to interact with the sssync backend API to manage e-commerce platform connections, synchronize product data, and display inventory information.
+
+**I. Core Concepts & Setup**
+
+1.  **User Authentication (sssync JWT):**
+    *   All API requests to the sssync backend must be authenticated.
+    *   The frontend is expected to obtain a JWT from your primary user authentication system (e.g., when a user logs into your main application which uses Supabase Auth).
+    *   This JWT must be included in the `Authorization` header for every request to the sssync API:
+        ```
+        Authorization: Bearer <YOUR_SSSYNC_USER_JWT>
+        ```
+
+2.  **Base API URL:**
+    *   All sssync API endpoints are prefixed with `/api`. For example, an endpoint documented as `/auth/shopify/login` should be called as `POST /api/auth/shopify/login`.
+    *   The full base URL will be `http://localhost:3000/api` for local development, or your production backend URL.
+
+3.  **General API Interaction:**
+    *   **Content-Type:** For `POST` requests with a body, use `Content-Type: application/json`.
+    *   **Error Handling:** The API uses standard HTTP status codes. The frontend should handle:
+        *   `200 OK`, `201 Created`, `202 Accepted`: Successful operations.
+        *   `400 Bad Request`: Invalid request payload (e.g., missing fields, incorrect data types). Response body usually contains a `message` field.
+        *   `401 Unauthorized`: Missing, invalid, or expired JWT.
+        *   `403 Forbidden`: User does not have permission (e.g., feature not enabled on their subscription).
+        *   `404 Not Found`: Requested resource or endpoint does not exist.
+        *   `429 Too Many Requests`: User has exceeded the rate limit for an endpoint. Advise the user to wait.
+        *   `500 Internal Server Error`: A server-side error occurred.
+    *   **Asynchronous Operations:** Some operations (like initial scans, reconciliation, publishing) are asynchronous and return a `202 Accepted`. The frontend should inform the user that the process has started and will complete in the background.
+
+**II. Connecting E-commerce Platforms (OAuth Flow)**
+
+This flow allows users to authorize sssync to access their data on Shopify, Clover, or Square.
+
+*   **General OAuth Steps:**
+
+    1.  **Client Initiates Login:**
+        *   The frontend constructs the appropriate login URL for the desired platform (see platform-specific sections below) and redirects the user's browser to this URL (or opens it in a new window/popup).
+        *   **Crucial Query Parameter:** `finalRedirectUri`. This is a URL on your frontend application where the user should be sent *after* the entire OAuth flow (including sssync's backend callback processing) is complete.
+    2.  **User Authorizes on Platform:** The user is taken to the platform's website (Shopify, Clover, Square) to log in and approve sssync's access.
+    3.  **Platform Redirects to sssync Backend:** After authorization, the platform redirects the user back to sssync's backend callback URL (e.g., `/api/auth/shopify/callback`).
+    4.  **sssync Backend Processes & Redirects to Client:**
+        *   The sssync backend exchanges the authorization code for an access token, encrypts, and stores the credentials.
+        *   It then redirects the user's browser to the `finalRedirectUri` (that your frontend provided in Step 1).
+        *   This redirect to your client app will include query parameters:
+            *   `connection=<platform_slug>` (e.g., `shopify`, `clover`, `square`)
+            *   `status=success` or `status=error`
+            *   `message=<error_message_if_any>` (if `status=error`)
+    5.  **Client Handles Final Callback:**
+        *   Your frontend route specified in `finalRedirectUri` should parse these query parameters.
+        *   Update the UI to inform the user of success (e.g., "Shopify connected successfully!") or failure.
+        *   If successful, you might want to refresh the list of platform connections.
+
+*   **Platform-Specific Login Initiation URLs (Client makes a GET request to these):**
+
+    *   **Shopify:**
+        *   Endpoint: `GET /api/auth/shopify/login`
+        *   Query Parameters:
+            *   `userId`: The sssync user's ID.
+            *   `shop`: The user's Shopify shop name (e.g., `your-store-name.myshopify.com`). The frontend will need to ask the user for this.
+            *   `finalRedirectUri`: Your frontend callback URL.
+        *   Example: `GET /api/auth/shopify/login?userId=abc&shop=my-shop.myshopify.com&finalRedirectUri=https://myapp.com/auth/finish`
+
+    *   **Clover:**
+        *   Endpoint: `GET /api/auth/clover/login`
+        *   Query Parameters:
+            *   `userId`: The sssync user's ID.
+            *   `finalRedirectUri`: Your frontend callback URL.
+        *   Example: `GET /api/auth/clover/login?userId=abc&finalRedirectUri=https://myapp.com/auth/finish`
+        *   **Note for Production Clover:** To connect to a live production Clover merchant account, ensure your sssync backend's `CLOVER_API_BASE_URL` environment variable is configured to point to the production Clover API (e.g., `https://api.clover.com` for North America, or the appropriate URL for other regions). The OAuth initiation URL for the frontend remains the same; the backend handles the environment targeting.
+
+    *   **Square:**
+        *   Endpoint: `GET /api/auth/square/login`
+        *   Query Parameters:
+            *   `userId`: The sssync user's ID.
+            *   `finalRedirectUri`: Your frontend callback URL.
+        *   Example: `GET /api/auth/square/login?userId=abc&finalRedirectUri=https://myapp.com/auth/finish`
+        *   **Note for Production Square:** To connect to a live production Square account, ensure your sssync backend's `SQUARE_API_BASE` environment variable is configured to point to the production Square API (e.g., `https://connect.squareup.com`). The OAuth initiation URL for the frontend remains the same; the backend handles the environment targeting.
+
+**III. Managing Platform Connections**
+
+*   **Endpoint:** `GET /api/platform-connections`
+*   **Purpose:** Retrieves a list of all platform connections for the authenticated user.
+*   **Usage:**
+    *   Call this after a user logs in or after a new platform connection is established.
+    *   Display the connections to the user, showing:
+        *   `DisplayName` (e.g., "my-shop.myshopify.com")
+        *   `PlatformType` (e.g., "shopify")
+        *   `Status` (e.g., "connected", "scanning", "needs_review", "error")
+        *   `IsEnabled` (boolean)
+        *   `LastSyncSuccessAt` (timestamp)
+    *   This data allows users to see the state of their connections and select one for further actions.
+    *   The `Id` from each connection object is used as `:connectionId` in other API calls.
+
+**IV. Initial Sync Workflow (After a New Platform is Connected)**
+
+1.  **Automatic Initial Scan:**
+    *   Inform the user that after connecting a new platform, sssync automatically starts an "initial scan" to fetch all existing products. This may take some time depending on the number of products.
+    *   The connection's `Status` (from `GET /api/platform-connections`) might reflect this (e.g., "scanning", then "needs_review" or "syncing").
+
+2.  **Fetch Mapping Suggestions:**
+    *   **Endpoint:** `GET /api/sync/connections/:connectionId/mapping-suggestions`
+    *   **Usage:** Once the initial scan appears complete (e.g., `Status` is "needs_review" or after a reasonable delay), call this endpoint.
+    *   **Response:** An array of products fetched from the platform. Each product will have:
+        *   `platformProduct`: Details like `id`, `sku`, `title` from the platform.
+        *   `suggestedCanonicalVariant`: sssync's best guess for an existing canonical product to link to (based on SKU/barcode). Will be `null` if no strong match is found.
+        *   `matchType`: "SKU", "BARCODE", or "NONE".
+    *   **UI:** Display these suggestions. For each platform product, allow the user to:
+        *   **Link** to an existing sssync product (if a good suggestion exists or they can search).
+        *   **Create** a new sssync product based on the platform product.
+        *   **Ignore** the platform product (it won't be synced).
+
+3.  **Confirm Mappings:**
+    *   **Endpoint:** `POST /api/sync/connections/:connectionId/confirm-mappings`
+    *   **Request Body:**
+        ```json
+        {
+          "confirmedMatches": [
+            {
+              "platformProductId": "gid://shopify/Product/123", // ID from platform
+              "platformVariantId": "gid://shopify/ProductVariant/456", // Variant ID from platform (if applicable)
+              "platformProductSku": "PLATFORM-SKU-001",
+              "platformProductTitle": "Platform Product Title",
+              "sssyncVariantId": "canonical-variant-uuid-if-linking", // null if action is 'create'
+              "action": "create" // "link", "create", or "ignore"
+            }
+            // ... more items
+          ]
+        }
+        ```
+    *   **Usage:** Send the user's choices from the mapping UI. This triggers the backend to:
+        *   Create new canonical `Products` and `ProductVariants` for `action: "create"`.
+        *   Create `PlatformProductMappings` to link platform items to canonical items.
+        *   Ingest initial `InventoryLevels`.
+    *   **Response:** `200 OK` or `202 Accepted`. The connection `Status` should eventually update to "connected" or "active_sync".
+
+**V. Displaying Product & Inventory Data**
+
+*   **Primary Data Source:** For displaying product lists, details, and inventory, the frontend should primarily query **your application's canonical database (Supabase)**. The sync processes are designed to keep this database up-to-date.
+*   **Shopify-Specific Inventory Views (via sssync API):**
+    These endpoints provide convenient ways to get Shopify data, especially for on-demand refreshes or location-specific views.
+
+    1.  **Fetch Shopify Locations:**
+        *   **Endpoint:** `GET /api/products/shopify/locations?platformConnectionId=<shopify_connection_id>`
+        *   **Prerequisite:** The selected Shopify connection must be `IsEnabled: true` and have a valid `Status` (e.g., "connected", "active", "needs_review", etc. Refer to API docs for full list).
+        *   **Usage:** Get Shopify Location GIDs (e.g., `"gid://shopify/Location/12345"`) and names. Useful for understanding where inventory is stocked and for UIs that need to show or allow setting of location-specific inventory.
+    2.  **Fetch Shopify Inventory Data:**
+        *   **Endpoint 1:** `GET /api/products/shopify/inventory?platformConnectionId=<shopify_connection_id>&sync=<true|false>`
+            *   Returns a list of variants with their inventory levels per location.
+        *   **Endpoint 2:** `GET /api/products/shopify/locations-with-products?platformConnectionId=<shopify_connection_id>&sync=<true|false>`
+            *   Returns a list of locations, each with the products and quantities stocked there.
+        *   **`sync` Parameter:**
+            *   `sync=false` (default): Fast. Returns data based on the last sync stored in sssync's database.
+            *   `sync=true`: Slower. Forces a live fetch from Shopify, updates sssync's database, then returns the very latest data. Use for a "Refresh Inventory" button, but inform users it might take a moment and be mindful of API rate limits (don't allow spamming this).
+        *   **UI:** Display inventory levels. The `/locations-with-products` endpoint is good for a "Stock by Location" view.
+
+**VI. Triggering a Full Reconciliation Sync**
+
+*   **Endpoint:** `POST /api/sync/connection/:connectionId/reconcile`
+*   **Usage:** Allow users to manually trigger a full reconciliation for a selected connection. This is useful if they suspect data is out of sync (e.g., made many changes directly on the platform) or to ensure consistency.
+*   **Response:** `202 Accepted`. This is an asynchronous background job. Inform the user the process has started. The `PlatformConnections.LastSyncSuccessAt` timestamp and `Status` should update upon completion. `ActivityLogs` will show progress.
+
+**VII. New Product Creation Workflow (Using sssync's AI Features - Optional)**
+
+If your frontend will support creating new products *through* sssync's AI-assisted workflow:
+
+1.  **Analyze Images:**
+    *   `POST /api/products/analyze`
+    *   Request Body: `{ "imageUris": ["url1", "url2"] }`
+    *   Response: Contains `product` (draft), `variant` (draft) IDs, and `analysis` data (e.g., visual matches from Google Lens).
+2.  **Generate Details:**
+    *   `POST /api/products/generate-details`
+    *   Request Body: `{ "productId": "...", "variantId": "...", "imageUris": [], "coverImageIndex": 0, "selectedPlatforms": ["shopify"], "selectedMatch": { ... } }`
+    *   Response: Contains `generatedDetails` for selected platforms (AI-written titles, descriptions, etc.).
+3.  **Curate and Publish:**
+    *   UI: Allow user to edit AI-generated details and combine them with their own input.
+    *   `POST /api/products/publish`
+    *   Request Body:
+        ```json
+        {
+          "productId": "...",
+          "variantId": "...",
+          "publishIntent": "SAVE_SSSYNC_DRAFT" | "PUBLISH_PLATFORM_DRAFT" | "PUBLISH_PLATFORM_LIVE",
+          "platformDetails": {
+            "canonical": { "title": "Final Title", "description": "...", "price": 19.99, "sku": "FINAL-SKU" /*, etc. */ }
+            // Potentially platform-specific overrides here too
+          },
+          "media": { "imageUris": ["final_url1"], "coverImageIndex": 0 },
+          "selectedPlatformsToPublish": ["shopify"] // null or array of platform slugs
+        }
+        ```
+    *   **`publishIntent` Explanation:**
+        *   `SAVE_SSSYNC_DRAFT`: Saves to sssync's canonical database only. Does not push to platforms.
+        *   `PUBLISH_PLATFORM_DRAFT`: Saves to sssync and attempts to publish to `selectedPlatformsToPublish` as a DRAFT on those platforms.
+        *   `PUBLISH_PLATFORM_LIVE`: Saves to sssync and attempts to publish to `selectedPlatformsToPublish` as ACTIVE/LIVE on those platforms.
+    *   **Publishing to Shopify with Specific Initial Inventory (Multi-step):**
+        1.  Call `/api/products/publish` (as above) with `publishIntent` to create the product in sssync and get it onto Shopify (e.g., as a draft).
+        2.  After the product shell exists on Shopify (this is asynchronous, may need to check status or wait), call `GET /api/products/shopify/locations?platformConnectionId=<shopify_conn_id>` to get Shopify Location GIDs.
+        3.  Then, call `POST /api/products/:productId/publish/shopify` (where `:productId` is the sssync canonical product ID).
+            *   Request Body for `/publish/shopify`:
+                ```json
+                {
+                  "platformConnectionId": "<shopify_conn_id>",
+                  "locations": [
+                    { "locationId": "gid://shopify/Location/111", "quantity": 10 },
+                    { "locationId": "gid://shopify/Location/222", "quantity": 5 }
+                  ],
+                  "options": { "status": "ACTIVE" /* or DRAFT */ }
+                }
+                ```
+            *   This sets precise initial inventory on Shopify.
+
+**VIII. Real-time UI Updates (Optional - Advanced)**
+
+*   Since the sssync backend uses Supabase, your frontend can leverage Supabase's real-time capabilities.
+*   By subscribing to changes on tables like `Products`, `ProductVariants`, and `InventoryLevels` directly from your frontend using the Supabase client library, you can create a highly responsive UI that updates instantly when backend sync processes modify data, without needing to constantly poll API endpoints.
+
+This guide should provide a solid starting point for your frontend team. Refer to the `docs/api/products.md` (this document) for more detailed request/response schemas for specific endpoints, and encourage communication for any clarifications!
