@@ -63,15 +63,15 @@ interface PlatformConnection {
 }
 // --- End Backend Connection Type ---
 
-// Get User ID directly from Supabase auth
-const { data: { user }, error: userError } = await supabase.auth.getUser();
-console.log("[ProfileScreen] User ID:", user?.id);
+// REMOVE Top-level await for user fetching
+// const { data: { user }, error: userError } = await supabase.auth.getUser();
+// console.log("[ProfileScreen] User ID:", user?.id);
 
-if (userError || !user) {
-  Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
-  console.error("[ProfileScreen] Error getting user from Supabase:", userError);
-}
-const userId = user?.id;
+// if (userError || !user) {
+//   Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
+//   console.error("[ProfileScreen] Error getting user from Supabase:", userError);
+// }
+// const userId = user?.id;
 
 
 const SQUARE_SCOPES = [
@@ -90,6 +90,7 @@ const generateRandomString = (length: number): string => {
   const byteArray = Crypto.getRandomValues(new Uint8Array(length));
   // Convert byte array to hex string
   return Array.from(byteArray, (byte: number) => byte.toString(16).padStart(2, '0')).join('');
+  // return Math.random().toString(36).substring(2, length + 2); // Keep previous fallback commented for now
 };
 
 const getPlatformColor = (platformId: PlatformId): string => {
@@ -177,19 +178,23 @@ const ProfileScreen = () => {
   ];
   
   // --- Fetch Connections Logic ---
-  const fetchConnections = useCallback(async () => {
-    // Get user ID inside the function directly
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
-      console.warn("[ProfileScreen] Fetch connections called without user ID.", userError);
-      setConnectionError("User not available.");
-      setIsLoadingConnections(false);
-      return;
-    }
-    const currentUserId = user.id;
-    console.log("[ProfileScreen] Fetching platform connections for user:", currentUserId);
+  const fetchConnections = useCallback(async () => { // Make fetchConnections NOT dependent on an external userId
     setIsLoadingConnections(true);
     setConnectionError(null);
+
+    // Get user ID inside the function directly
+    const { data: { user: currentUser }, error: fetchUserError } = await supabase.auth.getUser();
+
+    if (fetchUserError || !currentUser) {
+      console.warn("[ProfileScreen] Fetch connections called without user ID.", fetchUserError);
+      Alert.alert("Authentication Error", "Could not get user information. Please log in again to fetch connections.");
+      setConnectionError("User not available for fetching connections.");
+      setIsLoadingConnections(false);
+      setConnections([]); // Clear connections if user is not available
+      return;
+    }
+    const currentUserId = currentUser.id;
+    console.log("[ProfileScreen] Fetching platform connections for user:", currentUserId);
 
     try {
       // --- TEMPORARY: Direct Supabase Query for Debugging --- 
@@ -239,7 +244,7 @@ const ProfileScreen = () => {
     } finally {
       setIsLoadingConnections(false);
     }
-  }, []); // Remove user.id dependency, it's fetched inside
+  }, []); // Removed userId from dependency array as it's fetched inside
 
   // --- DEBUG: Add useEffect to log connections state changes ---
   useEffect(() => {
@@ -250,8 +255,8 @@ const ProfileScreen = () => {
   // Fetch connections on initial mount/focus (kept for initial load)
   useFocusEffect(
     useCallback(() => {
-      console.log("[ProfileScreen] Focus effect triggered");
-      fetchConnections();
+      console.log("[ProfileScreen] Focus effect triggered, calling fetchConnections");
+      fetchConnections(); 
       // Dependency array now only includes fetchConnections
     }, [fetchConnections])
   );
@@ -261,14 +266,15 @@ const ProfileScreen = () => {
     let channel: RealtimeChannel | null = null;
 
     const initializeSubscription = async () => {
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      // Fetch user inside for subscription setup as well
+      const { data: { user: currentUser }, error: subUserError } = await supabase.auth.getUser();
       
-      if (userError || !user) {
-        console.error("[ProfileScreen] Cannot setup realtime subscription without user.", userError);
+      if (subUserError || !currentUser) {
+        console.error("[ProfileScreen] Cannot setup realtime subscription without user.", subUserError);
         return;
       }
 
-      const currentUserId = user.id;
+      const currentUserId = currentUser.id;
       const tableName = 'PlatformConnections'; // Match DB schema (PascalCase)
       const userIdColumn = 'UserId';       // Match DB schema (PascalCase)
       console.log(`[ProfileScreen] Setting up realtime subscription for ${tableName} table, user: ${currentUserId}`);
