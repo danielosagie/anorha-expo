@@ -1,14 +1,18 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
 import { StatusBar, Linking, Alert } from 'react-native';
 import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { LogBox } from 'react-native';
 import 'react-native-get-random-values';
-
+import { supabase } from './lib/supabase';
+import { LegendStateContext } from './src/context/LegendStateContext';
+import { initializeLegendState, LegendStateObservables } from './src/utils/SupaLegend';
+import { Session, AuthChangeEvent } from '@supabase/supabase-js';
 
 const App: React.FC = () => {
   const navigationRef = useRef<NavigationContainerRef<any>>(null);
+  const [legendStateModules, setLegendStateModules] = useState<LegendStateObservables | null>(null);
 
   // --- Deep Link Handling ---
   useEffect(() => {
@@ -74,13 +78,62 @@ const App: React.FC = () => {
   };
   // --- End Deep Link Handling ---
 
+  useEffect(() => {
+    console.log("[App] Auth listener effect mounted.");
+
+    const setupLegendStateForSession = async (session: Session | null) => {
+        if (session && session.user) {
+            if (!legendStateModules || legendStateModules.userId !== session.user.id) {
+                console.log(`[App] Valid session for ${session.user.id}. Initializing/Re-initializing Legend State...`);
+                try {
+                    const initializedModules = await initializeLegendState(supabase, session.user.id);
+                    setLegendStateModules(initializedModules);
+                    console.log("[App] Legend State ready for user:", session.user.id);
+                } catch (error) {
+                    console.error("[App] Error initializing Legend State:", error);
+                    setLegendStateModules(null);
+                }
+            } else {
+                console.log("[App] Legend State already initialized for user:", session.user.id);
+            }
+        } else {
+            if (legendStateModules) {
+                console.log("[App] No session/user signed out. Resetting Legend State.");
+                setLegendStateModules(null);
+            }
+        }
+    };
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event: AuthChangeEvent, session: Session | null) => {
+        console.log(`[App] Auth event: ${event}`);
+        await setupLegendStateForSession(session);
+    });
+
+    const checkInitialSession = async () => {
+        console.log("[App] Checking initial session...");
+        const { data: { session } } = await supabase.auth.getSession();
+        await setupLegendStateForSession(session);
+    };
+
+    checkInitialSession();
+
+    return () => {
+        if (authListener && authListener.subscription) {
+            authListener.subscription.unsubscribe();
+            console.log("[App] Unsubscribed from auth state changes.");
+        }
+    };
+  }, [legendStateModules, setLegendStateModules]);
+
   return (
-    <ThemeProvider>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-      <NavigationContainer ref={navigationRef}>
-        <AppNavigator />
-      </NavigationContainer>
-    </ThemeProvider>
+    <LegendStateContext.Provider value={legendStateModules}>
+      <ThemeProvider>
+        <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+        <NavigationContainer ref={navigationRef}>
+          <AppNavigator />
+        </NavigationContainer>
+      </ThemeProvider>
+    </LegendStateContext.Provider>
   );
 };
 

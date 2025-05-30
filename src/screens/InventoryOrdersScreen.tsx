@@ -1,70 +1,196 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput, ScrollView, Image } from 'react-native';
+import React, { useState, useEffect, useMemo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput, ScrollView, Image, Modal } from 'react-native';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import PlaceholderImage from '../components/PlaceholderImage';
-import { mockInventoryItems } from '../data/mockData';
 import { mockOrders } from '../data/mockData';
 import { Platform } from 'react-native';
+import { observer } from '@legendapp/state/react';
+import { useLegendState } from '../context/LegendStateContext';
+import { ProductVariant as ProductVariantData, ProductImage, InventoryLevel, PlatformProductMapping, LegendStateObservables, MarketplaceListing } from '../utils/SupaLegend';
+import { useNavigation } from '@react-navigation/native';
+import { AppStackParamList } from '../navigation/AppNavigator';
+import { StackNavigationProp } from '@react-navigation/stack';
+import { supabase } from '../../lib/supabase';
 
-const InventoryOrdersScreen = () => {
-  const theme = useTheme() || { colors: { primary: '#0E8F7F' } };  
-  const [activeTab, setActiveTab] = useState('inventory'); // 'inventory' or 'orders'
+type InventoryOrdersScreenNavigationProp = StackNavigationProp<AppStackParamList, 'TabNavigator'>;
+
+// Enhanced ProductVariant type for combined data
+type EnrichedProductVariant = ProductVariantData & {
+  imageUrl?: string;
+  totalQuantity?: number;
+  platformNames?: string[]; // Array of PlatformConnectionIds or derived names
+};
+
+interface MockOrderItemData {
+  id: string;
+  platform: string;
+  date: string;
+  customer: string;
+  items: number;
+  status: string;
+  total: number;
+}
+
+const InventoryOrdersScreen = observer(() => {
+  const theme = useTheme();
+  const navigation = useNavigation<InventoryOrdersScreenNavigationProp>();
+  const legendState: LegendStateObservables | null = useLegendState();
+  
+  const [activeTab, setActiveTab] = useState('inventory');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('date');
   const [filterStatus, setFilterStatus] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
+  const [displayCount, setDisplayCount] = useState(30);
+  const ITEMS_PER_LOAD = 10;
+  const [isFilterModalVisible, setIsFilterModalVisible] = useState(false);
   
-  const renderInventoryItem = ({ item }) => (
-    <TouchableOpacity style={styles.gridItem}>
-      <Card style={styles.gridItemCard}>
-        {item.image ? (
-          <Image source={{ uri: item.image }} style={styles.gridItemImage} />
-        ) : (
-          <PlaceholderImage 
-            size={120} 
-            borderRadius={8} 
-            type="gradient"
-            icon="cube"
-            color={getRandomColor(item.id)}
-            style={styles.gridItemImage}
-          />
-        )}
-        
-        <View style={styles.gridItemDetails}>
-          <Text style={styles.gridItemTitle} numberOfLines={2}>{item.title}</Text>
-          <Text style={styles.gridItemPrice}>${item.price.toFixed(2)}</Text>
-          <Text style={styles.gridItemStock}>{item.quantity} in stock</Text>
+  useEffect(() => {
+    if (legendState && legendState.productVariants$) {
+      const variants = legendState.productVariants$.get() || {};
+      console.log('[InventoryScreen - legendState effect] productVariants$ count:', Object.keys(variants).length);
+      // console.log('[InventoryScreen - legendState effect] productVariants$ data:', JSON.stringify(variants, null, 2)); // Potentially very verbose
+    } else {
+      console.log('[InventoryScreen - legendState effect] legendState or productVariants$ not yet available.');
+    }
+  }, [legendState]);
+  
+  useEffect(() => {
+    const directFetchProducts = async () => {
+      if (supabase && legendState?.userId) {
+        console.log(`[InventoryScreen - Direct Fetch] Attempting to fetch ProductVariants for UserId: ${legendState.userId}`);
+        try {
+          const { data, error } = await supabase
+            .from('ProductVariants')
+            .select('*')
+            .eq('UserId', legendState.userId);
+
+          if (error) {
+            console.error('[InventoryScreen - Direct Fetch] Error fetching products:', error);
+          } else {
+            console.log('[InventoryScreen - Direct Fetch] Successfully fetched products directly:', data);
+            if (data && data.length === 0) {
+              console.warn('[InventoryScreen - Direct Fetch] Direct query returned 0 products for this user.');
+            }
+          }
+        } catch (e) {
+            console.error('[InventoryScreen - Direct Fetch] Exception during direct fetch:', e);
+        }
+      } else {
+        console.log('[InventoryScreen - Direct Fetch] Skipping direct fetch: Supabase client or legendState.userId not available.', { hasSupabase: !!supabase, userId: legendState?.userId });
+      }
+    };
+
+    if (legendState?.userId) {
+        directFetchProducts();
+    }
+  }, [legendState]);
+  
+  const enrichedProductVariants = useMemo(() => {
+    if (!legendState || 
+        !legendState.productVariants$ || 
+        !legendState.platformProductMappings$ ||
+        !legendState.productImages$ || 
+        !legendState.inventoryLevels$ ||
+        !legendState.marketplaceListings$) {
+      console.log("[InventoryScreen] LegendState or one of its critical observables is not ready for enrichment.");
+      return [];
+    }
+    
+    const variants = legendState.productVariants$.get() || {};
+    const images = (legendState.productImages$?.get() || {}) as Record<string, ProductImage>;
+    const levels = (legendState.inventoryLevels$?.get() || {}) as Record<string, InventoryLevel>;
+    const mappings = (legendState.platformProductMappings$?.get() || {}) as Record<string, PlatformProductMapping>;
+
+    console.log("Raw data for enrichment (after defaulting to {} if get() was undefined):", 
+      { 
+        variantsCount: Object.keys(variants || {}).length, 
+        imagesCount: Object.keys(images || {}).length, 
+        levelsCount: Object.keys(levels || {}).length, 
+        mappingsCount: Object.keys(mappings || {}).length 
+      }
+    );
+
+    return Object.values(variants).map((variant: ProductVariantData): EnrichedProductVariant => {
+      const variantImages = Object.values(images || {}).filter((img: ProductImage) => img.ProductVariantId === variant.Id);
+      const primaryImage = variantImages.sort((a: ProductImage, b: ProductImage) => a.Position - b.Position)[0];
+
+      const variantLevels = Object.values(levels || {}).filter((level: InventoryLevel) => level.ProductVariantId === variant.Id);
+      const totalQuantity = variantLevels.reduce((sum, level: InventoryLevel) => sum + level.Quantity, 0);
+
+      const variantMappings = Object.values(mappings || {}).filter((mapping: PlatformProductMapping) => mapping.ProductVariantId === variant.Id);
+      const platformNames = variantMappings.map(m => m.PlatformConnectionId);
+
+      const enriched = {
+        ...variant,
+        imageUrl: primaryImage?.ImageUrl,
+        totalQuantity: totalQuantity,
+        platformNames: platformNames,
+      };
+      return enriched;
+    });
+  }, [legendState]);
+  
+  const renderInventoryItem = ({ item }: { item: EnrichedProductVariant }) => {
+    const navigateToDetail = () => {
+      navigation.navigate('ProductDetail', { productId: item.Id });
+    };
+
+    return (
+      <TouchableOpacity style={styles.gridItem} onPress={navigateToDetail}>
+        <Card style={styles.gridItemCard}>
+          {item.imageUrl ? (
+            <Image source={{ uri: item.imageUrl }} style={styles.gridItemImage} />
+          ) : (
+            <PlaceholderImage 
+              size={120} 
+              borderRadius={8} 
+              type="gradient"
+              icon="cube"
+              color={getRandomColor(item.Id || 'default-id')}
+              style={styles.gridItemImage}
+            />
+          )}
           
-          <View style={styles.platformBadges}>
-            {item.platforms.slice(0, 2).map(platform => (
-              <View 
-                key={platform} 
-                style={[
-                  styles.platformBadge,
-                  { backgroundColor: getPlatformColor(platform, theme) }
-                ]}
-              >
-                <Text style={styles.platformBadgeText}>
-                  {platform[0].toUpperCase()}
-                </Text>
-              </View>
-            ))}
-            {item.platforms.length > 2 && (
-              <View style={styles.platformBadgeMore}>
-                <Text style={styles.platformBadgeMoreText}>+{item.platforms.length - 2}</Text>
-              </View>
-            )}
+          <View style={styles.gridItemDetails}>
+            <Text style={styles.gridItemTitle} numberOfLines={2}>{item.Title}</Text>
+            <Text style={styles.gridItemPrice}>${item.Price?.toFixed(2) ?? '0.00'}</Text>
+            <Text style={styles.gridItemStock}>{item.totalQuantity ?? 0} in stock</Text>
+            
+            <View style={styles.platformBadges}>
+              {(item.platformNames || []).slice(0, 2).map((platformId: string) => {
+                const platformDisplayName = platformId.substring(0, 3);
+                return (
+                  <View 
+                    key={platformId} 
+                    style={[
+                      styles.platformBadge,
+                      { backgroundColor: getRandomColor(platformId) }
+                    ]}
+                  >
+                    <Text style={styles.platformBadgeText}>
+                      {platformDisplayName[0]?.toUpperCase()}
+                    </Text>
+                  </View>
+                );
+              })}
+              {(item.platformNames || []).length > 2 && (
+                <View style={styles.platformBadgeMore}>
+                  <Text style={styles.platformBadgeMoreText}>+{(item.platformNames || []).length - 2}</Text>
+                </View>
+              )}
+            </View>
           </View>
-        </View>
-      </Card>
-    </TouchableOpacity>
-  );
+        </Card>
+      </TouchableOpacity>
+    );
+  };
   
-  const renderOrderItem = ({ item }) => {
+  const renderOrderItem = ({ item }: { item: MockOrderItemData }) => {
     const trackButtonStyle = {
       backgroundColor: theme.colors.primary + '00'
     };
@@ -75,7 +201,7 @@ const InventoryOrdersScreen = () => {
           <View style={styles.orderIdContainer}>
             <Text style={styles.orderId}>#{item.id || 'Unknown'}</Text>
             <View style={[
-              styles.platformBadge, 
+              styles.orderPlatformDisplayBadge,
               { backgroundColor: getPlatformColor(item.platform, theme) + '20' }
             ]}>
               <Text style={[
@@ -144,7 +270,7 @@ const InventoryOrdersScreen = () => {
     );
   };
   
-  const getPlatformColor = (platform, theme) => {
+  const getPlatformColor = (platform: string | undefined, theme: any): string => {
     if (!platform) return '#999';
     
     const platformLower = platform.toLowerCase();
@@ -152,7 +278,7 @@ const InventoryOrdersScreen = () => {
     if (platformLower.includes('shopify')) return theme.colors.primary;
     if (platformLower.includes('amazon')) return '#F17F5F';
     if (platformLower.includes('ebay')) return '#E53238';
-    if (platformLower.includes('clover')) return theme.colors.accent;
+    if (platformLower.includes('clover')) return theme.colors.accent || theme.colors.primary;
     if (platformLower.includes('square')) return '#6C757D';
     if (platformLower.includes('etsy')) return '#F56400';
     if (platformLower.includes('facebook')) return '#1877F2';
@@ -160,8 +286,8 @@ const InventoryOrdersScreen = () => {
     return theme.colors.primary;
   };
   
-  const getStatusIcon = (status) => {
-    if (!status) return 'help-circle-outline'; // Default icon if status is undefined
+  const getStatusIcon = (status: string | undefined): string => {
+    if (!status) return 'help-circle-outline';
     
     const statusLower = status.toLowerCase();
     
@@ -172,28 +298,25 @@ const InventoryOrdersScreen = () => {
     if (statusLower.includes('returned')) return 'keyboard-return';
     if (statusLower.includes('offloaded') || statusLower.includes('off-loaded')) return 'package-variant';
     
-    return 'help-circle-outline'; // Default icon
+    return 'help-circle-outline';
   };
   
-  const formatDate = (dateString) => {
+  const formatDate = (dateString: string | undefined): string => {
     if (!dateString) return 'No date';
     
     const date = new Date(dateString);
     const now = new Date();
     
-    // Check if date is today
     if (date.toDateString() === now.toDateString()) {
       return 'Today';
     }
     
-    // Check if date is yesterday
     const yesterday = new Date(now);
     yesterday.setDate(now.getDate() - 1);
     if (date.toDateString() === yesterday.toDateString()) {
       return 'Yesterday';
     }
     
-    // Otherwise return formatted date
     return date.toLocaleDateString('en-US', { 
       month: 'short', 
       day: 'numeric',
@@ -201,42 +324,59 @@ const InventoryOrdersScreen = () => {
     });
   };
   
-  const getStatusColor = (status, theme) => {
-    switch (status) {
-      case 'Delivered':
-        return theme.colors.success;
-      case 'In Transit':
+  const getStatusColor = (status: string | undefined, theme: any): string => {
+    const s = status?.toLowerCase();
+    switch (s) {
+      case 'delivered':
+      case 'completed':
+        return theme.colors.success || theme.colors.primary;
+      case 'in transit':
+      case 'intransit':
         return theme.colors.primary;
-      case 'Processing':
-        return theme.colors.secondary;
-      case 'Returned':
-        return theme.colors.error;
+      case 'processing':
+        return theme.colors.secondary || theme.colors.primary;
+      case 'returned':
+        return theme.colors.error || theme.colors.primary;
       default:
-        return theme.colors.text;
+        return theme.colors.text || '#000000';
     }
   };
   
-  const getRandomColor = (id) => {
+  const getRandomColor = (id: string | number): string => {
     const colors = ['#4B0082', '#1E90FF', '#32CD32', '#FF8C00', '#8A2BE2', '#20B2AA'];
-    return colors[id % colors.length];
+    const numId = typeof id === 'string' ? 
+                  id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) : 
+                  id;
+    return colors[numId % colors.length];
   };
   
-  const filteredInventory = mockInventoryItems.filter(item => 
-    item.title.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredInventory = useMemo(() => {
+    return enrichedProductVariants.filter((item: EnrichedProductVariant) => {
+      if (searchQuery && item.Title && !item.Title.toLowerCase().includes(searchQuery.toLowerCase())) {
+        return false;
+      }
+      return true;
+    });
+  }, [enrichedProductVariants, searchQuery, filterStatus]);
   
-  const filteredOrders = mockOrders.filter(order => 
+  const inventoryToDisplay = useMemo(() => {
+    return filteredInventory.slice(0, displayCount);
+  }, [filteredInventory, displayCount]);
+  
+  console.log('Enriched and Filtered Inventory (in screen):', filteredInventory.length);
+  console.log('Inventory to Display:', inventoryToDisplay.length);
+  
+  const filteredOrders = mockOrders.filter((order: MockOrderItemData) =>
     filterStatus === 'all' || order.status === filterStatus
   );
   
   return (
-    <View style={styles.container} paddingTop={60}>
+    <View style={[styles.container, {paddingTop: 60}]}>
       <Animated.View entering={FadeInUp.delay(100).duration(500)}>
         <Text style={[styles.title, { color: theme.colors.text }]}>
           {activeTab === 'inventory' ? 'Inventory' : 'Orders'}
         </Text>
         
-        {/* Tab Selector */}
         <View style={styles.tabSelector}>
           <TouchableOpacity 
             style={[
@@ -277,7 +417,6 @@ const InventoryOrdersScreen = () => {
           </TouchableOpacity>
         </View>
         
-        {/* Search Bar */}
         <View style={styles.searchContainer}>
           <View style={styles.searchBar}>
             <Icon name="magnify" size={20} color="#999" style={styles.searchIcon} />
@@ -294,26 +433,47 @@ const InventoryOrdersScreen = () => {
             ) : null}
           </View>
           
-          <TouchableOpacity style={styles.filterButton}>
+          <TouchableOpacity style={styles.filterButton} onPress={() => setIsFilterModalVisible(true)}>
             <Icon name="filter-variant" size={20} color="#777" />
           </TouchableOpacity>
         </View>
       </Animated.View>
       
-      {/* Inventory List */}
+      {/* Filter Modal */} 
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={isFilterModalVisible}
+        onRequestClose={() => {
+          setIsFilterModalVisible(!isFilterModalVisible);
+        }}
+      >
+        <View style={styles.centeredView}>
+          <View style={[styles.modalView, {backgroundColor: theme.colors.surface}]}>
+            <Text style={[styles.modalText, {color: theme.colors.text}]}>Filter & Sort Options</Text>
+            {/* Add filter controls here: Platform, Stock Status, Sort By etc. */}
+            <Text style={{color: theme.colors.textSecondary, marginVertical: 20}}>(Filter controls will go here)</Text>
+            <Button title="Apply Filters" onPress={() => setIsFilterModalVisible(false)} />
+            <TouchableOpacity style={styles.closeModalButton} onPress={() => setIsFilterModalVisible(false)}>
+              <Text style={{color: theme.colors.primary}}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      
       {activeTab === 'inventory' && (
         <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
           <FlatList
-            data={filteredInventory}
+            data={inventoryToDisplay}
             renderItem={renderInventoryItem}
-            keyExtractor={item => item.id.toString()}
+            keyExtractor={item => item.Id.toString()}
             numColumns={2}
             columnWrapperStyle={styles.gridRow}
             contentContainerStyle={styles.listContent}
             ListHeaderComponent={
               <>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersContainer}>
-                  {['all', 'Delivered', 'In Transit', 'Processing', 'Returned'].map(status => (
+                  {['all', 'Shopify', 'Amazon', 'Ebay', 'Clover', 'Square', 'Facebook'].map(status => (
                     <TouchableOpacity
                       key={status}
                       style={[
@@ -333,8 +493,31 @@ const InventoryOrdersScreen = () => {
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
+
+                <View style={styles.sellerStatsSection}>
+                  <Text style={styles.sellerStatsSectionTitle}>Your Activity</Text>
+                  <View style={styles.sellerStatsRow}>
+                    <View style={styles.sellerStatItem}>
+                      <Text style={styles.sellerStatValue}>{Object.keys(legendState?.productVariants$?.get() || {}).length}</Text>
+                      <Text style={styles.sellerStatLabel}>Products Listed</Text>
+                    </View>
+                    <View style={styles.sellerStatItem}>
+                      <Text style={styles.sellerStatValue}>
+                        {legendState?.marketplaceListings$ ? 
+                          Object.values(legendState.marketplaceListings$.get() || {} as Record<string, MarketplaceListing>)
+                            .filter(listing => listing.IsEnabled && listing.SellerUserId === legendState.userId).length 
+                          : 0}
+                      </Text>
+                      <Text style={styles.sellerStatLabel}>Active Listings</Text>
+                    </View>
+                    <View style={styles.sellerStatItem}>
+                      <Text style={styles.sellerStatValue}>86%</Text>
+                      <Text style={styles.sellerStatLabel}>Response Rate</Text>
+                    </View>
+                  </View>
+                </View>
                 
-                {/* Categories section */}
+                {/*
                 <View style={styles.categoriesSection}>
                   <Text style={styles.categoriesSectionTitle}>Categories</Text>
                   <View style={styles.categoriesGrid}>
@@ -364,32 +547,21 @@ const InventoryOrdersScreen = () => {
                     </TouchableOpacity>
                   </View>
                 </View>
-                
-                <View style={styles.sellerStatsSection}>
-                  <Text style={styles.sellerStatsSectionTitle}>Your Activity</Text>
-                  <View style={styles.sellerStatsRow}>
-                    <View style={styles.sellerStatItem}>
-                      <Text style={styles.sellerStatValue}>42</Text>
-                      <Text style={styles.sellerStatLabel}>Products Listed</Text>
-                    </View>
-                    <View style={styles.sellerStatItem}>
-                      <Text style={styles.sellerStatValue}>18</Text>
-                      <Text style={styles.sellerStatLabel}>Active Listings</Text>
-                    </View>
-                    <View style={styles.sellerStatItem}>
-                      <Text style={styles.sellerStatValue}>86%</Text>
-                      <Text style={styles.sellerStatLabel}>Response Rate</Text>
-                    </View>
-                  </View>
-                </View>
+                */}
               </>
             }
             ListFooterComponent={<View style={styles.listFooter} />}
+            onEndReached={() => {
+              if (displayCount < filteredInventory.length) {
+                console.log('Reached end, loading more inventory items...');
+                setDisplayCount(prevCount => Math.min(prevCount + ITEMS_PER_LOAD, filteredInventory.length));
+              }
+            }}
+            onEndReachedThreshold={0.5}
           />
         </Animated.View>
       )}
       
-      {/* Orders List */}
       {activeTab === 'orders' && (
         <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersContainer}>
@@ -429,7 +601,7 @@ const InventoryOrdersScreen = () => {
       )}
     </View>
   );
-};
+});
 
 const styles = StyleSheet.create({
   container: {
@@ -734,7 +906,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     paddingHorizontal: 16,
   },
-  platformBadge: {
+  orderPlatformDisplayBadge: {
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 12,
@@ -793,8 +965,40 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   listFooter: {
-    height: 100, // Extra space at the bottom for the tab bar
+    height: 100,
   },
+  centeredView: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)', // Semi-transparent background
+  },
+  modalView: {
+    margin: 20,
+    backgroundColor: 'white',
+    borderRadius: 20,
+    padding: 35,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+    width: '80%',
+  },
+  modalText: {
+    marginBottom: 15,
+    textAlign: 'center',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  closeModalButton: {
+    marginTop: 10,
+    padding: 10,
+  }
 });
 
 export default InventoryOrdersScreen; 

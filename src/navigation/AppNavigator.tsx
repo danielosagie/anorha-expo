@@ -100,7 +100,7 @@ const TabNavigator = () => {
       />
       <Tab.Screen 
         name="AddListing" 
-        component={AddListingScreen as React.ComponentType<any>}
+        component={AddListingScreen}
         options={{
           tabBarLabel: 'Add',
           tabBarIcon: ({ color, size }) => (
@@ -387,7 +387,7 @@ const AppNavigator = () => {
           <Stack.Screen name="AppStack">
              {(props) =>
                 initialAppScreen ? (
-                  <AppStack {...props} initialScreenName={initialAppScreen} />
+                  <AppStack initialScreenName={initialAppScreen} />
                 ) : (
                   <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator /></View>
                 )
