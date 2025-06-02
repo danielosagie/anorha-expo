@@ -10,7 +10,7 @@ import { mockOrders } from '../data/mockData';
 import { Platform } from 'react-native';
 import { observer } from '@legendapp/state/react';
 import { useLegendState } from '../context/LegendStateContext';
-import { ProductVariant as ProductVariantData, ProductImage, InventoryLevel, PlatformProductMapping, LegendStateObservables, MarketplaceListing } from '../utils/SupaLegend';
+import { ProductVariant as ProductVariantData, ProductImage, InventoryLevel, PlatformProductMapping, LegendStateObservables, MarketplaceListing, PlatformLocation, PlatformConnection } from '../utils/SupaLegend';
 import { useNavigation } from '@react-navigation/native';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -48,7 +48,31 @@ const InventoryOrdersScreen = observer(() => {
   const [displayCount, setDisplayCount] = useState(30);
   const ITEMS_PER_LOAD = 10;
   const [isFilterModalVisible, setIsFilterModalVisible] = useState(false);
-  
+  const [selectedPlatformType, setSelectedPlatformType] = useState<string | null>(null);
+  const [availableLocations, setAvailableLocations] = useState<PlatformLocation[]>([]);
+  const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
+  const [isLocationDropdownVisible, setIsLocationDropdownVisible] = useState(false);
+  const [isLocationSelectModalVisible, setIsLocationSelectModalVisible] = useState(false);
+
+  const legendObservables: LegendStateObservables | null = useLegendState();
+
+  // Mock PlatformConnections and PlatformLocations data until SupaLegend provides them
+  // In a real app, these would come from legendState.platformConnections$ and legendState.platformLocations$
+  const mockPlatformConnections: Record<string, PlatformConnection> = {
+    'conn_shopify_1': { Id: 'conn_shopify_1', UserId: 'user1', PlatformType: 'Shopify', DisplayName: 'My Shopify Store', Credentials: {}, Status: 'Active', IsEnabled: true, CreatedAt: '', UpdatedAt: '' },
+    'conn_square_1': { Id: 'conn_square_1', UserId: 'user1', PlatformType: 'Square', DisplayName: 'Main Square Acct', Credentials: {}, Status: 'Active', IsEnabled: true, CreatedAt: '', UpdatedAt: '' },
+    'conn_square_2': { Id: 'conn_square_2', UserId: 'user1', PlatformType: 'Square', DisplayName: 'Second Square Kiosk', Credentials: {}, Status: 'Active', IsEnabled: true, CreatedAt: '', UpdatedAt: '' },
+    'conn_clover_1': { Id: 'conn_clover_1', UserId: 'user1', PlatformType: 'Clover', DisplayName: 'Restaurant POS', Credentials: {}, Status: 'Active', IsEnabled: true, CreatedAt: '', UpdatedAt: '' },
+  };
+
+  const mockPlatformLocations: Record<string, PlatformLocation> = {
+    'loc_shopify_main': { Id: 'loc_shopify_main', PlatformConnectionId: 'conn_shopify_1', PlatformGeneratedLocationId: 'sl_1', Name: 'Shopify Online', IsPOS: false },
+    'loc_square_kennesaw': { Id: 'loc_square_kennesaw', PlatformConnectionId: 'conn_square_1', PlatformGeneratedLocationId: 'sq_loc_kennesaw', Name: 'Kennesaw - ACSM', IsPOS: true },
+    'loc_square_douglasville': { Id: 'loc_square_douglasville', PlatformConnectionId: 'conn_square_1', PlatformGeneratedLocationId: 'sq_loc_douglasville', Name: 'Douglasville - ACSM', IsPOS: true },
+    'loc_square_alabama': { Id: 'loc_square_alabama', PlatformConnectionId: 'conn_square_2', PlatformGeneratedLocationId: 'sq_loc_al', Name: 'Alabama Square', IsPOS: true },
+    'loc_clover_downtown': { Id: 'loc_clover_downtown', PlatformConnectionId: 'conn_clover_1', PlatformGeneratedLocationId: 'cl_loc_dt', Name: 'Downtown Clover POS', IsPOS: true },
+  };
+
   useEffect(() => {
     if (legendState && legendState.productVariants$) {
       const variants = legendState.productVariants$.get() || {};
@@ -90,50 +114,110 @@ const InventoryOrdersScreen = observer(() => {
     }
   }, [legendState]);
   
-  const enrichedProductVariants = useMemo(() => {
-    if (!legendState || 
-        !legendState.productVariants$ || 
-        !legendState.platformProductMappings$ ||
-        !legendState.productImages$ || 
-        !legendState.inventoryLevels$ ||
-        !legendState.marketplaceListings$) {
-      console.log("[InventoryScreen] LegendState or one of its critical observables is not ready for enrichment.");
-      return [];
+  useEffect(() => {
+    // This effect will update available locations when a platform type is selected
+    if (selectedPlatformType) {
+      const connectionsOfPlatformType = Object.values(mockPlatformConnections)
+        .filter(conn => conn.PlatformType === selectedPlatformType);
+      
+      const relevantLocationIds = connectionsOfPlatformType.map(conn => conn.Id);
+      
+      const locations = Object.values(mockPlatformLocations)
+        .filter(loc => relevantLocationIds.includes(loc.PlatformConnectionId) && loc.IsPOS);
+      setAvailableLocations(locations);
+      setIsLocationDropdownVisible(locations.length > 0);
+      setSelectedLocationIds([]); // Reset selected locations when platform changes
+    } else {
+      setAvailableLocations([]);
+      setIsLocationDropdownVisible(false);
+      setSelectedLocationIds([]);
     }
-    
-    const variants = legendState.productVariants$.get() || {};
-    const images = (legendState.productImages$?.get() || {}) as Record<string, ProductImage>;
-    const levels = (legendState.inventoryLevels$?.get() || {}) as Record<string, InventoryLevel>;
-    const mappings = (legendState.platformProductMappings$?.get() || {}) as Record<string, PlatformProductMapping>;
+  }, [selectedPlatformType]);
+  
+  const activeProductVariants = useMemo(() => {
+    if (!legendObservables?.productVariants$) return {};
+    return legendObservables.productVariants$.get() || {};
+  }, [legendObservables]);
 
-    console.log("Raw data for enrichment (after defaulting to {} if get() was undefined):", 
-      { 
-        variantsCount: Object.keys(variants || {}).length, 
-        imagesCount: Object.keys(images || {}).length, 
-        levelsCount: Object.keys(levels || {}).length, 
-        mappingsCount: Object.keys(mappings || {}).length 
+  const activePlatformMappings = useMemo(() => {
+    if (!legendObservables?.platformProductMappings$) return {};
+    return (legendObservables.platformProductMappings$.get() || {}) as Record<string, PlatformProductMapping>;
+  }, [legendObservables]);
+
+  const activeInventoryLevels = useMemo(() => {
+    if (!legendObservables?.inventoryLevels$) return {};
+    return (legendObservables.inventoryLevels$.get() || {}) as Record<string, InventoryLevel>;
+  }, [legendObservables]);
+
+  const activeProductImages = useMemo(() => {
+    if (!legendObservables?.productImages$) return {};
+    return (legendObservables.productImages$.get() || {}) as Record<string, ProductImage>;
+  }, [legendObservables]);
+
+  const activeMarketplaceListings = useMemo(() => {
+    if (!legendObservables?.marketplaceListings$) return {};
+    return (legendObservables.marketplaceListings$.get() || {}) as Record<string, MarketplaceListing>;
+  }, [legendObservables]);
+  
+  const enrichedProductVariants = useMemo((): EnrichedProductVariant[] => {
+    const variants = activeProductVariants;
+    const images = activeProductImages;
+    const levels = activeInventoryLevels; 
+    const mappings = activePlatformMappings;
+
+    if (Object.keys(variants).length === 0) return [];
+
+    let productVariantIdsToDisplay = Object.keys(variants);
+
+    if (selectedPlatformType) {
+      const relevantConnectionIds = Object.values(mockPlatformConnections)
+        .filter(conn => conn.PlatformType === selectedPlatformType)
+        .map(conn => conn.Id);
+
+      const mappedVariantIds = Object.values(mappings)
+        .filter((mapping: PlatformProductMapping) => relevantConnectionIds.includes(mapping.PlatformConnectionId)) 
+        .map((mapping: PlatformProductMapping) => mapping.ProductVariantId);
+      
+      productVariantIdsToDisplay = productVariantIdsToDisplay.filter(variantId => mappedVariantIds.includes(variantId));
+
+      if (selectedLocationIds.length > 0) {
+        const variantIdsInSelectedLocations = Object.values(levels)
+          .filter((level: InventoryLevel) => { 
+            const mockLoc = Object.values(mockPlatformLocations).find(
+              l => l.PlatformConnectionId === level.PlatformConnectionId && 
+                   l.PlatformGeneratedLocationId === level.PlatformLocationId 
+            );
+            return mockLoc && selectedLocationIds.includes(mockLoc.Id);
+          })
+          .map((level: InventoryLevel) => level.ProductVariantId);
+        
+        productVariantIdsToDisplay = productVariantIdsToDisplay.filter(variantId => variantIdsInSelectedLocations.includes(variantId));
       }
-    );
+    }
 
-    return Object.values(variants).map((variant: ProductVariantData): EnrichedProductVariant => {
-      const variantImages = Object.values(images || {}).filter((img: ProductImage) => img.ProductVariantId === variant.Id);
-      const primaryImage = variantImages.sort((a: ProductImage, b: ProductImage) => a.Position - b.Position)[0];
+    const result: EnrichedProductVariant[] = [];
+    for (const variantId of productVariantIdsToDisplay) {
+      const variant = variants[variantId];
+      if (!variant) continue; // Skip if variant somehow became undefined
 
-      const variantLevels = Object.values(levels || {}).filter((level: InventoryLevel) => level.ProductVariantId === variant.Id);
-      const totalQuantity = variantLevels.reduce((sum, level: InventoryLevel) => sum + level.Quantity, 0);
+      const variantImages = Object.values(images).filter((img: ProductImage) => img.ProductVariantId === variant.Id); 
+      const primaryImage = variantImages.sort((a: ProductImage, b: ProductImage) => a.Position - b.Position)[0]; 
 
-      const variantMappings = Object.values(mappings || {}).filter((mapping: PlatformProductMapping) => mapping.ProductVariantId === variant.Id);
-      const platformNames = variantMappings.map(m => m.PlatformConnectionId);
+      const variantLevels = Object.values(levels).filter((level: InventoryLevel) => level.ProductVariantId === variant.Id); 
+      const totalQuantity = variantLevels.reduce((sum, level: InventoryLevel) => sum + level.Quantity, 0); 
 
-      const enriched = {
+      const variantMappings = Object.values(mappings).filter((mapping: PlatformProductMapping) => mapping.ProductVariantId === variant.Id); 
+      const platformNames = variantMappings.map((mapping: PlatformProductMapping) => mapping.PlatformConnectionId); 
+
+      result.push({
         ...variant,
         imageUrl: primaryImage?.ImageUrl,
         totalQuantity: totalQuantity,
         platformNames: platformNames,
-      };
-      return enriched;
-    });
-  }, [legendState]);
+      });
+    }
+    return result;
+  }, [activeProductVariants, activeProductImages, activeInventoryLevels, activePlatformMappings, selectedPlatformType, selectedLocationIds, mockPlatformConnections, mockPlatformLocations]);
   
   const renderInventoryItem = ({ item }: { item: EnrichedProductVariant }) => {
     const navigateToDetail = () => {
@@ -439,7 +523,7 @@ const InventoryOrdersScreen = observer(() => {
         </View>
       </Animated.View>
       
-      {/* Filter Modal */} 
+      {/* Filter Modal (Original Content) */}
       <Modal
         animationType="slide"
         transparent={true}
@@ -451,7 +535,6 @@ const InventoryOrdersScreen = observer(() => {
         <View style={styles.centeredView}>
           <View style={[styles.modalView, {backgroundColor: theme.colors.surface}]}>
             <Text style={[styles.modalText, {color: theme.colors.text}]}>Filter & Sort Options</Text>
-            {/* Add filter controls here: Platform, Stock Status, Sort By etc. */}
             <Text style={{color: theme.colors.textSecondary, marginVertical: 20}}>(Filter controls will go here)</Text>
             <Button title="Apply Filters" onPress={() => setIsFilterModalVisible(false)} />
             <TouchableOpacity style={styles.closeModalButton} onPress={() => setIsFilterModalVisible(false)}>
@@ -461,10 +544,105 @@ const InventoryOrdersScreen = observer(() => {
         </View>
       </Modal>
       
+      {/* Location Selection Modal */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={isLocationSelectModalVisible}
+        onRequestClose={() => setIsLocationSelectModalVisible(false)}
+      >
+        <TouchableOpacity 
+          style={styles.centeredView} 
+          activeOpacity={1} 
+          onPressOut={() => setIsLocationSelectModalVisible(false)} // Close on outer press
+        >
+          <View style={[styles.modalView, styles.locationSelectModalView, {backgroundColor: theme.colors.surface}]} onStartShouldSetResponder={() => true}>
+            <Text style={[styles.modalText, {color: theme.colors.text}]}>Select Locations for {selectedPlatformType}</Text>
+            <ScrollView style={styles.locationListScrollView}>
+              {availableLocations.map(location => (
+                <TouchableOpacity 
+                  key={location.Id}
+                  style={styles.locationSelectItem}
+                  onPress={() => {
+                    setSelectedLocationIds(prevSelected => 
+                      prevSelected.includes(location.Id) 
+                        ? prevSelected.filter(id => id !== location.Id)
+                        : [...prevSelected, location.Id]
+                    );
+                  }}
+                >
+                  <Icon 
+                    name={selectedLocationIds.includes(location.Id) ? "checkbox-marked-outline" : "checkbox-blank-outline"}
+                    size={24} 
+                    color={selectedLocationIds.includes(location.Id) ? theme.colors.primary : theme.colors.textSecondary}
+                    style={styles.checkboxIcon}
+                  />
+                  <Text style={[styles.locationNameText, {color: theme.colors.text}]}>{location.Name}</Text>
+                </TouchableOpacity>
+              ))}
+              {availableLocations.length === 0 && (
+                <Text style={{color: theme.colors.textSecondary, textAlign: 'center', paddingVertical: 20}}>No locations available for this platform.</Text>
+              )}
+            </ScrollView>
+            <Button title="Done" onPress={() => setIsLocationSelectModalVisible(false)} style={{marginTop:10}}/>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+      
+      {/* Location Dropdown Area - Placed before FlatList */}
+      {isLocationDropdownVisible && selectedPlatformType && (
+        <View style={styles.locationFilterContainer}>
+          <TouchableOpacity 
+            style={styles.locationDropdownButton}
+            onPress={() => setIsLocationSelectModalVisible(true)} // Open location select modal
+          >
+            <Text style={styles.locationDropdownButtonText}>
+              {selectedLocationIds.length === 0 
+                ? `All ${selectedPlatformType} Locations` 
+                : selectedLocationIds.length === 1 
+                  ? `${availableLocations.find(loc => loc.Id === selectedLocationIds[0])?.Name}`
+                  : `${selectedLocationIds.length} ${selectedPlatformType} Locations Selected`}
+            </Text>
+            <Icon name="chevron-down" size={20} color="#777" />
+          </TouchableOpacity>
+        </View>
+      )}
+
       {activeTab === 'inventory' && (
         <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
+          {/* Platform Filter Chips - Placed before FlatList */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersContainer}>
+            {['All', 'Shopify', 'Square', 'Clover', 'Amazon', 'Ebay', 'Facebook'].map(platformName => (
+              <TouchableOpacity
+                key={platformName}
+                style={[
+                  styles.filterChip,
+                  selectedPlatformType === platformName && { backgroundColor: theme.colors.primary + '20' },
+                  platformName === 'All' && !selectedPlatformType && { backgroundColor: theme.colors.primary + '20' }
+                ]}
+                onPress={() => {
+                  if (platformName === 'All') {
+                    setSelectedPlatformType(null);
+                  } else {
+                    setSelectedPlatformType(platformName);
+                  }
+                  setFilterStatus(platformName.toLowerCase()); 
+                }}
+              >
+                <Text
+                  style={[
+                    styles.filterChipText,
+                    (selectedPlatformType === platformName || (platformName === 'All' && !selectedPlatformType)) && { color: theme.colors.primary }
+                  ]}
+                >
+                  {platformName}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
           <FlatList
-            data={inventoryToDisplay}
+            data={inventoryToDisplay} 
             renderItem={renderInventoryItem}
             keyExtractor={item => item.Id.toString()}
             numColumns={2}
@@ -472,82 +650,40 @@ const InventoryOrdersScreen = observer(() => {
             contentContainerStyle={styles.listContent}
             ListHeaderComponent={
               <>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersContainer}>
-                  {['all', 'Shopify', 'Amazon', 'Ebay', 'Clover', 'Square', 'Facebook'].map(status => (
-                    <TouchableOpacity
-                      key={status}
-                      style={[
-                        styles.filterChip,
-                        filterStatus === status && { backgroundColor: theme.colors.primary + '20' }
-                      ]}
-                      onPress={() => setFilterStatus(status)}
-                    >
-                      <Text
-                        style={[
-                          styles.filterChipText,
-                          filterStatus === status && { color: theme.colors.primary }
-                        ]}
-                      >
-                        {status === 'all' ? 'All' : status}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-
+                {/* Seller Stats Section - Now in ListHeaderComponent */}
                 <View style={styles.sellerStatsSection}>
                   <Text style={styles.sellerStatsSectionTitle}>Your Activity</Text>
                   <View style={styles.sellerStatsRow}>
                     <View style={styles.sellerStatItem}>
-                      <Text style={styles.sellerStatValue}>{Object.keys(legendState?.productVariants$?.get() || {}).length}</Text>
+                      <Text style={styles.sellerStatValue}>{filteredInventory.length}</Text>
                       <Text style={styles.sellerStatLabel}>Products Listed</Text>
                     </View>
                     <View style={styles.sellerStatItem}>
                       <Text style={styles.sellerStatValue}>
-                        {legendState?.marketplaceListings$ ? 
-                          Object.values(legendState.marketplaceListings$.get() || {} as Record<string, MarketplaceListing>)
-                            .filter(listing => listing.IsEnabled && listing.SellerUserId === legendState.userId).length 
+                        {legendObservables?.marketplaceListings$ && legendObservables.userId ? 
+                          Object.values(activeMarketplaceListings)
+                            .filter((listing: MarketplaceListing) => {
+                              const productForListing = enrichedProductVariants.find(p => p.Id === listing.ProductVariantId);
+                              return listing.IsEnabled && 
+                                     listing.SellerUserId === legendObservables.userId &&
+                                     (productForListing !== undefined);
+                            }).length 
                           : 0}
                       </Text>
                       <Text style={styles.sellerStatLabel}>Active Listings</Text>
                     </View>
                     <View style={styles.sellerStatItem}>
-                      <Text style={styles.sellerStatValue}>86%</Text>
-                      <Text style={styles.sellerStatLabel}>Response Rate</Text>
+                      <Text style={styles.sellerStatValue}>
+                        {selectedPlatformType 
+                          ? availableLocations.filter(loc => selectedLocationIds.length === 0 || selectedLocationIds.includes(loc.Id)).length
+                          : Object.values(mockPlatformLocations).filter(loc => loc.IsPOS).length} 
+                      </Text>
+                      <Text style={styles.sellerStatLabel}>POS Locations</Text>
                     </View>
                   </View>
                 </View>
                 
-                {/*
-                <View style={styles.categoriesSection}>
-                  <Text style={styles.categoriesSectionTitle}>Categories</Text>
-                  <View style={styles.categoriesGrid}>
-                    <TouchableOpacity style={styles.categoryItem}>
-                      <View style={[styles.categoryIcon, {backgroundColor: '#0E8F7F20'}]}>
-                        <Icon name="tag-outline" size={24} color="#0E8F7F" />
-                      </View>
-                      <Text style={styles.categoryName}>Clothing</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.categoryItem}>
-                      <View style={[styles.categoryIcon, {backgroundColor: '#F17F5F20'}]}>
-                        <Icon name="food-apple-outline" size={24} color="#F17F5F" />
-                      </View>
-                      <Text style={styles.categoryName}>Food</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.categoryItem}>
-                      <View style={[styles.categoryIcon, {backgroundColor: '#3CAD4620'}]}>
-                        <Icon name="laptop" size={24} color="#3CAD46" />
-                      </View>
-                      <Text style={styles.categoryName}>Electronics</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.categoryItem}>
-                      <View style={[styles.categoryIcon, {backgroundColor: '#865AF020'}]}>
-                        <Icon name="sofa-outline" size={24} color="#865AF0" />
-                      </View>
-                      <Text style={styles.categoryName}>Home</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-                */}
+                {/* Categories Section would also go in ListHeaderComponent if enabled */}
               </>
             }
             ListFooterComponent={<View style={styles.listFooter} />}
@@ -998,7 +1134,49 @@ const styles = StyleSheet.create({
   closeModalButton: {
     marginTop: 10,
     padding: 10,
-  }
+  },
+  // Styles for Location Filter
+  locationFilterContainer: {
+    marginVertical: 8,
+    paddingHorizontal: 8, 
+  },
+  locationDropdownButton: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF', // Static white
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0', // Static light gray
+  },
+  locationDropdownButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#333333', // Static dark gray
+  },
+  locationSelectModalView: {
+    width: '90%',
+    maxHeight: '70%',
+  },
+  locationListScrollView: {
+    width: '100%',
+    marginBottom: 10,
+  },
+  locationSelectItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0', // static light gray
+  },
+  checkboxIcon: {
+    marginRight: 15,
+  },
+  locationNameText: {
+    fontSize: 16,
+  },
 });
 
 export default InventoryOrdersScreen; 

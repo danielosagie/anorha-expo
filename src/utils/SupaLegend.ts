@@ -44,6 +44,7 @@ export interface LegendStateObservables {
     productImages$?: ObservableObject<Record<string, ProductImage>>;
     inventoryLevels$?: ObservableObject<Record<string, InventoryLevel>>;
     marketplaceListings$?: ObservableObject<Record<string, MarketplaceListing>>;
+    platformLocations$?: ObservableObject<Record<string, PlatformLocation>>;
     userId?: string; // Added userId to the return type
 }
 
@@ -160,6 +161,17 @@ export async function initializeLegendState(
     );
     console.log(`[SupaLegend] productImages$ observable configured for UserId: ${currentUserId} (indirectly, needs RLS/joins for proper filtering)`);
     
+    // Add onChange listener for productImages$ diagnostics
+    productImages$.onChange(syncedData => {
+        const dataCount = Object.keys(syncedData || {}).length;
+        console.log(`[SupaLegend - productImages$.onChange] Data changed. Count: ${dataCount}`);
+        if (dataCount > 0 && dataCount < 5) { // Log first few items if count is small
+            console.log('[SupaLegend - productImages$.onChange] Sample data:', JSON.stringify(Object.values(syncedData || {}).slice(0, 5), null, 2));
+        } else if (dataCount === 0) {
+            console.log('[SupaLegend - productImages$.onChange] Data is empty.');
+        }
+    }, { immediate: true });
+
     const inventoryLevels$ = observable<Record<string, InventoryLevel>>(
         customSynced({
             collection: 'InventoryLevels',
@@ -189,6 +201,10 @@ export async function initializeLegendState(
     );
     console.log(`[SupaLegend] marketplaceListings$ observable configured for UserId: ${currentUserId}`);
 
+    // Placeholder for PlatformLocations observable - to be implemented with actual data fetching
+    const platformLocations$ = observable<Record<string, PlatformLocation>>({}); 
+    console.log(`[SupaLegend] platformLocations$ observable initialized (placeholder).`);
+
     // --- Activate observables to potentially kickstart sync --- 
     console.log("[SupaLegend] Activating productVariants$...");
     productVariants$.get(); // Call get() to activate and start syncing
@@ -197,8 +213,8 @@ export async function initializeLegendState(
     // Optionally activate others if needed, but productVariants is primary for now
     // console.log("[SupaLegend] Activating platformProductMappings$...");
     // platformProductMappings$.get();
-    // console.log("[SupaLegend] Activating productImages$...");
-    // productImages$.get();
+    console.log("[SupaLegend] Activating productImages$...");
+    productImages$.get();
     // console.log("[SupaLegend] Activating inventoryLevels$...");
     // inventoryLevels$.get();
 
@@ -208,6 +224,7 @@ export async function initializeLegendState(
         productImages$,
         inventoryLevels$,
         marketplaceListings$,
+        platformLocations$,
         userId: currentUserId, // Store the userId with the initialized observables
     };
 
@@ -433,4 +450,33 @@ export interface MarketplaceListing {
     UpdatedAt: string; // timestamptz
     // Helper field for aliasing, actual DB field is Id
     id?: string; 
+}
+
+// Define PlatformLocation interface (based on discussion)
+export interface PlatformLocation {
+    Id: string; // Internal DB ID uuid
+    PlatformConnectionId: string; // uuid REFERENCES PlatformConnections(Id)
+    PlatformGeneratedLocationId: string; // The ID from the platform (e.g., Square's location ID)
+    Name: string; // User-friendly location name
+    IsPOS: boolean;
+    // Potentially other fields like address, etc.
+    // Helper field for aliasing, actual DB field is Id
+    id?: string; 
+}
+
+// Define PlatformConnection interface (based on sssync-db.md and usage)
+export interface PlatformConnection {
+    Id: string; // uuid
+    UserId: string; // uuid
+    PlatformType: string; // e.g., 'Shopify', 'Square', 'Clover'
+    DisplayName: string;
+    Credentials: any; // jsonb - Opaque, store encrypted OAuth credentials or API keys
+    Status: string; // e.g., 'Connected', 'NeedsReauth', 'Error'
+    IsEnabled: boolean;
+    LastSyncAttemptAt?: string | null; // timestamptz
+    LastSyncSuccessAt?: string | null; // timestamptz
+    CreatedAt: string; // timestamptz
+    UpdatedAt: string; // timestamptz
+    // Helper field for aliasing, actual DB field is Id
+    id?: string;
 } 

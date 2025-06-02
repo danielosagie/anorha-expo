@@ -863,6 +863,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
           }
 
           const connections: any[] = await response.json();
+          console.log('[FormReview Effect] Shopify connections:', connections);
           // Ensure you have your PlatformConnection type defined for better type safety
           // For example: const connections: PlatformConnection[] = await response.json();
 
@@ -1864,6 +1865,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
 
     // 2. Reset state comprehensively
     console.log("[handleSaveDraft] Resetting state comprehensively.");
+    
     setCapturedMedia([]);
     setCoverImageIndex(-1);
     setUploadedImageUrls([]);
@@ -1888,6 +1890,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
       console.log("[handleSaveDraft] Navigating back as it was an existing entity from Past Scans.");
       if (canGoBack) { // Use the logged variable
         navigation.goBack();
+        
       } else {
         // This case should be rare if isEditingExistingDraft is true
         console.warn("[handleSaveDraft] Was editing existing draft but cannot go back. Resetting to PlatformSelection.");
@@ -2199,7 +2202,10 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                 status: status.toUpperCase(),
                 vendor: shopifyData.vendor || undefined,
                 productType: shopifyData.productType || undefined,
-                tags: Array.isArray(shopifyData.tags) ? shopifyData.tags : []
+                tags: Array.isArray(shopifyData.tags) ? shopifyData.tags : [],
+                // Add cleaned image information for Shopify publish
+                imageUris: cleanedImageUrisForPayload, 
+                coverImageIndex: finalCoverImageIndex 
               }
         };
         console.log('[handlePublishAction] Attempting to POST to Shopify URL:', apiUrl);

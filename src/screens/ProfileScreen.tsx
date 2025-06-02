@@ -19,17 +19,17 @@ import { AuthContext } from '../context/AuthContext';
 
 // --- BEGIN Re-inlined Constants ---
 // TODO: Replace placeholder values with your actual credentials and URLs
-const CLOVER_APP_ID = "YOUR_CLOVER_APP_ID";
-const CLOVER_FRONTEND_REDIRECT_URI = "sssyncapp://clover-auth-callback"; // Or your specific deep link
-const CLOVER_AUTHORIZE_URL = "https://sandbox.dev.clover.com/oauth/authorize"; // Or production URL
-const SSSYNC_CLOVER_CALLBACK_URL = "https://api.sssync.app/api/auth/clover/callback"; // Your backend callback
+// const CLOVER_APP_ID = "YOUR_CLOVER_APP_ID"; // REMOVED - Backend handles this
+// const CLOVER_FRONTEND_REDIRECT_URI = "sssyncapp://clover-auth-callback"; // REMOVED - Backend handles this
+// const CLOVER_AUTHORIZE_URL = "https://sandbox.dev.clover.com/oauth/authorize"; // REMOVED - Backend handles this
+// const SSSYNC_CLOVER_CALLBACK_URL = "https://api.sssync.app/api/auth/clover/callback"; // REMOVED - Backend handles this
 
-const SQUARE_APP_ID = "YOUR_SQUARE_APP_ID";
-const SQUARE_FRONTEND_REDIRECT_URI = "sssyncapp://square-auth-callback"; // Or your specific deep link
-const SQUARE_AUTHORIZE_URL = "https://connect.squareup.com/oauth2/authorize"; // Or production URL
-const SSSYNC_SQUARE_CALLBACK_URL = "https://api.sssync.app/api/auth/square/callback"; // Your backend callback
+// const SQUARE_APP_ID = "YOUR_SQUARE_APP_ID"; // REMOVED - Backend handles this
+// const SQUARE_FRONTEND_REDIRECT_URI = "sssyncapp://square-auth-callback"; // REMOVED - Backend handles this
+// const SQUARE_AUTHORIZE_URL = "https://connect.squareup.com/oauth2/authorize"; // REMOVED - Backend handles this
+// const SSSYNC_SQUARE_CALLBACK_URL = "https://api.sssync.app/api/auth/square/callback"; // REMOVED - Backend handles this
 
-// const SSSYNC_API_BASE_URL = "https://api.sssync.app"; // Example, if needed elsewhere for constructing URLs
+const SSSYNC_API_BASE_URL = "https://api.sssync.app"; // Keep if used for constructing backend URLs
 // --- END Re-inlined Constants ---
 
 // Define route param types (add other screens/params if needed)
@@ -86,12 +86,11 @@ const SQUARE_SCOPES = [
 // --- End Square OAuth Constants ---
 
 // Helper function to generate a random string for OAuth state using expo-crypto
-const generateRandomString = (length: number): string => {
-  const byteArray = Crypto.getRandomValues(new Uint8Array(length));
-  // Convert byte array to hex string
-  return Array.from(byteArray, (byte: number) => byte.toString(16).padStart(2, '0')).join('');
-  // return Math.random().toString(36).substring(2, length + 2); // Keep previous fallback commented for now
-};
+// const generateRandomString = (length: number): string => { // REMOVED - state management might change with backend handling
+//   const byteArray = Crypto.getRandomValues(new Uint8Array(length));
+//   // Convert byte array to hex string
+//   return Array.from(byteArray, (byte: number) => byte.toString(16).padStart(2, '0')).join('');
+// };
 
 const getPlatformColor = (platformId: PlatformId): string => {
   switch (platformId) {
@@ -510,9 +509,49 @@ const ProfileScreen = () => {
     }
   };
 
+  // --- NEW: Function to start platform scan ---
+  const startPlatformScan = async (connectionId: string, platformName: string) => {
+    console.log(`[ProfileScreen] Attempting to start scan for connection ID: ${connectionId} (${platformName})`);
+    try {
+      const session = await supabase.auth.getSession();
+      const token = session?.data.session?.access_token;
+      if (!token) {
+        throw new Error("Authentication token not found for starting scan.");
+      }
+
+      const response = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/start-scan`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json' // Though body might be empty, content-type is good practice
+        },
+        // body: JSON.stringify({}), // Empty body if not required by backend
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
+        throw new Error(errorData.message || `Failed to start scan for ${platformName}. Status: ${response.status}`);
+      }
+
+      const responseData = await response.json().catch(() => ({})); // Allow empty success response
+
+      Alert.alert("Scan Initiated", responseData.message || `Initial scan started for ${platformName}. You will be notified upon completion or if action is needed.`);
+      console.log(`[ProfileScreen] Successfully initiated scan for ${platformName} (Connection ID: ${connectionId}). Response:`, responseData);
+      // TODO: Implement polling for /scan-summary or progress indicator
+      // For now, we can refresh connections to potentially see a status change
+      fetchConnections(); 
+
+    } catch (error: unknown) {
+      console.error(`[ProfileScreen] Error starting scan for ${platformName}:`, error);
+      const message = error instanceof Error ? error.message : String(error);
+      Alert.alert('Error Starting Scan', `Could not start the initial scan for ${platformName}: ${message}`);
+    }
+  };
+  // --- END Function to start platform scan ---
+
   // --- NEW: Clover Connection Logic ---
   const handleCloverConnect = async () => {
-    console.log("[ProfileScreen] Initiating Clover connection...");
+    console.log("[ProfileScreen] Initiating Clover connection (New OAuth Flow)...");
     try {
       // 1. Get SSSync User ID
       const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -523,78 +562,38 @@ const ProfileScreen = () => {
       }
       const sssyncUserId = user.id;
 
-      // 2. Generate and store state for CSRF protection
-      const state = generateRandomString(32);
-      await AsyncStorage.setItem('cloverOAuthState', state);
-      console.log("[ProfileScreen] Clover Connect: Stored state:", state);
+      // 2. Define finalRedirectUri
+      const finalRedirectUri = "sssyncapp://auth/callback?platform=clover"; // App-specific deep link
 
-      // 3. Construct Clover Authorization URL
-      const encodedRedirectUri = encodeURIComponent(CLOVER_FRONTEND_REDIRECT_URI);
-      const cloverAuthUrl = `${CLOVER_AUTHORIZE_URL}?client_id=${CLOVER_APP_ID}&redirect_uri=${encodedRedirectUri}&state=${state}`;
-      console.log("[ProfileScreen] Clover Connect: Auth URL:", cloverAuthUrl);
+      // 3. Construct Backend Authorization URL
+      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/auth/clover/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
+      console.log("[ProfileScreen] Clover Connect: Backend Auth URL:", backendAuthUrl);
 
-      // 4. Open WebBrowser for OAuth flow
-      const result = await WebBrowser.openAuthSessionAsync(cloverAuthUrl, CLOVER_FRONTEND_REDIRECT_URI);
+      // 4. Open WebBrowser for OAuth flow, listening for finalRedirectUri
+      const result = await WebBrowser.openAuthSessionAsync(backendAuthUrl, finalRedirectUri);
       console.log("[ProfileScreen] Clover Connect: WebBrowser result:", result);
 
-      // 5. Handle Callback
+      // 5. Handle Callback from finalRedirectUri
       if (result.type === 'success' && result.url) {
-        const urlParams = new URLSearchParams(result.url.split('?')[1]); // Extract query params from the full URL
-        const receivedState = urlParams.get('state');
-        const storedState = await AsyncStorage.getItem('cloverOAuthState');
-        
-        console.log("[ProfileScreen] Clover Connect: Received state:", receivedState);
-        console.log("[ProfileScreen] Clover Connect: Expected state:", storedState);
+        const urlParams = new URLSearchParams(result.url.split('?')[1]);
+        const status = urlParams.get('status');
+        const message = urlParams.get('message');
+        const connectionId = urlParams.get('connectionId'); // Assuming backend might send this
 
-        if (receivedState !== storedState) {
-          Alert.alert("Security Alert", "OAuth state mismatch. Connection aborted.");
-          console.error("[ProfileScreen] Clover Connect: Invalid OAuth state.");
-          return;
-        }
+        console.log("[ProfileScreen] Clover Connect: Callback params:", { status, message, connectionId });
 
-        const authorizationCode = urlParams.get('code');
-        const merchantId = urlParams.get('merchant_id');
-
-        if (!authorizationCode || !merchantId) {
-          Alert.alert("Connection Error", "Clover authorization failed or was denied. Code or Merchant ID missing.");
-          console.error("[ProfileScreen] Clover Connect: Auth code or merchant_id missing from callback.", { authorizationCode, merchantId });
-          return;
-        }
-
-        console.log("[ProfileScreen] Clover Connect: Auth code:", authorizationCode, "Merchant ID:", merchantId);
-
-        // c. Send Code to Your Backend
-        const session = await supabase.auth.getSession(); 
-        const token = session?.data.session?.access_token;
-        if (!token) {
-            Alert.alert("Authentication Error", "Cannot get access token for backend call.");
-            return;
-        }
-
-        const backendResponse = await fetch(SSSYNC_CLOVER_CALLBACK_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}` 
-          },
-          body: JSON.stringify({
-            code: authorizationCode,
-            merchantId: merchantId,
-            userId: sssyncUserId, 
-          }),
-        });
-
-        const backendData = await backendResponse.json();
-
-        if (backendResponse.ok && backendData.success) {
-          Alert.alert("Success", "Clover account connected successfully!");
-          console.log("[ProfileScreen] Clover Connect: Successfully connected via backend.");
-          fetchConnections(); 
+        if (status === 'success') {
+          Alert.alert("Success", message || "Clover account connected successfully!");
+          if (connectionId) {
+            console.log(`[ProfileScreen] Clover Connect: Connection ID ${connectionId}. Proceed to start scan.`);
+            // Call startPlatformScan
+            await startPlatformScan(connectionId, 'Clover');
+          }
+          fetchConnections(); // Refresh connections list
         } else {
-          Alert.alert("Connection Failed", backendData.message || "Failed to finalize Clover connection with backend.");
-          console.error("[ProfileScreen] Clover Connect: Backend finalization failed:", backendData);
+          Alert.alert("Connection Failed", message || "Failed to connect Clover account.");
+          console.error("[ProfileScreen] Clover Connect: Connection failed via backend callback:", { status, message });
         }
-
       } else if (result.type === 'cancel' || result.type === 'dismiss') {
         Alert.alert("Cancelled", "Clover connection process was cancelled.");
         console.log("[ProfileScreen] Clover Connect: User cancelled or dismissed flow.");
@@ -610,16 +609,14 @@ const ProfileScreen = () => {
       console.error("[ProfileScreen] Clover Connect: General error:", error);
       const message = error instanceof Error ? error.message : String(error);
       Alert.alert("Error", `Failed to connect Clover: ${message}`);
-    } finally {
-      await AsyncStorage.removeItem('cloverOAuthState');
-      console.log("[ProfileScreen] Clover Connect: Cleaned up OAuth state.");
     }
+    // No finally block for state cleanup needed for now, as state param is not sent to backend login URL
   };
   // --- END Clover Connection Logic ---
 
   // --- NEW: Square Connection Logic ---
   const handleSquareConnect = async () => {
-    console.log("[ProfileScreen] Initiating Square connection...");
+    console.log("[ProfileScreen] Initiating Square connection (New OAuth Flow)...");
     try {
       // 1. Get SSSync User ID
       const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -630,84 +627,38 @@ const ProfileScreen = () => {
       }
       const sssyncUserId = user.id;
 
-      // 2. Generate and store state for CSRF protection
-      const state = generateRandomString(32);
-      await AsyncStorage.setItem('squareOAuthState', state);
-      console.log("[ProfileScreen] Square Connect: Stored state:", state);
+      // 2. Define finalRedirectUri
+      const finalRedirectUri = "sssyncapp://auth/callback?platform=square"; // App-specific deep link
 
-      // 3. Construct Square Authorization URL
-      const encodedRedirectUri = encodeURIComponent(SQUARE_FRONTEND_REDIRECT_URI);
-      // Square uses 'session=false' for the standard auth code flow for web-based apps / server-side token exchange
-      const squareAuthUrl = `${SQUARE_AUTHORIZE_URL}?client_id=${SQUARE_APP_ID}&redirect_uri=${encodedRedirectUri}&scope=${encodeURIComponent(SQUARE_SCOPES)}&state=${state}&session=false`;
-      console.log("[ProfileScreen] Square Connect: Auth URL:", squareAuthUrl);
+      // 3. Construct Backend Authorization URL
+      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/auth/square/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
+      console.log("[ProfileScreen] Square Connect: Backend Auth URL:", backendAuthUrl);
 
-      // 4. Open WebBrowser for OAuth flow
-      const result = await WebBrowser.openAuthSessionAsync(squareAuthUrl, SQUARE_FRONTEND_REDIRECT_URI);
+      // 4. Open WebBrowser for OAuth flow, listening for finalRedirectUri
+      const result = await WebBrowser.openAuthSessionAsync(backendAuthUrl, finalRedirectUri);
       console.log("[ProfileScreen] Square Connect: WebBrowser result:", result);
 
-      // 5. Handle Callback
+      // 5. Handle Callback from finalRedirectUri
       if (result.type === 'success' && result.url) {
-        const urlParams = new URLSearchParams(result.url.split('?')[1]); // Extract query params
-        const receivedState = urlParams.get('state');
-        const storedState = await AsyncStorage.getItem('squareOAuthState');
+        const urlParams = new URLSearchParams(result.url.split('?')[1]);
+        const status = urlParams.get('status');
+        const message = urlParams.get('message');
+        const connectionId = urlParams.get('connectionId'); // Assuming backend might send this
 
-        console.log("[ProfileScreen] Square Connect: Received state:", receivedState);
-        console.log("[ProfileScreen] Square Connect: Expected state:", storedState);
+        console.log("[ProfileScreen] Square Connect: Callback params:", { status, message, connectionId });
 
-        if (receivedState !== storedState) {
-          Alert.alert("Security Alert", "OAuth state mismatch. Square connection aborted.");
-          console.error("[ProfileScreen] Square Connect: Invalid OAuth state.");
-          return;
-        }
-
-        const authorizationCode = urlParams.get('code');
-
-        if (!authorizationCode) {
-          const errorParam = urlParams.get('error');
-          const errorDescription = urlParams.get('error_description');
-          Alert.alert(
-            "Connection Error", 
-            `Square authorization failed or was denied. ${errorDescription || errorParam || 'Unknown reason'}`
-          );
-          console.error("[ProfileScreen] Square Connect: Auth code missing from callback.", { errorParam, errorDescription });
-          return;
-        }
-
-        console.log("[ProfileScreen] Square Connect: Auth code:", authorizationCode);
-
-        // c. Send Code to Your Backend
-        const session = await supabase.auth.getSession();
-        const token = session?.data.session?.access_token;
-        if (!token) {
-          Alert.alert("Authentication Error", "Cannot get access token for backend call.");
-          return;
-        }
-
-        const backendResponse = await fetch(SSSYNC_SQUARE_CALLBACK_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({
-            code: authorizationCode,
-            userId: sssyncUserId, // SSSync User ID
-            // Square backend callback might also need the original redirect_uri if it verifies it for token exchange
-            // frontendRedirectUri: SQUARE_FRONTEND_REDIRECT_URI 
-          }),
-        });
-
-        const backendData = await backendResponse.json();
-
-        if (backendResponse.ok && backendData.success) {
-          Alert.alert("Success", "Square account connected successfully!");
-          console.log("[ProfileScreen] Square Connect: Successfully connected via backend.");
+        if (status === 'success') {
+          Alert.alert("Success", message || "Square account connected successfully!");
+           if (connectionId) {
+            console.log(`[ProfileScreen] Square Connect: Connection ID ${connectionId}. Proceed to start scan.`);
+            // Call startPlatformScan
+            await startPlatformScan(connectionId, 'Square');
+          }
           fetchConnections(); // Refresh connections list
         } else {
-          Alert.alert("Connection Failed", backendData.message || "Failed to finalize Square connection with backend.");
-          console.error("[ProfileScreen] Square Connect: Backend finalization failed:", backendData);
+          Alert.alert("Connection Failed", message || "Failed to connect Square account.");
+          console.error("[ProfileScreen] Square Connect: Connection failed via backend callback:", { status, message });
         }
-
       } else if (result.type === 'cancel' || result.type === 'dismiss') {
         Alert.alert("Cancelled", "Square connection process was cancelled.");
         console.log("[ProfileScreen] Square Connect: User cancelled or dismissed flow.");
@@ -723,10 +674,8 @@ const ProfileScreen = () => {
       console.error("[ProfileScreen] Square Connect: General error:", error);
       const message = error instanceof Error ? error.message : String(error);
       Alert.alert("Error", `Failed to connect Square: ${message}`);
-    } finally {
-      await AsyncStorage.removeItem('squareOAuthState');
-      console.log("[ProfileScreen] Square Connect: Cleaned up OAuth state.");
     }
+    // No finally block for state cleanup needed for now
   };
   // --- END Square Connection Logic ---
 
