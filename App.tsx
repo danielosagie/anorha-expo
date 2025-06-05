@@ -9,6 +9,7 @@ import { supabase } from './lib/supabase';
 import { LegendStateContext } from './src/context/LegendStateContext';
 import { initializeLegendState, LegendStateObservables } from './src/utils/SupaLegend';
 import { Session, AuthChangeEvent } from '@supabase/supabase-js';
+import FlashMessage from 'react-native-flash-message';
 
 const App: React.FC = () => {
   const navigationRef = useRef<NavigationContainerRef<any>>(null);
@@ -132,6 +133,7 @@ const App: React.FC = () => {
         <NavigationContainer ref={navigationRef}>
           <AppNavigator />
         </NavigationContainer>
+        <FlashMessage position="top" />
       </ThemeProvider>
     </LegendStateContext.Provider>
   );

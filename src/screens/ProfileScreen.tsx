@@ -7,6 +7,8 @@ import Card from '../components/Card';
 import Button from '../components/Button';
 import PlaceholderImage from '../components/Placeholder';
 import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
+import { StackNavigationProp } from '@react-navigation/stack';
+import { AppStackParamList } from '../navigation/AppNavigator';
 import { supabase } from '../../lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CommonActions } from '@react-navigation/native';
@@ -14,6 +16,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as Clipboard from 'expo-clipboard';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import * as Crypto from 'expo-crypto'; // For generating random string
+import { showMessage } from 'react-native-flash-message';
 
 import { AuthContext } from '../context/AuthContext';
 
@@ -36,6 +39,9 @@ const SSSYNC_API_BASE_URL = "https://api.sssync.app"; // Keep if used for constr
 type ProfileScreenRouteParams = {
   Profile: { refresh?: number }; // Define the refresh param as optional number
 };
+
+// Type for navigation prop
+type ProfileScreenNavigationProp = StackNavigationProp<AppStackParamList>;
 
 // Define available platforms centrally (or import if moved)
 const AVAILABLE_PLATFORMS = [
@@ -122,27 +128,107 @@ const getIconForPlatform = (platform: PlatformId): string => {
   }
 };
 
+// Add new connection status types and helper functions
+const CONNECTION_STATUS = {
+  ACTIVE: 'active',
+  INACTIVE: 'inactive',
+  PENDING: 'pending',
+  NEEDS_REVIEW: 'needs_review',
+  SCANNING: 'scanning',
+  ERROR: 'error',
+  SYNCING: 'syncing',
+  NEW: 'new',           // Added for newly created connections
+  RECONNECT: 'reconnect' // Added for reconnecting existing accounts
+};
+
+const getStatusDisplay = (status: string, isNewConnection: boolean = false): { label: string, color: string, icon: string } => {
+  // For new connections, show a special "New" status regardless of backend status
+  if (isNewConnection) {
+    return { label: 'New Connection', color: '#30B4FF', icon: 'new-box' };
+  }
+  
+  switch (status?.toLowerCase()) {
+    case CONNECTION_STATUS.ACTIVE:
+      return { label: 'Connected', color: '#34C759', icon: 'check-circle' };
+    case CONNECTION_STATUS.INACTIVE:
+      return { label: 'Inactive', color: '#8E8E93', icon: 'pause-circle' };
+    case CONNECTION_STATUS.PENDING:
+      return { label: 'Setup Needed', color: '#FF9500', icon: 'progress-clock' };
+    case CONNECTION_STATUS.NEEDS_REVIEW:
+      return { label: 'Products Need Review', color: '#FF3B30', icon: 'sync-alert' };
+    case CONNECTION_STATUS.SCANNING:
+      return { label: 'Scanning Products...', color: '#5856D6', icon: 'sync' };
+    case CONNECTION_STATUS.SYNCING:
+      return { label: 'Syncing...', color: '#007AFF', icon: 'sync' };
+    case CONNECTION_STATUS.ERROR:
+      return { label: 'Connection Error', color: '#FF3B30', icon: 'alert-circle' };
+    case 'reconcile': // Match the string value used in code
+      return { label: 'Data Reconciliation Needed', color: '#FF9500', icon: 'sync-alert' };
+    case CONNECTION_STATUS.NEW:
+      return { label: 'New Connection', color: '#30B4FF', icon: 'new-box' };
+    case CONNECTION_STATUS.RECONNECT:
+      return { label: 'Reconnecting', color: '#5856D6', icon: 'connection' };
+    default:
+      return { label: status || 'Unknown', color: '#8E8E93', icon: 'help-circle' };
+  }
+};
+
+// Add a function to show in-app notifications
+const showStatusNotification = (title: string, message: string, type: 'success' | 'info' | 'warning' | 'danger' = 'info') => {
+  try {
+    showMessage({
+      message: title,
+      description: message,
+      type: type,
+      duration: 4000,
+      icon: type,
+    });
+  } catch (error) {
+    // Fallback to Alert if showMessage fails
+    console.warn('[ProfileScreen] Error showing notification, falling back to Alert:', error);
+    Alert.alert(title, message);
+  }
+};
+
 const ProfileScreen = () => {
   const theme = useTheme();
-  const navigation = useNavigation();
+  const navigation = useNavigation<ProfileScreenNavigationProp>();
+  const authContext = useContext(AuthContext);
   const route = useRoute<RouteProp<ProfileScreenRouteParams, 'Profile'>>();
+  
+  // For refresh trigger from route params
+  const routeRefreshParam = route.params?.refresh || 0;
+  const [refreshTrigger, setRefreshTrigger] = useState(routeRefreshParam);
+  
+  useEffect(() => {
+    if (route.params?.refresh) {
+      setRefreshTrigger(route.params.refresh);
+    }
+  }, [route.params?.refresh]);
+
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [darkModeEnabled, setDarkModeEnabled] = useState(false);
-  const authContext = useContext(AuthContext);
   
   // --- NEW State for Connections ---
-  const [connections, setConnections] = useState<PlatformConnection[]>([]);
+  const [showConnections, setShowConnections] = useState(true);
+  const [platformConnections, setPlatformConnections] = useState<PlatformConnection[]>([]);
   const [isLoadingConnections, setIsLoadingConnections] = useState(true);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
+  // New state for tracking which connections are using fallback data
+  const [fallbackConnectionIds, setFallbackConnectionIds] = useState<string[]>([]);
+  const [userName, setUserName] = useState('');
+  const [userEmail, setUserEmail] = useState('');
+  const [shopifyShopName, setShopifyShopName] = useState('');
+  const [shopifyFlowStep, setShopifyFlowStep] = useState<ShopifyFlowStep>('idle');
+  const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+  const [showDevOptions, setShowDevOptions] = useState(false);
+  const [devMode, setDevMode] = useState(false);
   // --- NEW: State for Add Connection Modal ---
   const [isAddConnectionModalVisible, setIsAddConnectionModalVisible] = useState(false);
-  // --- NEW: State for Edit Mode ---
-  const [isEditMode, setIsEditMode] = useState(false);
   // --- END State ---
 
   // --- REVISED State for Guided Shopify Flow ---
   type ShopifyFlowStep = 'idle' | 'enterInfo'; // Simplified states
-  const [shopifyFlowStep, setShopifyFlowStep] = useState<ShopifyFlowStep>('idle');
   const [pastedShopifyUrl, setPastedShopifyUrl] = useState('');
   const [manualShopName, setManualShopName] = useState('');
   // --- END REVISED Guided Shopify Flow State ---
@@ -176,152 +262,635 @@ const ProfileScreen = () => {
     },
   ];
   
-  // --- Fetch Connections Logic ---
-  const fetchConnections = useCallback(async () => { // Make fetchConnections NOT dependent on an external userId
+  // Move styles definition here to fix "used before declaration" errors
+  const styles = StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: '#F8F9FB',
+    },
+    scrollViewContent: {
+      padding: 16,
+      paddingTop: 60,
+    },
+    card: {
+      marginBottom: 16,
+    },
+    title: {
+      fontSize: 28,
+      fontWeight: 'bold',
+      marginVertical: 16,
+    },
+    accountHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 24,
+    },
+    avatar: {
+      width: 64,
+      height: 64,
+      borderRadius: 32,
+    },
+    accountInfo: {
+      flex: 1,
+      marginLeft: 16,
+    },
+    accountName: {
+      fontSize: 18,
+      fontWeight: 'bold',
+      marginBottom: 4,
+    },
+    accountEmail: {
+      fontSize: 14,
+      color: '#777',
+      marginBottom: 4,
+    },
+    planBadge: {
+      alignSelf: 'flex-start',
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 4,
+    },
+    planText: {
+      fontSize: 12,
+      fontWeight: '500',
+    },
+    editButton: {
+      padding: 8,
+    },
+    statsContainer: {
+      flexDirection: 'row',
+      justifyContent: 'space-around',
+      borderTopWidth: 1,
+      borderTopColor: '#f0f0f0',
+      paddingTop: 16,
+    },
+    statItem: {
+      alignItems: 'center',
+    },
+    statValue: {
+      fontSize: 18,
+      fontWeight: 'bold',
+      marginBottom: 4,
+    },
+    statLabel: {
+      fontSize: 12,
+      color: '#777',
+    },
+    statDivider: {
+      width: 1,
+      height: '100%',
+      backgroundColor: '#f0f0f0',
+    },
+    sectionHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 16,
+    },
+    sectionTitle: {
+      fontSize: 18,
+      fontWeight: 'bold',
+    },
+    sectionAction: {
+      fontSize: 14,
+    },
+    integrationsContainer: {
+      marginBottom: 8,
+    },
+    integrationItem: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: '#f0f0f0',
+    },
+    integrationIcon: {
+      width: 32,
+      height: 32,
+      marginRight: 12,
+    },
+    integrationName: {
+      fontSize: 16,
+      flex: 1,
+      marginLeft: 12,
+    },
+    connectedBadge: {
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 4,
+    },
+    connectedText: {
+      fontSize: 14,
+      fontWeight: '500',
+      marginLeft: 4,
+    },
+    connectButton: {
+      height: 32,
+      paddingHorizontal: 12,
+      flex: 0,
+    },
+    connectButtonText: {
+      fontSize: 12,
+      color: '#FFFFFF',
+    },
+    settingItem: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: 16,
+      borderBottomWidth: 1,
+      borderBottomColor: '#f0f0f0',
+    },
+    settingInfo: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    settingIcon: {
+      marginRight: 16,
+    },
+    settingText: {
+      fontSize: 16,
+    },
+    menuItem: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: 16,
+    },
+    menuItemBorder: {
+      borderBottomWidth: 1,
+      borderBottomColor: '#f0f0f0',
+    },
+    menuItemLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    menuIcon: {
+      marginRight: 16,
+    },
+    menuText: {
+      fontSize: 16,
+    },
+    menuBadge: {
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 4,
+    },
+    menuBadgeText: {
+      fontSize: 12,
+      fontWeight: '500',
+    },
+    footer: {
+      alignItems: 'center',
+      marginVertical: 24,
+    },
+    versionText: {
+      fontSize: 12,
+      color: '#999',
+    },
+    settingsContainer: {
+    },
+    menuContainer: {
+    },
+    errorContainer: {
+      padding: 15,
+      marginVertical: 10,
+      borderRadius: 8,
+      alignItems: 'center',
+    },
+    errorText: {
+      fontSize: 14,
+      textAlign: 'center',
+      marginTop: 5,
+      marginBottom: 10,
+    },
+    connectedContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginLeft: 4,
+    },
+    connectedIcon: {
+      marginRight: 4,
+    },
+    manageButton: {
+      padding: 4, 
+      marginLeft: 8,
+    },
+    disconnectButton: {
+      padding: 4,
+      marginLeft: 4,
+    },
+    addConnectionButton: {
+      marginTop: 20,
+      marginBottom: 10,
+    },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 20, 
+    },
+    modalContent: {
+      backgroundColor: 'white',
+      borderRadius: 12,
+      padding: 25,
+      width: '100%', 
+      maxWidth: 500,
+      maxHeight: '80%',
+      alignItems: 'center',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.25,
+      shadowRadius: 4,
+      elevation: 5,
+    },
+    modalTitle: {
+      fontSize: 18,
+      fontWeight: '600',
+      marginBottom: 20,
+      color: '#333',
+      textAlign: 'center',
+    },
+    modalPlatformGrid: { 
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'space-around', // Better spacing for grid items
+        alignItems: 'center',
+        width: '100%',
+        maxHeight: '70%', 
+        marginBottom: 20, // Add space before close button
+    },
+    // --- NEW: Styles for Modal Platform Items ---
+    modalPlatformCard: {
+      width: '40%', // Adjust width for grid layout
+      aspectRatio: 1.2, // Adjust aspect ratio
+      justifyContent: 'center', 
+      alignItems: 'center', 
+      margin: 10, 
+      borderRadius: 12, 
+      borderWidth: 1.5, 
+      borderColor: '#ddd', 
+      backgroundColor: '#fff', 
+      padding: 10, 
+      position: 'relative', // For the checkmark icon positioning
+    },
+    modalPlatformCardDisabled: {
+      opacity: 0.5, // Make disabled cards faded
+      backgroundColor: '#f5f5f5',
+    },
+    modalPlatformName: {
+        fontSize: 13, 
+        fontWeight: '500', 
+        color: '#555', 
+        textAlign: 'center', 
+        marginTop: 8, 
+    },
+    modalConnectedIcon: {
+      position: 'absolute',
+      top: 5,
+      right: 5,
+      backgroundColor: 'rgba(255, 255, 255, 0.8)', // Slight background for visibility
+      borderRadius: 10,
+    },
+    // --- END Modal Platform Item Styles ---
+    // --- NEW: Styles for Guided Flow --- 
+    guidedFlowText: {
+      // This style might be replaced by sectionDescription or removed
+    },
+    // --- END Guided Flow Styles ---
+    // --- NEW: Styles for Paste UI ---
+    pasteContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      width: '100%',
+      marginBottom: 15, // Space before confirm button
+    },
+    pasteInput: {
+      flex: 1,
+      borderWidth: 1,
+      borderColor: '#ccc',
+      borderRadius: 6,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      fontSize: 14,
+      marginRight: 8,
+      backgroundColor: '#fff',
+    },
+    pasteButton: {
+      paddingHorizontal: 12,
+      height: 42, // Match input height approximately
+      justifyContent: 'center', // Center icon vertically if needed
+      alignItems: 'center', // Center icon horizontally if needed
+      paddingLeft: 10, // Adjust padding for icon spacing
+    },
+    pasteButtonText: {
+      fontSize: 14, 
+    },
+    pasteIcon: {
+      // Specific styles for the icon itself if needed
+    },
+    pasteHintText: {
+      fontSize: 12,
+      color: '#777',
+      marginTop: 4,
+      width: '100%', // Take full width
+      textAlign: 'right', // Align hint text right below input
+    },
+    // --- END Paste UI Styles ---
+    noConnectionsText: { 
+      textAlign: 'center',
+      color: '#888',
+      paddingVertical: 20,
+      fontStyle: 'italic',
+    },
+    promptPasteContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      padding: 10,
+    },
+    promptPasteText: {
+      flex: 1,
+      fontSize: 16,
+      fontWeight: 'bold',
+      marginRight: 10,
+    },
+    pasteSectionTitle: {
+      fontSize: 16,
+      fontWeight: 'bold',
+      marginBottom: 8, // Adjusted spacing
+      color: '#333',
+      alignSelf: 'flex-start', // Align title left
+      width: '100%', // Take full width
+    },
+    manualInput: {
+      flex: 1,
+      borderWidth: 1,
+      borderColor: '#ccc',
+      borderRadius: 6,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      fontSize: 14,
+      marginBottom: 10,
+      backgroundColor: '#fff',
+    },
+    // --- NEW Styles for Combined Modal & Shadcn feel ---
+    inputSection: {
+      width: '100%',
+      paddingBottom: 20,
+    },
+    inputSectionManualOnly: { // Style for the container of the manual input only
+      width: '100%',
+      paddingTop: 15, // Add some space above
+      marginTop: -10, // Adjust spacing relative to section above if needed
+    },
+    manualInputLabel: { // Style for the label above the manual input
+      fontSize: 14,
+      color: '#555',
+      marginBottom: 8,
+      fontWeight: '500',
+    },
+    sectionDescription: {
+
+      fontSize: 14,
+      color: '#555',
+      marginBottom: 40,
+      lineHeight: 20,
+    },
+    modalButton: {
+      alignSelf: 'stretch', // Make buttons take full width within their container
+      marginTop: 10,
+      // height: 45, // Slightly larger buttons
+    },
+    manualInputSingle: { // Style for the single manual input field
+      borderWidth: 1,
+      borderColor: '#ccc',
+      borderRadius: 6,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      fontSize: 14,
+      backgroundColor: '#fff',
+      width: '100%', // Take full width
+    },
+    dividerContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      width: '90%',
+      marginVertical: 15,
+    },
+    dividerLine: {
+      flex: 1,
+      height: 1,
+      backgroundColor: '#ddd',
+    },
+    dividerText: {
+      marginHorizontal: 10,
+      color: '#777',
+      fontWeight: '500',
+    },
+    actionButtonContainer: {
+      flexDirection: 'row-reverse', // Put primary action (Connect) on the right
+      justifyContent: 'space-between', // Spread buttons
+      width: '100%',
+      marginTop: 20,
+      paddingTop: 20,
+      borderTopWidth: 1, // Separator line above actions
+      borderTopColor: '#eee',
+    },
+    cancelButton: {
+      // Properly define as a ViewStyle object with real properties
+      flex: 0.48, // Take slightly less than half the space
+      backgroundColor: '#f5f5f5', // Light gray background
+    },
+    connectButtonModal: {
+      // Properly define as a ViewStyle object with real properties
+      flex: 0.48, // Take slightly less than half the space
+      marginLeft: 10, // Add some space between buttons
+    },
+    // --- NEW: Style for Delete Button in Edit Mode ---
+    deleteButton: {
+      paddingHorizontal: 10, // Add padding to make it easier to tap
+      marginRight: 8, // Add some space between delete button and platform icon
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    // --- END Style ---
+    devModeContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      flex: 1,
+    },
+    devModeText: {
+      fontSize: 16,
+      color: '#555',
+    },
+    // --- NEW: Styles for Review & Sync Button ---
+    reviewSyncButton: {
+      marginLeft: 'auto',
+    },
+    manageText: {
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    fallbackIndicator: {
+      flexDirection: 'row',
+      alignItems: 'center', 
+      backgroundColor: theme.colors.warning + '25', // Brighter background for pill
+      paddingHorizontal: 10, // More horizontal padding for pill shape
+      paddingVertical: 5,    // Vertical padding for pill shape
+      borderRadius: 15,      // Fully rounded corners for pill
+      marginLeft: 8,
+      marginTop: 2, // Add a small top margin if needed to separate from status text
+    },
+    fallbackText: {
+      fontSize: 11, // Slightly larger for better readability in a pill
+      color: theme.colors.warning, // Keep warning color for text
+      fontWeight: '500', // Make text a bit bolder
+      marginLeft: 4, // Adjust spacing from icon if needed
+    },
+    connectionInfoContainer: {
+      flex: 1,
+      marginLeft: 8,
+    },
+    statusContainer: {
+      marginBottom: 4,
+    },
+    statusRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    statusIcon: {
+      marginRight: 4,
+    },
+    statusText: {
+      fontSize: 14,
+      fontWeight: '600',
+    },
+    lastSyncText: {
+      fontSize: 11,
+      color: '#777',
+      marginTop: 2,
+    },
+    connectionActions: {
+      flexDirection: 'row',
+      marginTop: 4,
+    },
+    actionButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 16,
+      marginRight: 8,
+    },
+    actionButtonText: {
+      fontSize: 12,
+      fontWeight: '600',
+      marginLeft: 4,
+    },
+  });
+
+  // Define loadConnections function that will be used by fetchConnections
+  const loadConnections = async () => {
     setIsLoadingConnections(true);
-    setConnectionError(null);
-
-    // Get user ID inside the function directly
-    const { data: { user: currentUser }, error: fetchUserError } = await supabase.auth.getUser();
-
-    if (fetchUserError || !currentUser) {
-      console.warn("[ProfileScreen] Fetch connections called without user ID.", fetchUserError);
-      Alert.alert("Authentication Error", "Could not get user information. Please log in again to fetch connections.");
-      setConnectionError("User not available for fetching connections.");
-      setIsLoadingConnections(false);
-      setConnections([]); // Clear connections if user is not available
-      return;
-    }
-    const currentUserId = currentUser.id;
-    console.log("[ProfileScreen] Fetching platform connections for user:", currentUserId);
-
+    setFallbackConnectionIds([]); // Reset fallback connections list
+    
     try {
-      // --- TEMPORARY: Direct Supabase Query for Debugging --- 
-      console.log("[ProfileScreen DEBUG] Querying Supabase directly for connections...");
-      const { data: directData, error: directError } = await supabase
-        .from('PlatformConnections') 
-        .select('*')
-        .eq('UserId', currentUserId); 
-
-      if (directError) {
-        console.error("[ProfileScreen DEBUG] Direct Supabase query error:", directError);
-      } else {
-        console.log("[ProfileScreen DEBUG] Direct Supabase query result:", JSON.stringify(directData, null, 2));
-      }
-      // --- END TEMPORARY DEBUG --- 
-
-      // 1. Get Auth Token (Still good practice for API calls)
+      console.log('[ProfileScreen] Attempting to fetch user connections');
+      
+      // First try to get connections from SSSync API for most up-to-date status
       const session = await supabase.auth.getSession();
-      const token = session?.data.session?.access_token;
-      if (!token) {
-        throw new Error("Authentication token not found.");
-      }
+      const token = session?.data?.session?.access_token;
 
-      // 2. Make API Call 
-      const response = await fetch('https://api.sssync.app/api/platform-connections', { 
+      if (token) {
+        try {
+          const apiResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
+              'Content-Type': 'application/json',
         },
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
-        throw new Error(errorData.message || `Failed to fetch connections. Status: ${response.status}`);
+          if (apiResponse.ok) {
+            const apiData = await apiResponse.json();
+            console.log('[ProfileScreen] Successfully fetched connections from API:', apiData.length);
+            setPlatformConnections(apiData);
+            setIsLoadingConnections(false);
+            return; // Exit early if API succeeds
+          } else {
+            console.warn(`[ProfileScreen] API returned status ${apiResponse.status}, falling back to DB`);
+            // Continue to fallback mechanism
+          }
+        } catch (apiError) {
+          console.warn('[ProfileScreen] Error fetching connections from API, falling back to DB:', apiError);
+          // Continue to fallback mechanism
+        }
       }
-
-      const data: PlatformConnection[] = await response.json();
-      console.log("[ProfileScreen] Fetched connections:", data);
-      setConnections(data || []); // Ensure it's an array
-
-    } catch (error: unknown) {
-      console.error("[ProfileScreen] Error fetching connections:", error);
-      const message = error instanceof Error ? error.message : String(error);
-      setConnectionError(message);
-      setConnections([]); // Clear connections on error
+      
+      // Fallback: Get connections directly from Supabase if API fails
+      console.log('[ProfileScreen] Using fallback: Fetching connections directly from DB');
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      
+      if (userError || !user) {
+        throw new Error("Authentication required to fetch connections");
+      }
+      
+      const { data, error } = await supabase
+        .from('PlatformConnections')
+        .select('*')
+        .eq('UserId', user.id)
+        .order('CreatedAt', { ascending: false });
+        
+      if (error) {
+        console.error('[ProfileScreen] Error fetching connections from DB:', error);
+        throw new Error(`Database error: ${error.message}`);
+      } else {
+        console.log('[ProfileScreen] Successfully fetched connections from DB:', data?.length);
+        
+        if (data && data.length > 0) {
+          // Mark all connections as using fallback data
+          const fallbackIds = data.map(conn => conn.Id);
+          setFallbackConnectionIds(fallbackIds);
+          
+          // Use connections from DB
+          setPlatformConnections(data);
+        } else {
+          setPlatformConnections([]);
+        }
+      }
+    } catch (err: any) {
+      console.error('[ProfileScreen] Critical error loading connections:', err);
+      Alert.alert(
+        "Connection Error", 
+        "Unable to load your platform connections. Please check your internet connection and try again."
+      );
+      setPlatformConnections([]);
     } finally {
       setIsLoadingConnections(false);
     }
-  }, []); // Removed userId from dependency array as it's fetched inside
+  };
+
+  // Create a fetchConnections function that calls loadConnections
+  // This maintains compatibility with existing code that calls fetchConnections
+  const fetchConnections = useCallback(() => {
+    loadConnections();
+  }, []);
+  
+  // Load platform connections from Supabase
+  useFocusEffect(
+    useCallback(() => {
+      loadConnections();
+    }, [refreshTrigger])
+  );
 
   // --- DEBUG: Add useEffect to log connections state changes ---
   useEffect(() => {
-    console.log('[ProfileScreen STATE DEBUG] Connections state updated:', JSON.stringify(connections, null, 2));
-  }, [connections]);
+    console.log('[ProfileScreen STATE DEBUG] Connections state updated:', JSON.stringify(platformConnections, null, 2));
+  }, [platformConnections]);
   // --- END DEBUG ---
-
-  // Fetch connections on initial mount/focus (kept for initial load)
-  useFocusEffect(
-    useCallback(() => {
-      console.log("[ProfileScreen] Focus effect triggered, calling fetchConnections");
-      fetchConnections(); 
-      // Dependency array now only includes fetchConnections
-    }, [fetchConnections])
-  );
-
-  // --- REVISED: Realtime Subscription for Connections ---
-  useEffect(() => {
-    let channel: RealtimeChannel | null = null;
-
-    const initializeSubscription = async () => {
-      // Fetch user inside for subscription setup as well
-      const { data: { user: currentUser }, error: subUserError } = await supabase.auth.getUser();
-      
-      if (subUserError || !currentUser) {
-        console.error("[ProfileScreen] Cannot setup realtime subscription without user.", subUserError);
-        return;
-      }
-
-      const currentUserId = currentUser.id;
-      const tableName = 'PlatformConnections'; // Match DB schema (PascalCase)
-      const userIdColumn = 'UserId';       // Match DB schema (PascalCase)
-      console.log(`[ProfileScreen] Setting up realtime subscription for ${tableName} table, user: ${currentUserId}`);
-
-      channel = supabase
-        .channel(`public:${tableName}:${currentUserId}`) // Unique channel name per user
-        .on(
-          'postgres_changes',
-          { 
-            event: '*', 
-            schema: 'public',
-            table: tableName, // Use correct table name
-            filter: `${userIdColumn}=eq.${currentUserId}` // Use correct column name
-          },
-          (payload) => {
-            console.log('[ProfileScreen] Realtime change received:', payload);
-            // Re-fetch with a slight delay
-            setTimeout(() => fetchConnections(), 500); 
-          }
-        )
-        .subscribe((status, err) => {
-          if (status === 'SUBSCRIBED') {
-            console.log('[ProfileScreen] Realtime subscribed!');
-          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-            // Use string concatenation to avoid syntax issues
-            console.error('[ProfileScreen] Realtime subscription error/closed: ' + status, err);
-          } else {
-            // Log other statuses for debugging if needed
-            console.log(`[ProfileScreen] Realtime status: ${status}`);
-          }
-        });
-    };
-    
-    initializeSubscription();
-
-    // Cleanup function
-    return () => {
-      if (channel) {
-        const channelToRemove = channel; // Capture channel in closure
-        channel = null; // Set to null immediately
-        console.log('[ProfileScreen] Removing realtime subscription');
-        supabase.removeChannel(channelToRemove)
-          .then(() => console.log('[ProfileScreen] Realtime channel removed successfully.'))
-          .catch(err => console.error('[ProfileScreen] Error removing realtime channel:', err));
-      }
-    };
-  }, [fetchConnections]);
-  // --- END Realtime Subscription ---
 
   // --- NEW: Delete Connection Logic ---
   const handleDisconnectPlatform = async (connectionId: string, platformName: string) => {
@@ -510,7 +1079,7 @@ const ProfileScreen = () => {
   };
 
   // --- NEW: Function to start platform scan ---
-  const startPlatformScan = async (connectionId: string, platformName: string) => {
+  const startPlatformScan = async (connectionId: string, platformName: string, isReconnect: boolean = false) => {
     console.log(`[ProfileScreen] Attempting to start scan for connection ID: ${connectionId} (${platformName})`);
     try {
       const session = await supabase.auth.getSession();
@@ -519,13 +1088,20 @@ const ProfileScreen = () => {
         throw new Error("Authentication token not found for starting scan.");
       }
 
-      const response = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/start-scan`, {
+      // Show a loading notification
+      showStatusNotification('Processing', `Starting scan for ${platformName}...`, 'info');
+
+      // Determine which endpoint to use based on isReconnect
+      const endpoint = isReconnect 
+        ? `${SSSYNC_API_BASE_URL}/api/sync/connection/${connectionId}/reconcile` // Reconcile for reconnections
+        : `${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/start-scan`; // Regular scan for new connections
+
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json' // Though body might be empty, content-type is good practice
+          'Content-Type': 'application/json'
         },
-        // body: JSON.stringify({}), // Empty body if not required by backend
       });
 
       if (!response.ok) {
@@ -533,18 +1109,32 @@ const ProfileScreen = () => {
         throw new Error(errorData.message || `Failed to start scan for ${platformName}. Status: ${response.status}`);
       }
 
-      const responseData = await response.json().catch(() => ({})); // Allow empty success response
-
-      Alert.alert("Scan Initiated", responseData.message || `Initial scan started for ${platformName}. You will be notified upon completion or if action is needed.`);
+      const responseData = await response.json().catch(() => ({}));
+      
+      // Show a success notification
+      showStatusNotification(
+        'Scan Started', 
+        responseData.message || `Initial scan started for ${platformName}. You'll be notified when it's ready for review.`,
+        'success'
+      );
+      
       console.log(`[ProfileScreen] Successfully initiated scan for ${platformName} (Connection ID: ${connectionId}). Response:`, responseData);
-      // TODO: Implement polling for /scan-summary or progress indicator
-      // For now, we can refresh connections to potentially see a status change
-      fetchConnections(); 
+      
+      // Navigate to MappingReviewScreen if immediate review is needed
+      // This typically won't happen immediately, but the backend might determine that review is needed right away
+      if (responseData.needsReview) {
+        navigation.navigate('MappingReview', { connectionId, platformName });
+      } else {
+        // Otherwise, just refresh the connections list to show updated status
+        fetchConnections();
+      }
 
     } catch (error: unknown) {
       console.error(`[ProfileScreen] Error starting scan for ${platformName}:`, error);
       const message = error instanceof Error ? error.message : String(error);
-      Alert.alert('Error Starting Scan', `Could not start the initial scan for ${platformName}: ${message}`);
+      
+      // Show an error notification
+      showStatusNotification('Error', `Could not start scan for ${platformName}: ${message}`, 'danger');
     }
   };
   // --- END Function to start platform scan ---
@@ -679,11 +1269,23 @@ const ProfileScreen = () => {
   };
   // --- END Square Connection Logic ---
 
+  // --- NEW: Handler for Review & Sync ---
+  const handleReviewAndSync = (connectionId: string, platformName: string) => {
+    console.log(`[ProfileScreen] Initiating Review & Sync for Connection ID: ${connectionId}, Platform: ${platformName}`);
+    
+    // Show a notification that we're opening the review screen
+    showStatusNotification('Opening Review', `Preparing product review for ${platformName}...`, 'info');
+    
+    // Navigate to the MappingReview screen
+    navigation.navigate('MappingReview', { connectionId, platformName });
+  };
+  // --- END Handler for Review & Sync ---
+
   const handleLogout = async () => {
     console.log("[ProfileScreen] handleLogout initiated..."); // Add log
     try {
       // Call context signOut first (now synchronous state update)
-      if (authContext) {
+      if (authContext && authContext.signOut) {
         authContext.signOut(); 
         console.log("[ProfileScreen] authContext.signOut() called."); // Add log
       } else {
@@ -835,7 +1437,73 @@ const ProfileScreen = () => {
   console.log('[ProfileScreen] Rendering - isDevMode:', isDevMode);
   console.log('[ProfileScreen] Rendering - menuItems:', JSON.stringify(menuItems.map(item => ({ title: item.title, hasCustomComponent: !!item.customComponent }))));
   
-  // Return statement will be below
+  // Add a state for the realtime channel
+  const [realtimeChannel, setRealtimeChannel] = useState<RealtimeChannel | null>(null);
+
+  // Add this function to set up the real-time subscription
+  const setupRealtimeSubscription = async () => {
+    try {
+      // Get the current user
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) {
+        console.error('[ProfileScreen] No authenticated user for realtime subscription');
+        return;
+      }
+
+      // Unsubscribe from any existing channel
+      if (realtimeChannel) {
+        console.log('[ProfileScreen] Unsubscribing from existing realtime channel');
+        realtimeChannel.unsubscribe();
+      }
+
+      // Subscribe to changes on the PlatformConnections table for this user
+      console.log('[ProfileScreen] Setting up realtime subscription for PlatformConnections');
+      const channel = supabase
+        .channel('platform-connections-changes')
+        .on(
+          'postgres_changes',
+          {
+            event: '*', // Listen to all events (INSERT, UPDATE, DELETE)
+            schema: 'public',
+            table: 'PlatformConnections',
+            filter: `UserId=eq.${user.id}`, // Only listen to changes for this user
+          },
+          (payload) => {
+            console.log('[ProfileScreen] Received realtime update:', payload);
+            // Refresh connections when a change is detected
+            loadConnections();
+          }
+        )
+        .subscribe((status) => {
+          console.log('[ProfileScreen] Realtime subscription status:', status);
+        });
+
+      setRealtimeChannel(channel);
+    } catch (error) {
+      console.error('[ProfileScreen] Error setting up realtime subscription:', error);
+    }
+  };
+
+  // Clean up the subscription when the component unmounts
+  useEffect(() => {
+    setupRealtimeSubscription();
+    
+    return () => {
+      if (realtimeChannel) {
+        console.log('[ProfileScreen] Cleaning up realtime subscription');
+        realtimeChannel.unsubscribe();
+        setRealtimeChannel(null);
+      }
+    };
+  }, []);  // Empty dependency array means this runs once on mount and cleanup on unmount
+
+  // Add detection for new connections (created within the last hour)
+  const isRecentlyCreated = (connection: PlatformConnection): boolean => {
+    const createdAt = new Date(connection.CreatedAt);
+    const now = new Date();
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+    return createdAt > oneHourAgo;
+  };
 
   return (
     <ScrollView 
@@ -902,17 +1570,6 @@ const ProfileScreen = () => {
           {/* --- UPDATED Integrations Rendering --- */}
           {isLoadingConnections ? (
              <ActivityIndicator size="large" color={theme.colors.primary} style={{ marginVertical: 20 }}/>
-          ) : connectionError ? (
-            <View style={[styles.errorContainer, { backgroundColor: theme.colors.error + '15' }]}>
-              <Icon name="alert-circle-outline" size={24} color={theme.colors.error} />
-              <Text style={[styles.errorText, { color: '#FFFFFF' }]}>
-                Error loading connections: {' '}
-                <Text style={{ color: theme.colors.error, fontWeight: 'bold' }}>
-                  {connectionError}
-                </Text>
-              </Text>
-              <Button title="Retry" onPress={fetchConnections} outlined style={{ alignSelf: 'center' }}/>
-            </View>
           ) : (
           <View style={styles.integrationsContainer}>
               {/* Map over FETCHED connections, not AVAILABLE_PLATFORMS */}
@@ -920,15 +1577,15 @@ const ProfileScreen = () => {
                 // Calculate filteredConnections first
                 
                 // --- DEBUG: Log connections right before filter --- 
-                // console.log(`[ProfileScreen PRE-FILTER DEBUG] connections at filter time: ${JSON.stringify(connections)}`);
+                // console.log(`[ProfileScreen PRE-FILTER DEBUG] connections at filter time: ${JSON.stringify(platformConnections)}`);
                 // --- END DEBUG ---
 
                 // --- REMOVE THE FILTER BASED ON STATUS ---
-                const filteredConnections = connections; // Display all connections
+                const filteredConnections = platformConnections; // Display all connections
                 // --- END REMOVAL ---
 
                 // Perform logging and return JSX
-                if (!(connections.length > 0)) {
+                if (!(platformConnections.length > 0)) {
                   // console.log("[ProfileScreen RENDER DEBUG] connections.length is NOT > 0");
                    // Note: This case might be redundant if filteredConnections handles it, but keep for explicit logging
                 } else {
@@ -985,22 +1642,95 @@ const ProfileScreen = () => {
                           <Text style={styles.integrationName}>{displayShopName}</Text> 
                           
                           {/* --- Conditional Right-Side Elements (Not Edit Mode) --- */}
-                          {!isEditMode && (
-                            <View style={styles.connectedContainer}> 
-                              <Icon name="check-circle" size={18} color={theme.colors.success} style={styles.connectedIcon} />
-                              <Text style={[styles.connectedText, { color: theme.colors.success, fontWeight: '600' }]}>Connected</Text>
-                              {/* --- REMOVED Manage/Disconnect Buttons from Default View --- */}
-                              {/* 
-                              <TouchableOpacity style={styles.manageButton} onPress={() => Alert.alert('Manage', `Manage ${platformConfig.name} (Not Implemented)`)}>
-                                <Icon name="cog-outline" size={18} color={theme.colors.textSecondary || '#888'} />
+                          {!isEditMode && connection && (
+                            <View style={styles.connectionInfoContainer}>
+                              {/* Status display section */}
+                              <View style={styles.statusContainer}>
+                                {(() => {
+                                  // Pass isRecentlyCreated to getStatusDisplay to show a special "New Connection" status
+                                  const statusInfo = getStatusDisplay(connection.Status, isRecentlyCreated(connection));
+                                  return (
+                                    <View style={styles.statusRow}>
+                                      <Icon name={statusInfo.icon} size={18} color={statusInfo.color} style={styles.statusIcon} />
+                                      <Text style={[styles.statusText, { color: statusInfo.color }]}>{statusInfo.label}</Text>
+                                      
+                                      {/* Display fallback data indicator */}
+                                      {fallbackConnectionIds.includes(connection.Id) && (
+                                        <View style={styles.fallbackIndicator}>
+                                          <Icon name="cloud-off-outline" size={14} color={theme.colors.warning} />
+                                          <Text style={styles.fallbackText}>Using saved data</Text>
+                                        </View>
+                                      )}
+                                    </View>
+                                  );
+                                })()}
+                                
+                                {/* Last sync time if available */}
+                                {connection.LastSyncSuccessAt && (
+                                  <Text style={styles.lastSyncText}>
+                                    Last synced: {new Date(connection.LastSyncSuccessAt).toLocaleString()}
+                                  </Text>
+                                )}
+                              </View>
+                              
+                              {/* Action buttons based on status */}
+                              <View style={styles.connectionActions}>
+                                {/* For new connections, show a prominent "Start Sync" button */}
+                                {isRecentlyCreated(connection) && connection.Status === CONNECTION_STATUS.PENDING && (
+                                  <TouchableOpacity 
+                                    style={[styles.actionButton, { backgroundColor: theme.colors.primary + '25' }]}
+                                    onPress={() => startPlatformScan(connection.Id, platformConfig.name)}
+                                  >
+                                    <Icon name="rocket-launch" size={18} color={theme.colors.primary} />
+                                    <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Start Initial Sync</Text>
                               </TouchableOpacity>
+                                )}
+
+                                {/* For connections that need review (not new), show the Review & Sync button */}
+                                {!isRecentlyCreated(connection) && (connection.Status === CONNECTION_STATUS.NEEDS_REVIEW || connection.Status === 'reconcile') && (
                               <TouchableOpacity 
-                                style={styles.disconnectButton} 
-                                onPress={() => handleDisconnectPlatform(connection.Id, platformConfig.name)} // Original disconnect still here if needed outside edit mode
+                                    style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
+                                    onPress={() => handleReviewAndSync(connection.Id, platformConfig.name)}
                               >
-                                <Icon name="close-circle-outline" size={18} color={theme.colors.error} />
+                                    <Icon name="sync-alert" size={18} color={theme.colors.primary} />
+                                    <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>
+                                      {connection.Status === 'reconcile' ? 'Reconcile Data' : 'Review & Sync'}
+                                    </Text>
                               </TouchableOpacity>
-                              */}
+                                )}
+                                
+                                {/* For connections in pending state (not new), show "Complete Setup" button */}
+                                {!isRecentlyCreated(connection) && connection.Status === CONNECTION_STATUS.PENDING && (
+                              <TouchableOpacity 
+                                    style={[styles.actionButton, { backgroundColor: theme.colors.secondary + '15' }]}
+                                    onPress={() => startPlatformScan(connection.Id, platformConfig.name, true /* isReconnect */)}
+                              >
+                                    <Icon name="cog" size={18} color={theme.colors.secondary} />
+                                    <Text style={[styles.actionButtonText, { color: theme.colors.secondary }]}>Complete Setup</Text>
+                              </TouchableOpacity>
+                                )}
+                                
+                                {connection.Status === CONNECTION_STATUS.INACTIVE && (
+                                  <TouchableOpacity 
+                                    style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
+                                    onPress={() => startPlatformScan(connection.Id, platformConfig.name)}
+                                  >
+                                    <Icon name="play-circle" size={18} color={theme.colors.success} />
+                                    <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Activate</Text>
+                                  </TouchableOpacity>
+                                )}
+                                
+                                {/* Active connections get a manage button */}
+                                {connection.Status === CONNECTION_STATUS.ACTIVE && (
+                                  <TouchableOpacity 
+                                    style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
+                                    onPress={() => navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name })}
+                                  >
+                                    <Icon name="cog" size={18} color={theme.colors.primary} />
+                                    <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Manage</Text>
+                                  </TouchableOpacity>
+                                )}
+                              </View>
                             </View>
                           )}
                         </View>
@@ -1011,7 +1741,7 @@ const ProfileScreen = () => {
 
               {/* Render "No active connections yet" text if needed */}
               {/* --- ADJUSTED CONDITION: Show text only if the connections array is truly empty --- */}
-              {connections.length === 0 && (
+              {platformConnections.length === 0 && (
                   <Text style={styles.noConnectionsText}>No connections yet.</Text>
               )}
               {/* --- END ADJUSTED CONDITION --- */}
@@ -1093,7 +1823,7 @@ const ProfileScreen = () => {
             <View style={styles.modalPlatformGrid}> 
               {AVAILABLE_PLATFORMS.map((platform) => {
                 // Check if this platform is already connected and active
-                const isAlreadyConnected = connections.some(
+                const isAlreadyConnected = platformConnections.some(
                   (conn) => conn.PlatformType === platform.key && conn.Status === 'active'
                 );
 
@@ -1259,470 +1989,5 @@ const ProfileScreen = () => {
     </ScrollView>
   );
 };
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F8F9FB',
-  },
-  scrollViewContent: {
-    padding: 16,
-    paddingTop: 60,
-  },
-  card: {
-    marginBottom: 16,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    marginVertical: 16,
-  },
-  accountHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  avatar: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-  },
-  accountInfo: {
-    flex: 1,
-    marginLeft: 16,
-  },
-  accountName: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  accountEmail: {
-    fontSize: 14,
-    color: '#777',
-    marginBottom: 4,
-  },
-  planBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  planText: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  editButton: {
-    padding: 8,
-  },
-  statsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
-    paddingTop: 16,
-  },
-  statItem: {
-    alignItems: 'center',
-  },
-  statValue: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  statLabel: {
-    fontSize: 12,
-    color: '#777',
-  },
-  statDivider: {
-    width: 1,
-    height: '100%',
-    backgroundColor: '#f0f0f0',
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  sectionAction: {
-    fontSize: 14,
-  },
-  integrationsContainer: {
-    marginBottom: 8,
-  },
-  integrationItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  integrationIcon: {
-    width: 32,
-    height: 32,
-    marginRight: 12,
-  },
-  integrationName: {
-    fontSize: 16,
-    flex: 1,
-    marginLeft: 12,
-  },
-  connectedBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  connectedText: {
-    fontSize: 12,
-    marginRight: 8,
-    fontWeight: '600',
-  },
-  connectButton: {
-    height: 32,
-    paddingHorizontal: 12,
-    flex: 0,
-  },
-  connectButtonText: {
-    fontSize: 12,
-    color: '#FFFFFF',
-  },
-  settingItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  settingInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  settingIcon: {
-    marginRight: 16,
-  },
-  settingText: {
-    fontSize: 16,
-  },
-  menuItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 16,
-  },
-  menuItemBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  menuItemLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  menuIcon: {
-    marginRight: 16,
-  },
-  menuText: {
-    fontSize: 16,
-  },
-  menuBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  menuBadgeText: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  footer: {
-    alignItems: 'center',
-    marginVertical: 24,
-  },
-  versionText: {
-    fontSize: 12,
-    color: '#999',
-  },
-  settingsContainer: {
-  },
-  menuContainer: {
-  },
-  errorContainer: {
-    padding: 15,
-    marginVertical: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  errorText: {
-    fontSize: 14,
-    textAlign: 'center',
-    marginTop: 5,
-    marginBottom: 10,
-  },
-  connectedContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginLeft: 4,
-  },
-  connectedIcon: {
-    marginRight: 4,
-  },
-  manageButton: {
-    padding: 4, 
-    marginLeft: 8,
-  },
-  disconnectButton: {
-    padding: 4,
-    marginLeft: 4,
-  },
-  addConnectionButton: {
-    marginTop: 20,
-    marginBottom: 10,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20, 
-  },
-  modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 25,
-    width: '100%', 
-    maxWidth: 500,
-    maxHeight: '80%',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 20,
-    color: '#333',
-    textAlign: 'center',
-  },
-  modalPlatformGrid: { 
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      justifyContent: 'space-around', // Better spacing for grid items
-      alignItems: 'center',
-      width: '100%',
-      maxHeight: '70%', 
-      marginBottom: 20, // Add space before close button
-  },
-  // --- NEW: Styles for Modal Platform Items ---
-  modalPlatformCard: {
-    width: '40%', // Adjust width for grid layout
-    aspectRatio: 1.2, // Adjust aspect ratio
-    justifyContent: 'center', 
-    alignItems: 'center', 
-    margin: 10, 
-    borderRadius: 12, 
-    borderWidth: 1.5, 
-    borderColor: '#ddd', 
-    backgroundColor: '#fff', 
-    padding: 10, 
-    position: 'relative', // For the checkmark icon positioning
-  },
-  modalPlatformCardDisabled: {
-    opacity: 0.5, // Make disabled cards faded
-    backgroundColor: '#f5f5f5',
-  },
-  modalPlatformName: {
-      fontSize: 13, 
-      fontWeight: '500', 
-      color: '#555', 
-      textAlign: 'center', 
-      marginTop: 8, 
-  },
-  modalConnectedIcon: {
-    position: 'absolute',
-    top: 5,
-    right: 5,
-    backgroundColor: 'rgba(255, 255, 255, 0.8)', // Slight background for visibility
-    borderRadius: 10,
-  },
-  // --- END Modal Platform Item Styles ---
-  // --- NEW: Styles for Guided Flow --- 
-  guidedFlowText: {
-    // This style might be replaced by sectionDescription or removed
-  },
-  // --- END Guided Flow Styles ---
-  // --- NEW: Styles for Paste UI ---
-  pasteContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    width: '100%',
-    marginBottom: 15, // Space before confirm button
-  },
-  pasteInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-    marginRight: 8,
-    backgroundColor: '#fff',
-  },
-  pasteButton: {
-    paddingHorizontal: 12,
-    height: 42, // Match input height approximately
-    justifyContent: 'center', // Center icon vertically if needed
-    alignItems: 'center', // Center icon horizontally if needed
-    paddingLeft: 10, // Adjust padding for icon spacing
-  },
-  pasteButtonText: {
-    fontSize: 14, 
-  },
-  pasteIcon: {
-    // Specific styles for the icon itself if needed
-  },
-  pasteHintText: {
-    fontSize: 12,
-    color: '#777',
-    marginTop: 4,
-    width: '100%', // Take full width
-    textAlign: 'right', // Align hint text right below input
-  },
-  // --- END Paste UI Styles ---
-  noConnectionsText: { 
-    textAlign: 'center',
-    color: '#888',
-    paddingVertical: 20,
-    fontStyle: 'italic',
-  },
-  promptPasteContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 10,
-  },
-  promptPasteText: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginRight: 10,
-  },
-  pasteSectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 8, // Adjusted spacing
-    color: '#333',
-    alignSelf: 'flex-start', // Align title left
-    width: '100%', // Take full width
-  },
-  manualInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-    marginBottom: 10,
-    backgroundColor: '#fff',
-  },
-  // --- NEW Styles for Combined Modal & Shadcn feel ---
-  inputSection: {
-    width: '100%',
-    paddingBottom: 20,
-  },
-  inputSectionManualOnly: { // Style for the container of the manual input only
-    width: '100%',
-    paddingTop: 15, // Add some space above
-    marginTop: -10, // Adjust spacing relative to section above if needed
-  },
-  manualInputLabel: { // Style for the label above the manual input
-    fontSize: 14,
-    color: '#555',
-    marginBottom: 8,
-    fontWeight: '500',
-  },
-  sectionDescription: {
-
-    fontSize: 14,
-    color: '#555',
-    marginBottom: 40,
-    lineHeight: 20,
-  },
-  modalButton: {
-    alignSelf: 'stretch', // Make buttons take full width within their container
-    marginTop: 10,
-    // height: 45, // Slightly larger buttons
-  },
-  manualInputSingle: { // Style for the single manual input field
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-    backgroundColor: '#fff',
-    width: '100%', // Take full width
-  },
-  dividerContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    width: '90%',
-    marginVertical: 15,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#ddd',
-  },
-  dividerText: {
-    marginHorizontal: 10,
-    color: '#777',
-    fontWeight: '500',
-  },
-  actionButtonContainer: {
-    flexDirection: 'row-reverse', // Put primary action (Connect) on the right
-    justifyContent: 'space-between', // Spread buttons
-    width: '100%',
-    marginTop: 20,
-    paddingTop: 20,
-    borderTopWidth: 1, // Separator line above actions
-    borderTopColor: '#eee',
-  },
-  cancelButton: {
-    // Properly define as a ViewStyle object with real properties
-    flex: 0.48, // Take slightly less than half the space
-    backgroundColor: '#f5f5f5', // Light gray background
-  },
-  connectButtonModal: {
-    // Properly define as a ViewStyle object with real properties
-    flex: 0.48, // Take slightly less than half the space
-    marginLeft: 10, // Add some space between buttons
-  },
-  // --- NEW: Style for Delete Button in Edit Mode ---
-  deleteButton: {
-    paddingHorizontal: 10, // Add padding to make it easier to tap
-    marginRight: 8, // Add some space between delete button and platform icon
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  // --- END Style ---
-  devModeContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flex: 1,
-  },
-  devModeText: {
-    fontSize: 16,
-    color: '#555',
-  },
-});
 
 export default ProfileScreen; 

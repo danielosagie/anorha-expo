@@ -2072,17 +2072,38 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
       }
       // --- END NEW: Defensive cleaning --- 
 
+      // --- Correcting the weightUnit key ---
+      let correctedFormDataForCanonical = { ...formData[activeFormTab] };
+      if (correctedFormDataForCanonical.hasOwnProperty(' weightUnit')) {
+        correctedFormDataForCanonical.weightUnit = correctedFormDataForCanonical[' weightUnit'];
+        delete correctedFormDataForCanonical[' weightUnit'];
+      }
+      // --- End correction ---
+
       const canonicalDetailsPayload = {
         productId: productId,
         variantId: variantId,
         publishIntent: "SAVE_SSSYNC_DRAFT", 
         platformDetails: {
           canonical: {
-            ...formData[activeFormTab],
-            title: formData[activeFormTab]?.title || 'Untitled Product',
-            description: formData[activeFormTab]?.description || '',
-            price: formData[activeFormTab]?.price === undefined ? 0 : formData[activeFormTab]?.price,
-            sku: formData[activeFormTab]?.sku || ('DRAFT-' + (productId?.substring(0, 8) || 'temp')), // Ensure SKU is not empty
+            // ...correctedFormDataForCanonical, // Use the corrected form data
+            // Ensure all required fields are present, even if not in correctedFormDataForCanonical
+            title: correctedFormDataForCanonical?.title || 'Untitled Product',
+            description: correctedFormDataForCanonical?.description || '',
+            price: correctedFormDataForCanonical?.price === undefined ? 0 : correctedFormDataForCanonical.price,
+            sku: correctedFormDataForCanonical?.sku || ('DRAFT-' + (productId?.substring(0, 8) || 'temp')),
+            barcode: correctedFormDataForCanonical?.barcode || '',
+            status: correctedFormDataForCanonical?.status || 'draft',
+            tags: correctedFormDataForCanonical?.tags || [],
+            brand: correctedFormDataForCanonical?.brand || '',
+            vendor: correctedFormDataForCanonical?.vendor || '',
+            weight: correctedFormDataForCanonical?.weight === undefined ? null : correctedFormDataForCanonical.weight,
+            condition: correctedFormDataForCanonical?.condition || '',
+            weightUnit: correctedFormDataForCanonical?.weightUnit || null, // Ensure this is the corrected key
+            productType: correctedFormDataForCanonical?.productType || '',
+            compareAtPrice: correctedFormDataForCanonical?.compareAtPrice === undefined ? null : correctedFormDataForCanonical.compareAtPrice,
+            categorySuggestion: correctedFormDataForCanonical?.categorySuggestion || '',
+            // Add any other specific fields from formData[activeFormTab] that should be in canonical, ensuring correct keys
           }
         },
         media: {

@@ -47,11 +47,28 @@ type AuthStackParamList = {
 
 // Export the type
 export type AppStackParamList = {
-  CreateAccountScreen: undefined;
-  TabNavigator: undefined;
+  CreateAccountScreen: undefined; 
+  TabNavigator: undefined; 
+  AddListing?: { // The entire params object for AddListing is optional
+    initialData?: { 
+      title: string;
+      description: string;
+      price: number;
+      sku: string;
+      barcode: string;
+      images: string[];
+      platformDetails: any; 
+      status: 'draft' | 'active' | 'archived';
+      initialStage?: string; 
+      productId?: string;
+      variantId?: string;
+      uploadedImageUrls?: string[];
+    };
+  }; 
   ProductDetail: { productId: string };
   PastScans: undefined;
-  AddListing: { initialData?: any };
+  MappingReview: { connectionId: string; platformName: string }; 
+  // Add other screens here as needed
 };
 
 type RootStackParamList = {
