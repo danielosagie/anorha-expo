@@ -69,7 +69,7 @@ const PastScansScreen = () => {
             Options, 
             CreatedAt,
             UpdatedAt,
-            ProductImages (
+            ProductImages!ProductImages_ProductVariantId_fkey (
               ImageUrl,
               Position
             )

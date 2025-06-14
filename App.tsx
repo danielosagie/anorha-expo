@@ -7,6 +7,7 @@ import { LogBox } from 'react-native';
 import 'react-native-get-random-values';
 import { supabase } from './lib/supabase';
 import { LegendStateContext } from './src/context/LegendStateContext';
+import { LegendStateControlContext } from './src/context/LegendStateControlContext';
 import { initializeLegendState, LegendStateObservables } from './src/utils/SupaLegend';
 import { Session, AuthChangeEvent } from '@supabase/supabase-js';
 import FlashMessage from 'react-native-flash-message';
@@ -126,16 +127,34 @@ const App: React.FC = () => {
     };
   }, [legendStateModules, setLegendStateModules]);
 
+  const resetLegendState = async () => {
+    console.log('[App] Manually resetting Legend State by forcing re-initialization...');
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session && session.user) {
+        try {
+            const reinitializedModules = await initializeLegendState(supabase, session.user.id, { force: true });
+            setLegendStateModules(reinitializedModules);
+            console.log("[App] Legend State has been forcefully reset and re-initialized.");
+        } catch (error) {
+            console.error("[App] Error during forced Legend State re-initialization:", error);
+        }
+    } else {
+        console.warn("[App] Could not reset Legend State: No active session.");
+    }
+  };
+
   return (
-    <LegendStateContext.Provider value={legendStateModules}>
-      <ThemeProvider>
-        <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-        <NavigationContainer ref={navigationRef}>
-          <AppNavigator />
-        </NavigationContainer>
-        <FlashMessage position="top" />
-      </ThemeProvider>
-    </LegendStateContext.Provider>
+    <LegendStateControlContext.Provider value={{ resetLegendState }}>
+      <LegendStateContext.Provider value={legendStateModules}>
+        <ThemeProvider>
+          <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+          <NavigationContainer ref={navigationRef}>
+            <AppNavigator />
+          </NavigationContainer>
+          <FlashMessage position="top" />
+        </ThemeProvider>
+      </LegendStateContext.Provider>
+    </LegendStateControlContext.Provider>
   );
 };
 

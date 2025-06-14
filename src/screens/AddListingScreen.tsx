@@ -17,9 +17,11 @@ import {
   KeyboardAvoidingView,
   Modal,
   Pressable,
-  Keyboard
+  Keyboard,
+  ViewStyle,
+  GestureResponderEvent
 } from 'react-native';
-import { CameraView, useCameraPermissions, Camera, CameraType, FlashMode } from 'expo-camera';
+import { CameraView, useCameraPermissions, Camera, CameraType, FlashMode, BarcodeScanningResult } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import Animated, { 
   FadeIn, 
@@ -36,9 +38,11 @@ import { Buffer } from 'buffer';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import DraggableFlatList, { ScaleDecorator, RenderItemParams } from 'react-native-draggable-flatlist';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { useNavigation } from '@react-navigation/native';
 import { Checkbox } from 'react-native-paper';
-import { useAuth } from '../contexts/AuthContext';
+import { StackScreenProps } from '@react-navigation/stack';
+import { AppStackParamList } from '../navigation/AppNavigator';
+import { useNavigation } from '@react-navigation/native';
+
 
 // Define available platforms with icons
 const AVAILABLE_PLATFORMS = [
@@ -164,6 +168,14 @@ interface CapturedMediaItem {
   id: string;
 }
 
+interface DetectedBarcode extends BarcodeScanningResult {
+    isSelected?: boolean;
+    boundingBox?: {
+        origin: { x: number, y: number };
+        size: { width: number, height: number };
+    };
+}
+
 interface CameraSectionProps {
   onCapture: (media: CapturedMediaItem[]) => void;
   onClose: () => void;
@@ -176,7 +188,7 @@ interface CameraSectionProps {
 const CameraSection = ({ onCapture, onClose, styles, initialMedia = [] }: CameraSectionProps) => {
   const [cameraPermission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState<CameraType>("back");
-  const [cameraMode, setCameraMode] = useState<"picture" | "video">("picture");
+  // Removed cameraMode as we're using picture mode only
   const [recording, setRecording] = useState(false);
   const [flash, setFlash] = useState<FlashMode>("off");
   const [localMedia, setLocalMedia] = useState<CapturedMediaItem[]>(initialMedia);
@@ -251,7 +263,6 @@ const CameraSection = ({ onCapture, onClose, styles, initialMedia = [] }: Camera
     }
   };
 
-  const toggleCameraMode = () => setCameraMode(current => current === "picture" ? "video" : "picture");
   const toggleFlash = () => setFlash(current => current === 'off' ? 'on' : current === 'on' ? 'auto' : 'off');
   const toggleCameraFacing = () => setFacing(current => current === "back" ? "front" : "back");
   const getFlashIcon = () => flash === 'on' ? 'flash' : flash === 'auto' ? 'flash-auto' : 'flash-off';
@@ -376,7 +387,7 @@ const CameraSection = ({ onCapture, onClose, styles, initialMedia = [] }: Camera
 
   return (
     <View style={styles.cameraStageContainer}>
-      <CameraView ref={cameraRef} style={styles.cameraPreview} facing={facing} flash={flash} mode={cameraMode}>
+      <CameraView ref={cameraRef} style={styles.cameraPreview} facing={facing} flash={flash}>
         <View style={styles.cameraHeader}>
           <TouchableOpacity onPress={toggleFlash} style={styles.headerButton} disabled={facing === 'front'}>
             <Icon name={getFlashIcon()} size={24} color={facing === 'front' ? 'grey' : 'white'} />
@@ -410,11 +421,11 @@ const CameraSection = ({ onCapture, onClose, styles, initialMedia = [] }: Camera
         <TouchableOpacity style={styles.sideControlButton} onPress={pickImagesFromLibrary} disabled={localMedia.length >= 10}>
           <Icon name="image-multiple-outline" size={30} color={localMedia.length >= 10 ? "grey" : "white"} />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.captureButton} onPress={cameraMode === "picture" ? takePicture : (recording ? stopRecording : startRecording)} disabled={localMedia.length >= 10}>
-          <View style={[styles.captureInner, recording && styles.recordingButton, localMedia.length >= 10 && styles.captureDisabledInner]} />
+        <TouchableOpacity style={styles.captureButton} onPress={takePicture} disabled={localMedia.length >= 10}>
+          <View style={[styles.captureInner, localMedia.length >= 10 && styles.captureDisabledInner]} />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.sideControlButton} onPress={toggleCameraMode}>
-          <Icon name={cameraMode === "picture" ? "video-outline" : "camera-outline"} size={30} color="white" />
+        <TouchableOpacity style={styles.sideControlButton} >
+            {/* Placeholder for potential future button */}
         </TouchableOpacity>
       </View>
 
@@ -669,11 +680,38 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   // --- Camera State (Moved from CameraSection) ---
   const [cameraPermission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState<CameraType>("back");
-  const [cameraMode, setCameraMode] = useState<"picture" | "video">("picture");
   const [recording, setRecording] = useState(false);
   const [flash, setFlash] = useState<FlashMode>("off");
   const cameraRef = useRef<CameraView>(null);
+  
+  // --- NEW State for Barcode Scanner and Focus ---
+  const [isBarcodeScanningActive, setIsBarcodeScanningActive] = useState(false);
+  const [detectedBarcodes, setDetectedBarcodes] = useState<DetectedBarcode[]>([]);
+  const [selectedBarcode, setSelectedBarcode] = useState<string | null>(null);
+  const [focusPoint, setFocusPoint] = useState<{ x: number; y: number } | null>(null);
+  const [showFocusIndicator, setShowFocusIndicator] = useState(false);
+  
+  // --- Ref for barcode caching ---
+  const barcodeCache = useRef<{ [key: string]: BarcodeScanningResult }>({});
+  const barcodeDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   // --- End Camera State ---
+
+  // Cleanup effect for barcode cache
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+        barcodeCache.current = {};
+        if(isBarcodeScanningActive) {
+            setDetectedBarcodes([]);
+        }
+    }, 5000); // Clear cache every 5 seconds
+
+    return () => {
+        clearInterval(intervalId);
+        if (barcodeDebounceTimerRef.current) {
+            clearTimeout(barcodeDebounceTimerRef.current);
+        }
+    };
+  }, [isBarcodeScanningActive]);
 
   // --- NEW State for Publish Modal ---
   const [isPublishModalVisible, setIsPublishModalVisible] = useState(false);
@@ -707,6 +745,9 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
 
   // --- NEW: State for Add Platform Modal from Form Review ---
   const [isAddPlatformModalVisible, setIsAddPlatformModalVisible] = useState(false);
+
+  // --- NEW: Debug toggle for ignoring Shopify ID errors ---
+  const [ignoreShopifyIdErrors, setIgnoreShopifyIdErrors] = useState(false);
 
   const IMAGE_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
 
@@ -1090,9 +1131,8 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   };
 
   const stopRecording = () => { if (cameraRef.current && recording) { cameraRef.current.stopRecording(); } };
-  const toggleCameraMode = () => setCameraMode(current => current === "picture" ? "video" : "picture");
-  const toggleFlash = () => setFlash(current => current === 'off' ? 'on' : current === 'on' ? 'auto' : 'off');
-  const toggleCameraFacing = () => setFacing(current => current === "back" ? "front" : "back");
+  const toggleFlash = () => setFlash((current: FlashMode) => current === 'off' ? 'on' : current === 'on' ? 'auto' : 'off');
+  const toggleCameraFacing = () => setFacing((current: CameraType) => current === "back" ? "front" : "back");
   const getFlashIcon = () => flash === 'on' ? 'flash' : flash === 'auto' ? 'flash-auto' : 'flash-off';
   // --- End Camera Functions ---
 
@@ -2302,9 +2342,35 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
 
     } catch (err: any) {
       console.error("[handlePublishAction] Error:", err);
-      Alert.alert("Publish Error", err.message);
-      // Revert to FormReview so user can see the form and try again or save draft
-      setCurrentStage(ListingStage.FormReview);
+      
+      // Check if it's the specific Shopify Product ID error and if we should ignore it
+      if (ignoreShopifyIdErrors && 
+          err.message && 
+          (err.message.includes("Failed to obtain Shopify Product ID") || 
+           err.message.includes("Status: CREATED"))) {
+        
+        console.warn("[handlePublishAction] Ignoring Shopify ID error due to debug toggle:", err.message);
+        
+        // Show a success message anyway since the product was created
+        Alert.alert(
+          "Product Created (Debug Mode)", 
+          "The product appears to have been created successfully, but the Shopify Product ID could not be obtained. " +
+          "This error was ignored due to your debug settings."
+        );
+        
+        // Reset to platform selection as if successful
+        setCurrentStage(ListingStage.PlatformSelection);
+        setSelectedPlatforms([]);
+        setFormData(null);
+        setCapturedMedia([]);
+        setCoverImageIndex(-1);
+        
+      } else {
+        // Normal error handling for other errors
+        Alert.alert("Publish Error", err.message);
+        // Revert to FormReview so user can see the form and try again or save draft
+        setCurrentStage(ListingStage.FormReview);
+      }
     } finally {
       setIsLoading(false);
       setLoadingMessage('');
@@ -2335,6 +2401,37 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
     );
   };
   // --- End ADDED --- 
+
+  // --- NEW: Render debug options UI ---
+  const renderDebugOptions = () => {
+    if (!__DEV__) return null; // Only show in development mode
+    
+    return (
+      <View style={styles.debugOptionsContainer}>
+        <TouchableOpacity
+          style={styles.debugOptionRow}
+          onPress={() => setIgnoreShopifyIdErrors(!ignoreShopifyIdErrors)}
+        >
+          <View style={styles.debugToggle}>
+            <Icon 
+              name={ignoreShopifyIdErrors ? "toggle-switch" : "toggle-switch-off"} 
+              size={24} 
+              color={ignoreShopifyIdErrors ? "#ff9500" : "#999"} 
+            />
+          </View>
+          <View style={styles.debugOptionTextContainer}>
+            <Text style={styles.debugOptionTitle}>Ignore Shopify ID Errors</Text>
+            <Text style={styles.debugOptionDescription}>
+              {ignoreShopifyIdErrors 
+                ? "ON - Will ignore 'Failed to obtain Shopify Product ID' errors" 
+                : "OFF - Will report all Shopify ID errors normally"}
+            </Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+  // --- End NEW --- 
 
   // --- NEW: Render function for Add Platform Modal ---
   const renderAddPlatformModal = () => {
@@ -2541,27 +2638,40 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   };
 
   const renderImageInput = () => {
-       // Restore original ImageInput rendering logic (Camera Integrated)
-       console.log("[AddListingScreen] Rendering Image Input Stage (Camera Integrated)");
-      // --- Permission Handling ---
-      if (!cameraPermission) {
-        return (
-          <View style={styles.centeredMessageContainer}>
-            <ActivityIndicator size="large" color={'#294500'} />
-            <Text style={styles.centeredMessageText}>Initializing Camera...</Text>
-          </View>
-        );
+    // --- Barcode Scanning Handlers ---
+    const handleBarcodeScanned = useCallback((result: BarcodeScanningResult) => {
+      if (!isBarcodeScanningActive) return;
+      
+      if (result.data) {
+          barcodeCache.current[result.data] = result;
       }
-      if (!cameraPermission.granted) {
-        return (
-          <View style={styles.centeredMessageContainer}>
-            <Icon name="camera-off-outline" size={50} color="#FF5252" />
-            <Text style={styles.centeredMessageText}>Camera permission is required to add media.</Text>
-            <Button title="Grant Permission" onPress={requestPermission} style={{marginTop: 20}} />
-            <Button title="Back to Platforms" onPress={() => setCurrentStage(ListingStage.PlatformSelection)} outlined style={{marginTop: 10}}/>
-            </View>
-        );
+      
+      if (barcodeDebounceTimerRef.current) {
+        clearTimeout(barcodeDebounceTimerRef.current);
       }
+      barcodeDebounceTimerRef.current = setTimeout(() => {
+        const allBarcodes = Object.values(barcodeCache.current);
+        const newDetectedBarcodes = allBarcodes.map(b => ({
+            ...b,
+            isSelected: selectedBarcode === b.data,
+        }));
+        setDetectedBarcodes(newDetectedBarcodes);
+      }, 200);
+    }, [isBarcodeScanningActive, selectedBarcode]);
+  
+    const handleBarcodeSelect = (barcode: DetectedBarcode) => {
+        const newSelectedValue = barcode.data === selectedBarcode ? null : barcode.data;
+        setSelectedBarcode(newSelectedValue);
+  
+        setDetectedBarcodes(prev => prev.map(b => ({
+            ...b,
+            isSelected: b.data === newSelectedValue
+        })));
+  
+        if (newSelectedValue) {
+            console.log(`Selected Barcode: ${newSelectedValue}`);
+      }
+    };
 
       // --- Draggable Item Renderer ---
       const renderDraggableMediaItem = ({ item, drag, isActive }: RenderItemParams<CapturedMediaItem>) => {
@@ -2591,10 +2701,37 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
         );
       };
 
-      // --- Main Camera View Layout ---
+    if (!cameraPermission) {
+      return (
+        <View style={styles.centeredMessageContainer}>
+          <ActivityIndicator size="large" color={'#294500'} />
+          <Text style={styles.centeredMessageText}>Initializing Camera...</Text>
+        </View>
+      );
+    }
+    if (!cameraPermission.granted) {
+      return (
+        <View style={styles.centeredMessageContainer}>
+          <Icon name="camera-off-outline" size={50} color="#FF5252" />
+          <Text style={styles.centeredMessageText}>Camera permission is required to add media.</Text>
+          <Button title="Grant Permission" onPress={requestPermission} style={{marginTop: 20}} />
+          <Button title="Back to Platforms" onPress={() => setCurrentStage(ListingStage.PlatformSelection)} outlined style={{marginTop: 10}}/>
+        </View>
+      );
+    }
+
           return (
         <View style={styles.cameraStageContainer}>
-          <CameraView ref={cameraRef} style={styles.cameraPreview} facing={facing} flash={flash} mode={cameraMode}>
+        <CameraView 
+          ref={cameraRef} 
+          style={styles.cameraPreview} 
+          facing={facing} 
+          flash={flash}
+          barcodeScannerSettings={{
+            barcodeTypes: ["qr", "ean13", "upc_a", "upc_e", "code128"],
+          }}
+          onBarcodeScanned={isBarcodeScanningActive ? handleBarcodeScanned : undefined}
+        >
             <View style={styles.cameraHeader}>
               <TouchableOpacity onPress={toggleFlash} style={styles.headerButton} disabled={facing === 'front'}>
                 <Icon name={getFlashIcon()} size={24} color={facing === 'front' ? 'grey' : 'white'} />
@@ -2603,6 +2740,27 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                 <Icon name="camera-switch-outline" size={24} color="white" />
               </TouchableOpacity>
                   </View>
+          
+          {isBarcodeScanningActive && detectedBarcodes.map((barcode) => {
+            if (!barcode.boundingBox) return null;
+            return (
+              <TouchableOpacity
+                  key={barcode.data}
+                  style={[
+                      styles.barcodeFrame,
+                      {
+                          left: barcode.boundingBox.origin.x,
+                          top: barcode.boundingBox.origin.y,
+                          width: barcode.boundingBox.size.width,
+                          height: barcode.boundingBox.size.height,
+                      },
+                      barcode.isSelected && styles.barcodeFrameSelected
+                  ]}
+                  onPress={() => handleBarcodeSelect(barcode)}
+                  activeOpacity={0.7}
+              />
+            );
+          })}
           </CameraView>
 
           {capturedMedia.length > 0 && (
@@ -2628,11 +2786,11 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
             <TouchableOpacity style={styles.sideControlButton} onPress={pickImagesFromLibrary} disabled={capturedMedia.length >= 10}>
               <Icon name="image-multiple-outline" size={30} color={capturedMedia.length >= 10 ? "grey" : "white"} />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.captureButton} onPress={cameraMode === "picture" ? takePicture : (recording ? stopRecording : startRecording)} disabled={capturedMedia.length >= 10}>
-              <View style={[ styles.captureInner, recording && styles.recordingButton, capturedMedia.length >= 10 && styles.captureDisabledInner]} />
+          <TouchableOpacity style={styles.captureButton} onPress={takePicture} disabled={capturedMedia.length >= 10}>
+            <View style={[ styles.captureInner, capturedMedia.length >= 10 && styles.captureDisabledInner]} />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.sideControlButton} onPress={() => Alert.alert("Barcode Scanner", "Not implemented yet.")}>
-              <Icon name="barcode-scan" size={30} color="white" />
+          <TouchableOpacity style={styles.sideControlButton} onPress={() => setIsBarcodeScanningActive(prev => !prev)}>
+            <Icon name={isBarcodeScanningActive ? "barcode-off" : "barcode-scan"} size={30} color={isBarcodeScanningActive ? "#4CAF50" : "white"} />
                           </TouchableOpacity>
                 </View>
                 
@@ -3219,6 +3377,10 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
               ))}
               */}
             </View>
+            
+            {/* Add debug options right before the bottom buttons */}
+            {renderDebugOptions()}
+            
           </ScrollView>
         </KeyboardAvoidingView>
 
@@ -4318,6 +4480,50 @@ const styles = StyleSheet.create({
     color: '#555',
   },
   // --- End Publish Modal Styles ---
+
+  debugOptionsContainer: {
+    marginTop: 20,
+    padding: 10,
+    backgroundColor: '#f8f8f8',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderStyle: 'dashed',
+  },
+  debugOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 8,
+  },
+  debugToggle: {
+    marginRight: 12,
+  },
+  debugOptionTextContainer: {
+    flex: 1,
+  },
+  debugOptionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  debugOptionDescription: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  // --- Styles for Barcode Overlay ---
+  barcodeFrame: {
+    position: 'absolute',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.7)',
+    borderRadius: 8,
+    backgroundColor: 'transparent',
+  },
+  barcodeFrameSelected: {
+    borderColor: '#4CAF50', // Green color for selected
+    backgroundColor: 'rgba(76, 175, 80, 0.2)',
+  },
+  // --- End Barcode Overlay Styles ---
 });
 
 // --- Platform Images Map (Unchanged, Ensure it's defined) --- //

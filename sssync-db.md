@@ -59,6 +59,12 @@ CREATE TABLE "PlatformConnections" (
 CREATE INDEX idx_platformconnections_userid ON "PlatformConnections"("UserId");
 CREATE INDEX idx_platformconnections_platformtype ON "PlatformConnections"("PlatformType");
 
+-- Partial unique indexes to allow multiple connections of the same platform type per user,
+-- as long as the platform-specific identifier (shop, merchantId) is different.
+CREATE UNIQUE INDEX "platformconnections_shopify_unique_idx" ON "PlatformConnections" ("UserId", ("PlatformSpecificData"->>'shop')) WHERE "PlatformType" = 'shopify';
+CREATE UNIQUE INDEX "platformconnections_square_unique_idx" ON "PlatformConnections" ("UserId", ("PlatformSpecificData"->>'merchantId')) WHERE "PlatformType" = 'square';
+CREATE UNIQUE INDEX "platformconnections_clover_unique_idx" ON "PlatformConnections" ("UserId", ("PlatformSpecificData"->>'merchantId')) WHERE "PlatformType" = 'clover';
+
 -- Product Structure (Depends on Users)
 CREATE TABLE "Products" (
     "Id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -79,11 +85,17 @@ CREATE TABLE "ProductVariants" (
     "Description" text,
     "Price" decimal NOT NULL,
     "CompareAtPrice" decimal,
+    "Cost" decimal,
     "Weight" decimal,
     "WeightUnit" text,
     "Options" jsonb,
+    "RequiresShipping" boolean,
+    "IsTaxable" boolean,
+    "TaxCode" text,
+    "ImageId" uuid REFERENCES "ProductImages"("Id") ON DELETE SET NULL,
     "CreatedAt" timestamptz NOT NULL DEFAULT now(),
     "UpdatedAt" timestamptz NOT NULL DEFAULT now(),
+    "status" text,
     UNIQUE ("UserId", "Sku")
 );
 CREATE INDEX idx_productvariants_productid ON "ProductVariants"("ProductId");
@@ -91,6 +103,39 @@ CREATE INDEX idx_productvariants_userid ON "ProductVariants"("UserId");
 CREATE INDEX idx_productvariants_sku ON "ProductVariants"("Sku");
 CREATE INDEX idx_productvariants_barcode ON "ProductVariants"("Barcode");
 CREATE INDEX idx_productvariants_userid_barcode ON "ProductVariants"("UserId", "Barcode");
+
+
+-- Create the ProductImages table
+CREATE TABLE "ProductImages" (
+    "Id" uuid PRIMARY KEY DEFAULT gen_random_uuid(), -- Unique identifier for the image
+    "ProductVariantId" uuid NOT NULL REFERENCES "ProductVariants"("Id") ON DELETE CASCADE, -- Link to ProductVariants
+    "ImageUrl" text NOT NULL, -- URL of the product image
+    "AltText" text, -- Optional alternative text for the image
+    "Position" integer NOT NULL DEFAULT 0, -- Position for ordering images
+    "PlatformMappingId" uuid REFERENCES "PlatformProductMappings"("Id") ON DELETE SET NULL, -- Optional link to platform mappings
+    "CreatedAt" timestamptz NOT NULL DEFAULT now() -- Timestamp for when the record was created
+);
+
+-- Create indexes for ProductImages
+CREATE INDEX idx_productimages_productvariantid ON "ProductImages"("ProductVariantId");
+CREATE INDEX idx_productimages_platformmappingid ON "ProductImages"("PlatformMappingId");
+
+
+-- Create the ProductEmbeddings table
+CREATE TABLE "ProductEmbeddings" (
+    "Id" uuid PRIMARY KEY DEFAULT gen_random_uuid(), -- Unique identifier for the embedding
+    "ProductVariantId" uuid REFERENCES "ProductVariants"("Id") ON DELETE CASCADE, -- Link to ProductVariants
+    "AiGeneratedContentId" uuid REFERENCES "AiGeneratedContent"("Id") ON DELETE SET NULL, -- Optional link to AI-generated content
+    "SourceType" text NOT NULL, -- Source type of the embedding (e.g., 'canonical_title', 'canonical_description')
+    "ContentText" text NOT NULL, -- The text that was embedded
+    embedding vector(384) NOT NULL, -- Embedding vector for the product
+    "ModelName" text NOT NULL, -- Name of the model used for embedding (e.g., 'all-MiniLM-L6-v2')
+    "CreatedAt" timestamptz NOT NULL DEFAULT now() -- Timestamp for when the record was created
+);
+
+-- Create indexes for ProductEmbeddings
+CREATE INDEX idx_productembeddings_variant_id ON "ProductEmbeddings"("ProductVariantId");
+CREATE INDEX idx_productembeddings_embedding ON "ProductEmbeddings" USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100); -- Example HNSW or IVFFlat index
 
 -- Mappings and Levels (Depend on Products/Variants and Connections)
 CREATE TABLE "PlatformProductMappings" (

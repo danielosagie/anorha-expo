@@ -36,6 +36,8 @@ import ProductDetailScreen from '../screens/ProductDetail';
 import PhoneAuthScreen from '../screens/PhoneAuthScreen';
 import CreateAccountScreen from '../screens/CreateAccountScreen';
 import PastScansScreen from '../screens/PastScansScreen';
+import MappingReviewScreen from '../screens/MappingReviewScreen';
+import SyncRulesScreen from '../screens/SyncRulesScreen';
 
 // --- Define Param Lists for Type Safety --- //
 type AuthStackParamList = {
@@ -67,7 +69,9 @@ export type AppStackParamList = {
   }; 
   ProductDetail: { productId: string };
   PastScans: undefined;
-  MappingReview: { connectionId: string; platformName: string }; 
+  MappingReview: { connectionId: string; platformName: string; jobId?: string; }; 
+  SyncRules: { connectionId: string };
+  Profile: { refresh?: number }; // Add Profile screen with optional refresh param
   // Add other screens here as needed
 };
 
@@ -172,7 +176,10 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />
     <AppStackNav.Screen name="ProductDetail" component={ProductDetailScreen} />
     <AppStackNav.Screen name="PastScans" component={PastScansScreen} />
-    <AppStackNav.Screen name="AddListing" component={AddListingScreen} />
+    <AppStackNav.Screen name="AddListing" component={AddListingScreen as React.FC} />
+    <AppStackNav.Screen name="MappingReview" component={MappingReviewScreen} />
+    <AppStackNav.Screen name="SyncRules" component={SyncRulesScreen} />
+    <AppStackNav.Screen name="Profile" component={ProfileScreen} />
   </AppStackNav.Navigator>
 );
 

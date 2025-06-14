@@ -54,19 +54,24 @@ let legendStateObservablesSingleton: LegendStateObservables | null = null;
 // Initialization function
 export async function initializeLegendState(
     supabaseClient: SupabaseClient, 
-    userIdToInitialize: string // Changed from optional to required
+    userIdToInitialize: string, // Changed from optional to required
+    options: { force?: boolean } = {} // NEW: Add options with force flag
 ): Promise<LegendStateObservables> {
 
     console.log(`[SupaLegend] Attempting to initialize Legend State for userIdToInitialize: ${userIdToInitialize}`);
 
-    // If already initialized for the same user, return the existing instance
-    if (legendStateObservablesSingleton && legendStateObservablesSingleton.userId === userIdToInitialize) {
-        console.warn(`[SupaLegend] Legend State already initialized for user ${userIdToInitialize}.`);
+    // If already initialized for the same user, return the existing instance UNLESS forcing
+    if (legendStateObservablesSingleton && legendStateObservablesSingleton.userId === userIdToInitialize && !options.force) {
+        console.warn(`[SupaLegend] Legend State already initialized for user ${userIdToInitialize}. Use force:true to re-initialize.`);
         return legendStateObservablesSingleton;
     }
 
-    // If switching users, or first time init for this user, proceed
-    console.log(`[SupaLegend] Initializing Legend State for user ${userIdToInitialize}...`);
+    // If switching users, or first time init for this user, or forcing, proceed
+    if (options.force) {
+        console.log(`[SupaLegend] Forcing re-initialization for user ${userIdToInitialize}...`);
+    } else {
+        console.log(`[SupaLegend] Initializing Legend State for user ${userIdToInitialize}...`);
+    }
     legendStateObservablesSingleton = null; // Clear previous instance if user is different
 
     const currentUserId = userIdToInitialize;

@@ -19,6 +19,7 @@ import * as Crypto from 'expo-crypto'; // For generating random string
 import { showMessage } from 'react-native-flash-message';
 
 import { AuthContext } from '../context/AuthContext';
+import { useLegendStateControl } from '../context/LegendStateControlContext';
 
 // --- BEGIN Re-inlined Constants ---
 // TODO: Replace placeholder values with your actual credentials and URLs
@@ -137,6 +138,7 @@ const CONNECTION_STATUS = {
   SCANNING: 'scanning',
   ERROR: 'error',
   SYNCING: 'syncing',
+  RECONCILING: 'reconciling', // Added for manual resync
   NEW: 'new',           // Added for newly created connections
   RECONNECT: 'reconnect' // Added for reconnecting existing accounts
 };
@@ -160,6 +162,8 @@ const getStatusDisplay = (status: string, isNewConnection: boolean = false): { l
       return { label: 'Scanning Products...', color: '#5856D6', icon: 'sync' };
     case CONNECTION_STATUS.SYNCING:
       return { label: 'Syncing...', color: '#007AFF', icon: 'sync' };
+    case CONNECTION_STATUS.RECONCILING:
+      return { label: 'Reconciling...', color: '#5856D6', icon: 'sync' };
     case CONNECTION_STATUS.ERROR:
       return { label: 'Connection Error', color: '#FF3B30', icon: 'alert-circle' };
     case 'reconcile': // Match the string value used in code
@@ -195,6 +199,7 @@ const ProfileScreen = () => {
   const navigation = useNavigation<ProfileScreenNavigationProp>();
   const authContext = useContext(AuthContext);
   const route = useRoute<RouteProp<ProfileScreenRouteParams, 'Profile'>>();
+  const { resetLegendState } = useLegendStateControl();
   
   // For refresh trigger from route params
   const routeRefreshParam = route.params?.refresh || 0;
@@ -927,6 +932,12 @@ const ProfileScreen = () => {
               
               console.log(`[ProfileScreen] Successfully disconnected connection ID: ${connectionId}`);
               Alert.alert('Disconnected', `${platformName} connection removed.`);
+              
+              // --- NEW: Reset Legend State to clear out old data ---
+              await resetLegendState();
+              console.log('[ProfileScreen] Legend state reset successfully.');
+              // --- END NEW ---
+
               // 3. Refresh the connections list
               fetchConnections(); 
 
@@ -1088,6 +1099,20 @@ const ProfileScreen = () => {
         throw new Error("Authentication token not found for starting scan.");
       }
 
+      // If this is a reconciliation, first update the status to 'reconciling'
+      if (isReconnect) {
+        await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections/${connectionId}/status`, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ status: 'reconciling' })
+        });
+        // Optimistically update local state or just reload after
+        loadConnections(); 
+      }
+
       // Show a loading notification
       showStatusNotification('Processing', `Starting scan for ${platformName}...`, 'info');
 
@@ -1111,23 +1136,21 @@ const ProfileScreen = () => {
 
       const responseData = await response.json().catch(() => ({}));
       
-      // Show a success notification
+      // --- MODIFIED: Show notification and navigate with Job ID ---
       showStatusNotification(
-        'Scan Started', 
-        responseData.message || `Initial scan started for ${platformName}. You'll be notified when it's ready for review.`,
-        'success'
+        'Scan Initialized', 
+        `Now analyzing products for ${platformName}. You can monitor the progress on the next screen.`,
+        'info' // Use 'info' as it's a start, not a final success
       );
       
       console.log(`[ProfileScreen] Successfully initiated scan for ${platformName} (Connection ID: ${connectionId}). Response:`, responseData);
       
-      // Navigate to MappingReviewScreen if immediate review is needed
-      // This typically won't happen immediately, but the backend might determine that review is needed right away
-      if (responseData.needsReview) {
-        navigation.navigate('MappingReview', { connectionId, platformName });
-      } else {
-        // Otherwise, just refresh the connections list to show updated status
-        fetchConnections();
-      }
+      // Navigate to MappingReviewScreen immediately, passing the jobId to monitor progress.
+      navigation.navigate('MappingReview', { 
+        connectionId, 
+        platformName,
+        jobId: responseData.jobId, // Pass the jobId from the API response
+      });
 
     } catch (error: unknown) {
       console.error(`[ProfileScreen] Error starting scan for ${platformName}:`, error);
@@ -1463,13 +1486,25 @@ const ProfileScreen = () => {
         .on(
           'postgres_changes',
           {
-            event: '*', // Listen to all events (INSERT, UPDATE, DELETE)
+            event: 'UPDATE', // Listen to UPDATE events
             schema: 'public',
             table: 'PlatformConnections',
             filter: `UserId=eq.${user.id}`, // Only listen to changes for this user
           },
           (payload) => {
             console.log('[ProfileScreen] Received realtime update:', payload);
+            const oldStatus = payload.old.Status;
+            const newStatus = payload.new.Status;
+            const platformName = payload.new.DisplayName || payload.new.PlatformType;
+
+            if (oldStatus !== newStatus) {
+              showStatusNotification(
+                `${platformName} Status Update`,
+                `Your connection is now ${newStatus}.`,
+                'info'
+              );
+            }
+
             // Refresh connections when a change is detected
             loadConnections();
           }
@@ -1703,7 +1738,7 @@ const ProfileScreen = () => {
                                 {!isRecentlyCreated(connection) && connection.Status === CONNECTION_STATUS.PENDING && (
                               <TouchableOpacity 
                                     style={[styles.actionButton, { backgroundColor: theme.colors.secondary + '15' }]}
-                                    onPress={() => startPlatformScan(connection.Id, platformConfig.name, true /* isReconnect */)}
+                                    onPress={() => startPlatformScan(connection.Id, platformConfig.name, false /* Set to false to trigger a scan, not a reconcile */)}
                               >
                                     <Icon name="cog" size={18} color={theme.colors.secondary} />
                                     <Text style={[styles.actionButtonText, { color: theme.colors.secondary }]}>Complete Setup</Text>
@@ -1720,15 +1755,24 @@ const ProfileScreen = () => {
                                   </TouchableOpacity>
                                 )}
                                 
-                                {/* Active connections get a manage button */}
+                                {/* Active connections get a manage button and a reconcile button */}
                                 {connection.Status === CONNECTION_STATUS.ACTIVE && (
-                                  <TouchableOpacity 
-                                    style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
-                                    onPress={() => navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name })}
-                                  >
-                                    <Icon name="cog" size={18} color={theme.colors.primary} />
-                                    <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Manage</Text>
-                                  </TouchableOpacity>
+                                  <>
+                                    <TouchableOpacity 
+                                      style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
+                                      onPress={() => navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name })}
+                                    >
+                                      <Icon name="cog" size={18} color={theme.colors.primary} />
+                                      <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Manage</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity 
+                                      style={[styles.actionButton, { backgroundColor: theme.colors.secondary + '15' }]}
+                                      onPress={() => startPlatformScan(connection.Id, platformConfig.name, true)}
+                                    >
+                                      <Icon name="sync" size={18} color={theme.colors.secondary} />
+                                      <Text style={[styles.actionButtonText, { color: theme.colors.secondary }]}>Reconcile</Text>
+                                    </TouchableOpacity>
+                                  </>
                                 )}
                               </View>
                             </View>

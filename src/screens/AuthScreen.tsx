@@ -1,15 +1,125 @@
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useCallback } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert, Image } from 'react-native';
 import AnimatedGradientBackground from '../components/AnimatedGradientBackground';
 import Button from '../components/Button';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { AuthContext } from '../context/AuthContext';
 import { supabase } from '../../lib/supabase';
+import { LinearGradient } from 'expo-linear-gradient';
 // import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 // Import Phone Number Input (Commented out for now)
 // import PhoneInput from 'react-native-phone-number-input';
 // import { useRef } from 'react';
 
+// Flag to use static gradient for better performance
+const USE_STATIC_GRADIENT = true;
+// Flag to disable form animations for better performance
+const DISABLE_FORM_ANIMATIONS = true;
+
+// Define props interface for FormContent
+interface FormContentProps {
+  isLogin: boolean;
+  firstName: string;
+  setFirstName: (value: string) => void;
+  lastName: string;
+  setLastName: (value: string) => void;
+  email: string;
+  setEmail: (value: string) => void;
+  password: string;
+  setPassword: (value: string) => void;
+  handleAuth: () => Promise<void>;
+  loading: boolean;
+  handleForgotPassword: () => Promise<void>;
+  setIsLogin: (value: boolean) => void;
+}
+
+// Memoize form component for better performance
+const FormContent = React.memo(({ 
+  isLogin, 
+  firstName, 
+  setFirstName, 
+  lastName, 
+  setLastName, 
+  email, 
+  setEmail, 
+  password, 
+  setPassword, 
+  handleAuth, 
+  loading, 
+  handleForgotPassword, 
+  setIsLogin 
+}: FormContentProps) => (
+  <>
+    <Text style={styles.headerText}>
+      {isLogin ? 'Log Back In' : 'Create Account'}
+    </Text>
+    
+    {!isLogin && (
+      <TextInput
+        style={styles.input}
+        placeholder="First Name"
+        placeholderTextColor="#aaa"
+        value={firstName}
+        onChangeText={setFirstName}
+      />
+    )}
+
+    {!isLogin && (
+      <TextInput
+        style={styles.input}
+        placeholder="Last Name"
+        placeholderTextColor="#aaa"
+        value={lastName}
+        onChangeText={setLastName}
+      />
+    )}
+    
+    <TextInput
+      style={styles.input}
+      placeholder="Email"
+      placeholderTextColor="#aaa"
+      keyboardType="email-address"
+      autoCapitalize="none"
+      value={email}
+      onChangeText={setEmail}
+    />
+    
+    <TextInput
+      style={styles.input}
+      placeholder="Password"
+      placeholderTextColor="#aaa"
+      secureTextEntry
+      value={password}
+      onChangeText={setPassword}
+    />
+    
+    <Button 
+      title={isLogin ? "Log In" : "Sign Up"} 
+      onPress={handleAuth} 
+      style={styles.button}
+      loading={loading}
+      icon={isLogin ? "login" : "account-plus"}
+      textStyle={styles.buttonText}
+    />
+    
+    {isLogin && (
+      <TouchableOpacity onPress={handleForgotPassword}>
+        <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+      </TouchableOpacity>
+    )}
+    
+    <View style={styles.switchContainer}>
+      <Text style={styles.switchText}>
+        {isLogin ? "Don't have an account?" : "Already have an account?"}
+      </Text>
+      <TouchableOpacity onPress={() => setIsLogin(!isLogin)}>
+        <Text style={styles.switchButton}>
+          {isLogin ? "Sign Up" : "Log In"}
+        </Text>
+      </TouchableOpacity>
+    </View>
+  </>
+));
 
 type AuthScreenProps = {
   navigation: any;
@@ -32,7 +142,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
   // Comment out phone ref for now
   // const phoneInputRef = useRef<PhoneInput>(null);
   
-  const handleAuth = async () => {
+  // Use useCallback for event handlers to prevent unnecessary re-renders
+  const handleAuth = useCallback(async () => {
     if (!authContext) {
       console.error("Auth context is not available");
       return;
@@ -136,9 +247,9 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [authContext, isLogin, email, password, firstName, lastName]);
   
-  const handleForgotPassword = async () => {
+  const handleForgotPassword = useCallback(async () => {
     if (!email) {
       Alert.alert('Error', 'Please enter your email');
       return;
@@ -157,7 +268,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [email]);
   
   // Implemented handleGoogleAuth
   /* // Commenting out Google Auth for now
@@ -225,138 +336,62 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
-      <AnimatedGradientBackground />
+      {USE_STATIC_GRADIENT ? (
+        <LinearGradient
+          colors={['#5c9c00', '#8cc63f', '#5c9c00']}
+          style={StyleSheet.absoluteFill}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+        />
+      ) : (
+        <AnimatedGradientBackground />
+      )}
       
       <View style={styles.logoContainer}>
         <Image source={require('../assets/rounded_sssync.png')} style={styles.logo} />
         <Text style={styles.title}>sssync</Text>
       </View>
       
-      <Animated.View 
-        style={styles.formContainer}
-        entering={FadeInDown.delay(300).duration(500)}
-      >
-        <Text style={styles.headerText}>
-          {isLogin ? 'Log Back In' : 'Create Account'}
-        </Text>
-        
-        {!isLogin && (
-          <TextInput
-            style={styles.input}
-            placeholder="First Name"
-            placeholderTextColor="#aaa"
-            value={firstName}
-            onChangeText={setFirstName}
+      {DISABLE_FORM_ANIMATIONS ? (
+        <View style={styles.formContainer}>
+          <FormContent 
+            isLogin={isLogin}
+            firstName={firstName}
+            setFirstName={setFirstName}
+            lastName={lastName}
+            setLastName={setLastName}
+            email={email}
+            setEmail={setEmail}
+            password={password}
+            setPassword={setPassword}
+            handleAuth={handleAuth}
+            loading={loading}
+            handleForgotPassword={handleForgotPassword}
+            setIsLogin={setIsLogin}
           />
-        )}
-
-        {!isLogin && (
-          <TextInput
-            style={styles.input}
-            placeholder="Last Name"
-            placeholderTextColor="#aaa"
-            value={lastName}
-            onChangeText={setLastName}
-          />
-        )}
-        
-        {/* --- Add Phone Input for Signup (Commented Out) --- */}
-        {/* {!isLogin && (
-          <PhoneInput
-              ref={phoneInputRef}
-              defaultValue={phoneNumber}
-              defaultCode={countryCode as any}
-              layout="first"
-              onChangeText={(text) => {
-                setPhoneNumber(text);
-              }}
-              onChangeFormattedText={(text) => {
-                setFormattedPhoneNumber(text);
-              }}
-              onChangeCountry={(country: any) => setCountryCode(country.cca2)}
-              containerStyle={styles.phoneContainer}
-              textContainerStyle={styles.phoneTextContainer}
-              textInputStyle={styles.phoneTextInput}
-              codeTextStyle={styles.phoneCodeText}
-              countryPickerButtonStyle={styles.phoneCountryPickerButton}
-              placeholder="Phone Number"
-              withShadow
-          />
-        )} */}
-        {/* ----------------------------------- */}
-        
-        <TextInput
-          style={styles.input}
-          placeholder="Email"
-          placeholderTextColor="#aaa"
-          keyboardType="email-address"
-          autoCapitalize="none"
-          value={email}
-          onChangeText={setEmail}
-        />
-        
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          placeholderTextColor="#aaa"
-          secureTextEntry
-          value={password}
-          onChangeText={setPassword}
-        />
-        
-        <Button 
-          title={isLogin ? "Log In" : "Sign Up"} 
-          onPress={handleAuth} 
-          style={styles.button}
-          loading={loading}
-          icon={isLogin ? "login" : "account-plus"}
-          textStyle={styles.buttonText}
-        />
-        
-        {isLogin && (
-          <TouchableOpacity onPress={handleForgotPassword}>
-            <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
-          </TouchableOpacity>
-        )}
-        
-        <View style={styles.switchContainer}>
-          <Text style={styles.switchText}>
-            {isLogin ? "Don't have an account?" : "Already have an account?"}
-          </Text>
-          <TouchableOpacity onPress={() => setIsLogin(!isLogin)}>
-            <Text style={styles.switchButton}>
-              {isLogin ? "Sign Up" : "Log In"}
-            </Text>
-          </TouchableOpacity>
         </View>
-        
-    
-        
-        {/* Commenting out Google Auth Button */}
-        {/* 
-        <View style={styles.divider}>
-          <View style={styles.dividerLine} />
-          <Text style={styles.dividerText}>OR</Text>
-          <View style={styles.dividerLine} />
-        </View>
-        
-        <TouchableOpacity style={styles.socialButton} onPress={handleGoogleAuth} disabled={loading}>
-          <Text style={styles.socialButtonText}>Continue with Google</Text>
-        </TouchableOpacity> */}
-        
-        {/* --- Conditionally show Phone Button only on Login (Commented Out) --- */}
-
-        {/* {isLogin && (
-          <TouchableOpacity
-            style={styles.socialButton}
-            onPress={() => navigation.navigate('PhoneAuthScreen')}
-            disabled={loading}
-          >
-          <Text style={styles.socialButtonText}>Continue with Phone Number</Text>
-        </TouchableOpacity>
-        )} */}
-        {/* --------------------------------------------------- */}
-      </Animated.View>
+      ) : (
+        <Animated.View 
+          style={styles.formContainer}
+          entering={FadeInDown.delay(300).duration(500)}
+        >
+          <FormContent 
+            isLogin={isLogin}
+            firstName={firstName}
+            setFirstName={setFirstName}
+            lastName={lastName}
+            setLastName={setLastName}
+            email={email}
+            setEmail={setEmail}
+            password={password}
+            setPassword={setPassword}
+            handleAuth={handleAuth}
+            loading={loading}
+            handleForgotPassword={handleForgotPassword}
+            setIsLogin={setIsLogin}
+          />
+        </Animated.View>
+      )}
     </KeyboardAvoidingView>
   );
 };
