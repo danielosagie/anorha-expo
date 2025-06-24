@@ -26,12 +26,23 @@ export interface ProductVariant {
     Weight?: number | null; // decimal
     WeightUnit?: string | null;
     Options?: Record<string, any> | null; // jsonb
+    RequiresShipping?: boolean; // Added missing property
+    IsTaxable?: boolean; // Added missing property
+    TaxCode?: string | null; // Added missing property
+    ImageUrls?: string[]; // Added missing property for product images
     CreatedAt: string; // timestamptz
     UpdatedAt: string; // timestamptz
     status?: string | null; // Added from your select query
     image?: string; // Example: To store a primary image URL
     quantity?: number; // Example: To store aggregated quantity
     platforms?: string[]; // Example
+    // Platform boolean flags for fast filtering
+    OnShopify?: boolean;
+    OnSquare?: boolean;
+    OnClover?: boolean;
+    OnAmazon?: boolean;
+    OnEbay?: boolean;
+    OnFacebook?: boolean;
 }
 
 // Function to generate IDs locally (can remain at top level)
@@ -108,12 +119,12 @@ export async function initializeLegendState(
     const productVariants$ = observable<Record<string, ProductVariant>>(
         customSynced({
             collection: 'ProductVariants',
-            select: (from: any) => from.select('*, id:Id'),
+            select: (from: any) => from.select('*, id:Id, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook'),
             filter: (query: any) => query.eq('UserId', currentUserId),
             actions: ['read', 'create', 'update', 'delete'],
             realtime: { filter: `UserId=eq.${currentUserId}` },
             persist: {
-                name: `productVariants_user_${currentUserId}_v2`,
+                name: `productVariants_user_${currentUserId}_v3`, // Updated version to clear cache
                 retrySync: true,
             },
         })
@@ -476,6 +487,7 @@ export interface PlatformConnection {
     PlatformType: string; // e.g., 'Shopify', 'Square', 'Clover'
     DisplayName: string;
     Credentials: any; // jsonb - Opaque, store encrypted OAuth credentials or API keys
+    PlatformSpecificData?: Record<string, any> | null; // jsonb - Platform-specific configuration and data
     Status: string; // e.g., 'Connected', 'NeedsReauth', 'Error'
     IsEnabled: boolean;
     LastSyncAttemptAt?: string | null; // timestamptz

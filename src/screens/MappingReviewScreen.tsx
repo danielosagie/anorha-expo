@@ -137,6 +137,19 @@ const MappingReviewScreen = () => {
   // --- NEW: Add state for custom notification ---
   const [showSuccessNotification, setShowSuccessNotification] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState('');
+  // --- NEW: Sync Rules State ---
+  type SyncDirection = 'two-way' | 'push-only' | 'pull-only';
+  type SourceOfTruth = 'sssync' | 'platform';
+  
+  const [syncDirection, setSyncDirection] = useState<SyncDirection>('two-way');
+  const [sourceOfTruth, setSourceOfTruth] = useState<SourceOfTruth>('sssync');
+  const [autoCreate, setAutoCreate] = useState(true);
+  const [autoUpdate, setAutoUpdate] = useState(true);
+  const [syncInventory, setSyncInventory] = useState(true);
+  const [syncPricing, setSyncPricing] = useState(true);
+  const [showSyncRules, setShowSyncRules] = useState(false);
+  const [showAdvancedRules, setShowAdvancedRules] = useState(false);
+  // --- END NEW ---
 
   // Effect to load platform connections
   useEffect(() => {
@@ -849,13 +862,23 @@ const MappingReviewScreen = () => {
       
       console.log('[MappingReviewScreen] Mappings confirmed successfully.');
       
-      // Step 2: Activate the sync
+      // Step 2: Activate the sync with sync rules
+      const syncRules = {
+        syncDirection,
+        sourceOfTruth,
+        autoCreate,
+        autoUpdate,
+        syncInventory,
+        syncPricing,
+      };
+      
       const activateResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/activate-sync`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
+        body: JSON.stringify({ syncRules }),
       });
       
       if (!activateResponse.ok) {
@@ -1386,6 +1409,277 @@ const MappingReviewScreen = () => {
       setLoading(false);
     }
   };
+
+  // --- NEW: Sync Rules UI Components ---
+  const renderSyncDirectionOption = (option: SyncDirection, title: string, subtitle: string, icon: string) => (
+    <TouchableOpacity
+      style={[syncRulesStyles.optionButton, syncDirection === option && syncRulesStyles.optionButtonSelected]}
+      onPress={() => setSyncDirection(option)}
+    >
+      <Icon 
+        name={icon} 
+        size={24} 
+        color={syncDirection === option ? theme.colors.primary : theme.colors.textSecondary} 
+        style={syncRulesStyles.optionIcon}
+      />
+      <View style={{ flex: 1 }}>
+        <Text style={[syncRulesStyles.optionTitle, syncDirection === option && syncRulesStyles.optionTitleSelected]}>{title}</Text>
+        <Text style={[syncRulesStyles.optionSubtitle, syncDirection === option && syncRulesStyles.optionSubtitleSelected]}>{subtitle}</Text>
+      </View>
+      <Icon 
+        name={syncDirection === option ? 'radiobox-marked' : 'radiobox-blank'} 
+        size={20} 
+        color={syncDirection === option ? theme.colors.primary : theme.colors.textSecondary} 
+      />
+    </TouchableOpacity>
+  );
+
+  const renderSourceOption = (option: SourceOfTruth, title: string, subtitle: string, icon: string) => (
+    <TouchableOpacity
+      style={[syncRulesStyles.optionButton, sourceOfTruth === option && syncRulesStyles.optionButtonSelected]}
+      onPress={() => setSourceOfTruth(option)}
+    >
+      <Icon 
+        name={icon} 
+        size={24} 
+        color={sourceOfTruth === option ? theme.colors.primary : theme.colors.textSecondary} 
+        style={syncRulesStyles.optionIcon}
+      />
+      <View style={{ flex: 1 }}>
+        <Text style={[syncRulesStyles.optionTitle, sourceOfTruth === option && syncRulesStyles.optionTitleSelected]}>{title}</Text>
+        <Text style={[syncRulesStyles.optionSubtitle, sourceOfTruth === option && syncRulesStyles.optionSubtitleSelected]}>{subtitle}</Text>
+      </View>
+      <Icon 
+        name={sourceOfTruth === option ? 'radiobox-marked' : 'radiobox-blank'} 
+        size={20} 
+        color={sourceOfTruth === option ? theme.colors.primary : theme.colors.textSecondary} 
+      />
+    </TouchableOpacity>
+  );
+
+  const renderSyncRulesModal = () => (
+    <Modal
+      visible={showSyncRules}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={() => setShowSyncRules(false)}
+    >
+      <View style={syncRulesStyles.modalContainer}>
+        <View style={syncRulesStyles.modalHeader}>
+          <TouchableOpacity onPress={() => setShowSyncRules(false)}>
+            <Icon name="close" size={24} color={theme.colors.text} />
+          </TouchableOpacity>
+          <Text style={syncRulesStyles.modalTitle}>Sync Settings</Text>
+          <TouchableOpacity onPress={() => setShowSyncRules(false)}>
+            <Text style={syncRulesStyles.doneButton}>Done</Text>
+          </TouchableOpacity>
+        </View>
+        
+        <ScrollView style={syncRulesStyles.modalContent}>
+          <Card style={syncRulesStyles.ruleSection}>
+            <Text style={syncRulesStyles.sectionTitle}>Sync Direction</Text>
+            <Text style={syncRulesStyles.sectionSubtitle}>How should data flow between SSSync and {platformName}?</Text>
+            {renderSyncDirectionOption('two-way', 'Two-way sync', 'Changes flow in both directions', 'sync')}
+            {renderSyncDirectionOption('push-only', 'Push to platform', 'SSSync updates your platform only', 'upload')}
+            {renderSyncDirectionOption('pull-only', 'Pull from platform', 'Platform updates SSSync only', 'download')}
+          </Card>
+
+          <Card style={syncRulesStyles.ruleSection}>
+            <Text style={syncRulesStyles.sectionTitle}>Conflict Resolution</Text>
+            <Text style={syncRulesStyles.sectionSubtitle}>When product details differ, which should win?</Text>
+            {renderSourceOption('sssync', 'SSSync wins', 'Use SSSync data when conflicts occur', 'shield-check')}
+            {renderSourceOption('platform', `${platformName} wins`, `Use ${platformName} data when conflicts occur`, 'store')}
+          </Card>
+
+          <Card style={syncRulesStyles.ruleSection}>
+            <Text style={syncRulesStyles.sectionTitle}>What to Sync</Text>
+            <View style={syncRulesStyles.switchRow}>
+              <View style={syncRulesStyles.switchLabelContainer}>
+                <Icon name="package-variant" size={20} color={theme.colors.text} />
+                <Text style={syncRulesStyles.switchLabel}>Inventory levels</Text>
+              </View>
+              <TouchableOpacity onPress={() => setSyncInventory(!syncInventory)}>
+                <Icon 
+                  name={syncInventory ? 'toggle-switch' : 'toggle-switch-off'} 
+                  size={32} 
+                  color={syncInventory ? theme.colors.primary : theme.colors.textSecondary} 
+                />
+              </TouchableOpacity>
+            </View>
+            <View style={syncRulesStyles.switchRow}>
+              <View style={syncRulesStyles.switchLabelContainer}>
+                <Icon name="currency-usd" size={20} color={theme.colors.text} />
+                <Text style={syncRulesStyles.switchLabel}>Pricing</Text>
+              </View>
+              <TouchableOpacity onPress={() => setSyncPricing(!syncPricing)}>
+                <Icon 
+                  name={syncPricing ? 'toggle-switch' : 'toggle-switch-off'} 
+                  size={32} 
+                  color={syncPricing ? theme.colors.primary : theme.colors.textSecondary} 
+                />
+              </TouchableOpacity>
+            </View>
+          </Card>
+
+          <TouchableOpacity 
+            style={syncRulesStyles.advancedToggle} 
+            onPress={() => setShowAdvancedRules(!showAdvancedRules)}
+          >
+            <Icon 
+              name={showAdvancedRules ? 'chevron-down' : 'chevron-right'} 
+              size={22} 
+              color={theme.colors.primary} 
+            />
+            <Text style={syncRulesStyles.advancedText}>Advanced Settings</Text>
+          </TouchableOpacity>
+          
+          {showAdvancedRules && (
+            <Card style={syncRulesStyles.ruleSection}>
+              <Text style={syncRulesStyles.sectionTitle}>Automatic Actions</Text>
+              <View style={syncRulesStyles.switchRow}>
+                <View style={syncRulesStyles.switchLabelContainer}>
+                  <Icon name="plus-circle" size={20} color={theme.colors.text} />
+                  <Text style={syncRulesStyles.switchLabel}>Auto-create new products</Text>
+                </View>
+                <TouchableOpacity onPress={() => setAutoCreate(!autoCreate)}>
+                  <Icon 
+                    name={autoCreate ? 'toggle-switch' : 'toggle-switch-off'} 
+                    size={32} 
+                    color={autoCreate ? theme.colors.primary : theme.colors.textSecondary} 
+                  />
+                </TouchableOpacity>
+              </View>
+              <View style={syncRulesStyles.switchRow}>
+                <View style={syncRulesStyles.switchLabelContainer}>
+                  <Icon name="update" size={20} color={theme.colors.text} />
+                  <Text style={syncRulesStyles.switchLabel}>Auto-update existing products</Text>
+                </View>
+                <TouchableOpacity onPress={() => setAutoUpdate(!autoUpdate)}>
+                  <Icon 
+                    name={autoUpdate ? 'toggle-switch' : 'toggle-switch-off'} 
+                    size={32} 
+                    color={autoUpdate ? theme.colors.primary : theme.colors.textSecondary} 
+                  />
+                </TouchableOpacity>
+              </View>
+            </Card>
+          )}
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+
+  // Sync rules styles
+  const syncRulesStyles = StyleSheet.create({
+    modalContainer: {
+      flex: 1,
+      backgroundColor: theme.colors.background,
+    },
+    modalHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 20,
+      paddingVertical: 15,
+      borderBottomWidth: 1,
+      borderBottomColor: '#e0e0e0',
+      backgroundColor: theme.colors.surface,
+    },
+    modalTitle: {
+      fontSize: 18,
+      fontWeight: '600',
+      color: theme.colors.text,
+    },
+    doneButton: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: theme.colors.primary,
+    },
+    modalContent: {
+      flex: 1,
+      padding: 20,
+    },
+    ruleSection: {
+      marginBottom: 20,
+      padding: 20,
+    },
+    sectionTitle: {
+      fontSize: 18,
+      fontWeight: '600',
+      color: theme.colors.text,
+      marginBottom: 5,
+    },
+    sectionSubtitle: {
+      fontSize: 14,
+      color: theme.colors.textSecondary,
+      marginBottom: 15,
+      lineHeight: 20,
+    },
+    optionButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      padding: 15,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: '#e0e0e0',
+      marginBottom: 10,
+      backgroundColor: theme.colors.background,
+    },
+    optionButtonSelected: {
+      borderColor: theme.colors.primary,
+      backgroundColor: theme.colors.primary + '10',
+    },
+    optionIcon: {
+      marginRight: 12,
+    },
+    optionTitle: {
+      fontSize: 16,
+      fontWeight: '500',
+      color: theme.colors.text,
+    },
+    optionTitleSelected: {
+      color: theme.colors.primary,
+    },
+    optionSubtitle: {
+      fontSize: 13,
+      color: theme.colors.textSecondary,
+      marginTop: 2,
+    },
+    optionSubtitleSelected: {
+      color: theme.colors.primary,
+    },
+    switchRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: '#e0e0e030',
+    },
+    switchLabelContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flex: 1,
+    },
+    switchLabel: {
+      fontSize: 16,
+      color: theme.colors.text,
+      marginLeft: 12,
+    },
+    advancedToggle: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingVertical: 15,
+    },
+    advancedText: {
+      fontSize: 16,
+      color: theme.colors.primary,
+      fontWeight: '600',
+      marginLeft: 8,
+    },
+  });
+  // --- END NEW ---
 
   // Moved StyleSheet.create inside the component to access theme
   const styles = StyleSheet.create({
@@ -2470,6 +2764,36 @@ const MappingReviewScreen = () => {
     ignoreBadge: {
       backgroundColor: theme.colors.warning,
     },
+    // Sync Rules Button Styles
+    syncRulesSection: {
+      paddingHorizontal: 20,
+      paddingVertical: 10,
+    },
+    syncRulesButton: {
+      backgroundColor: theme.colors.surface,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: '#e0e0e0',
+    },
+    syncRulesButtonContent: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      padding: 16,
+    },
+    syncRulesButtonText: {
+      flex: 1,
+      marginLeft: 12,
+    },
+    syncRulesButtonTitle: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: theme.colors.text,
+    },
+    syncRulesButtonSubtitle: {
+      fontSize: 13,
+      color: theme.colors.textSecondary,
+      marginTop: 2,
+    },
   });
 
   if (loading && isPolling) {
@@ -2661,6 +2985,9 @@ const MappingReviewScreen = () => {
       {/* Search Modal */}
       {renderSearchResults()}
       
+      {/* Sync Rules Modal */}
+      {renderSyncRulesModal()}
+      
       {/* Custom Success Notification */}
       {showSuccessNotification && (
         <Animated.View 
@@ -2746,6 +3073,26 @@ const MappingReviewScreen = () => {
                   </TouchableOpacity>
                 )}
               </View>
+            </View>
+
+            {/* Sync Rules Section */}
+            <View style={styles.syncRulesSection}>
+              <TouchableOpacity 
+                style={styles.syncRulesButton}
+                onPress={() => setShowSyncRules(true)}
+              >
+                <View style={styles.syncRulesButtonContent}>
+                  <Icon name="cog" size={20} color={theme.colors.primary} />
+                  <View style={styles.syncRulesButtonText}>
+                    <Text style={styles.syncRulesButtonTitle}>Sync Settings</Text>
+                    <Text style={styles.syncRulesButtonSubtitle}>
+                      {syncDirection === 'two-way' ? 'Two-way sync' : 
+                       syncDirection === 'push-only' ? 'Push to platform' : 'Pull from platform'} • {sourceOfTruth === 'sssync' ? 'SSSync wins conflicts' : `${platformName} wins conflicts`}
+                    </Text>
+                  </View>
+                  <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
+                </View>
+              </TouchableOpacity>
             </View>
 
             {/* Content Section */}

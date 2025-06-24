@@ -917,8 +917,8 @@ const ProfileScreen = () => {
                 throw new Error("Authentication token not found.");
               }
 
-              // 2. Make API Call (ASSUMED ENDPOINT - Backend needs to implement this)
-              const response = await fetch(`https://api.sssync.app/api/platform-connections/${connectionId}`, { // <-- BACKEND NEEDS THIS ROUTE
+              // 2. Make API Call 
+              const response = await fetch(`https://api.sssync.app/api/platform-connections/${connectionId}`, { 
                 method: 'DELETE',
                 headers: {
                   'Authorization': `Bearer ${token}`,

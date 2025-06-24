@@ -29,6 +29,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { MaterialIcons } from '@expo/vector-icons';
 import Button from '../components/Button';
 import Card from '../components/Card';
 import PlaceholderImage from '../components/PlaceholderImage';
@@ -43,6 +44,13 @@ import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { useNavigation } from '@react-navigation/native';
 
+// Import SVG files from assets
+import ShopifySvg from '../assets/shopify.svg';
+import AmazonSvg from '../assets/amazon.svg';
+import FacebookSvg from '../assets/facebook.svg';
+import EbaySvg from '../assets/ebay.svg';
+import CloverSvg from '../assets/clover.svg';
+import SquareSvg from '../assets/square.svg';
 
 // Define available platforms with icons
 const AVAILABLE_PLATFORMS = [
@@ -58,10 +66,12 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 // Define the stages of the listing process
 enum ListingStage {
+  EnhancedSearch = 'ENHANCED_SEARCH', // NEW: Enhanced search stage
   PlatformSelection = 'PLATFORM_SELECTION',
   ImageInput = 'IMAGE_INPUT',
   Analyzing = 'ANALYZING', // Loading state for /analyze
   VisualMatch = 'VISUAL_MATCH',
+  EnhancingData = 'ENHANCING_DATA', // NEW: Loading state for web scraping
   Generating = 'GENERATING', // Loading state for /generate-details
   FormReview = 'FORM_REVIEW',
   Publishing = 'PUBLISHING', // Loading state for final publish/save
@@ -334,27 +344,6 @@ const CameraSection = ({ onCapture, onClose, styles, initialMedia = [] }: Camera
     onCapture(localMedia);
   };
 
-  // Permission handling
-  if (!cameraPermission) {
-    return (
-      <View style={styles.centeredMessageContainer}>
-        <ActivityIndicator size="large" color={'#294500'} />
-        <Text style={styles.centeredMessageText}>Initializing Camera...</Text>
-      </View>
-    );
-  }
-
-  if (!cameraPermission.granted) {
-    return (
-      <View style={styles.centeredMessageContainer}>
-        <Icon name="camera-off-outline" size={50} color="#FF5252" />
-        <Text style={styles.centeredMessageText}>Camera permission is required to add media.</Text>
-        <Button title="Grant Permission" onPress={requestPermission} style={{marginTop: 20}} />
-        <Button title="Close" onPress={onClose} outlined style={{marginTop: 10}} />
-      </View>
-    );
-  }
-
   // Render draggable media item
   const renderDraggableMediaItem = ({ item, drag, isActive }: RenderItemParams<CapturedMediaItem>) => {
     const isCover = localMedia[coverImageIndex]?.id === item.id;
@@ -384,6 +373,27 @@ const CameraSection = ({ onCapture, onClose, styles, initialMedia = [] }: Camera
       </ScaleDecorator>
     );
   };
+
+  // Permission handling - moved to conditional rendering within return
+  if (!cameraPermission) {
+    return (
+      <View style={styles.centeredMessageContainer}>
+        <ActivityIndicator size="large" color={'#294500'} />
+        <Text style={styles.centeredMessageText}>Initializing Camera...</Text>
+      </View>
+    );
+  }
+
+  if (!cameraPermission.granted) {
+    return (
+      <View style={styles.centeredMessageContainer}>
+        <Icon name="camera-off-outline" size={50} color="#FF5252" />
+        <Text style={styles.centeredMessageText}>Camera permission is required to add media.</Text>
+        <Button title="Grant Permission" onPress={requestPermission} style={{marginTop: 20}} />
+        <Button title="Close" onPress={onClose} outlined style={{marginTop: 10}} />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.cameraStageContainer}>
@@ -597,7 +607,7 @@ interface AddListingScreenProps {
 const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   console.log("[AddListingScreen] Component Mounted");
   const theme = useTheme();
-  const [currentStage, setCurrentStage] = useState<ListingStage>(ListingStage.PlatformSelection);
+  const [currentStage, setCurrentStage] = useState<ListingStage>(ListingStage.EnhancedSearch);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
@@ -670,6 +680,8 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
 
   // --- NEW State for Visual Match Selection ---
   const [selectedMatchForGeneration, setSelectedMatchForGeneration] = useState<VisualMatch | null>(null);
+  // NEW: Enhanced web data from Firecrawl scraping
+  const [enhancedWebData, setEnhancedWebData] = useState<{ url: string; scrapedData: any; analysis?: string } | null>(null);
 
   // --- State for platformConnectionId ---
   const [platformConnectionId, setPlatformConnectionId] = useState<string | null>(null);
@@ -692,7 +704,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   const [showFocusIndicator, setShowFocusIndicator] = useState(false);
   
   // --- Ref for barcode caching ---
-  const barcodeCache = useRef<{ [key: string]: BarcodeScanningResult }>({});
+  const barcodeCache = useRef<{ [key: string]: BarcodeScanningResult & { lastSeen?: number } }>({});
   const barcodeDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   // --- End Camera State ---
 
@@ -1458,7 +1470,114 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
       } else {
           console.log(`Selecting match for generation: ${match.title}`);
           setSelectedMatchForGeneration(match); // Select the new match
+          // NEW: Automatically start enhancing data from the selected match
+          if (match.link) {
+              setCurrentStage(ListingStage.EnhancingData);
+              enhanceDataFromMatch(match);
+          } else {
+              // If no link, proceed directly to generation
+              setCurrentStage(ListingStage.Generating);
+              triggerDetailsGeneration();
+          }
       }
+  };
+
+  // NEW: Enhance data by scraping the selected match URL
+  const enhanceDataFromMatch = async (match: VisualMatch) => {
+    if (!match.link) {
+      console.log("No link available for match, proceeding without enhancement");
+      setCurrentStage(ListingStage.Generating);
+      triggerDetailsGeneration();
+      return;
+    }
+
+    setIsLoading(true);
+    setLoadingMessage('Gathering detailed product information...');
+    setError(null);
+
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+
+      if (userError || !user || sessionError || !sessionData?.session?.access_token) {
+        console.error("Auth error during data enhancement:", { userError, sessionError });
+        setError("Authentication error. Please log out and back in.");
+        setCurrentStage(ListingStage.VisualMatch);
+        return;
+      }
+
+      const token = sessionData.session.access_token;
+      const extractUrl = `https://api.sssync.app/api/products/extract-from-urls`;
+
+      // Use general products template for now - can be enhanced later
+      const templateId = 'general_products';
+      
+      const requestBody = {
+        urls: [match.link],
+        businessTemplate: templateId,
+        customPrompt: `Extract detailed product information from this page. Focus on: title, price, description, specifications, brand, model, features, dimensions, weight, materials, and any other relevant product details.`
+      };
+
+      console.log(`Extracting data from: ${match.link}`);
+      const response = await fetch(extractUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to extract data: ${response.status}`);
+      }
+
+      const enhancementData = await response.json();
+      console.log("Enhanced data received:", enhancementData);
+
+      // NEW: Enhanced web data from Firecrawl scraping
+      setEnhancedWebData({
+        url: match.link,
+        scrapedData: enhancementData.results?.[0]?.data || {},
+        analysis: enhancementData.results?.[0]?.title || match.title
+      });
+
+      // Store enhanced data in database for future reference
+      const { error: storageError } = await supabase
+        .from('ProductEmbeddings')
+        .insert({
+          ProductId: productId,
+          VariantId: variantId,
+          SourceUrl: match.link,
+          ScrapedData: enhancementData.results?.[0]?.data || {},
+          CreatedAt: new Date().toISOString(),
+          UpdatedAt: new Date().toISOString()
+        });
+
+      if (storageError) {
+        console.error("Error storing enhanced data:", storageError);
+        // Continue anyway - this is not critical for the flow
+      } else {
+        console.log("Enhanced data stored in database for future searches");
+      }
+
+      // Proceed to generation with enhanced data
+      setCurrentStage(ListingStage.Generating);
+      triggerDetailsGeneration();
+
+    } catch (error: any) {
+      console.error("Error enhancing data from match:", error);
+      setError(`Data enhancement failed: ${error.message}. Proceeding with basic information.`);
+      
+      // Proceed without enhanced data after 3 seconds
+      setTimeout(() => {
+        setCurrentStage(ListingStage.Generating);
+        triggerDetailsGeneration();
+      }, 3000);
+    } finally {
+      setIsLoading(false);
+      setLoadingMessage('');
+    }
   };
 
   // UPDATED triggerDetailsGeneration - Response handling adjusted
@@ -1506,14 +1625,15 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
      }
 
     // ... (Prepare Request Body - same as before) ...
-     const generateApiUrl = `https://sssync-bknd-production.up.railway.app/api/products/generate-details`;
+     const generateApiUrl = `https://api.sssync.app/api/products/generate-details`;
      const requestBodyGenerate = {
          productId: productId,
          variantId: variantId,
          imageUris: uploadedImageUrls,
          coverImageIndex: coverImageIndexForApi,
          selectedPlatforms: selectedPlatforms,
-         selectedMatch: cleanedSelectedMatch
+         selectedMatch: cleanedSelectedMatch,
+         enhancedWebData: enhancedWebData // NEW: Include enhanced web data
      };
 
       const headers = {
@@ -1649,6 +1769,117 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
          setLoadingMessage('');
      }
   };
+
+    // --- Barcode Scanning Handler ---
+  const handleBarcodeScanned = useCallback((result: BarcodeScanningResult) => {
+    console.log('[handleBarcodeScanned] Full result object:', JSON.stringify(result, null, 2));
+    console.log('[handleBarcodeScanned] Result keys:', Object.keys(result));
+    console.log('[handleBarcodeScanned] Bounding box:', (result as any).boundingBox);
+    console.log('[handleBarcodeScanned] Corner points:', (result as any).cornerPoints);
+    console.log('[handleBarcodeScanned] isBarcodeScanningActive:', isBarcodeScanningActive);
+    
+    if (!isBarcodeScanningActive) {
+      console.log('[handleBarcodeScanned] Barcode scanning is not active, ignoring');
+      return;
+    }
+    
+    if (result.data) {
+      console.log('[handleBarcodeScanned] Updating barcode in cache with live data:', result.data);
+      // Store the latest result with real-time bounding box and timestamp
+      barcodeCache.current[result.data] = {
+        ...result,
+        lastSeen: Date.now()
+      };
+    }
+    
+    // Clear previous timer for immediate update (live tracking)
+    if (barcodeDebounceTimerRef.current) {
+      clearTimeout(barcodeDebounceTimerRef.current);
+    }
+    
+    // Reduced debounce time for more responsive live tracking
+    barcodeDebounceTimerRef.current = setTimeout(() => {
+      const now = Date.now();
+      const maxAge = 2000; // Remove barcodes not seen for 2 seconds
+      
+      // Clean up old barcodes
+      Object.keys(barcodeCache.current).forEach(key => {
+        const barcode = barcodeCache.current[key];
+        if (barcode.lastSeen && (now - barcode.lastSeen) > maxAge) {
+          console.log('[handleBarcodeScanned] Removing old barcode:', key);
+          delete barcodeCache.current[key];
+        }
+      });
+      
+      const allBarcodes = Object.values(barcodeCache.current);
+      console.log('[handleBarcodeScanned] Processing cached barcodes for live update:', allBarcodes.length);
+      
+      const newDetectedBarcodes = allBarcodes.map(b => {
+        const rawBoundingBox = (b as any).boundingBox;
+        const cornerPoints = (b as any).cornerPoints;
+        console.log('[handleBarcodeScanned] Raw bounding box for', b.data, ':', rawBoundingBox);
+        console.log('[handleBarcodeScanned] Corner points for', b.data, ':', cornerPoints);
+        
+        // Try to extract bounding box from different possible formats
+        let boundingBox = null;
+        
+        if (rawBoundingBox && rawBoundingBox.origin && rawBoundingBox.size) {
+          // Standard format: { origin: { x, y }, size: { width, height } }
+          boundingBox = rawBoundingBox;
+        } else if (cornerPoints && Array.isArray(cornerPoints) && cornerPoints.length >= 4) {
+          // Calculate bounding box from corner points
+          const xs = cornerPoints.map(p => p.x);
+          const ys = cornerPoints.map(p => p.y);
+          const minX = Math.min(...xs);
+          const maxX = Math.max(...xs);
+          const minY = Math.min(...ys);
+          const maxY = Math.max(...ys);
+          
+          boundingBox = {
+            origin: { x: minX, y: minY },
+            size: { width: maxX - minX, height: maxY - minY }
+          };
+          console.log('[handleBarcodeScanned] Calculated bounding box from corner points:', boundingBox);
+        } else if (rawBoundingBox && typeof rawBoundingBox === 'object') {
+          // Try other possible formats
+          const keys = Object.keys(rawBoundingBox);
+          console.log('[handleBarcodeScanned] Unknown bounding box format, keys:', keys);
+        }
+        
+        // Fallback to default position if no valid bounding box found
+        if (!boundingBox) {
+          const index = allBarcodes.indexOf(b);
+          const spacing = 250; // Horizontal spacing between barcodes
+          boundingBox = {
+            origin: { x: 50 + (index * spacing), y: 100 },
+            size: { width: 220, height: 60 }
+          };
+          console.log('[handleBarcodeScanned] Using fallback bounding box for', b.data, 'at position', index);
+        }
+        
+        return {
+          ...b,
+          isSelected: selectedBarcode === b.data,
+          boundingBox
+        };
+      });
+      
+      // Auto-select first barcode if none selected and we have barcodes
+      // Or if the currently selected barcode is no longer detected
+      const currentlySelectedExists = newDetectedBarcodes.some(b => b.data === selectedBarcode);
+      
+      if ((!selectedBarcode || !currentlySelectedExists) && newDetectedBarcodes.length > 0) {
+        const firstBarcode = newDetectedBarcodes[0];
+        console.log('[handleBarcodeScanned] Auto-selecting barcode:', firstBarcode.data, 
+                   !selectedBarcode ? '(no selection)' : '(previous selection lost)');
+        setSelectedBarcode(firstBarcode.data);
+        newDetectedBarcodes[0].isSelected = true;
+      }
+      
+      console.log('[handleBarcodeScanned] Setting detected barcodes with live positions:', newDetectedBarcodes);
+      setDetectedBarcodes(newDetectedBarcodes);
+    }, 50); // Reduced from 200ms to 50ms for more responsive tracking
+  }, [isBarcodeScanningActive, selectedBarcode]);
 
 
   // --- NEW: Debounced function to save form data to DB ---
@@ -1963,7 +2194,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
 
       const token = sessionData.session.access_token;
       const response = await fetch(
-        `https://sssync-bknd-production.up.railway.app/api/products/shopify/locations?platformConnectionId=${platformConnectionId}`,
+        `https://api.sssync.app/api/products/shopify/locations?platformConnectionId=${platformConnectionId}`,
         {
           method: 'GET',
           headers: {
@@ -2458,7 +2689,11 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                     onPress={() => handleAddPlatformFromModal(item.key)}
                   >
                     {/* Assuming platformImageMap is available and contains image sources */}
-                    <Image source={platformImageMap[item.key]} style={styles.addPlatformModalIcon} />
+                    {React.createElement(platformImageMap[item.key], {
+                      width: 40,
+                      height: 40,
+                      style: styles.addPlatformModalIcon
+                    })}
                     <Text style={styles.addPlatformModalText}>{item.name}</Text>
                   </TouchableOpacity>
                 )}
@@ -2584,7 +2819,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
     return (
       <View style={styles.container}>
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Select Platform</Text>
+          <Text style={styles.headerTitle}>Add A New Product</Text>
           <TouchableOpacity 
             style={styles.pastScansButton}
             onPress={() => {
@@ -2611,11 +2846,11 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                   activeOpacity={0.7}
                 >
                   {imageSource ? (
-                    <Image
-                      source={imageSource}
-                      style={[styles.platformImage, !isSelected && styles.platformImageDeselected]}
-                      resizeMode="contain"
-                    />
+                    React.createElement(imageSource, {
+                      width: 70,
+                      height: 70,
+                      style: [styles.platformImage, !isSelected && styles.platformImageDeselected]
+                    })
                   ) : (
                     <View style={styles.platformIconPlaceholder} />
                   )}
@@ -2639,26 +2874,6 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
 
   const renderImageInput = () => {
     // --- Barcode Scanning Handlers ---
-    const handleBarcodeScanned = useCallback((result: BarcodeScanningResult) => {
-      if (!isBarcodeScanningActive) return;
-      
-      if (result.data) {
-          barcodeCache.current[result.data] = result;
-      }
-      
-      if (barcodeDebounceTimerRef.current) {
-        clearTimeout(barcodeDebounceTimerRef.current);
-      }
-      barcodeDebounceTimerRef.current = setTimeout(() => {
-        const allBarcodes = Object.values(barcodeCache.current);
-        const newDetectedBarcodes = allBarcodes.map(b => ({
-            ...b,
-            isSelected: selectedBarcode === b.data,
-        }));
-        setDetectedBarcodes(newDetectedBarcodes);
-      }, 200);
-    }, [isBarcodeScanningActive, selectedBarcode]);
-  
     const handleBarcodeSelect = (barcode: DetectedBarcode) => {
         const newSelectedValue = barcode.data === selectedBarcode ? null : barcode.data;
         setSelectedBarcode(newSelectedValue);
@@ -2741,24 +2956,54 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
               </TouchableOpacity>
                   </View>
           
-          {isBarcodeScanningActive && detectedBarcodes.map((barcode) => {
-            if (!barcode.boundingBox) return null;
+          {isBarcodeScanningActive && detectedBarcodes.map((barcode, index) => {
+            const boundingBox = barcode.boundingBox || {
+              origin: { x: 50, y: 100 + (index * 60) },
+              size: { width: 200, height: 50 }
+            };
             return (
               <TouchableOpacity
                   key={barcode.data}
                   style={[
-                      styles.barcodeFrame,
+                      styles.barcodeBrackets,
                       {
-                          left: barcode.boundingBox.origin.x,
-                          top: barcode.boundingBox.origin.y,
-                          width: barcode.boundingBox.size.width,
-                          height: barcode.boundingBox.size.height,
+                          left: boundingBox.origin.x,
+                          top: boundingBox.origin.y,
+                          width: boundingBox.size.width,
+                          height: boundingBox.size.height,
                       },
-                      barcode.isSelected && styles.barcodeFrameSelected
+                      barcode.isSelected && styles.barcodeBracketsSelected
                   ]}
                   onPress={() => handleBarcodeSelect(barcode)}
                   activeOpacity={0.7}
-              />
+              >
+                {/* Corner brackets */}
+                <View style={[
+                  styles.bracketCorner, 
+                  styles.bracketTopLeft,
+                  barcode.isSelected && { borderColor: '#4CAF50' }
+                ]} />
+                <View style={[
+                  styles.bracketCorner, 
+                  styles.bracketTopRight,
+                  barcode.isSelected && { borderColor: '#4CAF50' }
+                ]} />
+                <View style={[
+                  styles.bracketCorner, 
+                  styles.bracketBottomLeft,
+                  barcode.isSelected && { borderColor: '#4CAF50' }
+                ]} />
+                <View style={[
+                  styles.bracketCorner, 
+                  styles.bracketBottomRight,
+                  barcode.isSelected && { borderColor: '#4CAF50' }
+                ]} />
+                
+                {/* Barcode text */}
+                <View style={styles.barcodeTextContainer}>
+                  <Text style={styles.barcodeText}>{barcode.data}</Text>
+                </View>
+              </TouchableOpacity>
             );
           })}
           </CameraView>
@@ -2789,7 +3034,19 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
           <TouchableOpacity style={styles.captureButton} onPress={takePicture} disabled={capturedMedia.length >= 10}>
             <View style={[ styles.captureInner, capturedMedia.length >= 10 && styles.captureDisabledInner]} />
             </TouchableOpacity>
-          <TouchableOpacity style={styles.sideControlButton} onPress={() => setIsBarcodeScanningActive(prev => !prev)}>
+          <TouchableOpacity style={styles.sideControlButton} onPress={() => {
+            console.log('[Barcode Toggle] Toggling barcode scanning from:', isBarcodeScanningActive, 'to:', !isBarcodeScanningActive);
+            setIsBarcodeScanningActive(prev => {
+              const newValue = !prev;
+              // Clear detected barcodes when toggling off
+              if (!newValue) {
+                setDetectedBarcodes([]);
+                barcodeCache.current = {};
+                setSelectedBarcode(null);
+              }
+              return newValue;
+            });
+          }}>
             <Icon name={isBarcodeScanningActive ? "barcode-off" : "barcode-scan"} size={30} color={isBarcodeScanningActive ? "#4CAF50" : "white"} />
                           </TouchableOpacity>
                 </View>
@@ -2798,6 +3055,9 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
             <Text style={styles.stageTitleCamera}>Add Product Media</Text>
             <Text style={styles.stageSubtitleCamera}>
               {capturedMedia.length}/10 items. {capturedMedia.length > 0 ? 'Drag to reorder. Tap preview to set cover.' : 'Use camera or upload.'}
+              {isBarcodeScanningActive && ' • Barcode scanning active'}
+              {detectedBarcodes.length > 0 && ` • ${detectedBarcodes.length} barcode(s) detected`}
+              {detectedBarcodes.length > 1 && ' • Tap to select'}
                           </Text>
                 </View>
                 
@@ -3052,7 +3312,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                         <TextInput
                           style={styles.quantityInput}
                           keyboardType="numeric"
-                          value={selectedLocation.quantity === 0 ? '' : String(selectedLocation.quantity)} // Display blank if 0
+                          value={selectedLocation.quantity === 0 ? '0' : String(selectedLocation.quantity)} // Display blank if 0
                           onChangeText={(value) => updateLocationQuantity(location.id, value)} // Use updated function
                           placeholder="0"
                         />
@@ -3126,10 +3386,11 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                 style={[styles.platformTab, activeFormTab === platformKey && styles.platformTabActive]}
                 onPress={() => setActiveFormTab(platformKey)}
               >
-                <Image 
-                  source={platformImageMap[platformKey]} 
-                  style={styles.platformTabIcon} 
-                />
+                {React.createElement(platformImageMap[platformKey], {
+                  width: 40,
+                  height: 40,
+                  style: styles.platformTabIcon
+                })}
                 <Text style={[styles.platformTabText, activeFormTab === platformKey && styles.platformTabTextActive]}>
                   {AVAILABLE_PLATFORMS.find(p => p.key === platformKey)?.name || platformKey}
                 </Text>
@@ -3423,6 +3684,59 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
     );
   };
 
+  // --- Enhanced Search Stage --- //
+  const renderEnhancedSearch = () => {
+    return (
+      <View style={styles.stageContainer}>
+        <Text style={styles.stageTitle}>Enhanced Product Search</Text>
+        <Text style={styles.stageSubtitle}>
+          Search for products using our AI-powered system. Take photos, scan barcodes, 
+          or search specific websites with custom templates.
+        </Text>
+        
+        <View style={styles.searchOptionsContainer}>
+          <TouchableOpacity 
+            style={styles.searchOptionButton}
+            onPress={() => setCurrentStage(ListingStage.ImageInput)}
+          >
+            <MaterialIcons name="photo-camera" size={24} color="#007AFF" />
+            <Text style={styles.searchOptionText}>Take Photo & Search</Text>
+            <Text style={styles.searchOptionSubtext}>Visual product identification</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={styles.searchOptionButton}
+            onPress={() => {
+              // TODO: Navigate to EnhancedSearchScreen
+              console.log("Navigate to enhanced search - placeholder");
+              setCurrentStage(ListingStage.PlatformSelection);
+            }}
+          >
+            <MaterialIcons name="search" size={24} color="#007AFF" />
+            <Text style={styles.searchOptionText}>Advanced Search</Text>
+            <Text style={styles.searchOptionSubtext}>Custom templates & web search</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={styles.searchOptionButton}
+            onPress={() => setCurrentStage(ListingStage.PlatformSelection)}
+          >
+            <MaterialIcons name="edit" size={24} color="#007AFF" />
+            <Text style={styles.searchOptionText}>Manual Entry</Text>
+            <Text style={styles.searchOptionSubtext}>Create product from scratch</Text>
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity 
+          style={styles.skipButton}
+          onPress={() => setCurrentStage(ListingStage.PlatformSelection)}
+        >
+          <Text style={styles.skipButtonText}>Skip Search</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
   // --- Current Stage Logic (Unchanged) --- //
   const renderCurrentStage = () => {
     console.log(`[renderCurrentStage] Rendering stage: ${currentStage}`);
@@ -3433,13 +3747,15 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
     if (isLoading) {
         // Use the restored renderLoading function
         if (currentStage === ListingStage.Analyzing) return renderLoading('Analyzing Media...');
-        if (currentStage === ListingStage.Generating) return renderLoading('Generating Details...');
+        if (currentStage === ListingStage.EnhancingData) return renderLoading('Gathering Detailed Product Information...');
+        if (currentStage === ListingStage.Generating) return renderLoading('Generating Optimized Listings...');
         if (currentStage === ListingStage.Publishing) return renderLoading('Publishing...');
         return renderLoading(loadingMessage || 'Loading...');
     }
 
     // Restore original switch statement
     switch (currentStage) {
+        case ListingStage.EnhancedSearch: return renderEnhancedSearch();
         case ListingStage.PlatformSelection: return renderPlatformSelection();
         case ListingStage.ImageInput: return renderImageInput();
         case ListingStage.VisualMatch: return renderVisualMatch();
@@ -3451,22 +3767,9 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
     }
   };
 
-  // --- Camera Section Show Logic (Unchanged - Render CameraSection if showCameraSection is true) --- //
-  if (showCameraSection) {
-       console.log("[AddListingScreen] Rendering CameraSection");
-       // This assumes CameraSection is defined correctly elsewhere or imported
-       // If it was previously defined inline and removed, it needs to be restored/imported.
-       // For now, assuming it exists:
-       return (<CameraSection
-            onCapture={handleMediaCaptured}
-            onClose={() => setShowCameraSection(false)}
-            styles={styles} // Pass styles down
-            initialMedia={capturedMedia} // Pass current media down
-         />);
-   }
+
 
   // --- Main Render (Ensure this is the final return) --- //
-  // Restore original return statement
   console.log("[AddListingScreen] Rendering main SafeAreaView with renderCurrentStage");
   return (
     <SafeAreaView style={styles.container}>
@@ -3474,6 +3777,20 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
       {renderAddPlatformModal()} 
       {/* NEW: Render the Publish Modal */}
       {isPublishModalVisible && renderPublishModal()} 
+      {/* NEW: Render CameraSection inside a Modal */}
+      <Modal
+        visible={showCameraSection}
+        onRequestClose={() => setShowCameraSection(false)}
+        animationType="slide"
+        style={{ margin: 0 }} // Remove default margin for full screen modal
+      >
+        <CameraSection
+          onCapture={handleMediaCaptured}
+          onClose={() => setShowCameraSection(false)}
+          styles={styles} // Pass styles down
+          initialMedia={capturedMedia} // Pass current media down
+        />
+      </Modal>
     </SafeAreaView>
   );
   // REMOVE any return null placeholders below this point
@@ -3965,8 +4282,8 @@ const styles = StyleSheet.create({
       opacity: 1, // Make deselected images slightly faded
   },
   platformIconPlaceholder: { // Placeholder style if image fails to load
-      width: 40,
-      height: 40,
+      width: 100,
+      height: 100,
       backgroundColor: '#eee',
       borderRadius: 5,
       marginBottom: 10,
@@ -4523,15 +4840,119 @@ const styles = StyleSheet.create({
     borderColor: '#4CAF50', // Green color for selected
     backgroundColor: 'rgba(76, 175, 80, 0.2)',
   },
+  barcodeText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    padding: 4,
+    borderRadius: 4,
+  },
+  barcodeBrackets: {
+    position: 'absolute',
+    backgroundColor: 'transparent',
+  },
+  barcodeBracketsSelected: {
+    // Selected state styling handled by bracket corners
+  },
+  barcodeTextContainer: {
+    position: 'absolute',
+    bottom: -30,
+    left: -10,
+    right: -10,
+    alignItems: 'center',
+  },
+  bracketCorner: {
+    position: 'absolute',
+    width: 30,
+    height: 30,
+    borderColor: 'white',
+    borderWidth: 3,
+  },
+  bracketTopLeft: {
+    top: 0,
+    left: 0,
+    borderRightWidth: 0,
+    borderBottomWidth: 0,
+  },
+  bracketTopRight: {
+    top: 0,
+    right: 0,
+    borderLeftWidth: 0,
+    borderBottomWidth: 0,
+  },
+  bracketBottomLeft: {
+    bottom: 0,
+    left: 0,
+    borderRightWidth: 0,
+    borderTopWidth: 0,
+  },
+  bracketBottomRight: {
+    bottom: 0,
+    right: 0,
+    borderLeftWidth: 0,
+    borderTopWidth: 0,
+  },
   // --- End Barcode Overlay Styles ---
-});
 
-// --- Platform Images Map (Unchanged, Ensure it's defined) --- //
+  // --- Enhanced Search Styles ---
+  searchOptionsContainer: {
+    flex: 1,
+    paddingTop: 20,
+    paddingBottom: 20,
+  },
+  searchOptionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    padding: 20,
+    marginHorizontal: 20,
+    marginBottom: 15,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  searchOptionText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginLeft: 15,
+    flex: 1,
+  },
+  searchOptionSubtext: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 2,
+    marginLeft: 15,
+    flex: 1,
+  },
+  skipButton: {
+    alignItems: 'center',
+    padding: 15,
+    marginHorizontal: 20,
+    marginTop: 20,
+  },
+  skipButtonText: {
+    fontSize: 16,
+    color: '#007AFF',
+    fontWeight: '500',
+  },
+  // --- End Enhanced Search Styles ---
+  });
+
+// --- Platform Images Map --- //
 const platformImageMap: { [key: string]: any } = {
-    shopify: require('../../src/assets/shopify.png'),
-    amazon: require('../../src/assets/amazon.png'),
-    facebook: require('../../src/assets/facebook.png'),
-    ebay: require('../../src/assets/ebay.png'),
-    clover: require('../../src/assets/clover.png'),
-    square: require('../../src/assets/square.png'),
+    shopify: ShopifySvg,
+    amazon: AmazonSvg,
+    facebook: FacebookSvg,
+    ebay: EbaySvg,
+    clover: CloverSvg,
+    square: SquareSvg,
 };
+

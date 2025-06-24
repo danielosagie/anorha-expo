@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput, ScrollView, Image, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput, ScrollView, Image, Modal, ActivityIndicator } from 'react-native';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -15,6 +15,7 @@ import { useNavigation } from '@react-navigation/native';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { supabase } from '../../lib/supabase';
+// No need to import images, we'll use icons from react-native-vector-icons
 
 type InventoryOrdersScreenNavigationProp = StackNavigationProp<AppStackParamList, 'TabNavigator'>;
 
@@ -23,6 +24,13 @@ type EnrichedProductVariant = ProductVariantData & {
   imageUrl?: string;
   totalQuantity?: number;
   platformNames?: string[]; // Array of PlatformConnectionIds or derived names
+  // Platform boolean flags for fast filtering
+  OnShopify?: boolean;
+  OnSquare?: boolean;
+  OnClover?: boolean;
+  OnAmazon?: boolean;
+  OnEbay?: boolean;
+  OnFacebook?: boolean;
 };
 
 interface MockOrderItemData {
@@ -35,6 +43,18 @@ interface MockOrderItemData {
   total: number;
 }
 
+// Platform Icons Map
+const getIconForPlatformType = (platformType: string): string => {
+  const type = platformType.toLowerCase();
+  if (type.includes('shopify')) return 'shopping';
+  if (type.includes('square')) return 'square-medium';
+  if (type.includes('clover')) return 'clover';
+  if (type.includes('amazon')) return 'amazon';
+  if (type.includes('ebay')) return 'tag';
+  if (type.includes('facebook')) return 'facebook';
+  return 'store';
+};
+
 const InventoryOrdersScreen = observer(() => {
   const theme = useTheme();
   const navigation = useNavigation<InventoryOrdersScreenNavigationProp>();
@@ -45,33 +65,68 @@ const InventoryOrdersScreen = observer(() => {
   const [sortBy, setSortBy] = useState('date');
   const [filterStatus, setFilterStatus] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
-  const [displayCount, setDisplayCount] = useState(30);
-  const ITEMS_PER_LOAD = 10;
+  const [displayCount, setDisplayCount] = useState(50);
+  const ITEMS_PER_LOAD = 20;
   const [isFilterModalVisible, setIsFilterModalVisible] = useState(false);
   const [selectedPlatformType, setSelectedPlatformType] = useState<string | null>(null);
   const [availableLocations, setAvailableLocations] = useState<PlatformLocation[]>([]);
   const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
   const [isLocationDropdownVisible, setIsLocationDropdownVisible] = useState(false);
   const [isLocationSelectModalVisible, setIsLocationSelectModalVisible] = useState(false);
+  
+  // Real platform connections and locations from Supabase
+  const [platformConnections, setPlatformConnections] = useState<PlatformConnection[]>([]);
+  const [platformLocations, setPlatformLocations] = useState<PlatformLocation[]>([]);
+  const [isLoadingConnections, setIsLoadingConnections] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
   const legendObservables: LegendStateObservables | null = useLegendState();
 
-  // Mock PlatformConnections and PlatformLocations data until SupaLegend provides them
-  // In a real app, these would come from legendState.platformConnections$ and legendState.platformLocations$
-  const mockPlatformConnections: Record<string, PlatformConnection> = {
-    'conn_shopify_1': { Id: 'conn_shopify_1', UserId: 'user1', PlatformType: 'Shopify', DisplayName: 'My Shopify Store', Credentials: {}, Status: 'Active', IsEnabled: true, CreatedAt: '', UpdatedAt: '' },
-    'conn_square_1': { Id: 'conn_square_1', UserId: 'user1', PlatformType: 'Square', DisplayName: 'Main Square Acct', Credentials: {}, Status: 'Active', IsEnabled: true, CreatedAt: '', UpdatedAt: '' },
-    'conn_square_2': { Id: 'conn_square_2', UserId: 'user1', PlatformType: 'Square', DisplayName: 'Second Square Kiosk', Credentials: {}, Status: 'Active', IsEnabled: true, CreatedAt: '', UpdatedAt: '' },
-    'conn_clover_1': { Id: 'conn_clover_1', UserId: 'user1', PlatformType: 'Clover', DisplayName: 'Restaurant POS', Credentials: {}, Status: 'Active', IsEnabled: true, CreatedAt: '', UpdatedAt: '' },
-  };
+  // Fetch real platform connections and locations from Supabase
+  useEffect(() => {
+    const fetchPlatformData = async () => {
+      if (!legendState?.userId) return;
+      
+      setIsLoadingConnections(true);
+      try {
+        // Fetch platform connections
+        const { data: connectionsData, error: connectionsError } = await supabase
+          .from('PlatformConnections')
+          .select('*')
+          .eq('UserId', legendState.userId);
 
-  const mockPlatformLocations: Record<string, PlatformLocation> = {
-    'loc_shopify_main': { Id: 'loc_shopify_main', PlatformConnectionId: 'conn_shopify_1', PlatformGeneratedLocationId: 'sl_1', Name: 'Shopify Online', IsPOS: false },
-    'loc_square_kennesaw': { Id: 'loc_square_kennesaw', PlatformConnectionId: 'conn_square_1', PlatformGeneratedLocationId: 'sq_loc_kennesaw', Name: 'Kennesaw - ACSM', IsPOS: true },
-    'loc_square_douglasville': { Id: 'loc_square_douglasville', PlatformConnectionId: 'conn_square_1', PlatformGeneratedLocationId: 'sq_loc_douglasville', Name: 'Douglasville - ACSM', IsPOS: true },
-    'loc_square_alabama': { Id: 'loc_square_alabama', PlatformConnectionId: 'conn_square_2', PlatformGeneratedLocationId: 'sq_loc_al', Name: 'Alabama Square', IsPOS: true },
-    'loc_clover_downtown': { Id: 'loc_clover_downtown', PlatformConnectionId: 'conn_clover_1', PlatformGeneratedLocationId: 'cl_loc_dt', Name: 'Downtown Clover POS', IsPOS: true },
-  };
+        if (connectionsError) {
+          console.error('[InventoryScreen] Error fetching platform connections:', connectionsError);
+        } else {
+          console.log('[InventoryScreen] Platform connections fetched:', connectionsData);
+          console.log('[InventoryScreen] Enabled connections:', connectionsData?.filter(conn => conn.IsEnabled));
+          setPlatformConnections(connectionsData || []);
+        }
+
+        // Fetch platform locations for these connections
+        if (connectionsData && connectionsData.length > 0) {
+          const connectionIds = connectionsData.map(conn => conn.Id);
+          const { data: locationsData, error: locationsError } = await supabase
+            .from('PlatformLocations')
+            .select('*')
+            .in('PlatformConnectionId', connectionIds);
+
+          if (locationsError) {
+            console.error('[InventoryScreen] Error fetching platform locations:', locationsError);
+          } else {
+            console.log('[InventoryScreen] Platform locations fetched:', locationsData);
+            setPlatformLocations(locationsData || []);
+          }
+        }
+      } catch (error) {
+        console.error('[InventoryScreen] Exception fetching platform data:', error);
+      } finally {
+        setIsLoadingConnections(false);
+      }
+    };
+
+    fetchPlatformData();
+  }, [legendState?.userId]);
 
   useEffect(() => {
     if (legendState && legendState.productVariants$) {
@@ -116,23 +171,25 @@ const InventoryOrdersScreen = observer(() => {
   
   useEffect(() => {
     // This effect will update available locations when a platform type is selected
-    if (selectedPlatformType) {
-      const connectionsOfPlatformType = Object.values(mockPlatformConnections)
-        .filter(conn => conn.PlatformType === selectedPlatformType);
+    if (selectedPlatformType && platformConnections.length > 0) {
+      const connectionsOfPlatformType = platformConnections
+        .filter((conn: PlatformConnection) => conn.PlatformType === selectedPlatformType);
       
-      const relevantLocationIds = connectionsOfPlatformType.map(conn => conn.Id);
+      const relevantConnectionIds = connectionsOfPlatformType.map((conn: PlatformConnection) => conn.Id);
       
-      const locations = Object.values(mockPlatformLocations)
-        .filter(loc => relevantLocationIds.includes(loc.PlatformConnectionId) && loc.IsPOS);
+      // For Shopify, include both POS and online locations. For others, include all locations.
+      const locations = platformLocations
+        .filter((loc: PlatformLocation) => relevantConnectionIds.includes(loc.PlatformConnectionId));
+      
       setAvailableLocations(locations);
       setIsLocationDropdownVisible(locations.length > 0);
-      setSelectedLocationIds([]); // Reset selected locations when platform changes
+      setSelectedLocationIds([]); // Reset selected locations when platform changes (start with "All" selected)
     } else {
       setAvailableLocations([]);
       setIsLocationDropdownVisible(false);
       setSelectedLocationIds([]);
     }
-  }, [selectedPlatformType]);
+  }, [selectedPlatformType, platformConnections, platformLocations]);
   
   const activeProductVariants = useMemo(() => {
     if (!legendObservables?.productVariants$) return {};
@@ -165,59 +222,94 @@ const InventoryOrdersScreen = observer(() => {
     const levels = activeInventoryLevels; 
     const mappings = activePlatformMappings;
 
-    if (Object.keys(variants).length === 0) return [];
+    if (Object.keys(variants).length === 0 || platformConnections.length === 0) return [];
 
     let productVariantIdsToDisplay = Object.keys(variants);
 
     if (selectedPlatformType) {
-      const relevantConnectionIds = Object.values(mockPlatformConnections)
-        .filter(conn => conn.PlatformType === selectedPlatformType)
-        .map(conn => conn.Id);
-
-      const mappedVariantIds = Object.values(mappings)
-        .filter((mapping: PlatformProductMapping) => relevantConnectionIds.includes(mapping.PlatformConnectionId)) 
-        .map((mapping: PlatformProductMapping) => mapping.ProductVariantId);
+      // Fast platform filtering using boolean columns or fallback to mapping logic
+      const platformFilter = selectedPlatformType.toLowerCase();
       
-      productVariantIdsToDisplay = productVariantIdsToDisplay.filter(variantId => mappedVariantIds.includes(variantId));
-
-      if (selectedLocationIds.length > 0) {
-        const variantIdsInSelectedLocations = Object.values(levels)
-          .filter((level: InventoryLevel) => { 
-            const mockLoc = Object.values(mockPlatformLocations).find(
-              l => l.PlatformConnectionId === level.PlatformConnectionId && 
-                   l.PlatformGeneratedLocationId === level.PlatformLocationId 
-            );
-            return mockLoc && selectedLocationIds.includes(mockLoc.Id);
-          })
-          .map((level: InventoryLevel) => level.ProductVariantId);
+      productVariantIdsToDisplay = productVariantIdsToDisplay.filter(variantId => {
+        const variant = variants[variantId];
+        if (!variant) return false;
         
-        productVariantIdsToDisplay = productVariantIdsToDisplay.filter(variantId => variantIdsInSelectedLocations.includes(variantId));
-      }
-    }
+        // First check if platform boolean flags are available
+        switch (platformFilter) {
+          case 'shopify': 
+            if (variant.OnShopify !== undefined) return variant.OnShopify === true;
+            break;
+          case 'square': 
+            if (variant.OnSquare !== undefined) return variant.OnSquare === true;
+            break;
+          case 'clover': 
+            if (variant.OnClover !== undefined) return variant.OnClover === true;
+            break;
+          case 'amazon': 
+            if (variant.OnAmazon !== undefined) return variant.OnAmazon === true;
+            break;
+          case 'ebay': 
+            if (variant.OnEbay !== undefined) return variant.OnEbay === true;
+            break;
+          case 'facebook': 
+            if (variant.OnFacebook !== undefined) return variant.OnFacebook === true;
+            break;
+        }
+        
+        // Fallback to existing mapping logic if platform flags aren't available
+        const relevantConnectionIds = platformConnections
+          .filter((conn: PlatformConnection) => 
+            conn.PlatformType.toLowerCase() === selectedPlatformType.toLowerCase() && conn.IsEnabled)
+          .map((conn: PlatformConnection) => conn.Id);
 
-    const result: EnrichedProductVariant[] = [];
-    for (const variantId of productVariantIdsToDisplay) {
-      const variant = variants[variantId];
-      if (!variant) continue; // Skip if variant somehow became undefined
-
-      const variantImages = Object.values(images).filter((img: ProductImage) => img.ProductVariantId === variant.Id); 
-      const primaryImage = variantImages.sort((a: ProductImage, b: ProductImage) => a.Position - b.Position)[0]; 
-
-      const variantLevels = Object.values(levels).filter((level: InventoryLevel) => level.ProductVariantId === variant.Id); 
-      const totalQuantity = variantLevels.reduce((sum, level: InventoryLevel) => sum + level.Quantity, 0); 
-
-      const variantMappings = Object.values(mappings).filter((mapping: PlatformProductMapping) => mapping.ProductVariantId === variant.Id); 
-      const platformNames = variantMappings.map((mapping: PlatformProductMapping) => mapping.PlatformConnectionId); 
-
-      result.push({
-        ...variant,
-        imageUrl: primaryImage?.ImageUrl,
-        totalQuantity: totalQuantity,
-        platformNames: platformNames,
+        const hasMapping = Object.values(mappings).some((mapping: PlatformProductMapping) => 
+          mapping.ProductVariantId === variantId && 
+          relevantConnectionIds.includes(mapping.PlatformConnectionId) &&
+          mapping.IsEnabled
+        );
+        
+        return hasMapping;
       });
+      
+      console.log(`[InventoryScreen] Filtered to ${productVariantIdsToDisplay.length} variants for ${selectedPlatformType}`);
     }
-    return result;
-  }, [activeProductVariants, activeProductImages, activeInventoryLevels, activePlatformMappings, selectedPlatformType, selectedLocationIds, mockPlatformConnections, mockPlatformLocations]);
+
+    // Apply location filter if specific locations are selected
+    if (selectedLocationIds.length > 0 && !selectedLocationIds.includes('all')) {
+      productVariantIdsToDisplay = productVariantIdsToDisplay.filter(variantId => {
+        return Object.values(levels).some((level: InventoryLevel) => 
+          level.ProductVariantId === variantId && 
+          selectedLocationIds.includes(level.PlatformLocationId || 'unknown')
+        );
+      });
+      
+      console.log(`[InventoryScreen] After location filter: ${productVariantIdsToDisplay.length} variants`);
+    }
+
+    const enrichedVariants: EnrichedProductVariant[] = productVariantIdsToDisplay.map(variantId => {
+      const variant = variants[variantId];
+      const variantImages = Object.values(images).filter((img: ProductImage) => img.ProductVariantId === variantId);
+      const imageUrl = variantImages.length > 0 ? variantImages[0].ImageUrl : undefined;
+
+      const variantLevels = Object.values(levels).filter((level: InventoryLevel) => level.ProductVariantId === variantId);
+      const totalQuantity = variantLevels.reduce((sum, level) => sum + level.Quantity, 0);
+
+      const variantMappings = Object.values(mappings).filter((mapping: PlatformProductMapping) => mapping.ProductVariantId === variantId);
+      const platformNames = variantMappings.map((mapping: PlatformProductMapping) => {
+        const connection = platformConnections.find((conn: PlatformConnection) => conn.Id === mapping.PlatformConnectionId);
+        return connection ? `${connection.PlatformType} (${connection.DisplayName})` : 'Unknown Platform';
+      });
+
+      return {
+        ...variant,
+        imageUrl,
+        totalQuantity,
+        platformNames,
+      };
+    });
+
+    return enrichedVariants;
+  }, [activeProductVariants, activeProductImages, activeInventoryLevels, activePlatformMappings, platformConnections, selectedPlatformType, selectedLocationIds]);
   
   const renderInventoryItem = ({ item }: { item: EnrichedProductVariant }) => {
     const navigateToDetail = () => {
@@ -447,6 +539,19 @@ const InventoryOrdersScreen = observer(() => {
     return filteredInventory.slice(0, displayCount);
   }, [filteredInventory, displayCount]);
   
+  // Handle infinite scroll
+  const handleLoadMore = () => {
+    console.log(`[InventoryScreen] Loading more items. Current: ${displayCount}, Total: ${filteredInventory.length}`);
+    if (displayCount < filteredInventory.length && !isLoadingMore) {
+      setIsLoadingMore(true);
+      // Small delay to show loading indicator and prevent multiple calls
+      setTimeout(() => {
+        setDisplayCount(prevCount => prevCount + ITEMS_PER_LOAD);
+        setIsLoadingMore(false);
+      }, 500);
+    }
+  };
+  
   console.log('Enriched and Filtered Inventory (in screen):', filteredInventory.length);
   console.log('Inventory to Display:', inventoryToDisplay.length);
   
@@ -559,22 +664,66 @@ const InventoryOrdersScreen = observer(() => {
           <View style={[styles.modalView, styles.locationSelectModalView, {backgroundColor: theme.colors.surface}]} onStartShouldSetResponder={() => true}>
             <Text style={[styles.modalText, {color: theme.colors.text}]}>Select Locations for {selectedPlatformType}</Text>
             <ScrollView style={styles.locationListScrollView}>
+              {/* All Locations Option */}
+              <TouchableOpacity 
+                style={[styles.locationSelectItem, styles.allLocationItem]}
+                onPress={() => {
+                  const isAllSelected = selectedLocationIds.length === 0 || selectedLocationIds.length === availableLocations.length;
+                  if (isAllSelected) {
+                    // If "All" is currently selected, deselect all
+                    setSelectedLocationIds([]);
+                  } else {
+                    // If some or none are selected, select all
+                    setSelectedLocationIds(availableLocations.map(loc => loc.Id));
+                  }
+                }}
+              >
+                <Icon 
+                  name={
+                    selectedLocationIds.length === 0 || selectedLocationIds.length === availableLocations.length 
+                      ? "checkbox-marked-outline" 
+                      : selectedLocationIds.length > 0 
+                        ? "minus-box-outline"
+                        : "checkbox-blank-outline"
+                  }
+                  size={24} 
+                  color={
+                    selectedLocationIds.length === 0 || selectedLocationIds.length === availableLocations.length
+                      ? theme.colors.primary 
+                      : selectedLocationIds.length > 0 
+                        ? theme.colors.warning 
+                        : theme.colors.textSecondary
+                  }
+                  style={styles.checkboxIcon}
+                />
+                <Text style={[styles.locationNameText, styles.allLocationText, {color: theme.colors.text}]}>
+                  All Locations
+                </Text>
+              </TouchableOpacity>
+              
+              {/* Individual Location Options */}
               {availableLocations.map(location => (
                 <TouchableOpacity 
                   key={location.Id}
                   style={styles.locationSelectItem}
                   onPress={() => {
-                    setSelectedLocationIds(prevSelected => 
-                      prevSelected.includes(location.Id) 
+                    setSelectedLocationIds(prevSelected => {
+                      const newSelected = prevSelected.includes(location.Id) 
                         ? prevSelected.filter(id => id !== location.Id)
-                        : [...prevSelected, location.Id]
-                    );
+                        : [...prevSelected, location.Id];
+                      
+                      // If we now have all locations selected, clear the array to represent "All"
+                      if (newSelected.length === availableLocations.length) {
+                        return [];
+                      }
+                      return newSelected;
+                    });
                   }}
                 >
                   <Icon 
-                    name={selectedLocationIds.includes(location.Id) ? "checkbox-marked-outline" : "checkbox-blank-outline"}
+                    name={selectedLocationIds.includes(location.Id) || selectedLocationIds.length === 0 ? "checkbox-marked-outline" : "checkbox-blank-outline"}
                     size={24} 
-                    color={selectedLocationIds.includes(location.Id) ? theme.colors.primary : theme.colors.textSecondary}
+                    color={selectedLocationIds.includes(location.Id) || selectedLocationIds.length === 0 ? theme.colors.primary : theme.colors.textSecondary}
                     style={styles.checkboxIcon}
                   />
                   <Text style={[styles.locationNameText, {color: theme.colors.text}]}>{location.Name}</Text>
@@ -589,57 +738,149 @@ const InventoryOrdersScreen = observer(() => {
         </TouchableOpacity>
       </Modal>
       
-      {/* Location Dropdown Area - Placed before FlatList */}
-      {isLocationDropdownVisible && selectedPlatformType && (
-        <View style={styles.locationFilterContainer}>
-          <TouchableOpacity 
-            style={styles.locationDropdownButton}
-            onPress={() => setIsLocationSelectModalVisible(true)} // Open location select modal
-          >
-            <Text style={styles.locationDropdownButtonText}>
-              {selectedLocationIds.length === 0 
-                ? `All ${selectedPlatformType} Locations` 
-                : selectedLocationIds.length === 1 
-                  ? `${availableLocations.find(loc => loc.Id === selectedLocationIds[0])?.Name}`
-                  : `${selectedLocationIds.length} ${selectedPlatformType} Locations Selected`}
-            </Text>
-            <Icon name="chevron-down" size={20} color="#777" />
-          </TouchableOpacity>
-        </View>
-      )}
-
       {activeTab === 'inventory' && (
         <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
-          {/* Platform Filter Chips - Placed before FlatList */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersContainer}>
-            {['All', 'Shopify', 'Square', 'Clover', 'Amazon', 'Ebay', 'Facebook'].map(platformName => (
+          {/* Clean Apple-inspired Platform Filter */}
+          <View style={styles.filtersSection}>
+            <Text style={[styles.filtersSectionTitle, { color: theme.colors.text }]}>Platforms</Text>
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false} 
+              style={styles.platformFiltersContainer}
+              contentContainerStyle={styles.platformFiltersContent}
+            >
+              {/* All Filter - Always available */}
               <TouchableOpacity
-                key={platformName}
+                key="All"
                 style={[
-                  styles.filterChip,
-                  selectedPlatformType === platformName && { backgroundColor: theme.colors.primary + '20' },
-                  platformName === 'All' && !selectedPlatformType && { backgroundColor: theme.colors.primary + '20' }
-                ]}
-                onPress={() => {
-                  if (platformName === 'All') {
-                    setSelectedPlatformType(null);
-                  } else {
-                    setSelectedPlatformType(platformName);
+                  styles.platformFilterChip,
+                  !selectedPlatformType && {
+                    backgroundColor: theme.colors.primary,
+                    borderColor: theme.colors.primary,
                   }
-                  setFilterStatus(platformName.toLowerCase()); 
-                }}
+                ]}
+                onPress={() => setSelectedPlatformType(null)}
+                activeOpacity={0.7}
               >
                 <Text
                   style={[
-                    styles.filterChipText,
-                    (selectedPlatformType === platformName || (platformName === 'All' && !selectedPlatformType)) && { color: theme.colors.primary }
+                    styles.platformFilterChipText,
+                    !selectedPlatformType && {
+                      color: '#FFFFFF',
+                      fontWeight: '600'
+                    }
                   ]}
                 >
-                  {platformName}
+                  All
                 </Text>
               </TouchableOpacity>
-            ))}
-          </ScrollView>
+
+              {/* Dynamic Platform Filters based on actual connections */}
+              {['shopify', 'square', 'clover', 'amazon', 'ebay', 'facebook'].map(platformType => {
+                // Check if we have any connections of this platform type
+                const hasConnection = platformConnections.some((conn: PlatformConnection) => 
+                  conn.PlatformType.toLowerCase() === platformType && conn.IsEnabled
+                );
+                
+                // Count how many connections of this type we have
+                const connectionCount = platformConnections.filter((conn: PlatformConnection) => 
+                  conn.PlatformType.toLowerCase() === platformType && conn.IsEnabled
+                ).length;
+                
+                const displayName = platformType.charAt(0).toUpperCase() + platformType.slice(1);
+                
+                // Check if this platform is currently selected
+                const isSelected = selectedPlatformType?.toLowerCase() === platformType.toLowerCase();
+                
+                return (
+                  <TouchableOpacity
+                    key={platformType}
+                    style={[
+                      styles.platformFilterChip,
+                      {
+                        opacity: hasConnection ? 1 : 0.4,
+                        borderColor: hasConnection ? '#E0E0E0' : '#F0F0F0',
+                      },
+                      isSelected && hasConnection && {
+                        backgroundColor: theme.colors.primary,
+                        borderColor: theme.colors.primary,
+                      }
+                    ]}
+                    onPress={() => {
+                      if (hasConnection) {
+                        // If already selected, deselect it
+                        if (isSelected) {
+                          setSelectedPlatformType(null);
+                        } else {
+                          setSelectedPlatformType(displayName);
+                        }
+                        console.log(`[InventoryScreen] Selected platform: ${displayName}`);
+                      }
+                    }}
+                    activeOpacity={hasConnection ? 0.7 : 1}
+                    disabled={!hasConnection}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Text
+                        style={[
+                          styles.platformFilterChipText,
+                          {
+                            color: hasConnection 
+                              ? (isSelected ? '#FFFFFF' : theme.colors.text)
+                              : theme.colors.textSecondary,
+                          },
+                          isSelected && hasConnection && {
+                            fontWeight: '600'
+                          }
+                        ]}
+                      >
+                        {displayName}
+                      </Text>
+                      {connectionCount > 1 && (
+                        <View style={[
+                          styles.connectionCountBadge,
+                          isSelected && { backgroundColor: '#FFFFFF' }
+                        ]}>
+                          <Text style={[
+                            styles.connectionCountText,
+                            isSelected && { color: theme.colors.primary }
+                          ]}>
+                            {connectionCount}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            
+            {/* Location Dropdown - Only show when platform is selected and has locations */}
+            {isLocationDropdownVisible && selectedPlatformType && availableLocations.length > 0 && (
+              <View style={styles.locationDropdownSection}>
+                <Text style={[styles.locationSectionTitle, { color: theme.colors.text }]}>Locations</Text>
+                <TouchableOpacity 
+                  style={[styles.locationDropdown, { borderColor: theme.colors.textSecondary + '40' }]}
+                  onPress={() => setIsLocationSelectModalVisible(true)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.locationDropdownContent}>
+                    <Icon name="map-marker-outline" size={18} color={theme.colors.textSecondary} />
+                    <Text style={[styles.locationDropdownText, { color: theme.colors.text }]}>
+                      {selectedLocationIds.length === 0 
+                        ? `All Locations` 
+                        : selectedLocationIds.length === availableLocations.length
+                          ? `All Locations`
+                          : selectedLocationIds.length === 1 
+                            ? availableLocations.find(loc => loc.Id === selectedLocationIds[0])?.Name
+                            : `${selectedLocationIds.length} of ${availableLocations.length} Locations`}
+                    </Text>
+                  </View>
+                  <Icon name="chevron-down" size={18} color={theme.colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
 
           <FlatList
             data={inventoryToDisplay} 
@@ -648,18 +889,46 @@ const InventoryOrdersScreen = observer(() => {
             numColumns={2}
             columnWrapperStyle={styles.gridRow}
             contentContainerStyle={styles.listContent}
+            onEndReached={handleLoadMore}
+            onEndReachedThreshold={0.5}
+            initialNumToRender={20}
+            maxToRenderPerBatch={20}
+            windowSize={21}
+            ListFooterComponent={
+              <>
+                {isLoadingMore && (
+                  <View style={styles.loadingMoreContainer}>
+                    <ActivityIndicator size="small" color={theme.colors.primary} />
+                    <Text style={[styles.loadingMoreText, { color: theme.colors.textSecondary }]}>
+                      Loading more products...
+                    </Text>
+                  </View>
+                )}
+                {displayCount < filteredInventory.length && !isLoadingMore && (
+                  <TouchableOpacity 
+                    style={styles.loadMoreButton}
+                    onPress={handleLoadMore}
+                  >
+                    <Text style={[styles.loadMoreButtonText, { color: theme.colors.primary }]}>
+                      Load more ({filteredInventory.length - displayCount} remaining)
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                <View style={styles.listFooter} />
+              </>
+            }
             ListHeaderComponent={
               <>
                 {/* Seller Stats Section - Now in ListHeaderComponent */}
-                <View style={styles.sellerStatsSection}>
-                  <Text style={styles.sellerStatsSectionTitle}>Your Activity</Text>
+                <View style={[styles.sellerStatsSection, { backgroundColor: theme.colors.surface }]}>
+                  <Text style={[styles.sellerStatsSectionTitle, { color: theme.colors.text }]}>Your Activity</Text>
                   <View style={styles.sellerStatsRow}>
                     <View style={styles.sellerStatItem}>
-                      <Text style={styles.sellerStatValue}>{filteredInventory.length}</Text>
-                      <Text style={styles.sellerStatLabel}>Products Listed</Text>
+                      <Text style={[styles.sellerStatValue, { color: theme.colors.primary }]}>{filteredInventory.length}</Text>
+                      <Text style={[styles.sellerStatLabel, { color: theme.colors.textSecondary }]}>Products Listed</Text>
                     </View>
                     <View style={styles.sellerStatItem}>
-                      <Text style={styles.sellerStatValue}>
+                      <Text style={[styles.sellerStatValue, { color: theme.colors.primary }]}>
                         {legendObservables?.marketplaceListings$ && legendObservables.userId ? 
                           Object.values(activeMarketplaceListings)
                             .filter((listing: MarketplaceListing) => {
@@ -670,15 +939,15 @@ const InventoryOrdersScreen = observer(() => {
                             }).length 
                           : 0}
                       </Text>
-                      <Text style={styles.sellerStatLabel}>Active Listings</Text>
+                      <Text style={[styles.sellerStatLabel, { color: theme.colors.textSecondary }]}>Active Listings</Text>
                     </View>
                     <View style={styles.sellerStatItem}>
-                      <Text style={styles.sellerStatValue}>
+                      <Text style={[styles.sellerStatValue, { color: theme.colors.primary }]}>
                         {selectedPlatformType 
                           ? availableLocations.filter(loc => selectedLocationIds.length === 0 || selectedLocationIds.includes(loc.Id)).length
-                          : Object.values(mockPlatformLocations).filter(loc => loc.IsPOS).length} 
+                          : platformLocations.filter((loc: PlatformLocation) => loc.IsPOS).length} 
                       </Text>
-                      <Text style={styles.sellerStatLabel}>POS Locations</Text>
+                      <Text style={[styles.sellerStatLabel, { color: theme.colors.textSecondary }]}>POS Locations</Text>
                     </View>
                   </View>
                 </View>
@@ -686,41 +955,63 @@ const InventoryOrdersScreen = observer(() => {
                 {/* Categories Section would also go in ListHeaderComponent if enabled */}
               </>
             }
-            ListFooterComponent={<View style={styles.listFooter} />}
-            onEndReached={() => {
-              if (displayCount < filteredInventory.length) {
-                console.log('Reached end, loading more inventory items...');
-                setDisplayCount(prevCount => Math.min(prevCount + ITEMS_PER_LOAD, filteredInventory.length));
-              }
-            }}
-            onEndReachedThreshold={0.5}
+            ListEmptyComponent={
+              isLoadingConnections ? (
+                <View style={styles.loadingContainer}>
+                  <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
+                    Loading platform connections...
+                  </Text>
+                </View>
+              ) : (
+                <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
+                  No {activeTab === 'inventory' ? 'products' : 'orders'} found.
+                  {selectedPlatformType && ` Try selecting a different platform or location.`}
+                </Text>
+              )
+            }
+            /* ListFooterComponent already defined above */
           />
         </Animated.View>
       )}
       
       {activeTab === 'orders' && (
         <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersContainer}>
-            {['all', 'Delivered', 'In Transit', 'Processing', 'Returned'].map(status => (
-              <TouchableOpacity
-                key={status}
-                style={[
-                  styles.filterChip,
-                  filterStatus === status && { backgroundColor: theme.colors.primary + '20' }
-                ]}
-                onPress={() => setFilterStatus(status)}
-              >
-                <Text
+          <View style={styles.filtersSection}>
+            <Text style={[styles.filtersSectionTitle, { color: theme.colors.text }]}>Order Status</Text>
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false} 
+              style={styles.platformFiltersContainer}
+              contentContainerStyle={styles.platformFiltersContent}
+            >
+              {['all', 'Delivered', 'In Transit', 'Processing', 'Returned'].map(status => (
+                <TouchableOpacity
+                  key={status}
                   style={[
-                    styles.filterChipText,
-                    filterStatus === status && { color: theme.colors.primary }
+                    styles.platformFilterChip,
+                    filterStatus === status && {
+                      backgroundColor: theme.colors.primary,
+                      borderColor: theme.colors.primary,
+                    }
                   ]}
+                  onPress={() => setFilterStatus(status)}
+                  activeOpacity={0.7}
                 >
-                  {status === 'all' ? 'All' : status}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+                  <Text
+                    style={[
+                      styles.platformFilterChipText,
+                      filterStatus === status && {
+                        color: '#FFFFFF',
+                        fontWeight: '600'
+                      }
+                    ]}
+                  >
+                    {status === 'all' ? 'All' : status}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
           
           <FlatList
             data={filteredOrders}
@@ -731,7 +1022,9 @@ const InventoryOrdersScreen = observer(() => {
               <Text style={styles.emptyText}>No orders matching your filters.</Text>
             }
             contentContainerStyle={styles.listContent}
-            ListFooterComponent={<View style={styles.listFooter} />}
+            ListFooterComponent={
+              <View style={styles.listFooter} />
+            }
           />
         </Animated.View>
       )}
@@ -826,17 +1119,7 @@ const styles = StyleSheet.create({
   filtersContainer: {
     marginBottom: 16,
   },
-  filterChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: '#EEE',
-    marginRight: 8,
-  },
-  filterChipText: {
-    fontSize: 14,
-    fontWeight: '500',
-  },
+
   listContainer: {
     flex: 1,
   },
@@ -867,6 +1150,7 @@ const styles = StyleSheet.create({
   gridItemTitle: {
     fontSize: 14,
     fontWeight: '500',
+
     marginBottom: 4,
   },
   gridItemPrice: {
@@ -1177,6 +1461,143 @@ const styles = StyleSheet.create({
   locationNameText: {
     fontSize: 16,
   },
+  allLocationItem: {
+    borderBottomWidth: 2,
+    borderBottomColor: '#E0E0E0',
+    marginBottom: 8,
+  },
+  allLocationText: {
+    fontWeight: '600',
+  },
+  // New Apple-inspired Filter Styles
+  filtersSection: {
+    marginBottom: 16,
+  },
+  filtersSectionTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    marginBottom: 12,
+    marginLeft: 8,
+  },
+  platformFiltersContainer: {
+    marginBottom: 16,
+  },
+  platformFiltersContent: {
+    paddingHorizontal: 8,
+  },
+  platformFilterChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+    marginRight: 8,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1,
+        shadowRadius: 2,
+      },
+      android: {
+        elevation: 1,
+      },
+    }),
+  },
+  platformFilterChipText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#333333',
+  },
+  locationDropdownSection: {
+    marginTop: 8,
+  },
+  locationSectionTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    marginBottom: 12,
+    marginLeft: 8,
+  },
+  locationDropdown: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    marginHorizontal: 8,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1,
+        shadowRadius: 2,
+      },
+      android: {
+        elevation: 1,
+      },
+    }),
+  },
+  locationDropdownContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  locationDropdownText: {
+    marginLeft: 8,
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  loadingContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+  },
+  loadingText: {
+    textAlign: 'center',
+    fontSize: 16,
+  },
+  connectionCountBadge: {
+    backgroundColor: '#F0F0F0',
+    borderRadius: 10,
+    width: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 6,
+  },
+  connectionCountText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#555555',
+  },
+  loadingMoreContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  loadingMoreText: {
+    marginLeft: 10,
+    fontSize: 14,
+  },
+  loadMoreButton: {
+    alignItems: 'center',
+    paddingVertical: 15,
+    marginHorizontal: 20,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  loadMoreButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
 });
 
 export default InventoryOrdersScreen; 
+
