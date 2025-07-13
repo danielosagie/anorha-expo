@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, SetStateAction } from 'react';
 import {
   View,
   Text,
@@ -48,6 +48,13 @@ interface SearchResult {
   image?: string;
   existingProductId?: string;
   existingVariantId?: string;
+  url?: string;
+}
+
+interface DeepSearchResult {
+  title: string;
+  url: string;
+  content: string;
 }
 
 export default function EnhancedSearchScreen({ navigation, route }: any) {
@@ -60,6 +67,9 @@ export default function EnhancedSearchScreen({ navigation, route }: any) {
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [showCreateTemplateModal, setShowCreateTemplateModal] = useState(false);
   const [isTemplateRequired, setIsTemplateRequired] = useState(true);
+  const [showDeepSearchResultsModal, setShowDeepSearchResultsModal] = useState(false);
+  const [deepSearchResults, setDeepSearchResults] = useState<DeepSearchResult[]>([]);
+  const [selectedPillForDeepSearch, setSelectedPillForDeepSearch] = useState<SearchPill | null>(null);
 
   // New template creation state
   const [newTemplate, setNewTemplate] = useState({
@@ -201,19 +211,20 @@ export default function EnhancedSearchScreen({ navigation, route }: any) {
           ));
 
           let results: SearchResult[] = [];
+          const pillType = pill.type;
 
-          if (pill.type === 'url') {
+          if (pillType === 'url') {
             // Extract from URL
             results = await extractFromUrl(pill.value);
-          } else if (pill.type === 'image') {
+          } else if (pillType === 'image') {
             // Visual search
             results = await performVisualSearch(pill.value);
-          } else if (pill.type === 'barcode') {
+          } else if (pillType === 'barcode') {
             // Barcode search
             results = await searchByBarcode(pill.value);
           } else {
             // Text search
-            results = await performTextSearch(pill.value);
+            results = await performTextSearch(pill);
           }
 
           setSearchPills(prev => prev.map(p => 
@@ -221,7 +232,7 @@ export default function EnhancedSearchScreen({ navigation, route }: any) {
           ));
 
           allResults.push(...results);
-        } catch (error) {
+        } catch (error: any) {
           console.error(`Search failed for pill ${pill.id}:`, error);
           setSearchPills(prev => prev.map(p => 
             p.id === pill.id ? { ...p, status: 'error' } : p
@@ -230,7 +241,7 @@ export default function EnhancedSearchScreen({ navigation, route }: any) {
       }
 
       setSearchResults(allResults);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Search failed:', error);
       Alert.alert('Search Failed', 'An error occurred while searching. Please try again.');
     } finally {
@@ -272,10 +283,83 @@ export default function EnhancedSearchScreen({ navigation, route }: any) {
     return [];
   };
 
-  const performTextSearch = async (query: string): Promise<SearchResult[]> => {
-    // Implementation for text search
-    // This would use your enhanced search capabilities
+  const performTextSearch = async (pill: SearchPill): Promise<SearchResult[]> => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error('Not authenticated');
+
+    const response = await fetch('https://api.sssync.app/api/products/recognize/deep-search', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`
+      },
+      body: JSON.stringify({
+        query: pill.value,
+        searchSites: selectedTemplate?.suggestedSites,
+        businessTemplate: selectedTemplate?.name,
+      })
+    });
+
+    if (!response.ok) {
+        throw new Error('Deep search failed');
+    }
+
+    const deepResults = await response.json();
+    setDeepSearchResults(deepResults.data || []);
+    setSelectedPillForDeepSearch(pill);
+    setShowDeepSearchResultsModal(true);
+
+    // We return an empty array here because the actual results will be handled
+    // after the user selects from the deep search modal.
     return [];
+  };
+
+  const handleSelectDeepSearchResult = async (selectedResult: DeepSearchResult) => {
+    setShowDeepSearchResultsModal(false);
+    if (!selectedPillForDeepSearch) return;
+
+    setIsSearching(true);
+    setSearchPills(prev => prev.map(p => 
+        p.id === selectedPillForDeepSearch.id ? { ...p, status: 'searching', label: `Scraping: ${new URL(selectedResult.url).hostname}` } : p
+    ));
+
+    try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) throw new Error('Not authenticated');
+
+        const response = await fetch('https://api.sssync.app/api/products/recognize/scrape-and-generate', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${session.access_token}`
+            },
+            body: JSON.stringify({
+                urls: [selectedResult.url],
+                contextQuery: selectedPillForDeepSearch.value,
+                businessTemplate: selectedTemplate?.name,
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error('Scrape and generate failed');
+        }
+
+        const finalResult: SearchResult = await response.json();
+        
+        setSearchResults(prev => [...prev, finalResult]);
+        setSearchPills(prev => prev.map(p => 
+            p.id === selectedPillForDeepSearch.id ? { ...p, status: 'complete' } : p
+        ));
+
+    } catch (error) {
+        console.error('Scrape and generate failed:', error);
+        setSearchPills(prev => prev.map(p => 
+            p.id === selectedPillForDeepSearch.id ? { ...p, status: 'error' } : p
+        ));
+    } finally {
+        setIsSearching(false);
+        setSelectedPillForDeepSearch(null);
+    }
   };
 
   const createNewTemplate = async () => {
@@ -318,7 +402,7 @@ export default function EnhancedSearchScreen({ navigation, route }: any) {
       
       loadTemplates();
       Alert.alert('Success', 'Template created successfully!');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error in createNewTemplate:', error);
       Alert.alert('Error', 'Failed to create template. Please try again.');
     }
@@ -343,7 +427,7 @@ export default function EnhancedSearchScreen({ navigation, route }: any) {
         </View>
 
         <ScrollView style={styles.templateList}>
-          {templates.map((template) => (
+          {templates.map((template: SearchTemplate) => (
             <TouchableOpacity
               key={template.id}
               style={[
@@ -533,6 +617,34 @@ export default function EnhancedSearchScreen({ navigation, route }: any) {
     </Modal>
   );
 
+  function renderDeepSearchResultsModal() {
+    return (
+        <Modal visible={showDeepSearchResultsModal} animationType="slide" presentationStyle="pageSheet">
+            <View style={styles.modalContainer}>
+                <View style={styles.modalHeader}>
+                    <Text style={styles.modalTitle}>Select Best Match</Text>
+                    <TouchableOpacity onPress={() => setShowDeepSearchResultsModal(false)}>
+                        <MaterialIcons name="close" size={24} color="#000" />
+                    </TouchableOpacity>
+                </View>
+                <ScrollView style={styles.templateList}>
+                    {deepSearchResults.map((result, index) => (
+                        <TouchableOpacity
+                            key={index}
+                            style={styles.templateItem}
+                            onPress={() => handleSelectDeepSearchResult(result)}
+                        >
+                            <Text style={styles.templateName}>{result.title}</Text>
+                            <Text style={styles.templateDescription}>{result.url}</Text>
+                            <Text style={styles.templateDescription} numberOfLines={3}>{result.content}</Text>
+                        </TouchableOpacity>
+                    ))}
+                </ScrollView>
+            </View>
+        </Modal>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -641,6 +753,7 @@ export default function EnhancedSearchScreen({ navigation, route }: any) {
 
       {renderTemplateModal()}
       {renderCreateTemplateModal()}
+      {renderDeepSearchResultsModal()}
     </View>
   );
 }

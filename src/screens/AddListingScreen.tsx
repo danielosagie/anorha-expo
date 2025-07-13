@@ -93,6 +93,56 @@ interface VisualMatch {
   image?: string; 
 }
 
+// --- NEW: AI Recognition Interfaces ---
+interface ProductRecognitionRequest {
+  imageUrl: string;
+  textQuery?: string;
+  businessTemplate?: string;
+  userId: string;
+}
+
+interface RecognitionResult {
+  confidence: 'high' | 'medium' | 'low';
+  systemAction: 'show_single_match' | 'show_multiple_candidates' | 'fallback_to_external' | 'fallback_to_manual';
+  rankedCandidates: ProductCandidate[];
+  imageEmbedding?: number[];
+  textEmbedding?: number[];
+  webSearchResults?: any[];
+  processingSteps: string[];
+  matchId?: string;
+  metadata: {
+    processingTimeMs: number;
+    modelsUsed: string[];
+    embeddingDimensions: {
+      image?: number;
+      text?: number;
+    };
+  };
+}
+
+interface ProductCandidate {
+  id: string;
+  title: string;
+  description?: string;
+  imageUrl?: string;
+  price?: number;
+  brand?: string;
+  category?: string;
+  businessTemplate?: string;
+  similarity: number;
+  source: 'internal' | 'web' | 'marketplace';
+  url?: string;
+  visualSimilarity?: number;
+  textSimilarity?: number;
+  rank?: number;
+  score?: number;
+}
+
+interface BackfillResponse {
+  success: boolean;
+  message: string;
+}
+
 interface SerpApiLensResponse {
   search_metadata: Record<string, any>;
   visual_matches?: VisualMatch[];
@@ -624,6 +674,12 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   const [activeFormTab, setActiveFormTab] = useState<string | null>(null);
   const [serpApiResponse, setSerpApiResponse] = useState<SerpApiLensResponse | null>(null);
 
+  // --- NEW: AI Recognition State ---
+  const [recognitionResult, setRecognitionResult] = useState<RecognitionResult | null>(null);
+  const [selectedBusinessTemplate, setSelectedBusinessTemplate] = useState<string>('electronics');
+  const [aiProcessingSteps, setAiProcessingSteps] = useState<string[]>([]);
+  const [showAiDebugInfo, setShowAiDebugInfo] = useState(false);
+
   // --- NEW: Ref for debounce timer ---
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const inventoryDebounceTimerRef = useRef<NodeJS.Timeout | null>(null); // For inventory specific debouncing
@@ -700,6 +756,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   const [isBarcodeScanningActive, setIsBarcodeScanningActive] = useState(false);
   const [detectedBarcodes, setDetectedBarcodes] = useState<DetectedBarcode[]>([]);
   const [selectedBarcode, setSelectedBarcode] = useState<string | null>(null);
+  const lastTapRef = useRef<{ itemId: string | null; time: number }>({ itemId: null, time: 0 });
   const [focusPoint, setFocusPoint] = useState<{ x: number; y: number } | null>(null);
   const [showFocusIndicator, setShowFocusIndicator] = useState(false);
   
@@ -1246,9 +1303,10 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
     if (coverImageIndex < 0 || coverImageIndex >= capturedMedia.length) { Alert.alert("Select Cover", "Please tap an image/video in the preview to select it as the cover image before proceeding."); return;}
 
     setError(null);
-    setLoadingMessage('Preparing & Uploading Media...');
+    setLoadingMessage('🚀 Preparing & Uploading Media...');
     setCurrentStage(ListingStage.Analyzing);
     setIsLoading(true);
+    setAiProcessingSteps([]); // Reset processing steps
 
     let mediaToUpload = [...capturedMedia];
     if (coverImageIndex > 0) {
@@ -1256,36 +1314,35 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
         mediaToUpload.unshift(coverItem);
         console.log("Reordered media for upload with cover first.");
     }
-    const coverImageIndexForApi = 0; // Cover is now always first
 
-    let urls: string[] = []; // Define urls variable in the outer scope
+    let urls: string[] = [];
 
     try {
         // Upload images and get the URLs directly
         let rawUrls = await uploadImagesToSupabase(mediaToUpload);
-        console.log('[triggerImageAnalysis] URLs received from uploadImagesToSupabase:', JSON.stringify(rawUrls, null, 2)); // Log 1
+        console.log('[triggerImageAnalysis] URLs received from uploadImagesToSupabase:', JSON.stringify(rawUrls, null, 2));
 
         // Clean the URLs: ensure no trailing semicolons if they are strings
-        urls = rawUrls.map(url => { // Assign to the outer scope 'urls'
+        urls = rawUrls.map(url => {
           if (typeof url === 'string') {
-            const trimmedUrl = url.trim(); // Trim whitespace first
+            const trimmedUrl = url.trim();
             if (trimmedUrl.endsWith(';')) {
               console.warn('[triggerImageAnalysis] Cleaning trailing semicolon from URL:', url);
               return trimmedUrl.slice(0, -1);
             }
-            return trimmedUrl; // Return trimmed URL even if no semicolon
+            return trimmedUrl;
           }
-          return url; // Return as-is if not a string (though it should be)
+          return url;
         });
-        console.log('[triggerImageAnalysis] Cleaned URLs (assigned to outer urls): ', JSON.stringify(urls, null, 2)); // Log 2
+        console.log('[triggerImageAnalysis] Cleaned URLs:', JSON.stringify(urls, null, 2));
 
         if (urls.length === 0 && mediaToUpload.length > 0) {
-             console.error("[triggerImageAnalysis] Upload function returned empty or all-null URLs despite having media items. Check upload logs.")
+            console.error("[triggerImageAnalysis] Upload function returned empty URLs");
             throw new Error("Media upload failed or all items were skipped. Check logs and file sizes.");
         }
         setUploadedImageUrls(urls); 
         console.log(`[triggerImageAnalysis] Upload successful. Set uploadedImageUrls with ${urls.length} URLs.`);
-        setLoadingMessage('Analyzing Media...');
+        setLoadingMessage('🤖 Running AI Product Recognition...');
 
     } catch (uploadErr: any) {
         console.error("[triggerImageAnalysis] Upload phase failed:", uploadErr);
@@ -1293,16 +1350,16 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
         setCurrentStage(ListingStage.ImageInput);
         setIsLoading(false);
         setLoadingMessage('');
-        return; // Stop execution if upload fails
+        return;
     }
 
-    // --- Analysis API Call --- 
-    console.log("Fetching user for analysis API call...");
+    // --- NEW: AI Recognition API Call ---
+    console.log("Fetching user for AI recognition API call...");
     const { data: { user }, error: userError } = await supabase.auth.getUser();
     const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
 
     if (userError || !user) {
-        console.error("Error fetching user for analysis API:", userError);
+        console.error("Error fetching user for AI recognition API:", userError);
         setError("User session error. Please log out and back in.");
         setIsLoading(false);
         setLoadingMessage('');
@@ -1320,140 +1377,144 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
 
     const userId = user.id;
     const token = sessionData.session.access_token;
-    console.log(`User ID fetched for analysis: ${userId}`);
+    console.log(`User ID fetched for AI recognition: ${userId}`);
 
-    const analyzeApiUrl = `https://sssync-bknd-production.up.railway.app/api/products/analyze`;
-    // Now 'urls' from the outer scope (which has been cleaned) is used here implicitly by requestBodyAnalyze's definition later
-    const requestBodyAnalyze = { imageUris: urls, selectedPlatforms: selectedPlatforms };
+    // Use the new AI recognition endpoint
+    const recognizeApiUrl = `https://sssync-bknd-production.up.railway.app/api/products/recognize`;
+    const recognitionRequest: ProductRecognitionRequest = {
+      imageUrl: urls[0], // Use the first (cover) image
+      businessTemplate: selectedBusinessTemplate,
+      userId: userId
+    };
     
     const headers = { 
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`
     };
     
-    console.log(`Attempting to POST to: ${analyzeApiUrl}`);
-    console.log("Request Headers (Analyze):", { ...headers, Authorization: 'Bearer [REDACTED]' }); // Log headers, redact token
+    console.log(`Attempting to POST to: ${recognizeApiUrl}`);
+    console.log("Recognition Request:", { ...recognitionRequest, userId: '[REDACTED]' });
 
     try {
-        const response = await fetch(analyzeApiUrl, {
+        const response = await fetch(recognizeApiUrl, {
             method: 'POST', 
-            headers: headers, // Use the headers object
-            body: JSON.stringify(requestBodyAnalyze),
+            headers: headers,
+            body: JSON.stringify(recognitionRequest),
         });
-        console.log(`Analysis API Response Status: ${response.status}`);
-        // Only attempt to parse JSON if the response is not 204 No Content or similar non-JSON success cases
-        let responseData: BackendAnalysisResponse | null = null;
+        console.log(`AI Recognition API Response Status: ${response.status}`);
+        let responseData: RecognitionResult | null = null;
         if (response.status !== 204 && response.headers.get('content-type')?.includes('application/json')) {
             responseData = await response.json(); 
         }
 
         if (!response.ok) {
-            console.error("Analysis API Error Response Body:", responseData);
+            console.error("AI Recognition API Error Response Body:", responseData);
             let apiErrorMessage = `HTTP error! status: ${response.status}`;
-            // Use backend response message if available
-            if (responseData && responseData.message) { 
-                apiErrorMessage = typeof responseData.message === 'string' ? responseData.message : `Analysis API Error (Code: ${response.status})`;
-            } else if (response.status === 401) {
-                 apiErrorMessage = "Unauthorized. Please ensure you are logged in.";
+            if (response.status === 401) {
+                apiErrorMessage = "Unauthorized. Please ensure you are logged in.";
             }
-            
-            // Check specific conditions based on backend response structure if needed
-            if (response.status === 404 || (typeof apiErrorMessage === 'string' && apiErrorMessage.toLowerCase().includes("no matches"))) {
-                console.log("Analysis indicated no visual matches found (or 404). Setting minimal response.");
-                setAnalysisResponse({ product: { Id: 'unknown'}, variant: {Id: 'unknown'}, analysis: { GeneratedText: '{}' } }); 
-                setSerpApiResponse(null); // No parsed data
-                setProductId(null); // No valid ID
-                setVariantId(null); // No valid ID
-                setCurrentStage(ListingStage.VisualMatch); // Go to visual match to show "No Matches"
-            } else {
-                throw new Error(apiErrorMessage);
-            }
-        } else {
-             console.log("Analysis Response Data (Backend):", JSON.stringify(responseData, null, 2));
-             // Handle potential null responseData for non-JSON success cases if needed
-             if (responseData && 
-                 responseData.product && responseData.product.Id && 
-                 responseData.variant && responseData.variant.Id && 
-                 responseData.analysis && typeof responseData.analysis.GeneratedText === 'string') 
-             {
-                 // --- Set State on Success --- 
-                 setAnalysisResponse(responseData); // Set the full backend response
-                 setProductId(responseData.product.Id); // <-- SET PRODUCT ID
-                 setVariantId(responseData.variant.Id); // <-- SET VARIANT ID
-                 console.log(`Product/Variant IDs set: ${responseData.product.Id} / ${responseData.variant.Id}`);
-                 
-                 // --- NEW: Save images to ProductImages table ---
-                 if (responseData.variant.Id && urls.length > 0) { // (A) CHANGED: Use local 'urls' variable
-                   const imagesToInsert = urls.map((url, index) => ({ // (B) CHANGED: Use local 'urls' variable
-                     ProductVariantId: responseData.variant.Id,
-                     ImageUrl: url,
-                     Position: index,
-                     // AltText: null, // Optional: Add logic for AltText if available
-                     // PlatformMappingId: null, // Optional: Add logic if needed
-                   }));
-
-                   console.log('[triggerImageAnalysis] Attempting to insert product images:', JSON.stringify(imagesToInsert, null, 2)); // (C) NEW LOG
-
-                   try {
-                     const { error: imageInsertError } = await supabase
-                       .from('ProductImages')
-                       .insert(imagesToInsert); // (D)
-
-                     if (imageInsertError) { // (E)
-                       console.error('[triggerImageAnalysis] Error inserting product images into DB:', imageInsertError);
-                       Alert.alert(
-                        "Image Save Warning (DB)", 
-                        `Could not save product image records to the database. Please check console. Error: ${imageInsertError.message}`
-                       );
-                     } else {
-                       console.log('[triggerImageAnalysis] Successfully inserted product images records to database.'); // (F)
-                     }
-                   } catch (dbError: any) { // (G)
-                     console.error('[triggerImageAnalysis] Unexpected exception inserting product images into DB:', dbError);
-                     Alert.alert("Image Save Exception (DB)", `An unexpected error occurred while saving image records: ${dbError.message}`);
-                   }
-                 } else { // (H) NEW LOG
-                  console.warn('[triggerImageAnalysis] Skipping ProductImages insert. Details:', {
-                    hasVariantId: !!responseData?.variant?.Id,
-                    variantId: responseData?.variant?.Id,
-                    uploadedImageUrlsCount: urls.length, // CHANGED: Use local 'urls' variable for count
-                    uploadedImageUrls: urls // CHANGED: Log local 'urls' variable
-                  });
-                 }
-                 // --- END NEW ---
-                 
-                 // Attempt to parse SerpApi response from GeneratedText
-                 try {
-                     const parsedSerp = JSON.parse(responseData.analysis.GeneratedText);
-                     setSerpApiResponse(parsedSerp);
-                     console.log("[triggerImageAnalysis] Parsed and set serpApiResponse state.");
-                 } catch (parseErr) {
-                     console.error("[triggerImageAnalysis] Failed to parse GeneratedText JSON:", parseErr);
-                     setSerpApiResponse(null); // Ensure it's null if parsing fails
-                 }
-                 // --- End Set State --- 
-                 
-                 setCurrentStage(ListingStage.VisualMatch);
-             } else {
-                 // Handle successful but unexpected response structure 
-                 console.error("Analysis API response successful (2xx) but structure is invalid:", responseData);
-                 setError("Received invalid data structure from analysis API.");
-                 setCurrentStage(ListingStage.ImageInput); // Go back if data is unusable
-             }
+            throw new Error(apiErrorMessage);
         }
-        // setError(null); // Clear error only if fully successful - moved inside success block
-    } catch (err: any) {
-        console.error("Analysis API fetch/processing failed:", err);
-        setError(`Analysis Failed: ${err.message || 'Unknown error during analysis fetch'}`);
-        setProductId(null); // Clear IDs on error
-        setVariantId(null);
-        setSerpApiResponse(null);
-        setCurrentStage(ListingStage.ImageInput); 
+
+        if (!responseData) {
+            console.error("AI Recognition API returned no data");
+            setError("No recognition data returned from AI service.");
+            setCurrentStage(ListingStage.ImageInput);
+            setIsLoading(false);
+            setLoadingMessage('');
+            return;
+        }
+
+        console.log("AI Recognition Response:", JSON.stringify(responseData, null, 2));
+        
+        // Store the full recognition result
+        setRecognitionResult(responseData);
+        setAiProcessingSteps(responseData.processingSteps || []);
+        
+        // Handle different system actions based on AI confidence
+        switch (responseData.systemAction) {
+            case 'show_single_match':
+                // High confidence - proceed directly to generation
+                if (responseData.rankedCandidates.length > 0) {
+                    const bestMatch = responseData.rankedCandidates[0];
+                    console.log(`🎯 High confidence match found: ${bestMatch.title} (confidence: ${responseData.confidence})`);
+                    
+                    // Convert to old format for compatibility
+                    const visualMatch: VisualMatch = {
+                        position: 1,
+                        title: bestMatch.title,
+                        link: bestMatch.url || '',
+                        source: bestMatch.source,
+                        price: bestMatch.price ? {
+                            value: `$${bestMatch.price}`,
+                            extracted_value: bestMatch.price,
+                            currency: 'USD'
+                        } : undefined,
+                        thumbnail: bestMatch.imageUrl || '',
+                        image: bestMatch.imageUrl
+                    };
+                    
+                    setSelectedMatchForGeneration(visualMatch);
+                    setCurrentStage(ListingStage.Generating);
+                    
+                    // Automatically proceed to generate details
+                    setTimeout(() => triggerDetailsGeneration(), 500);
+                }
+                break;
+                
+            case 'show_multiple_candidates':
+                // Medium confidence - show candidates for user selection
+                console.log(`🤔 Multiple candidates found (confidence: ${responseData.confidence})`);
+                
+                // Convert candidates to VisualMatch format for compatibility
+                const visualMatches: VisualMatch[] = responseData.rankedCandidates.map((candidate, index) => ({
+                    position: index + 1,
+                    title: candidate.title,
+                    link: candidate.url || '',
+                    source: candidate.source,
+                    price: candidate.price ? {
+                        value: `$${candidate.price}`,
+                        extracted_value: candidate.price,
+                        currency: 'USD'
+                    } : undefined,
+                    thumbnail: candidate.imageUrl || '',
+                    image: candidate.imageUrl
+                }));
+                
+                setSerpApiResponse({
+                    search_metadata: {},
+                    visual_matches: visualMatches
+                });
+                
+                setCurrentStage(ListingStage.VisualMatch);
+                break;
+                
+            case 'fallback_to_external':
+            case 'fallback_to_manual':
+                // Low confidence or no matches - show enhanced search
+                console.log(`❓ Low confidence or no matches (confidence: ${responseData.confidence})`);
+                setSerpApiResponse({
+                    search_metadata: {},
+                    visual_matches: [],
+                    message: 'No confident matches found. Try the enhanced search below.'
+                });
+                setCurrentStage(ListingStage.VisualMatch);
+                break;
+                
+                         default:
+                 console.warn('Unknown system action:', responseData.systemAction);
+                 setCurrentStage(ListingStage.VisualMatch);
+         }
+
+    } catch (error: any) {
+        console.error("[triggerImageAnalysis] AI Recognition failed:", error);
+        setError(`AI Recognition Failed: ${error.message || 'Unknown error during recognition'}`);
+        setCurrentStage(ListingStage.ImageInput);
     } finally {
         setIsLoading(false);
         setLoadingMessage('');
     }
-};
+  };
 
   const handleProceedWithoutMatch = () => { 
       console.log("Proceeding without match."); 
@@ -2633,12 +2694,82 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
   };
   // --- End ADDED --- 
 
+  // --- AI Testing Functions ---
+  const testAiBackfill = async () => {
+    setIsLoading(true);
+    setLoadingMessage('🧠 Testing AI embedding backfill...');
+    
+    try {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError || !sessionData?.session?.access_token) {
+        setError("Authentication error. Please log out and back in.");
+        return;
+      }
+
+      const token = sessionData.session.access_token;
+      const backfillUrl = `https://sssync-bknd-production.up.railway.app/api/tasks/backfill-embeddings`;
+      
+      const response = await fetch(backfillUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ batchSize: 10 }) // Small batch for testing
+      });
+
+      const result: BackfillResponse = await response.json();
+      
+      if (response.ok) {
+        Alert.alert("✅ Backfill Success", result.message);
+        console.log("AI Backfill completed:", result);
+      } else {
+        throw new Error(result.message || 'Unknown error');
+      }
+    } catch (error: any) {
+      console.error("AI Backfill test failed:", error);
+      setError(`AI Backfill Failed: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+      setLoadingMessage('');
+    }
+  };
+
   // --- NEW: Render debug options UI ---
   const renderDebugOptions = () => {
     if (!__DEV__) return null; // Only show in development mode
     
     return (
       <View style={styles.debugOptionsContainer}>
+        <TouchableOpacity
+          style={styles.debugOptionRow}
+          onPress={testAiBackfill}
+        >
+          <View style={styles.debugToggle}>
+            <Icon name="brain" size={24} color="#FF6B35" />
+          </View>
+          <View style={styles.debugOptionTextContainer}>
+            <Text style={styles.debugOptionTitle}>Test AI Backfill</Text>
+            <Text style={styles.debugOptionDescription}>Generate embeddings for 10 existing products</Text>
+          </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.debugOptionRow}
+          onPress={() => setShowAiDebugInfo(!showAiDebugInfo)}
+        >
+          <View style={styles.debugToggle}>
+            <Icon name={showAiDebugInfo ? "eye" : "eye-off"} size={24} color={showAiDebugInfo ? "#007AFF" : "#999"} />
+          </View>
+          <View style={styles.debugOptionTextContainer}>
+            <Text style={styles.debugOptionTitle}>AI Debug Info</Text>
+            <Text style={styles.debugOptionDescription}>
+              {showAiDebugInfo ? "ON - Show AI processing steps and metadata" : "OFF - Hide AI debug information"}
+            </Text>
+          </View>
+        </TouchableOpacity>
+
         <TouchableOpacity
           style={styles.debugOptionRow}
           onPress={() => setIgnoreShopifyIdErrors(!ignoreShopifyIdErrors)}
@@ -2889,6 +3020,22 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
     };
 
       // --- Draggable Item Renderer ---
+      const handleImageTap = (itemId: string) => {
+        const now = Date.now();
+        const DOUBLE_TAP_DELAY = 300; // milliseconds
+        
+        if (lastTapRef.current.itemId === itemId && 
+            now - lastTapRef.current.time < DOUBLE_TAP_DELAY) {
+          // Double tap detected - set as cover
+          const index = capturedMedia.findIndex(m => m.id === itemId);
+          handleSetCover(index);
+          lastTapRef.current = { itemId: null, time: 0 }; // Reset
+        } else {
+          // Single tap - just record for potential double tap
+          lastTapRef.current = { itemId, time: now };
+        }
+      };
+
       const renderDraggableMediaItem = ({ item, drag, isActive }: RenderItemParams<CapturedMediaItem>) => {
         const isCover = capturedMedia[coverImageIndex]?.id === item.id;
         return (
@@ -2899,17 +3046,17 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                 isActive && styles.previewImageContainerActive,
                 isCover && styles.previewImageCover
               ]}
-              onPress={() => handleSetCover(capturedMedia.findIndex(m => m.id === item.id))}
+              onPress={() => handleImageTap(item.id)}
               onLongPress={drag}
               disabled={isActive}
               activeOpacity={0.9}
             >
               <Image source={{ uri: item.uri }} style={styles.previewImage} />
               {item.type === 'video' && (
-                <View style={styles.videoIndicatorPreview}><Icon name="play-circle" size={18} color={'white'} /></View>
+                <View style={styles.videoIndicatorPreview}><Icon name="play-circle" size={16} color={'white'} /></View>
               )}
               <TouchableOpacity style={styles.deleteMediaButton} onPress={() => handleRemoveMedia(item.id)}>
-                <Icon name="close-circle" size={20} color="#FF5252" />
+                <Icon name="close-circle" size={18} color="#FF5252" />
               </TouchableOpacity>
             </TouchableOpacity>
           </ScaleDecorator>
@@ -3008,8 +3155,9 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
           })}
           </CameraView>
 
+          {/* Top Left Image Preview */}
           {capturedMedia.length > 0 && (
-            <View style={styles.previewListContainer}>
+            <View style={styles.topLeftPreviewContainer}>
               <DraggableFlatList
                 data={capturedMedia}
                 onDragEnd={({ data }) => {
@@ -3020,9 +3168,9 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                 }}
                 keyExtractor={(item) => item.id}
                 renderItem={renderDraggableMediaItem}
-                horizontal
-                contentContainerStyle={styles.previewScroll}
-                showsHorizontalScrollIndicator={false}
+                numColumns={1}
+                contentContainerStyle={styles.verticalPreviewScroll}
+                showsVerticalScrollIndicator={false}
                   />
                 </View>
           )}
@@ -3054,7 +3202,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
           <View style={styles.cameraStageHeader}>
             <Text style={styles.stageTitleCamera}>Add Product Media</Text>
             <Text style={styles.stageSubtitleCamera}>
-              {capturedMedia.length}/10 items. {capturedMedia.length > 0 ? 'Drag to reorder. Tap preview to set cover.' : 'Use camera or upload.'}
+              {capturedMedia.length}/10 items. {capturedMedia.length > 0 ? 'Drag to reorder. Double-tap preview to set cover.' : 'Use camera or upload.'}
               {isBarcodeScanningActive && ' • Barcode scanning active'}
               {detectedBarcodes.length > 0 && ` • ${detectedBarcodes.length} barcode(s) detected`}
               {detectedBarcodes.length > 1 && ' • Tap to select'}
@@ -3129,6 +3277,32 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
                        ? "Tap an item below to select it for context."
                        : "We couldn't find similar products online."}
                   </Text>
+
+               {/* AI Debug Information */}
+               {showAiDebugInfo && recognitionResult && (
+                 <View style={{backgroundColor: '#f0f0f0', padding: 12, marginVertical: 8, borderRadius: 8}}>
+                   <Text style={{fontWeight: 'bold', fontSize: 14, marginBottom: 4}}>🤖 AI Debug Info</Text>
+                   <Text style={{fontSize: 12, color: '#666'}}>
+                     Confidence: {recognitionResult.confidence} | Action: {recognitionResult.systemAction}
+                   </Text>
+                   <Text style={{fontSize: 12, color: '#666'}}>
+                     Processing Time: {recognitionResult.metadata.processingTimeMs}ms
+                   </Text>
+                   <Text style={{fontSize: 12, color: '#666'}}>
+                     Models: {recognitionResult.metadata.modelsUsed.join(', ')}
+                   </Text>
+                   {aiProcessingSteps.length > 0 && (
+                     <View style={{marginTop: 4}}>
+                       <Text style={{fontSize: 12, fontWeight: 'bold'}}>Processing Steps:</Text>
+                       {aiProcessingSteps.slice(-3).map((step, index) => (
+                         <Text key={index} style={{fontSize: 11, color: '#555', marginLeft: 8}}>
+                           • {step}
+                         </Text>
+                       ))}
+                     </View>
+                   )}
+                 </View>
+               )}
 
                {hasMatches ? (
                    <FlatList
@@ -3686,13 +3860,46 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
 
   // --- Enhanced Search Stage --- //
   const renderEnhancedSearch = () => {
+    const businessTemplates = [
+      { key: 'electronics', name: '📱 Electronics', description: 'Phones, computers, gadgets' },
+      { key: 'clothing', name: '👕 Clothing', description: 'Fashion, apparel, accessories' },
+      { key: 'books', name: '📚 Books', description: 'Literature, textbooks, magazines' },
+      { key: 'toys', name: '🧸 Toys', description: 'Children\'s toys, games' },
+      { key: 'automotive', name: '🚗 Automotive', description: 'Car parts, accessories' },
+      { key: 'home_garden', name: '🏠 Home & Garden', description: 'Furniture, tools, decor' }
+    ];
+
     return (
       <View style={styles.stageContainer}>
         <Text style={styles.stageTitle}>Enhanced Product Search</Text>
         <Text style={styles.stageSubtitle}>
-          Search for products using our AI-powered system. Take photos, scan barcodes, 
-          or search specific websites with custom templates.
+          Choose your product category and search method. Our AI will optimize recognition for better results.
         </Text>
+
+        {/* Business Template Selector */}
+        <View style={{marginBottom: 20}}>
+          <Text style={{fontSize: 16, fontWeight: '600', marginBottom: 10, color: '#333'}}>Product Category:</Text>
+          <View style={styles.templateGrid}>
+            {businessTemplates.map((template) => (
+              <TouchableOpacity
+                key={template.key}
+                style={[
+                  styles.templateCard,
+                  selectedBusinessTemplate === template.key && styles.templateCardSelected
+                ]}
+                onPress={() => setSelectedBusinessTemplate(template.key)}
+              >
+                <Text style={[
+                  styles.templateName,
+                  selectedBusinessTemplate === template.key && styles.templateNameSelected
+                ]}>
+                  {template.name}
+                </Text>
+                <Text style={styles.templateDescription}>{template.description}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
         
         <View style={styles.searchOptionsContainer}>
           <TouchableOpacity 
@@ -3701,7 +3908,7 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
           >
             <MaterialIcons name="photo-camera" size={24} color="#007AFF" />
             <Text style={styles.searchOptionText}>Take Photo & Search</Text>
-            <Text style={styles.searchOptionSubtext}>Visual product identification</Text>
+            <Text style={styles.searchOptionSubtext}>AI visual product identification</Text>
           </TouchableOpacity>
 
           <TouchableOpacity 
@@ -3733,6 +3940,9 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
         >
           <Text style={styles.skipButtonText}>Skip Search</Text>
         </TouchableOpacity>
+
+        {/* Debug Options */}
+        {__DEV__ && renderDebugOptions()}
       </View>
     );
   };
@@ -3869,14 +4079,31 @@ const styles = StyleSheet.create({
       paddingVertical: 10,
       zIndex: 1, // Above camera view
   },
+  topLeftPreviewContainer: {
+      position: 'absolute',
+      top: Platform.OS === 'android' ? 150 : 170, // Below stage header
+      left: 15,
+      width: 90,
+      maxHeight: 400,
+      backgroundColor: 'rgba(0,0,0,0.4)',
+      borderRadius: 8,
+      paddingVertical: 8,
+      paddingHorizontal: 5,
+      zIndex: 2,
+  },
   previewScroll: {
       paddingHorizontal: 10,
       alignItems: 'center'
   },
+  verticalPreviewScroll: {
+      flexGrow: 1,
+      alignItems: 'center',
+  },
   previewImageContainer: {
-      width: 80,
-      height: 80,
+      width: 70,
+      height: 70,
       borderRadius: 6,
+      marginVertical: 4,
       marginHorizontal: 5,
       position: 'relative',
       overflow: 'hidden',
@@ -4895,6 +5122,43 @@ const styles = StyleSheet.create({
     borderTopWidth: 0,
   },
   // --- End Barcode Overlay Styles ---
+
+  // --- Template Selection Styles ---
+  templateGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  templateCard: {
+    width: '48%',
+    backgroundColor: '#fff',
+    padding: 12,
+    marginBottom: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    alignItems: 'center',
+  },
+  templateCardSelected: {
+    borderColor: '#4CAF50',
+    backgroundColor: '#E8F5E9',
+    borderWidth: 2,
+  },
+  templateName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  templateNameSelected: {
+    color: '#2E7D32',
+  },
+  templateDescription: {
+    fontSize: 11,
+    color: '#666',
+    textAlign: 'center',
+  },
 
   // --- Enhanced Search Styles ---
   searchOptionsContainer: {
