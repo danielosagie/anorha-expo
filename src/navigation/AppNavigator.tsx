@@ -122,10 +122,10 @@ const TabNavigator = () => {
         }}
       />
       <Tab.Screen 
-        name="AddListing" 
-        component={AddListingScreen}
+        name="AddProduct" 
+        component={AddProductScreen}
         options={{
-          tabBarLabel: 'Add',
+          tabBarLabel: 'Add Products',
           tabBarIcon: ({ color, size }) => (
             <Icon name="plus-circle-outline" color={color} size={size} />
           ),

@@ -9,6 +9,12 @@ export default {
         "android.permission.RECORD_AUDIO"
       ]
     },
+    ios: {
+      bundleIdentifier: "com.sssync.app",
+      supportsTablet: true,
+      buildNumber: "1",
+      icon: "./src/assets/high_sssync.png"
+    },
     plugins: [
       [
         "react-native-vision-camera",
