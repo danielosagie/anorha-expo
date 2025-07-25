@@ -141,8 +141,8 @@ const PhotoStack: React.FC<PhotoStackProps> = ({
 const styles = StyleSheet.create({
   photoStackContainer: {
     position: 'absolute',
-    top: 100,
-    left: 20,
+    top: 40,
+    left: 0,
     zIndex: 10,
     marginBottom: 100,
   },

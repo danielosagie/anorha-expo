@@ -38,8 +38,6 @@ import { useNavigation } from '@react-navigation/native';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { SvgXml } from 'react-native-svg';
-
-// Import components
 import PhotoStack, { CapturedPhoto } from '../components/camera/PhotoStack';
 import CameraControls from '../components/camera/CameraControls';
 import BusinessTemplateModal, { BusinessTemplate } from '../components/camera/BusinessTemplateModal';
@@ -76,6 +74,7 @@ type CameraMode = 'camera' | 'barcode';
 const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const navigation = useNavigation();
   const theme = useTheme();
+  
   
   console.log('[RENDER] AddProductScreen rendered');
   
@@ -119,8 +118,44 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Camera ref
   const cameraRef = useRef<CameraView>(null);
   
+  // Debug useEffects to track state changes
+  useEffect(() => {
+    console.log('[EFFECT] bulkItems changed! New value:', {
+      length: bulkItems.length,
+      items: bulkItems.map(item => ({
+        id: item.id,
+        photosCount: item.photos.length,
+        isActive: item.isActive
+      }))
+    });
+  }, [bulkItems]);
+  
+  useEffect(() => {
+    console.log('[EFFECT] activeItemId changed! New value:', activeItemId);
+  }, [activeItemId]);
+  
+  // Camera state optimization tracking
+  useEffect(() => {
+    const isCameraActive = !showDeepSearchSheet && !showMatchSheet;
+    console.log('[CAMERA OPTIMIZATION] Camera active state changed:', {
+      isActive: isCameraActive,
+      showDeepSearchSheet,
+      showMatchSheet,
+      reason: showDeepSearchSheet ? 'Deep search sheet open' : 
+              showMatchSheet ? 'Match sheet open' : 
+              'All sheets closed'
+    });
+  }, [showDeepSearchSheet, showMatchSheet]);
+  
   // Animation values
   const sheetTranslateY = useSharedValue(SCREEN_HEIGHT);
+  
+  // Force re-render counter for debugging
+  const [forceRenderCount, setForceRenderCount] = useState(0);
+  const forceRerender = useCallback(() => {
+    console.log('[FORCE RENDER] Forcing component re-render');
+    setForceRenderCount(prev => prev + 1);
+  }, []);
   const captureButtonScale = useSharedValue(1);
   const flashOpacity = useSharedValue(0);
   const overlayOpacity = useSharedValue(0.3);
@@ -258,57 +293,87 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         return updated;
       });
       
-        // Handle bulk mode vs single mode
-        if (isBulkMode) {
-          if (activeItemId) {
-            // Add photo to active bulk item
-            setBulkItems(prev => prev.map(item => {
-              if (item.id === activeItemId) {
-                const isFirstPhoto = item.photos.length === 0;
-                const updatedItem = { ...item, photos: [...item.photos, newPhoto] };
-                
-                // Quick scan EVERY item's first photo
-                if (isFirstPhoto) {
-                  setTimeout(() => {
-                    performQuickScan(newPhoto);
-                  }, 500);
-                }
-                
-                return updatedItem;
+        // SIMPLIFIED: Always create real items, regardless of mode
+        console.log('[ITEM CREATION] ==================');
+        console.log('[ITEM CREATION] Photo added to capturedPhotos:', newPhoto.id);
+        console.log('[ITEM CREATION] Current bulkItems count:', bulkItems.length);
+        console.log('[ITEM CREATION] Current activeItemId:', activeItemId);
+        
+        // Always create items in bulkItems (much simpler logic)
+        if (bulkItems.length === 0) {
+          // Very first photo ever - create first item
+          console.log('[ITEM CREATION] Creating FIRST ITEM (no items exist yet)');
+          const firstItem = {
+            id: `item-${Date.now()}`,
+            photos: [newPhoto],
+            title: undefined,
+            isActive: true
+          };
+          setBulkItems([firstItem]);
+          setActiveItemId(firstItem.id);
+          console.log('[ITEM CREATION] Created first item:', firstItem.id);
+          console.log('[ITEM CREATION] Triggering quick scan (first photo of first item)');
+          
+          setTimeout(() => {
+            performQuickScan(newPhoto);
+          }, 500);
+          
+        } else if (activeItemId) {
+          // Add to existing active item
+          console.log('[ITEM CREATION] Adding photo to existing active item:', activeItemId);
+          setBulkItems(prev => prev.map(item => {
+            if (item.id === activeItemId) {
+              const isFirstPhoto = item.photos.length === 0;
+              const updatedItem = { ...item, photos: [...item.photos, newPhoto] };
+              
+              console.log('[ITEM CREATION] Updated item:', {
+                itemId: item.id,
+                wasFirstPhoto: isFirstPhoto,
+                newPhotoCount: updatedItem.photos.length
+              });
+              
+              // Quick scan first photo of each item
+              if (isFirstPhoto) {
+                console.log('[ITEM CREATION] Triggering quick scan (first photo of item)');
+                setTimeout(() => {
+                  performQuickScan(newPhoto);
+                }, 500);
               }
-              return item;
-            }));
-          } else {
-            // No active item - create new one and quick-scan first photo
-            const newItem = {
-              id: `item-${Date.now()}`,
-              photos: [newPhoto],
-              title: undefined,
-              isActive: true
-            };
-            setBulkItems([newItem]);
-            setActiveItemId(newItem.id);
-            console.log('[BULK MODE] Created new item:', newItem.id);
-            
-            // Quick scan the first photo of new item
-            setTimeout(() => {
-              performQuickScan(newPhoto);
-            }, 500);
-          }
-          setCurrentInstruction('ready');
-          stopProgressAnimation();
+              
+              return updatedItem;
+            }
+            return item;
+          }));
+          
         } else {
-          // Single mode - quick scan the FIRST photo
-          const isFirstPhoto = capturedPhotos.length === 0;
-          if (isFirstPhoto) {
-            setTimeout(() => {
-              performQuickScan(newPhoto);
-            }, 500);
-          } else {
-            setCurrentInstruction('ready');
-            stopProgressAnimation();
-          }
+          // Items exist but no active item - create new one
+          console.log('[ITEM CREATION] Creating new item (items exist but no active item)');
+          const newItem = {
+            id: `item-${Date.now()}`,
+            photos: [newPhoto],
+            title: undefined,
+            isActive: true
+          };
+          setBulkItems(prev => [...prev.map(item => ({ ...item, isActive: false })), newItem]);
+          setActiveItemId(newItem.id);
+          console.log('[ITEM CREATION] Created new item:', newItem.id);
+          console.log('[ITEM CREATION] Triggering quick scan (first photo of new item)');
+          
+          setTimeout(() => {
+            performQuickScan(newPhoto);
+          }, 500);
         }
+        
+        setCurrentInstruction('ready');
+        stopProgressAnimation();
+        console.log('[ITEM CREATION] ==================');
+        
+        // FIXED: Use refs to get current state values, not closure-captured ones
+        setTimeout(() => {
+          console.log('[ITEM CREATION] State after timeout - bulkItems.length:', bulkItems.length);
+          console.log('[ITEM CREATION] State after timeout - activeItemId:', activeItemId);
+          console.log('[ITEM CREATION] 🚨 NOTE: These values are closure-captured and may be stale!');
+        }, 100);
       }
       
     } catch (error) {
@@ -432,7 +497,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4); // Position for 60% height sheet
   }, [sheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems.length, activeItemId]); 
 
-  // Handle image picker
+  // Handle image picker - SIMPLIFIED: Always add to bulkItems
   const handleImageUpload = useCallback(async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
@@ -455,12 +520,53 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         width: asset.width || SCREEN_WIDTH,
         height: asset.height || SCREEN_HEIGHT,
         timestamp: Date.now(),
-        isCover: capturedPhotos.length === 0,
+        isCover: false, // Will be set based on item logic
       };
       
+      console.log('[IMAGE UPLOAD] Adding uploaded image to bulkItems system');
+      
+      // Use the same logic as camera capture - add to bulkItems
+      if (bulkItems.length === 0) {
+        // Create first item with uploaded photo
+        const firstItem = {
+          id: `item-${Date.now()}`,
+          photos: [{ ...newPhoto, isCover: true }],
+          title: undefined,
+          isActive: true
+        };
+        setBulkItems([firstItem]);
+        setActiveItemId(firstItem.id);
+        console.log('[IMAGE UPLOAD] Created first item with uploaded photo');
+      } else if (activeItemId) {
+        // Add to existing active item
+        setBulkItems(prev => prev.map(item => {
+          if (item.id === activeItemId) {
+            const isFirstPhoto = item.photos.length === 0;
+            return { 
+              ...item, 
+              photos: [...item.photos, { ...newPhoto, isCover: isFirstPhoto }] 
+            };
+          }
+          return item;
+        }));
+        console.log('[IMAGE UPLOAD] Added to active item:', activeItemId);
+      } else {
+        // Create new item
+        const newItem = {
+          id: `item-${Date.now()}`,
+          photos: [{ ...newPhoto, isCover: true }],
+          title: undefined,
+          isActive: true
+        };
+        setBulkItems(prev => [...prev.map(item => ({ ...item, isActive: false })), newItem]);
+        setActiveItemId(newItem.id);
+        console.log('[IMAGE UPLOAD] Created new item with uploaded photo');
+      }
+      
+      // Also keep legacy array for backward compatibility during transition
       setCapturedPhotos(prev => [...prev, newPhoto]);
     }
-  }, [capturedPhotos.length]);
+  }, [bulkItems.length, activeItemId]);
 
   // Copy barcode to clipboard
   const copyBarcodeToClipboard = useCallback(() => {
@@ -477,22 +583,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     setCurrentInstruction('ready');
   }, []);
 
-  // Set cover photo
-  const setCoverPhoto = useCallback((photoId: string) => {
-    setCapturedPhotos(prev => prev.map(photo => ({
-      ...photo,
-      isCover: photo.id === photoId,
-    })));
-  }, []);
-
-  // Handle double tap on photo (main photo stack)
-  const handleDoubleTap = useCallback((photoId: string) => {
-    setCoverPhoto(photoId);
-    // Visual feedback
-    console.log('Set cover photo:', photoId);
-  }, [setCoverPhoto]);
-
-  // Drag handlers for photo reordering
+  // Legacy photo management functions - no longer needed with simplified bulkItems system
+  // (All photo management now happens through bulkItems functions)
+  
+  // Drag handlers for photo reordering (still needed for UI feedback)
   const [draggedPhotoId, setDraggedPhotoId] = useState<string | null>(null);
   
   const handleDragStart = useCallback((photoId: string) => {
@@ -505,27 +599,20 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     console.log('Drag ended');
   }, []);
 
-  // Reorder photos in main stack
+  // Reorder photos within active item (simplified)
   const reorderPhotos = useCallback((fromIndex: number, toIndex: number) => {
-    setCapturedPhotos(prev => {
-      const newPhotos = [...prev];
-      const [movedPhoto] = newPhotos.splice(fromIndex, 1);
-      newPhotos.splice(toIndex, 0, movedPhoto);
-      return newPhotos;
-    });
-  }, []);
-
-  // Remove photo
-  const removePhoto = useCallback((photoId: string) => {
-    setCapturedPhotos(prev => {
-      const filtered = prev.filter(photo => photo.id !== photoId);
-      // If we removed the cover photo, make the first remaining photo the cover
-      if (filtered.length > 0 && !filtered.some(photo => photo.isCover)) {
-        filtered[0].isCover = true;
-      }
-      return filtered;
-    });
-  }, []);
+    if (activeItemId) {
+      setBulkItems(prev => prev.map(item => {
+        if (item.id === activeItemId) {
+          const newPhotos = [...item.photos];
+          const [movedPhoto] = newPhotos.splice(fromIndex, 1);
+          newPhotos.splice(toIndex, 0, movedPhoto);
+          return { ...item, photos: newPhotos };
+        }
+        return item;
+      }));
+    }
+  }, [activeItemId]);
 
   // Get auth headers
   async function getAuthHeaders() {
@@ -791,16 +878,33 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Toggle bulk mode
   const toggleBulkMode = useCallback(() => {
-    setIsBulkMode(prev => !prev);
-    if (!isBulkMode && capturedPhotos.length > 0) {
-      // Create first bulk item from existing photos
-      setBulkItems([{
-        id: `item-${Date.now()}`,
-        photos: capturedPhotos,
-        title: undefined
-      }]);
+    // If we are trying to TURN OFF bulk mode...
+    if (isBulkMode) {
+      // ...and there are multiple items, prevent it.
+      if (bulkItems.length > 1) {
+        showNotificationMessage("Can't disable bulk mode with multiple items. Delete items until only one remains.", 4000);
+        return;
+      }
+      // Otherwise, it's safe to turn off.
+      setIsBulkMode(false);
+    } else {
+      // If the user is trying to TURN ON bulk mode...
+      setIsBulkMode(true);
+      
+      // If there are existing photos that haven't been put into an item yet,
+      // create the first item with them. This handles the transition from non-bulk to bulk.
+      if (capturedPhotos.length > 0 && bulkItems.length === 0) {
+        const firstItem = {
+          id: `item-${Date.now()}`,
+          photos: capturedPhotos,
+          title: undefined,
+          isActive: true
+        };
+        setBulkItems([firstItem]);
+        setActiveItemId(firstItem.id);
+      }
     }
-  }, [isBulkMode, capturedPhotos]);
+  }, [isBulkMode, bulkItems.length, capturedPhotos, showNotificationMessage]);
 
   // Add new bulk item
   const addNewBulkItem = useCallback(() => {
@@ -861,6 +965,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         return newItems;
       });
       setActiveItemId(newItemId);
+    } 
+    
+    if (isBulkMode && bulkItems.length > 0) {
+      console.log("You can't disable bulk mode when there are items in the list");
+      showNotificationMessage('You can\'t disable bulk mode when there are items in the list', 3000);
+      setIsBulkMode(true);
     }
   }, [isBulkMode, capturedPhotos, bulkItems.length]);
 
@@ -1015,6 +1125,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         style={styles.camera}
         facing={facing}
         flash={flash}
+        active={!showDeepSearchSheet && !showMatchSheet} // Disable camera when sheets are open
         onBarcodeScanned={handleBarCodeScanned}
         barcodeScannerSettings={{
           barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
@@ -1022,6 +1133,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       >
       {/* Flash overlay */}
       <Animated.View style={[styles.flashOverlay, flashAnimatedStyle]} />
+      
+      {/* Camera paused overlay */}
+      {(showDeepSearchSheet || showMatchSheet) && (
+        <View style={styles.cameraPausedOverlay}>
+          <View style={styles.cameraPausedIndicator}>
+            <MaterialIcons name="pause-circle-filled" size={48} color="rgba(255,255,255,0.8)" />
+            <Text style={styles.cameraPausedText}>Camera Paused</Text>
+            <Text style={styles.cameraPausedSubtext}>Saving battery while sheet is open</Text>
+          </View>
+        </View>
+      )}
       
         {/* Tap to focus overlay */}
           <Pressable 
@@ -1046,14 +1168,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         
         {/* Photo stack (top left) - shows active item's photos in bulk mode */}
         {(() => {
-          const displayPhotos = isBulkMode && activeItemId 
+          // SIMPLIFIED: Always show active item's photos from bulkItems
+          const displayPhotos = activeItemId 
             ? bulkItems.find(item => item.id === activeItemId)?.photos || []
-            : capturedPhotos;
+            : [];
           
           return (
             <View style={styles.photoStackContainer}>
-              {/* Active item indicator */}
-              {isBulkMode && activeItemId && (
+              {/* Active item indicator - always show if there's an active item */}
+              {activeItemId && (
                 <View style={styles.activeItemIndicator}>
                   <Text style={styles.activeItemIndicatorText}>
                     Item {bulkItems.findIndex(item => item.id === activeItemId) + 1}
@@ -1064,17 +1187,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               {displayPhotos.length > 0 && (
                 <PhotoStack 
                   photos={displayPhotos}
-                  onSetCover={isBulkMode && activeItemId 
+                  onSetCover={activeItemId 
                     ? (photoId: string) => setBulkItemCoverPhoto(activeItemId, photoId)
-                    : setCoverPhoto
+                    : () => console.log('No active item for cover photo')
                   }
-                  onRemovePhoto={isBulkMode && activeItemId
+                  onRemovePhoto={activeItemId
                     ? (photoId: string) => removeBulkItemPhoto(activeItemId, photoId) 
-                    : removePhoto
+                    : () => console.log('No active item for photo removal')
                   }
-                  onDoubleTap={isBulkMode && activeItemId
+                  onDoubleTap={activeItemId
                     ? (photoId: string) => setBulkItemCoverPhoto(activeItemId, photoId)
-                    : handleDoubleTap
+                    : () => console.log('No active item for double tap')
                   }
                   onDragStart={handleDragStart}
                   onDragEnd={handleDragEnd}
@@ -1131,16 +1254,61 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
              translateY={notificationTranslateY}
            />
          )}
+         
+         {/* DEBUG: Visual State Indicator 
+         {__DEV__ && (
+           <View style={styles.debugOverlay}>
+             <Text style={styles.debugText}>
+               Items: {bulkItems.length} | 
+               Total Photos: {bulkItems.reduce((sum, item) => sum + item.photos.length, 0)} | 
+               Active: {activeItemId ? bulkItems.findIndex(i => i.id === activeItemId) + 1 : 'none'} |
+               Legacy Photos: {capturedPhotos.length} |
+               Renders: {forceRenderCount}
+             </Text>
+             <Text style={[styles.debugText, { 
+               backgroundColor: (!showDeepSearchSheet && !showMatchSheet) ? '#4CAF50' : '#FF5722',
+               borderRadius: 4,
+               paddingHorizontal: 4
+             }]}>
+               📷 Camera: {(!showDeepSearchSheet && !showMatchSheet) ? 'ACTIVE' : 'PAUSED'}
+             </Text>
+             <View style={styles.debugButtons}>
+               <TouchableOpacity 
+                 style={styles.debugButton} 
+                 onPress={() => {
+                   console.log('[DEBUG] Manual item creation test');
+                   const testItem = {
+                     id: `test-item-${Date.now()}`,
+                     photos: [{
+                       id: `test-photo-${Date.now()}`,
+                       uri: 'https://via.placeholder.com/300x300.png?text=Test',
+                       width: 300,
+                       height: 300,
+                       timestamp: Date.now(),
+                       isCover: true
+                     }],
+                     title: undefined,
+                     isActive: true
+                   };
+                   setBulkItems(prev => [...prev, testItem]);
+                   setActiveItemId(testItem.id);
+                 }}
+               >
+                 <Text style={styles.debugButtonText}>Add Test Item</Text>
+               </TouchableOpacity>
+               <TouchableOpacity style={styles.debugButton} onPress={forceRerender}>
+                 <Text style={styles.debugButtonText}>Force Render</Text>
+               </TouchableOpacity>
+             </View>
+           </View>
+         )} */}
         
                  {/* Bottom controls */}
          <BottomControls 
            onCapture={handleCapture}
            isCapturing={isCapturing}
            captureButtonScale={captureButtonScale}
-           photosCount={isBulkMode 
-             ? bulkItems.reduce((sum, item) => sum + item.photos.length, 0)
-             : capturedPhotos.length
-           }
+           photosCount={bulkItems.reduce((sum, item) => sum + item.photos.length, 0)}
            cameraMode={cameraMode}
            onToggleCameraMode={toggleCameraMode}
            onImageUpload={handleImageUpload}
@@ -1158,25 +1326,51 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       )}
 
       {/* Bulk items sheet */}
-      {showDeepSearchSheet && (
-        <BulkItemsSheet 
-          onClose={closeSheets}
-          sheetStyle={sheetAnimatedStyle}
-          photos={capturedPhotos}
-          isBulkMode={isBulkMode}
-          bulkItems={bulkItems}
-          activeItemId={activeItemId}
-          onAddNewItem={addNewBulkItem}
-          onImageUpload={handleImageUpload}
-          onDeleteItem={deleteBulkItem}
-          onMovePhoto={movePhoto}
-          onSelectItem={selectActiveItem}
-          onSetCoverPhoto={setBulkItemCoverPhoto}
-          onRemovePhoto={removeBulkItemPhoto}
-          onSearch={performAnalyze}
-          sheetTranslateY={sheetTranslateY}
-        />
-      )}
+      {showDeepSearchSheet && (() => {
+        console.log('[SHEET CONDITIONAL] Sheet IS showing - showDeepSearchSheet is true');
+        console.log('[SHEET PROPS] ==================');
+        console.log('[SHEET PROPS] Passing to BulkItemsSheet:');
+        console.log('[SHEET PROPS] - photos (capturedPhotos):', capturedPhotos.length, 'items');
+        capturedPhotos.forEach((photo, index) => {
+          console.log(`[SHEET PROPS]   Photo ${index + 1}:`, {
+            id: photo.id,
+            uri: photo.uri.substring(0, 30) + '...',
+            isCover: photo.isCover
+          });
+        });
+        console.log('[SHEET PROPS] - isBulkMode:', isBulkMode);
+        console.log('[SHEET PROPS] - bulkItems:', bulkItems.length, 'items');
+        bulkItems.forEach((item, index) => {
+          console.log(`[SHEET PROPS]   BulkItem ${index + 1}:`, {
+            id: item.id,
+            photosCount: item.photos.length,
+            isActive: item.isActive
+          });
+        });
+        console.log('[SHEET PROPS] - activeItemId:', activeItemId);
+        console.log('[SHEET PROPS] ==================');
+        
+        return (
+          <BulkItemsSheet 
+            onClose={closeSheets}
+            sheetStyle={sheetAnimatedStyle}
+            photos={capturedPhotos}
+            isBulkMode={isBulkMode}
+            bulkItems={bulkItems}
+            activeItemId={activeItemId}
+            onAddNewItem={addNewBulkItem}
+            onImageUpload={handleImageUpload}
+            onDeleteItem={deleteBulkItem}
+            onMovePhoto={movePhoto}
+            onSelectItem={selectActiveItem}
+            onSetCoverPhoto={setBulkItemCoverPhoto}
+            onRemovePhoto={removeBulkItemPhoto}
+            onSearch={performAnalyze}
+            sheetTranslateY={sheetTranslateY}
+            navigation={navigation}
+          />
+        );
+      })()}
     </GestureHandlerRootView>
   );
 };
@@ -1320,7 +1514,7 @@ const BottomControls: React.FC<{
           <Text style={styles.continueButtonText}>
             {photosCount > 0 
               ? `Continue with ${photosCount} photo${photosCount > 1 ? 's' : ''}`
-              : 'Get Started'
+              : 'Take a photo to get started'
             }
           </Text>
         </TouchableOpacity>
@@ -1378,7 +1572,7 @@ const MatchResultsSheet: React.FC<{
   );
 };
 
-// Bulk Items Sheet Component
+// Bulk Items Sheet Component (memoized to debug re-rendering)
 const BulkItemsSheet: React.FC<{
   onClose: () => void;
   sheetStyle: any;
@@ -1395,26 +1589,39 @@ const BulkItemsSheet: React.FC<{
   onRemovePhoto: (itemId: string, photoId: string) => void;
   onSearch: (photo: CapturedPhoto) => Promise<void>;
   sheetTranslateY: Animated.SharedValue<number>;
-}> = ({ onClose, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, onSearch, sheetTranslateY }) => {
+  navigation: any;
+}> = ({ onClose, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, onSearch, sheetTranslateY, navigation }) => {
   
-  console.log('[SHEET RENDER] BulkItemsSheet rendered with props:', { photosLength: photos.length, isBulkMode, bulkItemsLength: bulkItems.length });
+  console.log('[SHEET RENDER] ==================');
+  console.log('[SHEET RENDER] BulkItemsSheet RE-RENDERED at:', new Date().toISOString());
+  console.log('[SHEET RENDER] Props received:');
+  console.log('[SHEET RENDER] - photos.length:', photos.length);
+  console.log('[SHEET RENDER] - bulkItems.length:', bulkItems.length);
+  console.log('[SHEET RENDER] - bulkItems array:', JSON.stringify(bulkItems, null, 2));
+  console.log('[SHEET RENDER] - activeItemId:', activeItemId);
+  console.log('[SHEET RENDER] ==================');
   
-  // Show items based on actual photos taken
+  // SIMPLIFIED: Always use bulkItems (no more virtual items)
   let displayItems: Array<{ id: string; photos: CapturedPhoto[]; title?: string; isActive?: boolean; }>;
-  if (isBulkMode && bulkItems.length > 0) {
-    displayItems = bulkItems;
-  } else if (photos.length > 0) {
-    // Single mode with photos - show single item
-    displayItems = [{ 
-      id: 'single', 
-      photos: photos, 
-      title: undefined, 
-      isActive: true 
-    }];
-  } else {
-    // No photos yet - show empty state
-    displayItems = [];
-  }
+  
+  console.log('[DISPLAY LOGIC] ==================');
+  console.log('[DISPLAY LOGIC] Using simplified logic - always show bulkItems');
+  console.log('[DISPLAY LOGIC] bulkItems.length:', bulkItems.length);
+  console.log('[DISPLAY LOGIC] photos (capturedPhotos) length:', photos.length, '(legacy - should be same as total photos in bulkItems)');
+  
+  // Always use bulkItems - much simpler!
+  displayItems = bulkItems;
+  
+  console.log('[DISPLAY LOGIC] Final displayItems (same as bulkItems):');
+  displayItems.forEach((item, index) => {
+    console.log(`[DISPLAY LOGIC] Item ${index + 1}:`, {
+      id: item.id,
+      photosCount: item.photos.length,
+      photoIds: item.photos.map(p => p.id),
+      isActive: item.isActive
+    });
+  });
+  console.log('[DISPLAY LOGIC] ==================');
   
   const totalItems = displayItems.length;
   
@@ -1430,9 +1637,17 @@ const BulkItemsSheet: React.FC<{
   
   // Fixed height at 60% of screen
   const sheetMaxHeight = SCREEN_HEIGHT * 0.6;
-  const headerHeight = 120; // Height for header, title, and subtitle
+  const headerHeight = 160; // Increased for debug sections
   const footerHeight = 120; // Height for fixed bottom actions
-  const scrollableHeight = sheetMaxHeight - headerHeight - footerHeight + 20;
+  const scrollableHeight = Math.max(200, sheetMaxHeight - headerHeight - footerHeight);
+  
+  console.log('[SHEET LAYOUT] Heights calculated:', {
+    screenHeight: SCREEN_HEIGHT,
+    sheetMaxHeight,
+    headerHeight,
+    footerHeight,
+    scrollableHeight
+  });
   
   const dynamicSheetStyle = useAnimatedStyle(() => ({
     transform: sheetStyle.transform,
@@ -1501,6 +1716,17 @@ const BulkItemsSheet: React.FC<{
       </View>
       
       <View style={styles.sheetContent}>
+        {/* DEBUG: Sheet state indicator 
+        <View style={{ backgroundColor: '#00ff00', padding: 8, marginBottom: 12, borderRadius: 4 }}>
+          <Text style={{ color: '#000', fontSize: 12, fontWeight: 'bold' }}>
+            🟢 SHEET DEBUG: {totalItems} items | bulkMode: {isBulkMode ? 'ON' : 'OFF'} | active: {activeItemId ? 'SET' : 'NONE'}
+          </Text>
+          <Text style={{ color: '#000', fontSize: 10 }}>
+            displayItems.length: {displayItems.length} | Should show: {displayItems.length === 0 ? 'EMPTY STATE' : 'ITEMS LIST'}
+          </Text>
+        </View>
+        */}
+        
         <Text style={styles.sheetSubtitle}>
           {totalItems === 0 
             ? 'Take a photo to automatically create your first item'
@@ -1509,38 +1735,80 @@ const BulkItemsSheet: React.FC<{
         </Text>
         
         {/* Scrollable Items Container */}
+        {/*<View style={{ backgroundColor: '#ffeb3b', padding: 4, marginBottom: 8 }}>
+          <Text style={{ color: '#000', fontSize: 12, fontWeight: 'bold' }}>
+            DEBUG: Items Container - {displayItems.length} items to show
+          </Text>
+        </View>
+        */}
         <ScrollView 
-          style={[styles.itemsScrollContainer, { height: scrollableHeight }]}
+          style={[
+            styles.itemsScrollContainer, 
+            { 
+              height: scrollableHeight,
+              //backgroundColor: '#ffeaa7', // DEBUG: Light orange background
+              //borderWidth: 2,
+              //borderColor: '#00b894'
+            }
+          ]}
           showsVerticalScrollIndicator={true}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { 
+              //backgroundColor: '#fab1a0', // DEBUG: Light pink content background
+              flexGrow: 1 // Ensure content can grow
+            }
+          ]}
         >
           {displayItems.length === 0 ? (
-            <View style={{ padding: 20, alignItems: 'center' }}>
-              <Icon name="camera-plus-outline" size={48} color="#ccc" />
-              <Text style={{ marginTop: 12, fontSize: 16, color: '#666', textAlign: 'center' }}>
-                Take your first photo to get started
-              </Text>
-              <Text style={{ marginTop: 4, fontSize: 14, color: '#999', textAlign: 'center' }}>
-                The first photo of each item gets automatically scanned
-              </Text>
-            </View>
+            (() => {
+              console.log('[RENDER] 🔴 Showing EMPTY STATE (no items to display)');
+              return (
+                <View style={{ padding: 20, alignItems: 'center' }}>
+                  <Icon name="camera-plus-outline" size={48} color="#ccc" />
+                  <Text style={{ marginTop: 12, fontSize: 16, color: '#666', textAlign: 'center' }}>
+                    Take your first photo to get started
+                  </Text>
+                  <Text style={{ marginTop: 4, fontSize: 14, color: '#999', textAlign: 'center' }}>
+                    The first photo of each item gets automatically scanned
+                  </Text>
+                </View>
+              );
+            })()
           ) : (
-            displayItems.map((item, itemIndex) => (
+            (() => {
+              console.log('[RENDER] ✅ Showing', displayItems.length, 'ITEMS');
+              return displayItems.map((item, id) => {
+                console.log(`[RENDER] Rendering Item ${id + 1}:`, {
+                  id: item.id,
+                  photosCount: item.photos.length,
+                  isActive: item.isActive
+                });
+                return (
             <TouchableOpacity 
               key={item.id} 
               style={[
                 styles.bulkItemContainer,
-                item.isActive && styles.activeItemContainer
+                item.isActive && styles.activeItemContainer,
+                // DEBUG: Make each item super visible
+                { backgroundColor: item.isActive ? '#e8f5e8' : '#ffffff' }
               ]}
               onPress={() => onSelectItem(item.id)}
             >
+              {/* DEBUG: Item visibility indicator 
+              <View style={{ backgroundColor: '#ff0000', padding: 4, marginBottom: 8}}>
+                <Text style={{ color: '#fff', fontSize: 10, fontWeight: 'bold' }}>
+                  🔴 ITEM {id + 1} RENDERED - {item.photos.length} photos - {item.isActive ? 'ACTIVE' : 'INACTIVE'}
+                </Text>
+              </View>
+              */}
               <View style={styles.itemHeader}>
                 <View style={styles.itemLabelContainer}>
                   <Text style={[
                     styles.itemLabel,
                     item.isActive && styles.activeItemLabel
                   ]}>
-                    Item {itemIndex + 1}
+                    Item {id + 1}
                   </Text>
                   {item.isActive && (
                     <View style={styles.activeItemBadge}>
@@ -1557,7 +1825,7 @@ const BulkItemsSheet: React.FC<{
                     <Icon name="delete-outline" size={18} color="#ff6b6b" />
                   </TouchableOpacity>
                 )}
-      </View>
+              </View>
 
               <View style={styles.photoSlotsContainer}>
                 {item.photos.map((photo: CapturedPhoto, photoIndex: number) => (
@@ -1570,7 +1838,7 @@ const BulkItemsSheet: React.FC<{
                       }
                     }}
                   >
-        <Animated.View 
+                    <Animated.View 
                       style={[
                         styles.photoSlot,
                         photo.isCover && styles.coverPhotoSlot // Green border for cover photo
@@ -1596,12 +1864,12 @@ const BulkItemsSheet: React.FC<{
                             ]
                           );
                         }}
-                      >
-                                                <Image source={{ uri: photo.uri }} style={styles.photoSlotImage} />
+                        >
+                        <Image source={{ uri: photo.uri }} style={styles.photoSlotImage} />
                         <View style={[
                           styles.photoSlotLabel,
                           photo.isCover && styles.coverPhotoLabel
-                        ]}>
+                          ]}>
                           <Text style={styles.photoSlotLabelText}>
                             {photo.isCover ? 'COVER' : `pic ${photoIndex + 1}`}
                           </Text>
@@ -1611,7 +1879,7 @@ const BulkItemsSheet: React.FC<{
                           style={styles.bulkPhotoDeleteButton}
                           onPress={() => onRemovePhoto(item.id, photo.id)}
                           hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
-                        >
+                          >
                           <Icon name="close-circle" size={14} color="#ff4444" />
                         </TouchableOpacity>
                       </TouchableOpacity>
@@ -1632,7 +1900,9 @@ const BulkItemsSheet: React.FC<{
                 <Text style={styles.maxPhotosText}>Maximum 12 photos per item</Text>
               )}
               </TouchableOpacity>
-            ))
+                );
+              });
+            })()
           )}
         </ScrollView>
         
@@ -1659,21 +1929,27 @@ const BulkItemsSheet: React.FC<{
             disabled={totalItems === 0}
             onPress={async () => {
               console.log('[SEARCH] Starting broad search for all items');
+
+              // Get all photos from bulkItems (simplified - no more dual system)
+              const firstPhotos = bulkItems.map(item => item.photos[0]).filter(Boolean); // Ensure no undefined photos
               
-              // Get all photos from all items
-              const allPhotos = isBulkMode 
-                ? bulkItems.flatMap(item => item.photos)
-                : photos;
+              // Navigate to loading screen with the new, more flexible structure
+              navigation.navigate("LoadingScreen", {
+                processType: 'match',
+                payload: {
+                  firstPhotos: firstPhotos,
+                  bulkItems: bulkItems,
+                },
+                onCompleteRoute: {
+                  screen: 'MatchSelectionScreen', // Example: navigate to AddListing on completion
+                  params: {
+                    // You can pass the results of the matching process here
+                  }
+                }
+              });
               
-              if (allPhotos.length === 0) {
-                Alert.alert('No Photos', 'Please take some photos first before searching.');
-                return;
-              }
-              
-              // Start with analyze on the first photo
-              if (allPhotos[0]) {
-                await onSearch(allPhotos[0]);
-              }
+              console.log('[SEARCH] Navigating to LoadingScreen with payload for "match" process.');
+            
             }}
           >
             <Icon name="magnify" size={16} color={totalItems === 0 ? "#999" : "white"} />
@@ -1979,7 +2255,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    marginBottom: 20,
+    marginBottom: 10,
   },
   sheetTitle: {
     fontSize: 18,
@@ -1987,6 +2263,7 @@ const styles = StyleSheet.create({
     color: '#333',
   },
   sheetContent: {
+    flexGrow: 1,
     paddingHorizontal: 20,
   },
   
@@ -2172,10 +2449,14 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   bulkItemContainer: {
-    backgroundColor: '#f8f9fa',
+    backgroundColor: '#ffffff',
     borderRadius: 12,
     padding: 16,
     marginBottom: 16,
+    // DEBUG: Make items more visible
+    borderWidth: 2,
+    borderColor: '#D9D9D9',
+    minHeight: 100,
   },
   photoSlotsContainer: {
     flexDirection: 'row',
@@ -2248,7 +2529,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
     borderRadius: 12,
     paddingVertical: 16,
-    marginBottom: 20,
+    marginBottom: 10,
     gap: 8,
   },
   newItemButtonText: {
@@ -2278,24 +2559,26 @@ const styles = StyleSheet.create({
   // New Bulk Sheet Styles
   dragHandle: {
     alignItems: 'center',
-    paddingVertical: 10,
+    marginBottom: 10,
   },
   dragHandleButton: {
     alignItems: 'center',
     paddingVertical: 5,
-    paddingHorizontal: 20,
+    paddingHorizontal: 15,
   },
   dragHandleBar: {
-    width: 40,
+    width: 60,
     height: 4,
     backgroundColor: '#ddd',
     borderRadius: 2,
   },
   itemsScrollContainer: {
-    flex: 1,
+    flexGrow: 1,
   },
   scrollContent: {
     paddingBottom: 20,
+
+    paddingHorizontal: 10,
   },
   itemHeader: {
     flexDirection: 'row',
@@ -2306,7 +2589,7 @@ const styles = StyleSheet.create({
   itemLabel: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#333',
+    color: '#333333',
   },
   itemLabelContainer: {
     flexDirection: 'row',
@@ -2455,6 +2738,73 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
+  },
+  
+  // Debug styles
+  debugOverlay: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 40 : 20,
+    left: 10,
+    right: 10,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    borderRadius: 6,
+    padding: 8,
+    zIndex: 100,
+  },
+  debugText: {
+    color: 'white',
+    fontSize: 12,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    textAlign: 'center',
+  },
+  debugButtons: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 8,
+    gap: 10,
+  },
+  debugButton: {
+    backgroundColor: 'rgba(76, 175, 80, 0.8)',
+    borderRadius: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  debugButtonText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  
+  // Camera paused overlay styles
+  cameraPausedOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 5,
+  },
+  cameraPausedIndicator: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    borderRadius: 12,
+    padding: 20,
+  },
+  cameraPausedText: {
+    color: 'white',
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 12,
+    textAlign: 'center',
+  },
+  cameraPausedSubtext: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 14,
+    marginTop: 4,
+    textAlign: 'center',
   },
 });
 

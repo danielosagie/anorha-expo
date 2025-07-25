@@ -39,6 +39,8 @@ import PastScansScreen from '../screens/PastScansScreen';
 import MappingReviewScreen from '../screens/MappingReviewScreen';
 import SyncRulesScreen from '../screens/SyncRulesScreen';
 import AddProductScreen from '../screens/AddProductScreen';
+import LoadingScreen from '../screens/LoadingScreen';
+import MatchSelectionScreen from '../screens/MatchSelectionScreen';
 
 // --- Define Param Lists for Type Safety --- //
 type AuthStackParamList = {
@@ -67,13 +69,27 @@ export type AppStackParamList = {
       variantId?: string;
       uploadedImageUrls?: string[];
     };
-  }; 
+  };
+  LoadingScreen: {
+    processType: 'match' | 'generate';
+    payload: {
+      firstPhotos: any[];
+      bulkItems: any[];
+    };
+    onCompleteRoute: {
+      screen: keyof AppStackParamList;
+      params?: any;
+    };
+  };
   ProductDetail: { productId: string };
   PastScans: undefined;
   MappingReview: { connectionId: string; platformName: string; jobId?: string; }; 
   SyncRules: { connectionId: string };
   Profile: { refresh?: number }; // Add Profile screen with optional refresh param
-  AddProduct: undefined;
+  AddProduct: {
+    firstPhotos: any[];
+    bulkItems: any[];
+  }
   // Add other screens here as needed
 };
 
@@ -183,6 +199,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="SyncRules" component={SyncRulesScreen} />
     <AppStackNav.Screen name="Profile" component={ProfileScreen} />
     <AppStackNav.Screen name="AddProduct" component={AddProductScreen} />
+    <AppStackNav.Screen name="LoadingScreen" component={LoadingScreen} />
   </AppStackNav.Navigator>
 );
 

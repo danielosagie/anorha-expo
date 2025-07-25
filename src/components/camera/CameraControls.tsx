@@ -67,7 +67,7 @@ const CameraControls: React.FC<CameraControlsProps> = ({
 const styles = StyleSheet.create({
   cameraControlsContainer: {
     position: 'absolute',
-    top: 0,
+    top: 100,
     right: 0,
     zIndex: 10,
   },
