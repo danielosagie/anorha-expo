@@ -685,3 +685,53 @@ WHERE "Id" IN (
     JOIN "PlatformConnections" pc ON ppm."PlatformConnectionId" = pc."Id"
     WHERE LOWER(pc."PlatformType") = 'facebook' AND ppm."IsEnabled" = true
 );
+
+
+
+CREATE TABLE IF NOT EXISTS public.ProductAnalysisJobs (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    job_id TEXT UNIQUE NOT NULL,
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'cancelled')),
+    progress JSONB DEFAULT '{}',
+    results JSONB DEFAULT '[]',
+    summary JSONB DEFAULT '{}',
+    error TEXT,
+    started_at TIMESTAMPTZ DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    estimated_completion_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Create indexes for efficient querying
+CREATE INDEX IF NOT EXISTS idx_ProductAnalysisJobs_job_id ON public.ProductAnalysisJobs(job_id);
+CREATE INDEX IF NOT EXISTS idx_ProductAnalysisJobs_user_id ON public.ProductAnalysisJobs(user_id);
+CREATE INDEX IF NOT EXISTS idx_ProductAnalysisJobs_status ON public.ProductAnalysisJobs(status);
+CREATE INDEX IF NOT EXISTS idx_ProductAnalysisJobs_created_at ON public.ProductAnalysisJobs(created_at DESC);
+
+-- Enable RLS (Row Level Security)
+ALTER TABLE public.ProductAnalysisJobs ENABLE ROW LEVEL SECURITY;
+
+-- Create RLS policy so users can only see their own jobs
+CREATE POLICY "Users can view their own analysis jobs" ON public.ProductAnalysisJobs
+    FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert their own analysis jobs" ON public.ProductAnalysisJobs
+    FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own analysis jobs" ON public.ProductAnalysisJobs
+    FOR UPDATE USING (auth.uid() = user_id);
+
+-- Add updated_at trigger
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+CREATE TRIGGER update_ProductAnalysisJobs_updated_at 
+    BEFORE UPDATE ON public.ProductAnalysisJobs
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

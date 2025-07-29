@@ -20,6 +20,7 @@ import { AppStackParamList } from '../navigation/AppNavigator';
 import PyramidGrid from '../components/PyramidGrid';
 import { Blurred } from '../components/Blurred';
 import StepLoader from '../components/StepLoader';
+import { supabase } from '../lib/supabase';
 
 
 type LoadingScreenProps = StackScreenProps<AppStackParamList, 'LoadingScreen'>;
@@ -29,9 +30,10 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
 
   // Destructure the new, more flexible params
   const { processType, payload, onCompleteRoute } = route.params;
-  const { firstPhotos, bulkItems } = payload;
+  const { jobId, firstPhotos, bulkItems } = payload;
 
   const [currentStageIndex, setCurrentStageIndex] = useState(0);
+  const [jobStatus, setJobStatus] = useState('queued');
 
   // Define the stages for different processes
   const stages = {
@@ -56,32 +58,81 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
   // Select the correct list of stages based on the processType
   const activeStages = stages[processType];
 
-  // This effect handles advancing the loader through the stages.
+  // Poll job status using the jobId
   useEffect(() => {
-    // Stop the timer when we've reached the final stage.
-    if (currentStageIndex >= activeStages.length - 1) {
-      return;
-    }
+    if (!jobId) return;
+
+    const pollJobStatus = async () => {
+      try {
+
+        // Get current user
+        async function getToken() {
+          const { data: { user }, error: userError } = await supabase.auth.getUser();
+          const session = await supabase.auth.getSession();
+          const token = session?.data.session?.access_token;
+          return token;
+        }
+
+        
+        // Get auth token
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = await getToken();
+        
+        const response = await fetch(`https://api.sssync.app/api/products/match/jobs/${jobId}/status`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        const status = await response.json();
+        
+        console.log('[POLLING] Job status:', status.status, 'Stage:', status.currentStage);
+        
+        // Update job status and stage
+        setJobStatus(status.status);
+        
+        // Map backend stages to frontend stage index
+        const stageIndex = activeStages.indexOf(status.currentStage);
+        if (stageIndex >= 0) {
+          setCurrentStageIndex(stageIndex);
+        }
+        
+        // If completed, navigate to next screen
+        if (status.status === 'completed') {
+          console.log(`Process "${processType}" complete! Navigating...`);
+          setTimeout(() => {
+            navigation.replace(onCompleteRoute.screen, {
+              ...onCompleteRoute.params,
+              jobResults: status.results
+            });
+          }, 1000);
+        } else if (status.status === 'failed') {
+          console.error('Job failed:', status.error);
+          // Handle error - maybe go back or show error screen
+        }
+      } catch (error) {
+        console.error('[POLLING] Error polling status:', error);
+      }
+    };
+
+    // Start polling immediately, then every 2 seconds
+    pollJobStatus();
+    const interval = setInterval(pollJobStatus, 2000);
+    
+    return () => clearInterval(interval);
+  }, [jobId, processType, navigation, onCompleteRoute, activeStages]);
+
+  // Fallback timer for advancing stages if polling fails
+  useEffect(() => {
+    if (jobStatus !== 'queued' && jobStatus !== 'processing') return;
+    if (currentStageIndex >= activeStages.length - 1) return;
 
     const stageTimer = setTimeout(() => {
       setCurrentStageIndex(prevIndex => prevIndex + 1);
-    }, 1500);
+    }, 3000); // Slower fallback
 
     return () => clearTimeout(stageTimer);
-  }, [currentStageIndex, activeStages.length]);
-
-  // This separate effect handles the final navigation after a delay.
-  useEffect(() => {
-    // Only run this when the current stage is the last one.
-    if (currentStageIndex === activeStages.length - 1) {
-      console.log(`Process "${processType}" complete! Navigating in 2 seconds...`);
-      const navigationTimer = setTimeout(() => {
-        navigation.replace(onCompleteRoute.screen, onCompleteRoute.params);
-      }, 2000); // Wait for 2 seconds before navigating.
-
-      return () => clearTimeout(navigationTimer);
-    }
-  }, [currentStageIndex, activeStages.length, processType, onCompleteRoute, navigation]);
+  }, [currentStageIndex, activeStages.length, jobStatus]);
 
   console.log(`[LOADING] Starting process: "${processType}"`);
   console.log('[LOADING] Payload photos:', firstPhotos);

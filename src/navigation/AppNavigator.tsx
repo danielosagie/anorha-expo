@@ -73,6 +73,7 @@ export type AppStackParamList = {
   LoadingScreen: {
     processType: 'match' | 'generate';
     payload: {
+      jobId?: string;
       firstPhotos: any[];
       bulkItems: any[];
     };
@@ -90,7 +91,97 @@ export type AppStackParamList = {
     firstPhotos: any[];
     bulkItems: any[];
   }
-  // Add other screens here as needed
+  MatchSelectionScreen: {
+    jobId?: string;
+    bulkItems?: any[];
+    firstPhotos?: any[];
+    jobResults?: any[];
+    analysis?: {
+      jobId: string;
+      userId: string;
+      status: string;
+      currentStage: string;
+      progress: {
+        totalProducts: number;
+        completedProducts: number;
+        currentProductIndex: number;
+        failedProducts: number;
+        stagePercentage: number;
+      };
+      results: Array<{
+        productIndex: number;
+        productId: string;
+        variantId: string;
+        serpApiData: Array<{
+          position?: number;
+          title?: string;
+          link?: string;
+          source?: string;
+          source_icon?: string;
+          thumbnail?: string;
+          thumbnail_width?: number;
+          thumbnail_height?: number;
+          image?: string;
+          image_width?: number;
+          image_height?: number;
+          rating?: number;
+          reviews?: number;
+          price?: {
+            value?: string;
+            extracted_value?: number;
+            currency?: string;
+          };
+          condition?: string;
+          in_stock?: boolean;
+        }>;
+        rerankedResults: Array<{
+          position?: number;
+          title?: string;
+          link?: string;
+          source?: string;
+          source_icon?: string;
+          thumbnail?: string;
+          thumbnail_width?: number;
+          thumbnail_height?: number;
+          image?: string;
+          image_width?: number;
+          image_height?: number;
+          rank?: number;
+          score?: number;
+          rating?: number;
+          reviews?: number;
+          price?: {
+            value?: string;
+            extracted_value?: number;
+            currency?: string;
+          };
+          condition?: string;
+          in_stock?: boolean;
+        }>;
+        confidence: string; // Changed from number to string based on the JSON example
+        vectorSearchFoundResults: boolean;
+        originalTargetImage: string;
+        timing: {
+          quickScanMs: number;
+          serpApiMs: number;
+          embeddingMs: number;
+          vectorSearchMs: number;
+          rerankingMs: number;
+          totalMs: number;
+        };
+      }>;
+      startedAt: string;
+      updatedAt: string;
+      summary: {
+        highConfidenceCount: number;
+        mediumConfidenceCount: number;
+        lowConfidenceCount: number;
+        totalEmbeddingsStored: number | null;
+        averageProcessingTimeMs: number | null;
+      };
+      completedAt: string;
+    }
+  };
 };
 
 type RootStackParamList = {
@@ -200,6 +291,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="Profile" component={ProfileScreen} />
     <AppStackNav.Screen name="AddProduct" component={AddProductScreen} />
     <AppStackNav.Screen name="LoadingScreen" component={LoadingScreen} />
+    <AppStackNav.Screen name="MatchSelectionScreen" component={MatchSelectionScreen} />
   </AppStackNav.Navigator>
 );
 

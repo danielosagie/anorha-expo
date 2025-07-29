@@ -48,6 +48,92 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 // Types
 
+export interface Analysis {
+  jobId: string;
+  userId: string;
+  status: string;
+  currentStage: string;
+  progress: {
+    totalProducts: number;
+    completedProducts: number;
+    currentProductIndex: number;
+    failedProducts: number;
+    stagePercentage: number;
+  };
+  results: Array<{
+    productIndex: number;
+    productId: string;
+    variantId: string;
+    serpApiData: Array<{
+      position?: number;
+      title?: string;
+      link?: string;
+      source?: string;
+      source_icon?: string;
+      thumbnail?: string;
+      thumbnail_width?: number;
+      thumbnail_height?: number;
+      image?: string;
+      image_width?: number;
+      image_height?: number;
+      rating?: number;
+      reviews?: number;
+      price?: {
+        value?: string;
+        extracted_value?: number;
+        currency?: string;
+      };
+      condition?: string;
+      in_stock?: boolean;
+    }>;
+    rerankedResults: Array<{
+      position?: number;
+      title?: string;
+      link?: string;
+      source?: string;
+      source_icon?: string;
+      thumbnail?: string;
+      thumbnail_width?: number;
+      thumbnail_height?: number;
+      image?: string;
+      image_width?: number;
+      image_height?: number;
+      rank?: number;
+      score?: number;
+      rating?: number;
+      reviews?: number;
+      price?: {
+        value?: string;
+        extracted_value?: number;
+        currency?: string;
+      };
+      condition?: string;
+      in_stock?: boolean;
+    }>;
+    confidence: string; // Changed from number to string based on the JSON example
+    vectorSearchFoundResults: boolean;
+    originalTargetImage: string;
+    timing: {
+      quickScanMs: number;
+      serpApiMs: number;
+      embeddingMs: number;
+      vectorSearchMs: number;
+      rerankingMs: number;
+      totalMs: number;
+    };
+  }>;
+  startedAt: string;
+  updatedAt: string;
+  summary: {
+    highConfidenceCount: number;
+    mediumConfidenceCount: number;
+    lowConfidenceCount: number;
+    totalEmbeddingsStored: number | null;
+    averageProcessingTimeMs: number | null;
+  };
+  completedAt: string;
+}
+
 interface MatchCandidate {
   id: string;
   title: string;
@@ -268,7 +354,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
       
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.8,
+        quality: 0.7,
         base64: false,
        });
       
@@ -386,53 +472,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   }, [isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity]);
 
-  // Simulate AI processing and matching
-  const processImageForMatches = async (photo: CapturedPhoto) => {
-    // Mock API response - replace with actual API call
-    const mockResponse: MatchResponse = Math.random() > 0.5 ? {
-      systemAction: 'show_single_match',
-      confidence: 'high',
-      totalMatches: 3,
-      rankedCandidates: [
-        {
-          id: '1',
-          title: 'iPhone 15 Pro Max',
-          description: 'Latest iPhone with titanium design',
-          price: 1199,
-          imageUrl: 'https://example.com/iphone.jpg',
-          matchPercentage: 95,
-          sourceUrl: 'https://apple.com/iphone-15-pro',
-        },
-        {
-          id: '2',
-          title: 'iPhone 15 Pro',
-          description: 'Pro iPhone with advanced features',
-          price: 999,
-          imageUrl: 'https://example.com/iphone-pro.jpg',
-          matchPercentage: 87,
-          sourceUrl: 'https://apple.com/iphone-15-pro',
-        },
-      ],
-    } : {
-      systemAction: 'fallback_to_manual',
-      confidence: 'low',
-      totalMatches: 0,
-      rankedCandidates: [],
-    };
-
-    setMatchData(mockResponse);
-    
-    if (mockResponse.systemAction === 'show_single_match' || mockResponse.systemAction === 'show_multiple_matches') {
-      setCurrentInstruction('matches_found');
-      setShowMatchSheet(true);
-      sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.5);
-    } else {
-      setCurrentInstruction('no_matches');
-      setShowDeepSearchSheet(true);
-      sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.5);
-    }
-  };
-
   // Handle barcode scan
   const handleBarCodeScanned = useCallback((scanningResult: BarcodeScanningResult) => {
     if (cameraMode === 'barcode' && scanningResult.data && scannedBarcode !== scanningResult.data) {
@@ -504,7 +543,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       Alert.alert('Permission needed', 'We need camera roll permissions to upload images.');
       return;
     }
-
+    
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
@@ -659,11 +698,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // Create file name
       const fileName = `${user.id}/${photoId}-${Date.now()}.jpg`;
       
-      // For React Native, we can upload the base64 string directly
-      // Supabase expects either a File, Blob, or ArrayBuffer
+      // Convert base64 to proper blob for upload
+      const byteCharacters = atob(base64);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      
       const { data, error } = await supabase.storage
         .from('product-images')
-        .upload(fileName, `data:image/jpeg;base64,${base64}`, {
+        .upload(fileName, byteArray, {
           contentType: 'image/jpeg',
           cacheControl: '3600',
         });
@@ -792,23 +837,38 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   }, [isAutoScanning, sheetTranslateY, stopProgressAnimation, uploadImageToSupabase]);
 
-  // Analyze with SerpAPI (Manual trigger)
-  const performAnalyze = useCallback(async (photo: CapturedPhoto) => {
+  // Send payload of first photos for analysis/matching
+  const performAnalyze = useCallback(async (firstPhotos: CapturedPhoto[]) => {
     try {
-      console.log('[ANALYZE] Starting SerpAPI analyze for photo:', photo.id);
+      console.log('[ANALYZE] Sending payload of ' + firstPhotos.length + ' first photos to backend for analysis, matching, and item creation');
       
-      // Upload image to Supabase Storage first
-      console.log('[ANALYZE] Uploading image to Supabase...');
-      const publicImageUrl = await uploadImageToSupabase(photo.uri, photo.id);
-      console.log('[ANALYZE] Image uploaded to:', publicImageUrl);
+      // Upload images to Supabase Storage first
+      console.log('[ANALYZE] Uploading images to Supabase...');
+
+      const publicImageUrls = await Promise.all(
+        firstPhotos.map(photo => uploadImageToSupabase(photo.uri, photo.id))
+      );
+
+      const products = publicImageUrls.map((url, index) => ({
+        productIndex: index,
+        images: [{url}]
+      }));
+
+      console.log('[ANALYZE] Images uploaded to:', publicImageUrls);
       
-      const token = await getToken();
-      const response = await fetch('https://api.sssync.app/api/products/analyze', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageUris: [publicImageUrl] // Use Supabase public URL instead of local file path
-        })
+             const finalPayload = {
+         products,
+         options: {
+           useReranking: true,
+           vectorSearchLimit: 10,
+         }
+       };
+
+       const token = await getToken();
+       const response = await fetch('https://api.sssync.app/api/products/orchestrate/match', {
+         method: 'POST',
+         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+         body: JSON.stringify(finalPayload)
       });
 
       console.log('[ANALYZE] Response received:', response);
@@ -819,62 +879,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       
       const analyzeResult = await response.json();
       console.log('[ANALYZE] Response received:', analyzeResult);
-      
-      // Parse SerpAPI data from analysis
-      let serpData = null;
-      if (analyzeResult.analysis?.GeneratedText) {
-        try {
-          serpData = JSON.parse(analyzeResult.analysis.GeneratedText);
-          console.log('[ANALYZE] Parsed SerpAPI data:', serpData);
-        } catch (parseError) {
-          console.error('[ANALYZE] Failed to parse SerpAPI data:', parseError);
-        }
-      }
-      
-      if (serpData?.visual_matches && serpData.visual_matches.length > 0) {
-        // Convert SerpAPI results to our match format
-        const serpMatches = serpData.visual_matches.slice(0, 5).map((match: any, index: number) => ({
-          id: `serp-${index}`,
-          title: match.title || 'Unknown Product',
-          description: match.snippet || '',
-          price: match.price?.extracted_value || 0,
-          imageUrl: match.thumbnail || '',
-          matchPercentage: Math.max(90 - (index * 10), 50), // Simulated confidence based on position
-          sourceUrl: match.link || '',
-        }));
-        
-        setMatchData({
-          systemAction: 'show_multiple_matches',
-          confidence: 'medium',
-          totalMatches: serpMatches.length,
-          rankedCandidates: serpMatches
-        });
-                 setCurrentInstruction('matches_found');
-         stopProgressAnimation();
-         setShowMatchSheet(true);
-         sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
-      } else {
-        console.log('[ANALYZE] No SerpAPI matches found, showing deep search');
-        setCurrentInstruction('no_matches');
-        stopProgressAnimation();
-        showNotificationMessage('No matches found. Use the search options to find your product.', 4000);
-        setTimeout(() => {
-          setShowDeepSearchSheet(true);
-          sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
-        }, 1000);
-      }
+      return analyzeResult;
       
     } catch (error) {
       console.error('[ANALYZE] Analyze failed:', error);
-      setCurrentInstruction('no_matches');
-      stopProgressAnimation();
-      showNotificationMessage('Analysis failed. Please try taking another photo.', 3000);
-      setTimeout(() => {
-        setShowDeepSearchSheet(true);
-        sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
-      }, 1000);
+      showNotificationMessage('Analysis failed. Please try again in a second or two.', 3000);
     }
-  }, [uploadImageToSupabase, sheetTranslateY, stopProgressAnimation, showNotificationMessage]);
+  }, []);
 
   // Toggle bulk mode
   const toggleBulkMode = useCallback(() => {
@@ -1168,7 +1179,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         
         {/* Photo stack (top left) - shows active item's photos in bulk mode */}
         {(() => {
-          // SIMPLIFIED: Always show active item's photos from bulkItems
           const displayPhotos = activeItemId 
             ? bulkItems.find(item => item.id === activeItemId)?.photos || []
             : [];
@@ -1181,7 +1191,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   <Text style={styles.activeItemIndicatorText}>
                     Item {bulkItems.findIndex(item => item.id === activeItemId) + 1}
                   </Text>
-                </View>
+          </View>
               )}
               
               {displayPhotos.length > 0 && (
@@ -1295,11 +1305,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                  }}
                >
                  <Text style={styles.debugButtonText}>Add Test Item</Text>
-               </TouchableOpacity>
+            </TouchableOpacity>
                <TouchableOpacity style={styles.debugButton} onPress={forceRerender}>
                  <Text style={styles.debugButtonText}>Force Render</Text>
-               </TouchableOpacity>
-             </View>
+            </TouchableOpacity>
+          </View>
            </View>
          )} */}
         
@@ -1365,7 +1375,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             onSelectItem={selectActiveItem}
             onSetCoverPhoto={setBulkItemCoverPhoto}
             onRemovePhoto={removeBulkItemPhoto}
-            onSearch={performAnalyze}
+            performAnalyze={performAnalyze}
             sheetTranslateY={sheetTranslateY}
             navigation={navigation}
           />
@@ -1394,11 +1404,11 @@ const ProgressBarOverlay: React.FC<{
     <View style={styles.progressBarContainer}>
       <View style={styles.progressBarBackground}>
         <Animated.View style={[styles.progressBarFill, progressBarStyle]} />
-          </View>
+              </View>
       <Animated.View style={[styles.progressSpinner, spinnerStyle]}>
         <Icon name="loading" size={20} color="#4CAF50" />
         </Animated.View>
-    </View>
+            </View>
   );
 };
 
@@ -1417,7 +1427,7 @@ const NotificationBar: React.FC<{
     <Animated.View style={[styles.notificationBar, notificationStyle]}>
       <Icon name="information-outline" size={20} color="white" />
       <Text style={styles.notificationText}>{message}</Text>
-    </Animated.View>
+        </Animated.View>
   );
 };
 
@@ -1517,7 +1527,7 @@ const BottomControls: React.FC<{
               : 'Take a photo to get started'
             }
           </Text>
-        </TouchableOpacity>
+          </TouchableOpacity>
       </Animated.View>
     </View>
   );
@@ -1587,10 +1597,11 @@ const BulkItemsSheet: React.FC<{
   onSelectItem: (itemId: string) => void;
   onSetCoverPhoto: (itemId: string, photoId: string) => void;
   onRemovePhoto: (itemId: string, photoId: string) => void;
-  onSearch: (photo: CapturedPhoto) => Promise<void>;
+  performAnalyze: (firstPhotos: CapturedPhoto[]) => Promise<any>;
   sheetTranslateY: Animated.SharedValue<number>;
+  analysis: Analysis;
   navigation: any;
-}> = ({ onClose, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, onSearch, sheetTranslateY, navigation }) => {
+}> = ({ onClose, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation }) => {
   
   console.log('[SHEET RENDER] ==================');
   console.log('[SHEET RENDER] BulkItemsSheet RE-RENDERED at:', new Date().toISOString());
@@ -1698,14 +1709,14 @@ const BulkItemsSheet: React.FC<{
         <Animated.View style={styles.dragHandle}>
           <TouchableOpacity onPress={onClose} style={styles.dragHandleButton}>
             <View style={styles.dragHandleBar} />
-          </TouchableOpacity>
-        </Animated.View>
+            </TouchableOpacity>
+          </Animated.View>
       </PanGestureHandler>
       
-      <View style={styles.sheetHeader}>
+          <View style={styles.sheetHeader}>
         <TouchableOpacity onPress={onClose}>
-          <Icon name="close" size={24} color="#333" />
-        </TouchableOpacity>
+              <Icon name="close" size={24} color="#333" />
+            </TouchableOpacity>
         <Text style={styles.sheetTitle}>
           {totalItems === 0 
             ? 'Ready to Create Items'
@@ -1713,19 +1724,10 @@ const BulkItemsSheet: React.FC<{
           }
         </Text>
         <View style={{ width: 24 }} />
-      </View>
-      
-      <View style={styles.sheetContent}>
-        {/* DEBUG: Sheet state indicator 
-        <View style={{ backgroundColor: '#00ff00', padding: 8, marginBottom: 12, borderRadius: 4 }}>
-          <Text style={{ color: '#000', fontSize: 12, fontWeight: 'bold' }}>
-            🟢 SHEET DEBUG: {totalItems} items | bulkMode: {isBulkMode ? 'ON' : 'OFF'} | active: {activeItemId ? 'SET' : 'NONE'}
-          </Text>
-          <Text style={{ color: '#000', fontSize: 10 }}>
-            displayItems.length: {displayItems.length} | Should show: {displayItems.length === 0 ? 'EMPTY STATE' : 'ITEMS LIST'}
-          </Text>
-        </View>
-        */}
+          </View>
+          
+          <View style={styles.sheetContent}>
+
         
         <Text style={styles.sheetSubtitle}>
           {totalItems === 0 
@@ -1735,34 +1737,24 @@ const BulkItemsSheet: React.FC<{
         </Text>
         
         {/* Scrollable Items Container */}
-        {/*<View style={{ backgroundColor: '#ffeb3b', padding: 4, marginBottom: 8 }}>
-          <Text style={{ color: '#000', fontSize: 12, fontWeight: 'bold' }}>
-            DEBUG: Items Container - {displayItems.length} items to show
-          </Text>
-        </View>
-        */}
         <ScrollView 
           style={[
             styles.itemsScrollContainer, 
             { 
               height: scrollableHeight,
-              //backgroundColor: '#ffeaa7', // DEBUG: Light orange background
-              //borderWidth: 2,
-              //borderColor: '#00b894'
             }
           ]}
           showsVerticalScrollIndicator={true}
           contentContainerStyle={[
             styles.scrollContent,
             { 
-              //backgroundColor: '#fab1a0', // DEBUG: Light pink content background
-              flexGrow: 1 // Ensure content can grow
+              flexGrow: 1
             }
           ]}
         >
           {displayItems.length === 0 ? (
             (() => {
-              console.log('[RENDER] 🔴 Showing EMPTY STATE (no items to display)');
+              console.log('[RENDER] Showing EMPTY STATE (no items to display)');
               return (
                 <View style={{ padding: 20, alignItems: 'center' }}>
                   <Icon name="camera-plus-outline" size={48} color="#ccc" />
@@ -1777,7 +1769,7 @@ const BulkItemsSheet: React.FC<{
             })()
           ) : (
             (() => {
-              console.log('[RENDER] ✅ Showing', displayItems.length, 'ITEMS');
+              console.log('[RENDER] Showing', displayItems.length, 'ITEMS');
               return displayItems.map((item, id) => {
                 console.log(`[RENDER] Rendering Item ${id + 1}:`, {
                   id: item.id,
@@ -1790,18 +1782,11 @@ const BulkItemsSheet: React.FC<{
               style={[
                 styles.bulkItemContainer,
                 item.isActive && styles.activeItemContainer,
-                // DEBUG: Make each item super visible
+    
                 { backgroundColor: item.isActive ? '#e8f5e8' : '#ffffff' }
               ]}
               onPress={() => onSelectItem(item.id)}
             >
-              {/* DEBUG: Item visibility indicator 
-              <View style={{ backgroundColor: '#ff0000', padding: 4, marginBottom: 8}}>
-                <Text style={{ color: '#fff', fontSize: 10, fontWeight: 'bold' }}>
-                  🔴 ITEM {id + 1} RENDERED - {item.photos.length} photos - {item.isActive ? 'ACTIVE' : 'INACTIVE'}
-                </Text>
-              </View>
-              */}
               <View style={styles.itemHeader}>
                 <View style={styles.itemLabelContainer}>
                   <Text style={[
@@ -1823,10 +1808,10 @@ const BulkItemsSheet: React.FC<{
                     onPress={() => onDeleteItem(item.id)}
                   >
                     <Icon name="delete-outline" size={18} color="#ff6b6b" />
-                  </TouchableOpacity>
+              </TouchableOpacity>
                 )}
-              </View>
-
+            </View>
+            
               <View style={styles.photoSlotsContainer}>
                 {item.photos.map((photo: CapturedPhoto, photoIndex: number) => (
                   <TapGestureHandler
@@ -1881,7 +1866,7 @@ const BulkItemsSheet: React.FC<{
                           hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
                           >
                           <Icon name="close-circle" size={14} color="#ff4444" />
-                        </TouchableOpacity>
+              </TouchableOpacity>
                       </TouchableOpacity>
                     </Animated.View>
                   </TapGestureHandler>
@@ -1899,7 +1884,7 @@ const BulkItemsSheet: React.FC<{
               {item.photos.length >= 12 && (
                 <Text style={styles.maxPhotosText}>Maximum 12 photos per item</Text>
               )}
-              </TouchableOpacity>
+            </TouchableOpacity>
                 );
               });
             })()
@@ -1931,27 +1916,52 @@ const BulkItemsSheet: React.FC<{
               console.log('[SEARCH] Starting broad search for all items');
 
               // Get all photos from bulkItems (simplified - no more dual system)
-              const firstPhotos = bulkItems.map(item => item.photos[0]).filter(Boolean); // Ensure no undefined photos
+              const firstPhotos = bulkItems.map(item => item.photos[0]).filter(Boolean);
               
-              // Navigate to loading screen with the new, more flexible structure
-              navigation.navigate("LoadingScreen", {
-                processType: 'match',
-                payload: {
-                  firstPhotos: firstPhotos,
-                  bulkItems: bulkItems,
-                },
-                onCompleteRoute: {
-                  screen: 'MatchSelectionScreen', // Example: navigate to AddListing on completion
-                  params: {
-                    // You can pass the results of the matching process here
-                  }
+              if (firstPhotos.length === 0) {
+                Alert.alert('No Photos', 'Please take some photos first before searching.');
+                return;
+              }
+              
+              try {
+                
+                // Call performAnalyze to get the job ID
+                const analysis: Analysis = await performAnalyze(firstPhotos);
+                console.log('[SEARCH] Analysis:', analysis);
+                console.log('[SEARCH] Analysis Results:', analysis.results);
+                const jobId = analysis?.jobId;
+                console.log('[SEARCH] Job ID:', jobId);
+                
+                if (jobId) {
+                  // Navigate to loading screen with job ID for polling
+                  navigation.navigate("LoadingScreen", {
+                    processType: 'match',
+                    payload: {
+                      jobId: jobId,
+                      bulkItems: bulkItems,
+                      firstPhotos: firstPhotos,
+                    },
+                    onCompleteRoute: {
+                      screen: 'MatchSelectionScreen',
+                      params: {
+                        jobId: jobId,
+                        bulkItems: bulkItems,
+                        firstPhotos: firstPhotos,
+                        analysis: analysis,
+                      },
+                    }
+                  });
+                  
+                  console.log('[SEARCH] Navigating to LoadingScreen with jobId:', jobId);
+                } else {
+                  Alert.alert('Error', 'Failed to start analysis. Please try again.');
                 }
-              });
-              
-              console.log('[SEARCH] Navigating to LoadingScreen with payload for "match" process.');
-            
-            }}
-          >
+              } catch (error) {
+                console.error('[SEARCH] Error starting analysis:', error);
+                Alert.alert('Error', 'Failed to start analysis. Please try again.');
+              }
+          }
+        }>
             <Icon name="magnify" size={16} color={totalItems === 0 ? "#999" : "white"} />
             <Text style={[
               styles.searchForProductButtonText,
@@ -1960,7 +1970,7 @@ const BulkItemsSheet: React.FC<{
               Search For Product (Broad)
             </Text>
           </TouchableOpacity>
-          </View>
+    </View>
     </View>
     </Animated.View>
   );

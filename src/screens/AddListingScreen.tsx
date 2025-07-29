@@ -4010,7 +4010,8 @@ const AddListingScreen: React.FC<AddListingScreenProps> = ({ route }) => {
 export default AddListingScreen;
 
 // --- Styles --- //
-const styles = StyleSheet.create({
+const styles = StyleSheet.create(
+  {
   container: { flex: 1, backgroundColor: '#F8F9FB' },
   stageContainer: { flex: 1, paddingHorizontal: 15, paddingBottom: 15 },
   loadingContainer: { 
@@ -5208,7 +5209,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   // --- End Enhanced Search Styles ---
-  });
+});
 
 // --- Platform Images Map --- //
 const platformImageMap: { [key: string]: any } = {
