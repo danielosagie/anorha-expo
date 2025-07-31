@@ -1,908 +1,795 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigation } from '@react-navigation/native';
-import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity, Dimensions, Animated } from 'react-native';
-import { StackScreenProps } from '@react-navigation/stack';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import { RouteProp, useNavigation } from '@react-navigation/native';
+import { 
+    View, Text, StyleSheet, Image, Dimensions, ActivityIndicator, 
+    Pressable, Modal, TouchableOpacity, SafeAreaView, ScrollView
+} from 'react-native';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { FlashList } from '@shopify/flash-list';
-import { Analysis } from './AddProductScreen';
+import { supabase } from '../lib/supabase';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import PlatformButton from '../components/PlatformButton';
+import { LinearGradient } from 'expo-linear-gradient';
+import { PackageCheck } from 'lucide-react';
 
+// --- 1. Define Comprehensive Types (from previous step) ---
+interface Price {
+    value: string;
+    extracted_value: number;
+    currency: string;
+}
 
-// Get screen dimensions for responsive grid
+interface SerpApiData {
+    position: number;
+    title: string;
+    link: string;
+    source: string;
+    source_icon: string;
+    thumbnail?: string;
+    image?: string;
+    rating?: number;
+    reviews?: number;
+    price?: Price;
+    condition?: string;
+    in_stock?: boolean;
+}
+
+interface Result {
+    productIndex: number;
+    serpApiData: SerpApiData[];
+    // ... other fields
+}
+
+export interface Analysis {
+    jobId: string;
+    results: Result[];
+    // ... other fields
+}
+
+// --- Helper Functions & Constants ---
+const SSSYNC_API_BASE_URL = 'https://api.sssync.app';
 const { width: screenWidth } = Dimensions.get('window');
 const GRID_PADDING = 16;
-const ITEM_SPACING = 8;
-const COLUMNS = 2;
+const ITEM_SPACING = 12;
+const COLUMNS = 3;
 const ITEM_WIDTH = (screenWidth - GRID_PADDING * 2 - ITEM_SPACING * (COLUMNS - 1)) / COLUMNS;
 
-// Base URL for your SSSync API
-const SSSYNC_API_BASE_URL = 'https://api.sssync.app';
-
-// Type alias for a single product result from the main analysis
-type ProductResult = Analysis['results'][0];
-// Type alias for a single item from the nested serpApiData array
-type SerpApiItem = ProductResult['serpApiData'][0];
-
-// Enhanced SerpApiItem with selection state
-interface SelectableSerpApiItem extends SerpApiItem {
-  id: string;
-  productId: string;
-  isSelected?: boolean;
+async function getToken() {
+    const session = await supabase.auth.getSession();
+    return session?.data.session?.access_token;
 }
 
-// ====================================================================
-// Component #1: Pinterest/Google Lens Style Grid Item
-// Beautiful card with image focus, selection states, and interactions
-// ====================================================================
-interface SerpGridItemProps {
-  item: SelectableSerpApiItem;
-  onPress: (item: SelectableSerpApiItem) => void;
-  onLongPress: (item: SelectableSerpApiItem) => void;
-  isSelectionMode: boolean;
-}
+// --- Reusable Components ---
 
-const SerpGridItem: React.FC<SerpGridItemProps> = ({ 
-  item, 
-  onPress, 
-  onLongPress, 
-  isSelectionMode 
+// Optimized ProductGridItem with instant feedback
+const ProductGridItem = React.memo(({ item, isSelected, onSelect }: { 
+    item: SerpApiData, 
+    isSelected: boolean, 
+    onSelect: () => void 
 }) => {
-  const [scaleAnim] = useState(new Animated.Value(1));
-  const [imageLoaded, setImageLoaded] = useState(false);
-  
-  const handlePressIn = () => {
-    Animated.spring(scaleAnim, {
-      toValue: 0.95,
-      useNativeDriver: true,
-    }).start();
-  };
-
-  const handlePressOut = () => {
-    Animated.spring(scaleAnim, {
-      toValue: 1,
-      useNativeDriver: true,
-    }).start();
-  };
-
-  const getCardHeight = () => {
-    // Pinterest-style varying heights based on content
-    const baseHeight = 180;
-    const titleLines = Math.ceil((item.title?.length || 0) / 25);
-    return baseHeight + (titleLines * 15);
-  };
-
-  return (
-    <Animated.View 
-      style={[
-        styles.gridItem, 
-        { 
-          width: ITEM_WIDTH,
-          height: getCardHeight(),
-          transform: [{ scale: scaleAnim }] 
-        }
-      ]}
-    >
-      <TouchableOpacity
-        style={[
-          styles.gridItemTouchable,
-          item.isSelected && styles.selectedCard,
-          isSelectionMode && styles.selectionModeCard
-        ]}
-        onPress={() => onPress(item)}
-        onLongPress={() => onLongPress(item)}
-        onPressIn={handlePressIn}
-        onPressOut={handlePressOut}
-        activeOpacity={0.9}
-      >
-        {/* Selection Indicator */}
-        {isSelectionMode && (
-          <View style={styles.selectionIndicator}>
-            <View style={[
-              styles.selectionCircle,
-              item.isSelected && styles.selectedCircle
-            ]}>
-              {item.isSelected && (
-                <Text style={styles.checkmark}>✓</Text>
-              )}
-            </View>
-          </View>
-        )}
-
-        {/* Main Image */}
-        <View style={styles.imageContainer}>
-          <Image 
-            source={{ uri: item.thumbnail || item.image || 'https://placehold.co/200x200/e0e0e0/999999?text=No+Image' }} 
-            style={styles.gridImage}
-            onLoad={() => setImageLoaded(true)}
-            resizeMode="cover"
-          />
-          
-          {/* Price Overlay */}
-          {item.price?.value && (
-            <View style={styles.priceOverlay}>
-              <Text style={styles.priceText}>{item.price.value}</Text>
-            </View>
-          )}
-
-          {/* Source Badge */}
-          <View style={styles.sourceBadge}>
-            <Text style={styles.sourceText} numberOfLines={1}>
-              {item.source || 'Unknown'}
-            </Text>
-          </View>
-        </View>
-
-        {/* Content Area */}
-        <View style={styles.contentArea}>
-          <Text style={styles.gridTitle} numberOfLines={3}>
-            {item.title || 'No Title Available'}
-          </Text>
-          
-          {/* Rating & Reviews */}
-          {(item.rating || item.reviews) && (
-            <View style={styles.ratingContainer}>
-              {item.rating && (
-                <View style={styles.ratingBadge}>
-                  <Text style={styles.ratingText}>★ {item.rating}</Text>
+    return (
+        <Pressable 
+            onPress={onSelect} 
+            style={({ pressed }) => [
+                styles.itemContainer, 
+                isSelected && styles.itemSelected,
+                pressed && styles.itemPressed
+            ]}
+        >
+            <Image source={{ uri: item.thumbnail || item.image }} style={styles.itemImage} />
+            {isSelected && (
+                <View style={styles.selectionOverlay}>
+                    <Icon name="check-circle" size={54} color="#FFFFFF" />
                 </View>
-              )}
-              {item.reviews && (
-                <Text style={styles.reviewsText}>({item.reviews})</Text>
-              )}
+            )}
+            <View style={styles.itemDetails}>
+                <Text style={styles.itemTitle} numberOfLines={2}>{item.title}</Text>
+                <Text style={styles.itemPrice}>{item.price?.value}</Text>
+                <Text style={styles.itemCondition}>{item.condition}</Text>
+                <Text style={styles.itemSource}>{item.source}</Text>
             </View>
-          )}
+        </Pressable>
+    );
+});
 
-          {/* Stock Status */}
-          {item.in_stock !== undefined && (
-            <View style={[
-              styles.stockBadge,
-              item.in_stock ? styles.inStock : styles.outOfStock
-            ]}>
-              <Text style={[
-                styles.stockText,
-                item.in_stock ? styles.inStockText : styles.outOfStockText
-              ]}>
-                {item.in_stock ? 'In Stock' : 'Out of Stock'}
-              </Text>
-            </View>
-          )}
-        </View>
-      </TouchableOpacity>
-    </Animated.View>
-  );
+// Template data with favorites and recents
+const TEMPLATE_DATA = {
+    favorites: [
+        { id: 'amazon', name: 'Amazon', icon: 'package-variant' },
+        { id: 'previewsworld', name: 'Previewsworld.com/search?', icon: 'web' },
+        { id: 'amazon-fda', name: 'Amazon + FDA + 2 more...', icon: 'package-variant' },
+    ],
+    recents: [
+        { id: 'amazon-fda-recent', name: 'Amazon + FDA + 2 more...', icon: 'package-variant' },
+    ]
 };
 
-// ====================================================================
-// Component #2: Enhanced Product Group with Grid Layout
-// ====================================================================
-interface ProductGroupProps {
-  product: ProductResult;
-  onItemPress: (item: SelectableSerpApiItem) => void;
-  onItemLongPress: (item: SelectableSerpApiItem) => void;
-  isSelectionMode: boolean;
-  selectedItems: Set<string>;
-}
+// --- Main Screen Component ---
 
-const ProductGroup: React.FC<ProductGroupProps> = ({ 
-  product, 
-  onItemPress, 
-  onItemLongPress, 
-  isSelectionMode,
-  selectedItems 
-}) => {
-  // Transform serpApiData into selectable items
-  const gridData: SelectableSerpApiItem[] = product.serpApiData.map((item, index) => ({
-    ...item,
-    id: `${product.productId}-${index}`,
-    productId: product.productId,
-    isSelected: selectedItems.has(`${product.productId}-${index}`)
-  }));
+function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, 'MatchSelectionScreen'> }) {
+    const navigation = useNavigation();
+    const { jobId } = route.params.response;
 
-  const renderGridItem = ({ item }: { item: SelectableSerpApiItem }) => (
-    <SerpGridItem
-      item={item}
-      onPress={onItemPress}
-      onLongPress={onItemLongPress}
-      isSelectionMode={isSelectionMode}
-    />
-  );
+    // --- State Management ---
+    const [analysisData, setAnalysisData] = useState<Analysis | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
-  return (
-    <View style={styles.productGroupContainer}>
-      {/* Product Header */}
-      <View style={styles.productHeader}>
-        <Image 
-          source={{ uri: product.originalTargetImage || 'https://placehold.co/60x60' }} 
-          style={styles.originalImage} 
-        />
-        <View style={styles.headerContent}>
-          <Text style={styles.headerTitle}>Search Results</Text>
-          <Text style={styles.headerSubtitle}>
-            {gridData.length} matches • {product.confidence} confidence
-          </Text>
-        </View>
-      </View>
+    // State for the new UI flow
+    const [
+        selectedIndices, 
+        setSelectedIndices
+    ] = useState<number[]>([]);
+    const [
+        selectedProducts, 
+        setSelectedProducts
+    ] = useState<SerpApiData[]>([]);
+    const [bottomNavState, setBottomNavState] = useState<'empty' | 'selection' | 'template' | 'platform'>('empty');
+    const [isTemplateModalVisible, setTemplateModalVisible] = useState(false);
+    const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
+    const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
 
-      {/* Grid of Results */}
-      <FlashList
-        data={gridData}
-        renderItem={renderGridItem}
-        numColumns={COLUMNS}
-        estimatedItemSize={220}
-        contentContainerStyle={styles.gridContainer}
-        ItemSeparatorComponent={() => <View style={{ height: ITEM_SPACING }} />}
-        showsVerticalScrollIndicator={false}
-      />
-    </View>
-  );
-};
+    // --- Data Fetching ---
+    useEffect(() => {
+        navigation.setOptions({ headerShown: false });
 
-// ====================================================================
-// Component #3: Main Screen with Selection Management
-// ====================================================================
-type MatchSelectionScreenProps = StackScreenProps<AppStackParamList, 'MatchSelectionScreen'>;
+        const fetchAnalysis = async () => {
+            try {
+                const token = await getToken();
+                const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/match/jobs/${jobId}/results`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (!response.ok) throw new Error(`API Error: ${response.status}`);
+                const data: Analysis = await response.json();
+                setAnalysisData(data);
+            } catch (err: any) {
+                setError(err.message);
+            } finally {
+                setIsLoading(false);
+            }
+        };
 
-const MatchSelectionScreen: React.FC<MatchSelectionScreenProps> = ({ route, navigation }) => {
-  const { analysis } = route.params || {};
-  console.log('[MATCH SELECTION] Initial analysis:', analysis);
+        fetchAnalysis();
+    }, [jobId]);
 
-  // Selection state management
-  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
-  const [isSelectionMode, setIsSelectionMode] = useState(false);
-  
-  // Fresh data state
-  const [displayAnalysis, setDisplayAnalysis] = useState<Analysis | null>(analysis || null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [canRetry, setCanRetry] = useState(false);
-
-  async function getAuthHeaders(): Promise<Record<string, string>> {
-    try {
-      const { supabase } = await import('../../lib/supabase');
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      
-      if (session?.access_token) {
-        headers['Authorization'] = `Bearer ${session.access_token}`;
-      }
-      
-      return headers;
-    } catch (error) {
-      console.error('[MATCH SELECTION] Auth error:', error);
-      return {
-        'Content-Type': 'application/json',
-      };
-    }
-  }
-
-  async function pollJobStatus(jobId: string): Promise<Analysis> {
-    console.log('[MATCH SELECTION] Checking for completed job results, jobId:', jobId);
-    const headers = await getAuthHeaders();
-    
-    const maxAttempts = 6; // 1 minute max (10-second intervals)
-    let attempts = 0;
-    
-    while (attempts < maxAttempts) {
-      try {
-        console.log(`[MATCH SELECTION] Attempt ${attempts + 1}/${maxAttempts} - Checking database for completed analysis`);
-        
-        // Query database directly for completed analysis (your data is already saved)
-        const dbResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/analysis`, {
-          method: 'GET',
-          headers,
-        });
-        
-        if (dbResponse.ok) {
-          const dbResults = await dbResponse.json();
-          console.log('[MATCH SELECTION] Database query results count:', dbResults?.length || 0);
-          
-          // Find analysis with matching job ID in the results
-          const matchingAnalysis = dbResults.find((analysis: any) => {
-            const hasJobIdInMetadata = analysis.Metadata?.jobId === jobId;
-            const hasJobIdInText = analysis.GeneratedText?.includes(jobId);
-            return hasJobIdInMetadata || hasJobIdInText;
-          });
-          
-          if (matchingAnalysis) {
-            console.log('[MATCH SELECTION] Found matching analysis:', matchingAnalysis.Id);
+    // --- Optimized Event Handlers ---
+    const handleSelectProduct = useCallback((index: number) => {
+        setSelectedIndices(prev => {
+            const newSelection = prev.includes(index)
+                ? prev.filter(i => i !== index)
+                : [...prev, index];
             
-            if (matchingAnalysis.GeneratedText) {
-              try {
-                const parsedAnalysis = JSON.parse(matchingAnalysis.GeneratedText);
-                console.log('[MATCH SELECTION] Parsed analysis - results count:', parsedAnalysis.results?.length || 0);
+            // Reset flow when items are deselected
+            if (newSelection.length === 0) {
+                setBottomNavState('empty');
+                setSelectedPlatforms([]);
+                setSelectedTemplate(null);
+            } else if (newSelection.length > 0 && bottomNavState === 'empty') {
+                // Auto-advance to template stage when first item is selected
+                setBottomNavState('selection');
+            }
+            return newSelection;
+        });
+    }, [bottomNavState]);
+
+    const handleBackToEmpty = useCallback(() => {
+        setSelectedIndices([]);
+        setBottomNavState('empty');
+        setSelectedPlatforms([]);
+        setSelectedTemplate(null);
+    }, []);
+
+    const handleBackToTemplate = useCallback(() => {
+        setBottomNavState('template');
+        setSelectedPlatforms([]);
+    }, []);
+
+    const handleShowTemplates = useCallback(() => {
+        setBottomNavState('template');
+    }, []);
+
+    const handleShowSelection = useCallback(() => {
+        setBottomNavState('selection');
+    }, []);
+
+    const handleBackToSelection = useCallback (() =>{
+        setBottomNavState('selection');
+        }, [bottomNavState]);
+
+    const handleTemplateSelect = useCallback((template: string | null) => {
+        setSelectedTemplate(template);
+        setTemplateModalVisible(false);
+        setBottomNavState('platform'); // Move to platform selection
+    }, []);
+    
+
+    const handlePlatformSelect = useCallback((platform: string) => {
+        setSelectedPlatforms(prev => 
+            prev.includes(platform)
+                ? prev.filter(p => p !== platform)
+                : [...prev, platform]
+        );
+    }, []);
+
+    const handleGenerate = useCallback(() => {
+        // TODO: Implement the final generation logic
+        console.log('Generating with:', {
+            selectedProducts: selectedIndices.map(i => analysisData?.results[0]?.serpApiData[i]),
+            template: selectedTemplate,
+            platforms: selectedPlatforms,
+        });
+        // Example: navigation.navigate('AnotherScreen', { ... });
+    }, [selectedIndices, analysisData, selectedTemplate, selectedPlatforms]);
+
+    // Memoize expensive computations
+    const serpApiData = useMemo(() => {
+        return analysisData?.results[0]?.serpApiData || [];
+    }, [analysisData]);
+
+    const selectedCount = selectedIndices.length;
+
+    // --- Render Logic ---
+    if (isLoading) return <View style={styles.centerContainer}><ActivityIndicator size="large" color="#93C822" /></View>;
+    if (error) return <View style={styles.centerContainer}><Text style={styles.errorText}>Error: {error}</Text></View>;
+    if (!analysisData || analysisData.results.length === 0 || serpApiData.length === 0) {
+        return <View style={styles.centerContainer}><Text style={styles.infoText}>No results found.</Text></View>;
+    }
+
+    return (
+        <SafeAreaView style={styles.container}>
+            
+
+            <FlashList
+                data={serpApiData}
+                extraData={selectedIndices}
+                numColumns={COLUMNS}
+                contentContainerStyle={{ padding: GRID_PADDING }}
+                keyExtractor={(item, index) => `${item.position}-${index}`}
+                estimatedItemSize={ITEM_WIDTH + 60}
+                renderItem={({ item, index }) => (
+                    <ProductGridItem
+                        item={item}
+                        isSelected={selectedIndices.includes(index)}
+                        onSelect={() => handleSelectProduct(index)}
+                    />
+                )}
+                removeClippedSubviews={false}
+            />
+
+            {/* --- Enhanced Bottom Navigation Bar --- */}
+            <LinearGradient colors={['rgb(255, 255, 255)', 'rgba(255, 255, 255, 0)']} style={{}}>
                 
-                // Check if the analysis has actual results (not just job metadata)
-                if (parsedAnalysis.results && parsedAnalysis.results.length > 0) {
-                  // Check if results have serpApiData (the actual product matches)
-                  const hasProductData = parsedAnalysis.results.some((result: any) => 
-                    result.serpApiData && result.serpApiData.length > 0
-                  );
-                  
-                  if (hasProductData) {
-                    console.log('[MATCH SELECTION] ✅ Found completed analysis with product data!');
-                    return parsedAnalysis;
-                  } else {
-                    console.log('[MATCH SELECTION] Found analysis but no product data yet, waiting...');
-                  }
-                } else {
-                  console.log('[MATCH SELECTION] Found analysis but no results yet, waiting...');
-                }
-              } catch (parseError) {
-                console.error('[MATCH SELECTION] Failed to parse analysis GeneratedText:', parseError);
-              }
-            } else {
-              console.log('[MATCH SELECTION] Found analysis but no GeneratedText yet, waiting...');
-            }
-          } else {
-            console.log('[MATCH SELECTION] No matching analysis found yet, waiting...');
-          }
-        } else {
-          console.error('[MATCH SELECTION] Database query failed:', dbResponse.status, dbResponse.statusText);
-        }
-        
-        if (attempts < maxAttempts - 1) {
-          console.log('[MATCH SELECTION] Waiting 10 seconds before next check...');
-          await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
-        }
-        attempts++;
-        
-      } catch (error) {
-        console.error(`[MATCH SELECTION] Polling attempt ${attempts + 1} failed:`, error);
-        attempts++;
-        
-        if (attempts >= maxAttempts) {
-          throw new Error(`Failed to find completed job results after ${maxAttempts} attempts: ${error}`);
-        }
-        
-        if (attempts < maxAttempts) {
-          await new Promise(resolve => setTimeout(resolve, 10000)); // Wait before retry
-        }
-      }
-    }
+                {/* Empty State */}
+                {bottomNavState === 'empty' && selectedCount === 0 && (
+                    <View style={styles.emptyButtonSolo}>
+                        <TouchableOpacity style={styles.mainEmptyButton} onPress={handleShowSelection}>
+                                <Icon name="package-variant-closed" size={20} color="#000" style={{marginRight: 8}}/>
+                                <Text style={styles.secondaryButtonText}>Select Product Matches</Text>
+                            </TouchableOpacity>
+                    </View>
+                )}
+
+                {bottomNavState === 'selection' && (
+                    <View style={styles.bottomNavStepContainer}>
+                        {selectedCount > 0 ? (
+                            <>
+                                <TouchableOpacity style={styles.mainButton} onPress={handleShowTemplates}>
+                                    <Icon name="check-circle" size={20} color="#fff" style={{marginRight: 8}}/>
+                                    <Text style={styles.mainButtonText}>Selected {selectedCount} Match{selectedCount !== 1 ? 'es' : ''}</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.backButton} onPress={handleBackToEmpty}>
+                                    <Text style={styles.backButtonText}>Clear Selection</Text>
+                                </TouchableOpacity>
+                            </>
+                        ) : (
+                            <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+                                <Icon name="redo-variant" size={20} color="#888" style={{marginRight: 8}}/>
+                                <Text style={styles.backButtonText}>Back</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                )}
     
-    throw new Error(`Job results not found within ${maxAttempts * 10} seconds. The job may still be processing.`);
-  }
+                {bottomNavState === 'template' && (
+                    <View style={styles.bottomNavStepContainer}>
+                        <TouchableOpacity style={styles.clearBackButton} onPress={handleBackToSelection}>
+                            <Icon name="redo-variant" size={20} color="#888" style={{marginRight: 8}}/>
+                            <Text style={styles.backButtonText}>Reselect Matches</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.platformHeaderText}>Want Specific Sources?</Text>
+                        <TouchableOpacity style={styles.dropdownSelect} onPress={() => setTemplateModalVisible(true)}>
+                            <Text style={styles.dropdownSelectText}>Select a Template</Text>
+                            <Icon name="chevron-down" size={20} color="#000" style={{marginRight: 8}}/>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.secondaryButton} onPress={() => handleTemplateSelect(null)}>
+                            <Text style={styles.secondaryButtonText}>Continue w/o Template</Text>
+                        </TouchableOpacity>
+                        
+                    </View>
+                )}
 
-  // Fetch fresh data function (extracted for reuse)
-  const fetchFreshData = async () => {
-    const jobId = analysis?.jobId;
-    if (!jobId) {
-      console.log('[MATCH SELECTION] No jobId provided, using initial analysis');
-      setCanRetry(false);
-      return;
-    }
+                {bottomNavState === 'platform' && (
+                    
 
-    // If we already have results in the initial analysis, don't refetch
-    if (analysis?.results && analysis.results.length > 0) {
-      console.log('[MATCH SELECTION] Using initial analysis with', analysis.results.length, 'results');
-      setDisplayAnalysis(analysis);
-      setCanRetry(false);
-      return;
-    }
+                    <View style={styles.expandedBottomNav}>
+                        <View style={{flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 12}}>
+                            <TouchableOpacity style={styles.clearBackButton} onPress={handleBackToSelection}>
+                                <Icon name="redo-variant" size={20} color="#888" style={{marginRight: 8}}/>
+                                <Text style={styles.backButtonText}>Reselect Matches</Text>
+                                
+                            </TouchableOpacity>
+                            <Text style={styles.platformHeaderText}>Want Specific Sources?</Text>
+                            <TouchableOpacity style={styles.dropdownSelect} onPress={() => setTemplateModalVisible(true)}>
+                                <Text style={styles.dropdownSelectText}>Select a Template</Text>
+                                <Icon name="chevron-down" size={20} color="#000" style={{marginRight: 8}}/>
+                            </TouchableOpacity>
+                            {/* Continue Button (Not used anymore)
+                            <TouchableOpacity style={styles.secondaryButton} onPress={() => handleTemplateSelect(null)}>
+                                <Text style={styles.secondaryButtonText}>Continue w/o Template</Text>
+                            </TouchableOpacity>*/}
+                            
+                        </View>
+                    
+                        
+                    
+                 
+                        
+                        <View style={{flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 12}}>
+                            <View style={styles.platformHeader}>
+                                {/*
+                                <TouchableOpacity style={styles.backIconButton} onPress={handleBackToTemplate}>
+                                    <Icon name="arrow-left" size={20} color="#000" />
+                                </TouchableOpacity>*/}
+                                <Text style={styles.platformHeaderText}>Which Platforms?</Text>
+                                <View style={{width: 24}} />
+                            </View>
+                            <View style={styles.platformGrid}>
+                                <PlatformButton 
+                                    platform={'shopify'} 
+                                    isSelected={selectedPlatforms.includes('shopify')} 
+                                    onPress={() => handlePlatformSelect('shopify')}
+                                    isConnected={true}
+                                />
+                                <PlatformButton 
+                                    platform={'amazon'} 
+                                    isSelected={selectedPlatforms.includes('amazon')} 
+                                    onPress={() => handlePlatformSelect('amazon')}
+                                    isConnected={true}
+                                />
+                                <PlatformButton 
+                                    platform={'ebay'} 
+                                    isSelected={selectedPlatforms.includes('ebay')} 
+                                    onPress={() => handlePlatformSelect('ebay')}
+                                    isConnected={false}
+                                />
+                                <PlatformButton 
+                                    platform={'clover'} 
+                                    isSelected={selectedPlatforms.includes('clover')} 
+                                    onPress={() => handlePlatformSelect('clover')}
+                                    isConnected={true}
+                                />
+                                <PlatformButton 
+                                    platform={'square'} 
+                                    isSelected={selectedPlatforms.includes('square')} 
+                                    onPress={() => handlePlatformSelect('square')}
+                                    isConnected={false}
+                                />
+                                <PlatformButton 
+                                    platform={'facebook'} 
+                                    isSelected={selectedPlatforms.includes('facebook')} 
+                                    onPress={() => handlePlatformSelect('facebook')}
+                                    isConnected={true}
+                                />
+                            </View>
+                            <TouchableOpacity 
+                                style={[styles.mainButton, selectedPlatforms.length === 0 && styles.disabledButton]}
+                                disabled={selectedPlatforms.length === 0}
+                                onPress={handleGenerate}
+                            >
+                                <Icon name="rocket-launch-outline" size={20} color="#fff" style={{marginRight: 8}}/>
+                                <Text style={styles.mainButtonText}>Generate Listings ({selectedPlatforms.length} platform{selectedPlatforms.length !== 1 ? 's' : ''})</Text>
+                            </TouchableOpacity>
 
-    setIsLoading(true);
-    setError(null);
-    setCanRetry(false);
-    
-    try {
-      const freshData = await pollJobStatus(jobId);
-      console.log('[MATCH SELECTION] Successfully fetched fresh data:', freshData);
-      setDisplayAnalysis(freshData);
-      setCanRetry(false);
-    } catch (err) {
-      console.error('[MATCH SELECTION] Error fetching fresh data:', err);
-      setError(err instanceof Error ? err.message : 'Failed to fetch results');
-      setCanRetry(true); // Enable retry button
-      // Keep using initial analysis if fresh fetch fails
-      console.log('[MATCH SELECTION] Falling back to initial analysis');
-      setDisplayAnalysis(analysis);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+                        </View>
+                        
+                    </View>
+                )}
+            </LinearGradient>
 
-  // Manual retry function for the retry button
-  const handleRetry = () => {
-    console.log('[MATCH SELECTION] Manual retry triggered');
-    fetchFreshData();
-  };
+            {/* --- Enhanced Template Selection Modal --- */}
+            <Modal
+                animationType="fade"
+                transparent={true}
+                visible={isTemplateModalVisible}
+                onRequestClose={() => setTemplateModalVisible(false)}
+            >
+                <View style={styles.modalContainer}>
+                    <View style={styles.modalContent}>
+                        <View style={styles.modalHeader}>
+                            <TouchableOpacity 
+                                style={styles.modalCloseButton} 
+                                onPress={() => setTemplateModalVisible(false)}
+                            >
+                                <Icon name="close" size={24} color="#000" />
+                            </TouchableOpacity>
+                            <Text style={styles.modalTitle}>Templates</Text>
+                            <View style={{width: 24}} />
+                        </View>
 
-  // Fetch fresh data when component mounts or jobId changes
-  useEffect(() => {
-    fetchFreshData();
-  }, [analysis?.jobId]);
+                        <ScrollView style={styles.templateScrollView}>
+                            {/* Favorites Section */}
+                            <View style={styles.templateSection}>
+                                <Text style={styles.sectionTitle}>Favorites</Text>
+                                {TEMPLATE_DATA.favorites.map(template => (
+                                    <TouchableOpacity 
+                                        key={template.id} 
+                                        style={styles.templateOption} 
+                                        onPress={() => handleTemplateSelect(template.name)}
+                                    >
+                                        <View style={styles.templateRow}>
+                                            <Icon name={template.icon} size={20} color="#fff" />
+                                            <Text style={styles.templateOptionText}>{template.name}</Text>
+                                            <Icon name="star" size={20} color="#FFD700" />
+                                        </View>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
 
-  useEffect(() => {
-    console.log('[MatchSelectionScreen] Received analysis data with results:', displayAnalysis?.results?.length || 0);
-  }, [displayAnalysis]);
+                            <View style={{height: 1, backgroundColor: '#E5E5E5', marginBottom: 12, marginLeft: 20, marginRight: 20}}></View>
 
-  // Handle item press (normal tap)
-  const handleItemPress = (item: SelectableSerpApiItem) => {
-    if (isSelectionMode) {
-      toggleItemSelection(item.id);
-    } else {
-      // Navigate to product detail or open link
-      console.log('Opening item:', item.title, item.link);
-      // You can add navigation or link opening logic here
-    }
-  };
+                            {/* Recents Section */}
+                            <View style={styles.templateSection}>
+                                <Text style={styles.sectionTitle}>Recents</Text>
+                                {TEMPLATE_DATA.recents.map(template => (
+                                    <TouchableOpacity 
+                                        key={template.id} 
+                                        style={styles.templateOption} 
+                                        onPress={() => handleTemplateSelect(template.name)}
+                                    >
+                                        <View style={styles.templateRow}>
+                                            <Icon name={template.icon} size={20} color="#fff" />
+                                            <Text style={styles.templateOptionText}>{template.name}</Text>
+                                            <Icon name="star-outline" size={20} color="#71717A" />
+                                        </View>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
 
-  // Handle item long press (enters selection mode)
-  const handleItemLongPress = (item: SelectableSerpApiItem) => {
-    if (!isSelectionMode) {
-      setIsSelectionMode(true);
-      setSelectedItems(new Set([item.id]));
-    } else {
-      toggleItemSelection(item.id);
-    }
-  };
+                            {/* Create New Section */}
+                            <View style={styles.createTemplateContainer}>
+                                <TouchableOpacity 
+                                    style={[styles.templateOption, styles.createNewOption]} 
+                                    onPress={() => {
+                                        setTemplateModalVisible(false);
+                                        // TODO: Navigate to create template screen
+                                    }}
+                                >
+                                </TouchableOpacity>
+                            </View>
+                        </ScrollView>
 
-  // Toggle item selection
-  const toggleItemSelection = (itemId: string) => {
-    setSelectedItems(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(itemId)) {
-        newSet.delete(itemId);
-      } else {
-        newSet.add(itemId);
-      }
-      
-      // Exit selection mode if no items selected
-      if (newSet.size === 0) {
-        setIsSelectionMode(false);
-      }
-      
-      return newSet;
-    });
-  };
-
-  // Clear selection
-  const clearSelection = () => {
-    setSelectedItems(new Set());
-    setIsSelectionMode(false);
-  };
-
-  // Select all items
-  const selectAll = () => {
-    const allIds = new Set<string>();
-    displayAnalysis?.results?.forEach(product => {
-      product.serpApiData.forEach((_, index) => {
-        allIds.add(`${product.productId}-${index}`);
-      });
-    });
-    setSelectedItems(allIds);
-  };
-
-  const renderProductGroup = ({ item }: { item: ProductResult }) => (
-    <ProductGroup
-      product={item}
-      onItemPress={handleItemPress}
-      onItemLongPress={handleItemLongPress}
-      isSelectionMode={isSelectionMode}
-      selectedItems={selectedItems}
-    />
-  );
-
-  return (
-    <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.screenTitle}>Product Matches</Text>
-        {isSelectionMode && (
-          <View style={styles.selectionHeader}>
-            <Text style={styles.selectionCount}>
-              {selectedItems.size} selected
-            </Text>
-            <View style={styles.selectionActions}>
-              <TouchableOpacity style={styles.actionButton} onPress={selectAll}>
-                <Text style={styles.actionButtonText}>All</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionButton} onPress={clearSelection}>
-                <Text style={styles.actionButtonText}>Clear</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-      </View>
-
-      {/* Main Content */}
-      {isLoading ? (
-        <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Loading fresh results...</Text>
-          <Text style={styles.loadingSubtext}>
-            This may take 1-2 minutes while we analyze your product...
-          </Text>
-        </View>
-      ) : error ? (
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Error: {error}</Text>
-          <Text style={styles.errorSubtext}>
-            {displayAnalysis?.results?.length ? 
-              'Using cached results below' : 
-              'Unable to load results'
-            }
-          </Text>
-          {canRetry && (
-            <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
-              <Text style={styles.retryButtonText}>🔄 Retry</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      ) : (
-        <FlashList
-          data={displayAnalysis?.results}
-          renderItem={renderProductGroup}
-          estimatedItemSize={500}
-          showsVerticalScrollIndicator={false}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>No matches found</Text>
-              <Text style={styles.emptySubtext}>
-                {displayAnalysis?.jobId ? 
-                  'The analysis completed but found no matches' : 
-                  'Try adjusting your search or capture new photos'
-                }
-              </Text>
-            </View>
-          }
-        />
-      )}
-
-      {/* Bottom Action Bar (when in selection mode) */}
-      {isSelectionMode && selectedItems.size > 0 && (
-        <View style={styles.bottomActionBar}>
-          <TouchableOpacity style={styles.primaryAction}>
-            <Text style={styles.primaryActionText}>
-              Compare ({selectedItems.size})
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.secondaryAction}>
-            <Text style={styles.secondaryActionText}>Save</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-    </View>
-  );
-};
+                        <TouchableOpacity 
+                            style={styles.createNewTemplateButton} 
+                            onPress={() => handleTemplateSelect(null)}
+                        >
+                            <Icon name="plus" size={20} color="#FFFFFF" />
+                            <Text style={styles.createNewTemplateButtonText}>Create New Template</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+        </SafeAreaView>
+    );
+}
 
 export default MatchSelectionScreen;
 
+// --- Enhanced Stylesheet ---
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f8f9fa',
-  },
-  header: {
-    backgroundColor: 'white',
-    paddingTop: 50,
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e1e5e9',
-  },
-  screenTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#1a1a1a',
-    marginBottom: 8,
-  },
-  selectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  selectionCount: {
-    fontSize: 16,
-    color: '#6b7280',
-  },
-  selectionActions: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  actionButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#f3f4f6',
-    borderRadius: 16,
-  },
-  actionButtonText: {
-    fontSize: 14,
-    color: '#4b5563',
-    fontWeight: '500',
-  },
+    container: { 
+        flex: 1, 
+        backgroundColor: 'rgb(255, 255, 255)' 
+    }, 
+    centerContainer: { 
+        flex: 1, 
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        backgroundColor: '#FFFFFF' 
+    }, 
+    errorText: { 
+        color: '#ff4d4d', 
+        fontSize: 16, 
+        textAlign: 'center', 
+        padding: 20 
+    }, 
+    infoText: { 
+        color: '#000000', 
+        fontSize: 16, 
+        textAlign: 'center', 
+        marginTop: 50 
+    }, 
+    header: { 
+        paddingHorizontal: 16, 
+        paddingVertical: 10, 
+        borderBottomWidth: 1, 
+        borderBottomColor: 'rgba(228, 228, 231, 0.1)' 
+    },
+    headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#000000' },
+    headerSubtitle: { fontSize: 14, color: '#000000', marginTop: 4 },
+    itemContainer: { 
+        width: ITEM_WIDTH, 
+        marginBottom: ITEM_SPACING, 
+        borderRadius: 8, 
+        overflow: 'hidden', 
+        backgroundColor: '#FFFFFF', 
+        borderWidth: 2, 
+        borderColor: 'rgba(228, 228, 231, 0.5)'
+    },
+    itemSelected: { 
+        borderColor: '#93C822', 
+        borderWidth: 2, 
+        borderRadius: 8 
+    },
+    itemPressed: {
+        opacity: 0.8,
+        transform: [{ scale: 0.98 }]
+    },
+    selectionOverlay: { 
+        ...StyleSheet.absoluteFillObject, 
+        backgroundColor: 'rgba(147, 200, 34, 0.3)', 
+        justifyContent: 'center', 
+        alignItems: 'center' 
+    },
+    itemImage: { width: '100%', height: ITEM_WIDTH, backgroundColor: '#333' },
+    itemDetails: { padding: 8 },
+    itemTitle: { fontSize: 14, fontWeight: '600', color: '#000000', height: 34 },
+    itemSource: { fontSize: 12, color: '#000000', marginTop: 4 },
+    bottomNavContainer: { 
+        padding: 20, 
+        borderTopWidth: 1, 
+        borderTopColor: '#E5E5E5', 
+        //backgroundColor: 'red',
+        //backgroundColor: 'rgba(255, 255, 255, 0.9)',
+        minHeight: 100,
+    },
+    expandedBottomNav: {
+        alignItems: 'center', 
+        gap: 12, 
+        paddingLeft: 30,
+        paddingRight: 30,
+        justifyContent: 'space-between',
+        marginTop: 10,
+        minHeight: 550,
+        maxHeight: 600,
+        backgroundColor: 'rgb(255, 255, 255)'
+    },
+    bottomNavStepContainer: { 
+        alignItems: 'center', 
+        gap: 12, 
+        paddingLeft: 30,
+        paddingRight: 30,
+        marginTop: 10,
+        backgroundColor: 'rgba(255, 255, 255, 0)',
+        minHeight: 100,
+    },
+    emptyBottomNavStepContainer: {
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: 'transparent',
+        gap: 12,
+        maxHeight: 100,
+    
+    
+    },
+    dropdownSelect: {
+        flexDirection: 'row',
+        backgroundColor: '#FFFFFF',
+        paddingVertical: 14,
+        paddingHorizontal: 15,
+        marginLeft: 10,
+        marginRight: 10,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#E5E5E5',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        width: '100%'
+    }, dropdownSelectText: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#000000'
+    },
+    mainButton: { 
+        flexDirection: 'row', 
+        backgroundColor: '#93C822', 
+        paddingVertical: 14, 
+        paddingHorizontal: 30, 
+        borderRadius: 12, 
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        width: '100%' 
+    },
+    emptyButtonSolo: {
+        backgroundColor: 'green',
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: 12,
+        minHeight: 100,
+        maxHeight: 100,
+    },
+    mainEmptyButton: {
+        flexDirection: 'row',
+        backgroundColor: 'rgba(255, 210, 97, 0.5)',
+        borderWidth: 2,
+        borderColor: 'rgba(0,0,0,0.5)',
+        paddingVertical: 14,
+        paddingHorizontal: 30,
+        borderRadius: 12,
+    },
+    mainButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+    secondaryButton: { 
+        marginTop: 12,
+        flexDirection: 'row', 
+        backgroundColor: '#D9D9D9', 
+        paddingVertical: 14, 
+        paddingHorizontal: 30, 
+        borderRadius: 12, 
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        width: '100%' 
+    },
+    secondaryButtonText: { color: '#888', fontSize: 16, fontWeight: '500' },
+    
+    
+    clearBackButton: {
+        flexDirection: 'row', 
+        backgroundColor: 'transparent', 
+        paddingVertical: 7, 
+        borderRadius: 12, 
+    },
+    backButton: { 
+        flexDirection: 'row', 
+        backgroundColor: '#D9D9D9', 
+        paddingVertical: 14, 
+        paddingHorizontal: 30, 
+        borderRadius: 12, 
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        width: '100%' 
+    },
+    backButtonText: { color: '#888', fontSize: 16, fontWeight: '600' },
+    disabledButton: { backgroundColor: '#555' },
+    platformHeader: { 
+        flexDirection: 'row',
+        width: '100%',
+        marginBottom: 12 
+    },
+    platformHeaderText: { 
+        fontSize: 24, 
+        fontWeight: '500', 
+        color: '#000' 
+    },
+    backIconButton: {
+        padding: 4
+    },
+    platformGrid: {
+        flexDirection: 'row', 
+        flexWrap: 'wrap',
+        justifyContent: 'center', 
+        marginBottom: 16, 
+        gap: 8
+    },
+    modalContainer: { 
+        flex: 1, 
+        justifyContent: 'flex-end', 
+        backgroundColor: 'rgba(0, 0, 0, 0.6)' 
+    },
+    modalContent: { 
+        backgroundColor: '#FFFFFF', 
+        borderRadius: 20,
+        paddingBottom: 20,
+        minHeight: '50%',
+        maxHeight: '70%',
+        height: '70%',
+        position: 'absolute',
+        bottom: 90,
+        left: 10,
+        right: 10,
+        borderWidth: 1,
+        borderColor: '#E5E5E5'
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: 20
+    },
+    modalTitle: { 
+        fontSize: 20, 
+        fontWeight: 'bold', 
+        color: '#000000'
+    },
+    modalCloseButton: { 
+        padding: 4,
+        color: '#000000'
+    },
+    templateScrollView: {
+        flex: 1
+    },
+    templateSection: {
+        paddingHorizontal: 20,
+        paddingVertical: 16,
+        gap: 12,
+    },
+    sectionTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#888',
+        marginBottom: 12,
+        textTransform: 'uppercase',
+        letterSpacing: 0.5
+    },
+    templateOption: { 
+        paddingVertical: 15, 
+        borderRadius: 12,
+        borderWidth: 1, 
+        borderColor: '#E5E5E5' 
+    },
+    templateRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingRight: 20,
+        gap: 12
+    },
+    templateOptionText: { 
+        color: '#000000', 
+        fontSize: 16,
+        fontWeight: '500',
+        flex: 1
+    },
+    createNewOption: {
+        borderWidth: 0
+    },
+    noThanksButton: {
+        margin: 20,
+        paddingVertical: 15,
+        borderWidth: 1,
+        borderColor: '#E5E5E5',
+        borderRadius: 8,
+        alignItems: 'center',
+        flexDirection: 'row',
+    }, 
+    createTemplateContainer:{
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        color: '#93C822'
+    },
+    createNewTemplateButton: {
+        borderWidth: 1,
+        borderColor: '#93C822',
+        borderRadius: 12,
+        paddingVertical: 15,
+        paddingHorizontal: 30,
+        marginHorizontal: 20,
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#93C822',
+        justifyContent: 'center',
+        gap: 12,
+        color: '#93C822'
 
-  // Product Group Styles
-  productGroupContainer: {
-    backgroundColor: 'white',
-    marginHorizontal: 8,
-    marginVertical: 6,
-    borderRadius: 16,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  productHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    backgroundColor: '#fafbfc',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e1e5e9',
-  },
-  originalImage: {
-    width: 50,
-    height: 50,
-    borderRadius: 12,
-    marginRight: 12,
-  },
-  headerContent: {
-    flex: 1,
-  },
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1a1a1a',
-  },
-  headerSubtitle: {
-    fontSize: 14,
-    color: '#6b7280',
-    marginTop: 2,
-  },
-  gridContainer: {
-    padding: ITEM_SPACING,
-  },
-
-  // Grid Item Styles
-  gridItem: {
-    marginHorizontal: ITEM_SPACING / 2,
-  },
-  gridItemTouchable: {
-    flex: 1,
-    backgroundColor: 'white',
-    borderRadius: 12,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#e1e5e9',
-  },
-  selectedCard: {
-    borderColor: '#3b82f6',
-    borderWidth: 2,
-    transform: [{ scale: 0.98 }],
-  },
-  selectionModeCard: {
-    borderColor: '#d1d5db',
-  },
-  selectionIndicator: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    zIndex: 10,
-  },
-  selectionCircle: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderWidth: 2,
-    borderColor: '#d1d5db',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  selectedCircle: {
-    backgroundColor: '#3b82f6',
-    borderColor: '#3b82f6',
-  },
-  checkmark: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-
-  // Image Styles
-  imageContainer: {
-    position: 'relative',
-    height: 120,
-  },
-  gridImage: {
-    width: '100%',
-    height: '100%',
-  },
-  priceOverlay: {
-    position: 'absolute',
-    bottom: 8,
-    left: 8,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  priceText: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  sourceBadge: {
-    position: 'absolute',
-    top: 8,
-    left: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    maxWidth: 80,
-  },
-  sourceText: {
-    fontSize: 10,
-    color: '#4b5563',
-    fontWeight: '500',
-  },
-
-  // Content Styles
-  contentArea: {
-    padding: 8,
-    flex: 1,
-  },
-  gridTitle: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: '#1a1a1a',
-    lineHeight: 16,
-    marginBottom: 6,
-  },
-  ratingContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  ratingBadge: {
-    backgroundColor: '#fef3c7',
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginRight: 4,
-  },
-  ratingText: {
-    fontSize: 10,
-    color: '#92400e',
-    fontWeight: '500',
-  },
-  reviewsText: {
-    fontSize: 10,
-    color: '#6b7280',
-  },
-  stockBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginTop: 4,
-  },
-  inStock: {
-    backgroundColor: '#d1fae5',
-  },
-  outOfStock: {
-    backgroundColor: '#fee2e2',
-  },
-  stockText: {
-    fontSize: 9,
-    fontWeight: '500',
-  },
-  inStockText: {
-    color: '#065f46',
-  },
-  outOfStockText: {
-    color: '#991b1b',
-  },
-
-  // Bottom Action Bar
-  bottomActionBar: {
-    flexDirection: 'row',
-    backgroundColor: 'white',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    paddingBottom: 32,
-    borderTopWidth: 1,
-    borderTopColor: '#e1e5e9',
-    gap: 12,
-  },
-  primaryAction: {
-    flex: 1,
-    backgroundColor: '#3b82f6',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  primaryActionText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  secondaryAction: {
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  secondaryActionText: {
-    color: '#4b5563',
-    fontSize: 16,
-    fontWeight: '500',
-  },
-
-  // Loading & Error States
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 60,
-  },
-  loadingText: {
-    fontSize: 16,
-    color: '#6b7280',
-    fontWeight: '500',
-  },
-  loadingSubtext: {
-    fontSize: 14,
-    color: '#9ca3af',
-    textAlign: 'center',
-    marginTop: 8,
-  },
-  errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 60,
-    paddingHorizontal: 20,
-  },
-  errorText: {
-    fontSize: 16,
-    color: '#dc2626',
-    fontWeight: '500',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  errorSubtext: {
-    fontSize: 14,
-    color: '#9ca3af',
-    textAlign: 'center',
-  },
-  retryButton: {
-    backgroundColor: '#3b82f6',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 8,
-    marginTop: 16,
-    alignSelf: 'center',
-  },
-  retryButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-
-  // Empty State
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 60,
-  },
-  emptyText: {
-    fontSize: 18,
-    fontWeight: '500',
-    color: '#4b5563',
-    marginBottom: 8,
-  },
-  emptySubtext: {
-    fontSize: 14,
-    color: '#9ca3af',
-    textAlign: 'center',
-  },
+    }, createNewTemplateButtonText: {
+        color: '#FFFFFF',
+        fontSize: 16,
+        fontWeight: '500'
+    },
+    noThanksButtonText: {
+        color: '#888',
+        fontSize: 16,
+        fontWeight: '500'
+    }
 });

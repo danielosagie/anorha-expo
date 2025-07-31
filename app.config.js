@@ -15,6 +15,9 @@ export default {
       buildNumber: "1",
       icon: "./src/assets/high_sssync.png"
     },
+    assetBundlePatterns: [
+      "**/*.{ttf,png,jpg,jpeg,gif,webp,svg}"
+    ],
     plugins: [
       [
         "react-native-vision-camera",

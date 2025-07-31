@@ -2,6 +2,7 @@ import React from 'react';
 import { View, TouchableOpacity, Text, StyleSheet, Platform } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { CirclePlus } from 'lucide-react';
 
 const getTabIcon = (routeName) => {
   switch (routeName) {
@@ -11,7 +12,7 @@ const getTabIcon = (routeName) => {
       return 'cube-outline';
     case 'Marketplace':
       return 'store-outline';
-    case 'AddListing':
+    case 'AddProduct':
       return 'plus-circle';
     case 'Profile':
       return 'account-outline';
@@ -31,7 +32,7 @@ const TabBar = ({ state, descriptors, navigation }) => {
         const isFocused = state.index === index;
         
         const icon = getTabIcon(route.name);
-        const isAddButton = route.name === 'AddListing';
+        const isAddButton = route.name === 'AddProduct';
         
         const onPress = () => {
           const event = navigation.emit({

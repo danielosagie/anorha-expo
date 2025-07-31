@@ -144,6 +144,14 @@ interface MatchCandidate {
   sourceUrl: string;
 }
 
+interface JobResponse {
+  jobId: string;
+  status: string;
+  estimatedTimeMinutes: number,
+  totalProducts: number,
+  message: string,
+}
+
 interface MatchResponse {
   systemAction: 'show_single_match' | 'show_multiple_matches' | 'fallback_to_manual';
   confidence: 'high' | 'medium' | 'low';
@@ -195,6 +203,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Auto-scan state
   const [isAutoScanning, setIsAutoScanning] = useState(false);
   const [quickScanResults, setQuickScanResults] = useState<any[]>([]);
+  
+  // Job response state
+  const [jobResponse, setJobResponse] = useState<JobResponse | null>(null);
   
   // Notification and progress state
   const [showNotification, setShowNotification] = useState(false);
@@ -1224,7 +1235,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
            flash={flash}
            onToggleFlash={toggleFlash}
            onToggleFacing={toggleFacing}
-           onPastScans={() => console.log('Past scans')}
+           onPastScans={() => navigation.navigate('PastScans' as never)}
            isBulkMode={isBulkMode}
            onToggleBulkMode={toggleBulkMode}
          />
@@ -1378,6 +1389,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             performAnalyze={performAnalyze}
             sheetTranslateY={sheetTranslateY}
             navigation={navigation}
+            jobResponse={jobResponse}
+            setJobResponse={setJobResponse}
           />
         );
       })()}
@@ -1582,7 +1595,7 @@ const MatchResultsSheet: React.FC<{
   );
 };
 
-// Bulk Items Sheet Component (memoized to debug re-rendering)
+// Bulk Items Sheet Component
 const BulkItemsSheet: React.FC<{
   onClose: () => void;
   sheetStyle: any;
@@ -1592,6 +1605,7 @@ const BulkItemsSheet: React.FC<{
   activeItemId: string | null;
   onAddNewItem: () => void;
   onImageUpload: () => void;
+  setJobResponse: (jobResponse: JobResponse | null) => void;
   onDeleteItem: (itemId: string) => void;
   onMovePhoto: (fromItemId: string, toItemId: string, photoId: string) => void;
   onSelectItem: (itemId: string) => void;
@@ -1599,9 +1613,9 @@ const BulkItemsSheet: React.FC<{
   onRemovePhoto: (itemId: string, photoId: string) => void;
   performAnalyze: (firstPhotos: CapturedPhoto[]) => Promise<any>;
   sheetTranslateY: Animated.SharedValue<number>;
-  analysis: Analysis;
+  jobResponse: JobResponse | null;
   navigation: any;
-}> = ({ onClose, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation }) => {
+}> = ({ onClose, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse }) => {
   
   console.log('[SHEET RENDER] ==================');
   console.log('[SHEET RENDER] BulkItemsSheet RE-RENDERED at:', new Date().toISOString());
@@ -1926,10 +1940,10 @@ const BulkItemsSheet: React.FC<{
               try {
                 
                 // Call performAnalyze to get the job ID
-                const analysis: Analysis = await performAnalyze(firstPhotos);
-                console.log('[SEARCH] Analysis:', analysis);
-                console.log('[SEARCH] Analysis Results:', analysis.results);
-                const jobId = analysis?.jobId;
+                const jobResponseData: JobResponse = await performAnalyze(firstPhotos);
+                console.log('[SEARCH] Job Response:', jobResponseData);
+                setJobResponse(jobResponseData); // Store in state
+                const jobId = jobResponseData?.jobId;
                 console.log('[SEARCH] Job ID:', jobId);
                 
                 if (jobId) {
@@ -1944,10 +1958,12 @@ const BulkItemsSheet: React.FC<{
                     onCompleteRoute: {
                       screen: 'MatchSelectionScreen',
                       params: {
-                        jobId: jobId,
-                        bulkItems: bulkItems,
-                        firstPhotos: firstPhotos,
-                        analysis: analysis,
+                        jobResponse: jobResponseData,
+                        response: {
+                          jobId: jobId,
+                          bulkItems: bulkItems,
+                          firstPhotos: firstPhotos,
+                        }
                       },
                     }
                   });
@@ -2010,7 +2026,7 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   activeItemIndicator: {
-    backgroundColor: 'rgba(76, 175, 80, 0.9)',
+    backgroundColor: '93C822',
     borderRadius: 12,
     paddingHorizontal: 8,
     paddingVertical: 4,
@@ -2223,8 +2239,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   continueButton: {
-    backgroundColor: '#4CAF50',
-    borderRadius: 25,
+    backgroundColor: '#93C822',
+    borderRadius: 12,
     paddingVertical: 15,
     alignItems: 'center',
   },
@@ -2323,7 +2339,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   primaryButton: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#93C822',
     borderRadius: 12,
     paddingVertical: 15,
     alignItems: 'center',
@@ -2463,7 +2479,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     marginBottom: 16,
-    // DEBUG: Make items more visible
     borderWidth: 2,
     borderColor: '#D9D9D9',
     minHeight: 100,
@@ -2548,7 +2563,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   searchForProductButton: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#93C822',
     borderRadius: 12,
     paddingVertical: 16,
     flexDirection: 'row',
@@ -2607,16 +2622,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   activeItemContainer: {
-    borderColor: '#4CAF50',
+    borderColor: '#93C822',
     borderWidth: 2,
     backgroundColor: '#f8fff8',
   },
   activeItemLabel: {
-    color: '#4CAF50',
+    color: '#93C822',
     fontWeight: '700',
   },
   activeItemBadge: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#93C822',
     borderRadius: 8,
     paddingHorizontal: 6,
     paddingVertical: 2,
@@ -2640,11 +2655,11 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   coverPhotoSlot: {
-    borderColor: '#4CAF50',
+    borderColor: '#93C822',
     borderWidth: 2,
   },
   coverPhotoLabel: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#93C822',
   },
   addPhotoText: {
     fontSize: 12,
@@ -2685,7 +2700,7 @@ const styles = StyleSheet.create({
   },
   progressBarFill: {
     height: '100%',
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#93C822',
     borderRadius: 2,
   },
   progressSpinner: {
@@ -2739,7 +2754,7 @@ const styles = StyleSheet.create({
     marginBottom: 30,
   },
   permissionButton: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#93C822',
     borderRadius: 25,
     paddingHorizontal: 30,
     paddingVertical: 15,

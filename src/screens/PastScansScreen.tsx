@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useNavigation } from '@react-navigation/native';
@@ -7,9 +7,11 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import { supabase } from '../../lib/supabase';
-import AddListingScreen from './AddListingScreen';
 import { AppStackParamList } from '../navigation/AppNavigator';
 
+// --- Interfaces for Data Types ---
+
+// For the "Generated Listings" tab (existing data structure)
 interface PastScan {
   id: string;
   variantId: string;
@@ -24,55 +26,84 @@ interface PastScan {
   status: 'draft' | 'active' | 'archived';
 }
 
-// Add type for navigation
+// For the "Match Jobs" tab
+interface MatchJob {
+  id: string; // This is the job_id from the table
+  created_at: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
+  summary: {
+    highConfidenceCount?: number;
+    mediumConfidenceCount?: number;
+    lowConfidenceCount?: number;
+    totalProducts?: number;
+  };
+  // We don't need the full results here, just the ID to navigate
+}
+
 type PastScansScreenNavigationProp = StackNavigationProp<AppStackParamList, 'PastScans'>;
 
 const PastScansScreen = () => {
   const theme = useTheme();
   const navigation = useNavigation<PastScansScreenNavigationProp>();
+  
+  const [activeTab, setActiveTab] = useState<'matches' | 'listings'>('matches');
+  const [matchJobs, setMatchJobs] = useState<MatchJob[]>([]);
   const [scans, setScans] = useState<PastScan[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchPastScans();
-  }, []);
-
-  const fetchPastScans = async () => {
+  const fetchMatchJobs = useCallback(async () => {
     try {
       setLoading(true);
+      setError(null);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('No authenticated user');
+
+      const { data, error } = await supabase
+        .from('match_jobs')
+        .select('job_id, created_at, status, summary')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching match jobs:', error);
+        throw new Error('Failed to fetch match jobs.');
+      }
+      
+      // The table has `job_id`, but our keyExtractor needs `id`. Let's map it.
+      const formattedJobs = data.map(job => ({ ...job, id: job.job_id })) as MatchJob[];
+      setMatchJobs(formattedJobs);
+
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const fetchPastScans = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
       const { data: { user } } = await supabase.auth.getUser();
       
-      if (!user) {
-        throw new Error('No authenticated user');
-      }
+      if (!user) throw new Error('No authenticated user');
 
-      // Query Products with their variants
-      // AiGeneratedContent is no longer the primary source for listing details here
       const { data: products, error: productsError } = await supabase
         .from('Products')
         .select(`
           Id,
           CreatedAt,
           IsArchived,
-          UpdatedAt,
           ProductVariants (
             Id,
             Title,
             Description,
             Price,
-            CompareAtPrice,
             Sku,
             Barcode,
-            Weight,
-            WeightUnit,
-            Options, 
-            CreatedAt,
-            UpdatedAt,
-            ProductImages!ProductImages_ProductVariantId_fkey (
-              ImageUrl,
-              Position
-            )
+            Options,
+            ProductImages!ProductImages_ProductVariantId_fkey ( ImageUrl, Position )
           )
         `)
         .eq('UserId', user.id)
@@ -83,57 +114,32 @@ const PastScansScreen = () => {
         throw new Error('Failed to fetch products');
       }
 
-      if (!products || products.length === 0) {
+      if (!products) {
         setScans([]);
         return;
       }
 
-      // Transform the data to match our PastScan interface
       const transformedScans = products.reduce((acc: PastScan[], product) => {
         const variant = product.ProductVariants?.[0];
-        if (!variant) {
-          console.warn(`[PastScansScreen] Product ${product.Id} has no variants, skipping.`);
-          return acc;
-        }
+        if (!variant) return acc;
 
-        // Images are still sourced the same way
         const sortedImages = variant.ProductImages
           ?.sort((a, b) => (a.Position || 0) - (b.Position || 0))
           ?.map(img => img.ImageUrl) || [];
 
-        // Determine status
-        let status: 'draft' | 'active' | 'archived' = 'draft';
-        if (product.IsArchived) {
-          status = 'archived';
-        } else if (variant.Title) { // If there's a title, consider it active enough for this view
-          status = 'active';
-        }
-
-        // Get platform details directly from variant.Options
-        let platformDetails = {};
-        if (variant.Options && typeof variant.Options === 'object') {
-          platformDetails = variant.Options;
-          console.log(`[PastScansScreen] Product ${product.Id}: Loaded platformDetails from variant.Options.`);
-        } else if (variant.Options) {
-          console.warn(`[PastScansScreen] Product ${product.Id}: variant.Options was present but not an object:`, variant.Options);
-          // Optionally try to parse if it might be a JSON string, though it should be an object from Supabase (JSONB)
-        } else {
-          console.log(`[PastScansScreen] Product ${product.Id}: No variant.Options found.`);
-        }
+        let status: 'draft' | 'active' | 'archived' = product.IsArchived ? 'archived' : (variant.Title ? 'active' : 'draft');
         
-        // Remove the AiGeneratedContent logic here as primary data comes from ProductVariants
-
         acc.push({
           id: product.Id,
           variantId: variant.Id,
-          created_at: product.CreatedAt, // Use product's CreatedAt for the scan list
+          created_at: product.CreatedAt,
           title: variant.Title || 'Untitled Product',
           description: variant.Description || '',
           price: variant.Price || 0,
           sku: variant.Sku || '',
           barcode: variant.Barcode || '',
           images: sortedImages,
-          platform_details: platformDetails, // Sourced from variant.Options
+          platform_details: variant.Options || {},
           status
         });
         return acc;
@@ -146,10 +152,29 @@ const PastScansScreen = () => {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'matches') {
+      fetchMatchJobs();
+    } else {
+      fetchPastScans();
+    }
+  }, [activeTab, fetchMatchJobs, fetchPastScans]);
+
+  const handleLoadMatchJob = (job: MatchJob) => {
+    if (job.status === 'completed') {
+      navigation.navigate('MatchSelectionScreen', {
+        // Pass the job ID to the selection screen
+        response: { jobId: job.id } 
+      });
+    } else {
+      // Handle other statuses if needed (e.g., show an alert)
+      console.log(`Job status is '${job.status}', cannot view results yet.`);
+    }
   };
 
   const handleLoadScan = (scan: PastScan) => {
-    // Navigate to AddListingScreen with the scan data and initial stage
     navigation.navigate('AddListing', {
       initialData: {
         title: scan.title,
@@ -160,15 +185,55 @@ const PastScansScreen = () => {
         images: scan.images,
         platformDetails: scan.platform_details,
         status: scan.status,
-        // Add these to ensure we go directly to form review
         initialStage: 'FORM_REVIEW',
-        productId: scan.id, // Pass the product ID to load existing data
-        // Include any other necessary data for the form
-        variantId: scan.variantId, // Make sure to include this in the PastScan interface
-        uploadedImageUrls: scan.images, // Pass the image URLs directly
+        productId: scan.id,
+        variantId: scan.variantId,
+        uploadedImageUrls: scan.images,
       }
     });
   };
+
+  const renderMatchJobItem = ({ item }: { item: MatchJob }) => (
+    <Card style={styles.scanCard}>
+      <TouchableOpacity 
+        style={styles.scanItem}
+        onPress={() => handleLoadMatchJob(item)}
+        disabled={item.status !== 'completed'}
+      >
+        <View style={styles.scanInfo}>
+          <Text style={styles.scanTitle}>Match Job</Text>
+          <Text style={styles.scanDate}>
+            {new Date(item.created_at).toLocaleString()}
+          </Text>
+          <View style={styles.scanDetails}>
+             <Text style={styles.scanDetail}>
+                High: {item.summary?.highConfidenceCount ?? 0}
+             </Text>
+             <Text style={styles.scanDetail}>
+                Med: {item.summary?.mediumConfidenceCount ?? 0}
+             </Text>
+             <Text style={styles.scanDetail}>
+                Low: {item.summary?.lowConfidenceCount ?? 0}
+             </Text>
+          </View>
+          <View style={styles.scanStatus}>
+            <Icon 
+              name={item.status === 'completed' ? 'check-circle' : 'cogs'} 
+              size={16} 
+              color={item.status === 'completed' ? theme.colors.success : theme.colors.primary} 
+            />
+            <Text style={[
+              styles.statusText,
+              { color: item.status === 'completed' ? theme.colors.success : theme.colors.primary }
+            ]}>
+              {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+            </Text>
+          </View>
+        </View>
+        <Icon name="chevron-right" size={24} color={item.status === 'completed' ? theme.colors.textSecondary : '#ccc'} />
+      </TouchableOpacity>
+    </Card>
+  );
 
   const renderScanItem = ({ item }: { item: PastScan }) => (
     <Card style={styles.scanCard}>
@@ -209,26 +274,45 @@ const PastScansScreen = () => {
     </Card>
   );
 
-  if (loading) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-      </View>
-    );
-  }
+  const renderContent = () => {
+    if (loading) {
+      return (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+        </View>
+      );
+    }
 
-  if (error) {
+    if (error) {
+      return (
+        <View style={styles.centered}>
+          <Text style={styles.errorText}>{error}</Text>
+          <Button 
+            title="Try Again" 
+            onPress={activeTab === 'matches' ? fetchMatchJobs : fetchPastScans}
+            style={styles.retryButton}
+          />
+        </View>
+      );
+    }
+
     return (
-      <View style={styles.centered}>
-        <Text style={styles.errorText}>{error}</Text>
-        <Button 
-          title="Try Again" 
-          onPress={fetchPastScans}
-          style={styles.retryButton}
-        />
-      </View>
+      <FlatList
+        data={activeTab === 'matches' ? matchJobs : scans}
+        renderItem={activeTab === 'matches' ? renderMatchJobItem : renderScanItem}
+        keyExtractor={item => item.id}
+        contentContainerStyle={styles.listContent}
+        ListEmptyComponent={
+          <View style={styles.emptyContainer}>
+            <Icon name="history" size={48} color={theme.colors.textSecondary} />
+            <Text style={styles.emptyText}>
+              {activeTab === 'matches' ? 'No match jobs found' : 'No generated listings found'}
+            </Text>
+          </View>
+        }
+      />
     );
-  }
+  };
 
   return (
     <View style={styles.container}>
@@ -239,21 +323,25 @@ const PastScansScreen = () => {
         >
           <Icon name="arrow-left" size={24} color={theme.colors.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Past Scans</Text>
+        <Text style={styles.headerTitle}>History</Text>
       </View>
 
-      <FlatList
-        data={scans}
-        renderItem={renderScanItem}
-        keyExtractor={item => item.id}
-        contentContainerStyle={styles.listContent}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Icon name="history" size={48} color={theme.colors.textSecondary} />
-            <Text style={styles.emptyText}>No past scans found</Text>
-          </View>
-        }
-      />
+      <View style={styles.tabContainer}>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'matches' && styles.activeTab]}
+          onPress={() => setActiveTab('matches')}
+        >
+          <Text style={[styles.tabText, activeTab === 'matches' && styles.activeTabText]}>Match Jobs</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'listings' && styles.activeTab]}
+          onPress={() => setActiveTab('listings')}
+        >
+          <Text style={[styles.tabText, activeTab === 'listings' && styles.activeTabText]}>Generated Listings</Text>
+        </TouchableOpacity>
+      </View>
+
+      {renderContent()}
     </View>
   );
 };
@@ -266,8 +354,9 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
-    marginTop: 50,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingTop: 50, // Adjust for status bar
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
   },
@@ -277,6 +366,34 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 20,
     fontWeight: 'bold',
+  },
+  tabContainer: {
+    paddingLeft: 5,
+    paddingRight: 5,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    backgroundColor: '#f8f8f8',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  tab: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    width: '40%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  activeTab: {
+    backgroundColor: '#93C822', // theme.colors.primary
+  },
+  tabText: {
+    fontWeight: '600',
+    color: '#333',
+  },
+  activeTabText: {
+    color: '#fff',
   },
   listContent: {
     padding: 16,
@@ -318,6 +435,7 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 12,
     marginLeft: 4,
+    textTransform: 'capitalize',
   },
   centered: {
     flex: 1,
@@ -334,9 +452,11 @@ const styles = StyleSheet.create({
     minWidth: 120,
   },
   emptyContainer: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 32,
+    marginTop: 50,
   },
   emptyText: {
     marginTop: 16,
@@ -346,4 +466,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default PastScansScreen; 
+export default PastScansScreen;

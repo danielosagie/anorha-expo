@@ -71,35 +71,37 @@ const DashboardScreen = () => {
               <Text style={styles.statsPositive}>+$391.20 vs previous year</Text>
             </View>
             
-            <LineChart
-              data={{
-                labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-                datasets: [{ data: mockSalesData }]
-              }}
-              width={Dimensions.get('window').width - 48}
-              height={180}
-              chartConfig={{
-                backgroundColor: theme.colors.background,
-                backgroundGradientFrom: theme.colors.background,
-                backgroundGradientTo: theme.colors.background,
-                decimalPlaces: 0,
-                color: () => theme.colors.primary,
-                labelColor: () => theme.colors.textSecondary,
-                propsForDots: {
-                  r: '0',
-                },
-                propsForBackgroundLines: {
-                  strokeDasharray: '',
-                  stroke: '#e3e3e3',
-                  strokeWidth: 1
-                },
-                propsForLabels: {
-                  fontSize: 10,
-                }
-              }}
-              bezier
-              style={styles.chart}
-            />
+            <View style={{width: '100%', paddingRight: 30}}>  
+              <LineChart
+                data={{
+                  labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+                  datasets: [{ data: mockSalesData }]
+                }}
+                width={370}
+                height={180}
+                chartConfig={{
+                  backgroundColor: theme.colors.background,
+                  backgroundGradientFrom: theme.colors.background,
+                  backgroundGradientTo: theme.colors.background,
+                  decimalPlaces: 0,
+                  color: () => theme.colors.primary,
+                  labelColor: () => theme.colors.textSecondary,
+                  propsForDots: {
+                    r: '0',
+                  },
+                  propsForBackgroundLines: {
+                    strokeDasharray: '',
+                    stroke: '#e3e3e3',
+                    strokeWidth: 1
+                  },
+                  propsForLabels: {
+                    fontSize: 10,
+                  }
+                }}
+                bezier
+                style={styles.chart}
+              />
+            </View>
           </Card>
           
 
@@ -334,7 +336,7 @@ const styles = StyleSheet.create({
     marginVertical: 16,
     borderRadius: 8,
     alignSelf: 'flex-start',
-    paddingLeft: 0,
+    paddingRight: 40,
   },
   sectionTitle: {
     fontSize: 18,

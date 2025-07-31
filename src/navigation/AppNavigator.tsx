@@ -18,6 +18,7 @@ import {
   PlusJakartaSans_500Medium,
   PlusJakartaSans_700Bold,
 } from '@expo-google-fonts/plus-jakarta-sans';
+import { CirclePlus } from 'lucide-react';
 
 // Import the context from its new location
 import { AuthContext, AuthContextType } from '../context/AuthContext';
@@ -40,7 +41,7 @@ import MappingReviewScreen from '../screens/MappingReviewScreen';
 import SyncRulesScreen from '../screens/SyncRulesScreen';
 import AddProductScreen from '../screens/AddProductScreen';
 import LoadingScreen from '../screens/LoadingScreen';
-import MatchSelectionScreen from '../screens/MatchSelectionScreen';
+import MatchSelectionScreen, { JobResponse } from '../screens/MatchSelectionScreen';
 
 // --- Define Param Lists for Type Safety --- //
 type AuthStackParamList = {
@@ -92,94 +93,97 @@ export type AppStackParamList = {
     bulkItems: any[];
   }
   MatchSelectionScreen: {
-    jobId?: string;
-    bulkItems?: any[];
-    firstPhotos?: any[];
-    jobResults?: any[];
-    analysis?: {
-      jobId: string;
-      userId: string;
-      status: string;
-      currentStage: string;
-      progress: {
-        totalProducts: number;
-        completedProducts: number;
-        currentProductIndex: number;
-        failedProducts: number;
-        stagePercentage: number;
-      };
-      results: Array<{
-        productIndex: number;
-        productId: string;
-        variantId: string;
-        serpApiData: Array<{
-          position?: number;
-          title?: string;
-          link?: string;
-          source?: string;
-          source_icon?: string;
-          thumbnail?: string;
-          thumbnail_width?: number;
-          thumbnail_height?: number;
-          image?: string;
-          image_width?: number;
-          image_height?: number;
-          rating?: number;
-          reviews?: number;
-          price?: {
-            value?: string;
-            extracted_value?: number;
-            currency?: string;
-          };
-          condition?: string;
-          in_stock?: boolean;
-        }>;
-        rerankedResults: Array<{
-          position?: number;
-          title?: string;
-          link?: string;
-          source?: string;
-          source_icon?: string;
-          thumbnail?: string;
-          thumbnail_width?: number;
-          thumbnail_height?: number;
-          image?: string;
-          image_width?: number;
-          image_height?: number;
-          rank?: number;
-          score?: number;
-          rating?: number;
-          reviews?: number;
-          price?: {
-            value?: string;
-            extracted_value?: number;
-            currency?: string;
-          };
-          condition?: string;
-          in_stock?: boolean;
-        }>;
-        confidence: string; // Changed from number to string based on the JSON example
-        vectorSearchFoundResults: boolean;
-        originalTargetImage: string;
-        timing: {
-          quickScanMs: number;
-          serpApiMs: number;
-          embeddingMs: number;
-          vectorSearchMs: number;
-          rerankingMs: number;
-          totalMs: number;
+    jobResponse: JobResponse;
+    response: {
+      jobId?: string;
+      bulkItems?: any[];
+      firstPhotos?: any[];
+      jobResults?: any[];
+      analysis?: {
+        jobId: string;
+        userId: string;
+        status: string;
+        currentStage: string;
+        progress: {
+          totalProducts: number;
+          completedProducts: number;
+          currentProductIndex: number;
+          failedProducts: number;
+          stagePercentage: number;
         };
-      }>;
-      startedAt: string;
-      updatedAt: string;
-      summary: {
-        highConfidenceCount: number;
-        mediumConfidenceCount: number;
-        lowConfidenceCount: number;
-        totalEmbeddingsStored: number | null;
-        averageProcessingTimeMs: number | null;
-      };
-      completedAt: string;
+        results: Array<{
+          productIndex: number;
+          productId: string;
+          variantId: string;
+          serpApiData: Array<{
+            position?: number;
+            title?: string;
+            link?: string;
+            source?: string;
+            source_icon?: string;
+            thumbnail?: string;
+            thumbnail_width?: number;
+            thumbnail_height?: number;
+            image?: string;
+            image_width?: number;
+            image_height?: number;
+            rating?: number;
+            reviews?: number;
+            price?: {
+              value?: string;
+              extracted_value?: number;
+              currency?: string;
+            };
+            condition?: string;
+            in_stock?: boolean;
+          }>;
+          rerankedResults: Array<{
+            position?: number;
+            title?: string;
+            link?: string;
+            source?: string;
+            source_icon?: string;
+            thumbnail?: string;
+            thumbnail_width?: number;
+            thumbnail_height?: number;
+            image?: string;
+            image_width?: number;
+            image_height?: number;
+            rank?: number;
+            score?: number;
+            rating?: number;
+            reviews?: number;
+            price?: {
+              value?: string;
+              extracted_value?: number;
+              currency?: string;
+            };
+            condition?: string;
+            in_stock?: boolean;
+          }>;
+          confidence: string; // Changed from number to string based on the JSON example
+          vectorSearchFoundResults: boolean;
+          originalTargetImage: string;
+          timing: {
+            quickScanMs: number;
+            serpApiMs: number;
+            embeddingMs: number;
+            vectorSearchMs: number;
+            rerankingMs: number;
+            totalMs: number;
+          };
+        }>;
+        startedAt: string;
+        updatedAt: string;
+        summary: {
+          highConfidenceCount: number;
+          mediumConfidenceCount: number;
+          lowConfidenceCount: number;
+          totalEmbeddingsStored: number | null;
+          averageProcessingTimeMs: number | null;
+        };
+        completedAt: string;
+      }
     }
   };
 };
