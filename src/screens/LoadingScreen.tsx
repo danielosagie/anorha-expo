@@ -58,12 +58,28 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
   // Select the correct list of stages based on the processType
   const activeStages = stages[processType];
 
+  // Map backend stage names to UI stage labels (keeps progress bar accurate)
+  const stageNameMap: Record<string, string> = {
+    // Backend => UI
+    'Preparing': 'Indexing web pages',
+    'Fetching sources': 'Finding product data',
+    'Scraping sources': 'Cleaning data',
+    'Generating details': 'Generating listing',
+    'Saving drafts': 'Creating view',
+    'Ready': 'Ready to review',
+  };
+
+  
+
+
   // Poll job status using the jobId
   useEffect(() => {
     if (!jobId) return;
 
     const pollJobStatus = async () => {
       try {
+
+        
 
         // Get current user
         async function getToken() {
@@ -77,39 +93,86 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
         // Get auth token
         const { data: { session } } = await supabase.auth.getSession();
         const token = await getToken();
-        
-        const response = await fetch(`https://api.sssync.app/api/products/match/jobs/${jobId}/status`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        });
-        const status = await response.json();
-        
-        console.log('[POLLING] Job status:', status.status, 'Stage:', status.currentStage);
-        
-        // Update job status and stage
-        setJobStatus(status.status);
-        
-        // Map backend stages to frontend stage index
-        const stageIndex = activeStages.indexOf(status.currentStage);
-        if (stageIndex >= 0) {
-          setCurrentStageIndex(stageIndex);
+
+        if (processType === 'generate') {
+
+          const response = await fetch(`https://api.sssync.app/api/products/generate/jobs/${jobId}/status`, {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          });
+          const status = await response.json();
+          
+          console.log('[POLLING] Job status:', status.status, 'Stage:', status.currentStage);
+          
+          // Update job status and stage
+          setJobStatus(status.status);
+          
+          // Map backend stages to frontend stage index
+          const mappedStage = stageNameMap[status.currentStage] || status.currentStage;
+          const stageIndex = activeStages.indexOf(mappedStage);
+          if (stageIndex >= 0) {
+            setCurrentStageIndex(stageIndex);
+          }
+          
+          // If completed, navigate to next screen
+          if (status.status === 'completed') {
+            console.log(`Process "${processType}" complete! Navigating...`);
+            setTimeout(() => {
+              navigation.replace(onCompleteRoute.screen, {
+                ...onCompleteRoute.params,
+                jobId: status.jobId,
+                status: status.status,
+                results: status.results,
+                summary: status.summary,
+                completedAt: status.completedAt,
+              });
+            }, 500);
+          } else if (status.status === 'failed') {
+            console.error('Job failed:', status.error);
+            // Handle error - maybe go back or show error screen
+          }
+          
+        } else {
+
+          const response = await fetch(`https://api.sssync.app/api/products/match/jobs/${jobId}/status`, {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          });
+          const status = await response.json();
+          
+          console.log('[POLLING] Job status:', status.status, 'Stage:', status.currentStage);
+          
+          // Update job status and stage
+          setJobStatus(status.status);
+          
+          // Map backend stages to frontend stage index
+          const stageIndex = activeStages.indexOf(status.currentStage);
+          if (stageIndex >= 0) {
+            setCurrentStageIndex(stageIndex);
+          }
+          
+          // If completed, navigate to next screen
+          if (status.status === 'completed') {
+            console.log(`Process "${processType}" complete! Navigating...`);
+            setTimeout(() => {
+              navigation.replace(onCompleteRoute.screen, {
+                ...onCompleteRoute.params,
+                jobResults: status.results
+              });
+            }, 1000);
+          } else if (status.status === 'failed') {
+            console.error('Job failed:', status.error);
+            // Handle error - maybe go back or show error screen
+          }
+
+
         }
         
-        // If completed, navigate to next screen
-        if (status.status === 'completed') {
-          console.log(`Process "${processType}" complete! Navigating...`);
-          setTimeout(() => {
-            navigation.replace(onCompleteRoute.screen, {
-              ...onCompleteRoute.params,
-              jobResults: status.results
-            });
-          }, 1000);
-        } else if (status.status === 'failed') {
-          console.error('Job failed:', status.error);
-          // Handle error - maybe go back or show error screen
-        }
+        
       } catch (error) {
         console.error('[POLLING] Error polling status:', error);
       }

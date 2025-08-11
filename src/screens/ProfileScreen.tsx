@@ -15,23 +15,13 @@ import { CommonActions } from '@react-navigation/native';
 import * as WebBrowser from 'expo-web-browser';
 import * as Clipboard from 'expo-clipboard';
 import { RealtimeChannel } from '@supabase/supabase-js';
+import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import * as Crypto from 'expo-crypto'; // For generating random string
 import { showMessage } from 'react-native-flash-message';
 
 import { AuthContext } from '../context/AuthContext';
 import { useLegendStateControl } from '../context/LegendStateControlContext';
 
-// --- BEGIN Re-inlined Constants ---
-// TODO: Replace placeholder values with your actual credentials and URLs
-// const CLOVER_APP_ID = "YOUR_CLOVER_APP_ID"; // REMOVED - Backend handles this
-// const CLOVER_FRONTEND_REDIRECT_URI = "sssyncapp://clover-auth-callback"; // REMOVED - Backend handles this
-// const CLOVER_AUTHORIZE_URL = "https://sandbox.dev.clover.com/oauth/authorize"; // REMOVED - Backend handles this
-// const SSSYNC_CLOVER_CALLBACK_URL = "https://api.sssync.app/api/auth/clover/callback"; // REMOVED - Backend handles this
-
-// const SQUARE_APP_ID = "YOUR_SQUARE_APP_ID"; // REMOVED - Backend handles this
-// const SQUARE_FRONTEND_REDIRECT_URI = "sssyncapp://square-auth-callback"; // REMOVED - Backend handles this
-// const SQUARE_AUTHORIZE_URL = "https://connect.squareup.com/oauth2/authorize"; // REMOVED - Backend handles this
-// const SSSYNC_SQUARE_CALLBACK_URL = "https://api.sssync.app/api/auth/square/callback"; // REMOVED - Backend handles this
 
 const SSSYNC_API_BASE_URL = "https://api.sssync.app"; // Keep if used for constructing backend URLs
 // --- END Re-inlined Constants ---
@@ -50,7 +40,11 @@ const AVAILABLE_PLATFORMS = [
   { key: 'amazon', name: 'Amazon', icon: 'package' },
   { key: 'clover', name: 'Clover', icon: 'leaf' },
   { key: 'square', name: 'Square', icon: 'square-outline' },
-  // Add other platforms here as needed
+  { key: 'ebay', name: 'eBay', icon: 'shopping' },
+  { key: 'facebook', name: 'Facebook', icon: 'facebook' },
+  { key: 'depop', name: 'Depop', icon: 'alpha-d' },
+  { key: 'whatnot', name: 'Whatnot', icon: 'chat-processing' },
+  { key: 'etsy', name: 'Etsy', icon: 'alpha-e' },
 ];
 
 type PlatformId = typeof AVAILABLE_PLATFORMS[number]['key'];
@@ -109,6 +103,16 @@ const getPlatformColor = (platformId: PlatformId): string => {
       return '#3CAD46';
     case 'square':
       return '#6C757D';
+    case 'ebay':
+      return '#0064D2';
+    case 'facebook':
+      return '#1877F2';
+    case 'depop':
+      return '#FF2C2C';
+    case 'whatnot':
+      return '#000000';
+    case 'etsy':
+      return '#F56400';
     default:
       return '#555555';
   }
@@ -124,6 +128,16 @@ const getIconForPlatform = (platform: PlatformId): string => {
       return 'leaf';
     case 'square':
       return 'square-outline';
+    case 'ebay':
+      return 'shopping';
+    case 'facebook':
+      return 'facebook';
+    case 'depop':
+      return 'alpha-d';
+    case 'whatnot':
+      return 'chat-processing';
+    case 'etsy':
+      return 'alpha-e';
     default:
       return 'store';
   }
@@ -200,6 +214,7 @@ const ProfileScreen = () => {
   const authContext = useContext(AuthContext);
   const route = useRoute<RouteProp<ProfileScreenRouteParams, 'Profile'>>();
   const { resetLegendState } = useLegendStateControl();
+  const { toggles } = usePlatformConnections();
   
   // For refresh trigger from route params
   const routeRefreshParam = route.params?.refresh || 0;
@@ -266,536 +281,6 @@ const ProfileScreen = () => {
       isConnected: false,
     },
   ];
-  
-  // Move styles definition here to fix "used before declaration" errors
-  const styles = StyleSheet.create({
-    container: {
-      flex: 1,
-      backgroundColor: '#F8F9FB',
-    },
-    scrollViewContent: {
-      padding: 16,
-      paddingTop: 60,
-    },
-    card: {
-      marginBottom: 16,
-    },
-    title: {
-      fontSize: 28,
-      fontWeight: 'bold',
-      marginVertical: 16,
-    },
-    accountHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      marginBottom: 24,
-    },
-    avatar: {
-      width: 64,
-      height: 64,
-      borderRadius: 32,
-    },
-    accountInfo: {
-      flex: 1,
-      marginLeft: 16,
-    },
-    accountName: {
-      fontSize: 18,
-      fontWeight: 'bold',
-      marginBottom: 4,
-    },
-    accountEmail: {
-      fontSize: 14,
-      color: '#777',
-      marginBottom: 4,
-    },
-    planBadge: {
-      alignSelf: 'flex-start',
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      borderRadius: 4,
-    },
-    planText: {
-      fontSize: 12,
-      fontWeight: '500',
-    },
-    editButton: {
-      padding: 8,
-    },
-    statsContainer: {
-      flexDirection: 'row',
-      justifyContent: 'space-around',
-      borderTopWidth: 1,
-      borderTopColor: '#f0f0f0',
-      paddingTop: 16,
-    },
-    statItem: {
-      alignItems: 'center',
-    },
-    statValue: {
-      fontSize: 18,
-      fontWeight: 'bold',
-      marginBottom: 4,
-    },
-    statLabel: {
-      fontSize: 12,
-      color: '#777',
-    },
-    statDivider: {
-      width: 1,
-      height: '100%',
-      backgroundColor: '#f0f0f0',
-    },
-    sectionHeader: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      marginBottom: 16,
-    },
-    sectionTitle: {
-      fontSize: 18,
-      fontWeight: 'bold',
-    },
-    sectionAction: {
-      fontSize: 14,
-    },
-    integrationsContainer: {
-      marginBottom: 8,
-    },
-    integrationItem: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      paddingVertical: 12,
-      borderBottomWidth: 1,
-      borderBottomColor: '#f0f0f0',
-    },
-    integrationIcon: {
-      width: 32,
-      height: 32,
-      marginRight: 12,
-    },
-    integrationName: {
-      fontSize: 16,
-      flex: 1,
-      marginLeft: 12,
-    },
-    connectedBadge: {
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      borderRadius: 4,
-    },
-    connectedText: {
-      fontSize: 14,
-      fontWeight: '500',
-      marginLeft: 4,
-    },
-    connectButton: {
-      height: 32,
-      paddingHorizontal: 12,
-      flex: 0,
-    },
-    connectButtonText: {
-      fontSize: 12,
-      color: '#FFFFFF',
-    },
-    settingItem: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      paddingVertical: 16,
-      borderBottomWidth: 1,
-      borderBottomColor: '#f0f0f0',
-    },
-    settingInfo: {
-      flexDirection: 'row',
-      alignItems: 'center',
-    },
-    settingIcon: {
-      marginRight: 16,
-    },
-    settingText: {
-      fontSize: 16,
-    },
-    menuItem: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      paddingVertical: 16,
-    },
-    menuItemBorder: {
-      borderBottomWidth: 1,
-      borderBottomColor: '#f0f0f0',
-    },
-    menuItemLeft: {
-      flexDirection: 'row',
-      alignItems: 'center',
-    },
-    menuIcon: {
-      marginRight: 16,
-    },
-    menuText: {
-      fontSize: 16,
-    },
-    menuBadge: {
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      borderRadius: 4,
-    },
-    menuBadgeText: {
-      fontSize: 12,
-      fontWeight: '500',
-    },
-    footer: {
-      alignItems: 'center',
-      marginVertical: 24,
-    },
-    versionText: {
-      fontSize: 12,
-      color: '#999',
-    },
-    settingsContainer: {
-    },
-    menuContainer: {
-    },
-    errorContainer: {
-      padding: 15,
-      marginVertical: 10,
-      borderRadius: 8,
-      alignItems: 'center',
-    },
-    errorText: {
-      fontSize: 14,
-      textAlign: 'center',
-      marginTop: 5,
-      marginBottom: 10,
-    },
-    connectedContainer: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      marginLeft: 4,
-    },
-    connectedIcon: {
-      marginRight: 4,
-    },
-    manageButton: {
-      padding: 4, 
-      marginLeft: 8,
-    },
-    disconnectButton: {
-      padding: 4,
-      marginLeft: 4,
-    },
-    addConnectionButton: {
-      marginTop: 20,
-      marginBottom: 10,
-    },
-    modalOverlay: {
-      flex: 1,
-      backgroundColor: 'rgba(0, 0, 0, 0.6)',
-      justifyContent: 'center',
-      alignItems: 'center',
-      padding: 20, 
-    },
-    modalContent: {
-      backgroundColor: 'white',
-      borderRadius: 12,
-      padding: 25,
-      width: '100%', 
-      maxWidth: 500,
-      maxHeight: '80%',
-      alignItems: 'center',
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.25,
-      shadowRadius: 4,
-      elevation: 5,
-    },
-    modalTitle: {
-      fontSize: 18,
-      fontWeight: '600',
-      marginBottom: 20,
-      color: '#333',
-      textAlign: 'center',
-    },
-    modalPlatformGrid: { 
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        justifyContent: 'space-around', // Better spacing for grid items
-        alignItems: 'center',
-        width: '100%',
-        maxHeight: '70%', 
-        marginBottom: 20, // Add space before close button
-    },
-    // --- NEW: Styles for Modal Platform Items ---
-    modalPlatformCard: {
-      width: '40%', // Adjust width for grid layout
-      aspectRatio: 1.2, // Adjust aspect ratio
-      justifyContent: 'center', 
-      alignItems: 'center', 
-      margin: 10, 
-      borderRadius: 12, 
-      borderWidth: 1.5, 
-      borderColor: '#ddd', 
-      backgroundColor: '#fff', 
-      padding: 10, 
-      position: 'relative', // For the checkmark icon positioning
-    },
-    modalPlatformCardDisabled: {
-      opacity: 0.5, // Make disabled cards faded
-      backgroundColor: '#f5f5f5',
-    },
-    modalPlatformName: {
-        fontSize: 13, 
-        fontWeight: '500', 
-        color: '#555', 
-        textAlign: 'center', 
-        marginTop: 8, 
-    },
-    modalConnectedIcon: {
-      position: 'absolute',
-      top: 5,
-      right: 5,
-      backgroundColor: 'rgba(255, 255, 255, 0.8)', // Slight background for visibility
-      borderRadius: 10,
-    },
-    // --- END Modal Platform Item Styles ---
-    // --- NEW: Styles for Guided Flow --- 
-    guidedFlowText: {
-      // This style might be replaced by sectionDescription or removed
-    },
-    // --- END Guided Flow Styles ---
-    // --- NEW: Styles for Paste UI ---
-    pasteContainer: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      width: '100%',
-      marginBottom: 15, // Space before confirm button
-    },
-    pasteInput: {
-      flex: 1,
-      borderWidth: 1,
-      borderColor: '#ccc',
-      borderRadius: 6,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      fontSize: 14,
-      marginRight: 8,
-      backgroundColor: '#fff',
-    },
-    pasteButton: {
-      paddingHorizontal: 12,
-      height: 42, // Match input height approximately
-      justifyContent: 'center', // Center icon vertically if needed
-      alignItems: 'center', // Center icon horizontally if needed
-      paddingLeft: 10, // Adjust padding for icon spacing
-    },
-    pasteButtonText: {
-      fontSize: 14, 
-    },
-    pasteIcon: {
-      // Specific styles for the icon itself if needed
-    },
-    pasteHintText: {
-      fontSize: 12,
-      color: '#777',
-      marginTop: 4,
-      width: '100%', // Take full width
-      textAlign: 'right', // Align hint text right below input
-    },
-    // --- END Paste UI Styles ---
-    noConnectionsText: { 
-      textAlign: 'center',
-      color: '#888',
-      paddingVertical: 20,
-      fontStyle: 'italic',
-    },
-    promptPasteContainer: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      padding: 10,
-    },
-    promptPasteText: {
-      flex: 1,
-      fontSize: 16,
-      fontWeight: 'bold',
-      marginRight: 10,
-    },
-    pasteSectionTitle: {
-      fontSize: 16,
-      fontWeight: 'bold',
-      marginBottom: 8, // Adjusted spacing
-      color: '#333',
-      alignSelf: 'flex-start', // Align title left
-      width: '100%', // Take full width
-    },
-    manualInput: {
-      flex: 1,
-      borderWidth: 1,
-      borderColor: '#ccc',
-      borderRadius: 6,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      fontSize: 14,
-      marginBottom: 10,
-      backgroundColor: '#fff',
-    },
-    // --- NEW Styles for Combined Modal & Shadcn feel ---
-    inputSection: {
-      width: '100%',
-      paddingBottom: 20,
-    },
-    inputSectionManualOnly: { // Style for the container of the manual input only
-      width: '100%',
-      paddingTop: 15, // Add some space above
-      marginTop: -10, // Adjust spacing relative to section above if needed
-    },
-    manualInputLabel: { // Style for the label above the manual input
-      fontSize: 14,
-      color: '#555',
-      marginBottom: 8,
-      fontWeight: '500',
-    },
-    sectionDescription: {
-
-      fontSize: 14,
-      color: '#555',
-      marginBottom: 40,
-      lineHeight: 20,
-    },
-    modalButton: {
-      alignSelf: 'stretch', // Make buttons take full width within their container
-      marginTop: 10,
-      // height: 45, // Slightly larger buttons
-    },
-    manualInputSingle: { // Style for the single manual input field
-      borderWidth: 1,
-      borderColor: '#ccc',
-      borderRadius: 6,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      fontSize: 14,
-      backgroundColor: '#fff',
-      width: '100%', // Take full width
-    },
-    dividerContainer: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      width: '90%',
-      marginVertical: 15,
-    },
-    dividerLine: {
-      flex: 1,
-      height: 1,
-      backgroundColor: '#ddd',
-    },
-    dividerText: {
-      marginHorizontal: 10,
-      color: '#777',
-      fontWeight: '500',
-    },
-    actionButtonContainer: {
-      flexDirection: 'row-reverse', // Put primary action (Connect) on the right
-      justifyContent: 'space-between', // Spread buttons
-      width: '100%',
-      marginTop: 20,
-      paddingTop: 20,
-      borderTopWidth: 1, // Separator line above actions
-      borderTopColor: '#eee',
-    },
-    cancelButton: {
-      // Properly define as a ViewStyle object with real properties
-      flex: 0.48, // Take slightly less than half the space
-      backgroundColor: '#f5f5f5', // Light gray background
-    },
-    connectButtonModal: {
-      // Properly define as a ViewStyle object with real properties
-      flex: 0.48, // Take slightly less than half the space
-      marginLeft: 10, // Add some space between buttons
-    },
-    // --- NEW: Style for Delete Button in Edit Mode ---
-    deleteButton: {
-      paddingHorizontal: 10, // Add padding to make it easier to tap
-      marginRight: 8, // Add some space between delete button and platform icon
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
-    // --- END Style ---
-    devModeContainer: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      flex: 1,
-    },
-    devModeText: {
-      fontSize: 16,
-      color: '#555',
-    },
-    // --- NEW: Styles for Review & Sync Button ---
-    reviewSyncButton: {
-      marginLeft: 'auto',
-    },
-    manageText: {
-      fontSize: 12,
-      fontWeight: '600',
-    },
-    fallbackIndicator: {
-      flexDirection: 'row',
-      alignItems: 'center', 
-      backgroundColor: theme.colors.warning + '25', // Brighter background for pill
-      paddingHorizontal: 10, // More horizontal padding for pill shape
-      paddingVertical: 5,    // Vertical padding for pill shape
-      borderRadius: 15,      // Fully rounded corners for pill
-      marginLeft: 8,
-      marginTop: 2, // Add a small top margin if needed to separate from status text
-    },
-    fallbackText: {
-      fontSize: 11, // Slightly larger for better readability in a pill
-      color: theme.colors.warning, // Keep warning color for text
-      fontWeight: '500', // Make text a bit bolder
-      marginLeft: 4, // Adjust spacing from icon if needed
-    },
-    connectionInfoContainer: {
-      flex: 1,
-      marginLeft: 8,
-    },
-    statusContainer: {
-      marginBottom: 4,
-    },
-    statusRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-    },
-    statusIcon: {
-      marginRight: 4,
-    },
-    statusText: {
-      fontSize: 14,
-      fontWeight: '600',
-    },
-    lastSyncText: {
-      fontSize: 11,
-      color: '#777',
-      marginTop: 2,
-    },
-    connectionActions: {
-      flexDirection: 'row',
-      marginTop: 4,
-    },
-    actionButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: 10,
-      paddingVertical: 6,
-      borderRadius: 16,
-      marginRight: 8,
-    },
-    actionButtonText: {
-      fontSize: 12,
-      fontWeight: '600',
-      marginLeft: 4,
-    },
-  });
 
   // Define loadConnections function that will be used by fetchConnections
   const loadConnections = async () => {
@@ -1863,58 +1348,91 @@ const ProfileScreen = () => {
         <Pressable style={styles.modalOverlay} onPress={() => setIsAddConnectionModalVisible(false)}>
           <Pressable style={styles.modalContent} onPress={() => {}}> 
             <Text style={styles.modalTitle}>Add New Platform Connection</Text>
+        
             
-            <View style={styles.modalPlatformGrid}> 
-              {AVAILABLE_PLATFORMS.map((platform) => {
-                // Check if this platform is already connected and active
-                const isAlreadyConnected = platformConnections.some(
-                  (conn) => conn.PlatformType === platform.key && conn.Status === 'active'
-                );
+            <View style={{justifyContent: 'space-around', alignItems: 'center', flex: 1, flexDirection: 'column', width: '100%', height: '100%'}}> 
+              <ScrollView style={{ alignSelf: 'stretch', maxHeight: '70%', minHeight: '70%' }} contentContainerStyle={styles.modalPlatformColumns} showsVerticalScrollIndicator={false}>
+                {(() => {
+                  const mid = Math.ceil(AVAILABLE_PLATFORMS.length / 2);
+                  const left = AVAILABLE_PLATFORMS.slice(0, mid);
+                  const right = AVAILABLE_PLATFORMS.slice(mid);
+                  const renderCard = (platform: typeof AVAILABLE_PLATFORMS[number]) => {
+                  // Check if this platform is already connected and active
+                  const isAlreadyConnected = platformConnections.some(
+                    (conn) => conn.PlatformType === platform.key && conn.Status === 'active'
+                  );
+                    const isGloballyDisabled = false; // can wire to toggles if desired here
 
-                return (
-                  <TouchableOpacity
-                    key={platform.key}
-                    style={[
-                      styles.modalPlatformCard,
-                      isAlreadyConnected && styles.modalPlatformCardDisabled // Style for disabled/connected
-                    ]}
-                    disabled={isAlreadyConnected} // Disable button if already connected
-                    onPress={() => {
-                      setIsAddConnectionModalVisible(false); // Close modal
-                      if (platform.key === 'shopify') {
-                        // Set state to show the combined input modal
-                        setShopifyFlowStep('enterInfo');
-                        // Clear previous inputs when starting fresh
-                        setPastedShopifyUrl('');
-                        setManualShopName('');
-                      } else {
-                        // --- NEW: Call Clover Connect Logic ---
-                        if (platform.key === 'clover') {
-                          handleCloverConnect();
-                        } else if (platform.key === 'square') { // --- NEW: Call Square Connect Logic ---
-                          handleSquareConnect();
+                    return (
+                    <TouchableOpacity
+                      key={platform.key}
+                      style={[
+                        styles.modalPlatformCard,
+                        (isAlreadyConnected || isGloballyDisabled) && styles.modalPlatformCardDisabled
+                      ]}
+                      disabled={isAlreadyConnected || isGloballyDisabled}
+                      onPress={() => {
+                        setIsAddConnectionModalVisible(false); // Close modal
+                        if (platform.key === 'shopify') {
+                          // Set state to show the combined input modal
+                          setShopifyFlowStep('enterInfo');
+                          // Clear previous inputs when starting fresh
+                          setPastedShopifyUrl('');
+                          setManualShopName('');
                         } else {
-                           Alert.alert('Connect', `Connect logic for ${platform.name} not implemented yet.`);
+                          // --- NEW: Call Clover Connect Logic ---
+                          if (platform.key === 'clover') {
+                            handleCloverConnect();
+                          } else if (platform.key === 'square') { // --- NEW: Call Square Connect Logic ---
+                            handleSquareConnect();
+                            } else if (platform.key === 'facebook') {
+                              (async () => {
+                                const { data: { user } } = await supabase.auth.getUser();
+                                if (!user) return;
+                                const finalRedirectUri = 'sssyncapp://auth-callback?platform=facebook';
+                                const url = `${SSSYNC_API_BASE_URL}/auth/facebook/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
+                                await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
+                              })();
+                            } else if (platform.key === 'ebay') {
+                              (async () => {
+                                const { data: { user } } = await supabase.auth.getUser();
+                                if (!user) return;
+                                const finalRedirectUri = 'sssyncapp://auth-callback?platform=ebay';
+                                const url = `${SSSYNC_API_BASE_URL}/auth/ebay/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
+                                await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
+                              })();
+                          } else {
+                            Alert.alert('Connect', `Connect logic for ${platform.name} not implemented yet.`);
+                          }
+                          // --- END NEW ---                       
                         }
-                        // --- END NEW ---                       
-                      }
-                    }}
-                    activeOpacity={isAlreadyConnected ? 1 : 0.7} // Reduce opacity feedback if disabled
-                  >
-                    <PlaceholderImage 
-                      size={40} // Smaller icon for modal grid
-                      borderRadius={4} 
-                      color={getPlatformColor(platform.key)}
-                      type="icon"
-                      icon={getIconForPlatform(platform.key)}
-                    />
-                    <Text style={styles.modalPlatformName}>{platform.name}</Text>
-                    {isAlreadyConnected && (
-                        <Icon name="check-circle" size={16} color={theme.colors.success} style={styles.modalConnectedIcon} />
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
+                      }}
+                      activeOpacity={isAlreadyConnected ? 1 : 0.7} // Reduce opacity feedback if disabled
+                    >
+                      <PlaceholderImage 
+                        size={40} // Smaller icon for modal grid
+                        borderRadius={4} 
+                        color={getPlatformColor(platform.key)}
+                        type="icon"
+                        icon={getIconForPlatform(platform.key)}
+                      />
+                      <Text style={styles.modalPlatformName}>{platform.name}</Text>
+                      {(isAlreadyConnected || isGloballyDisabled) && (
+                          <Icon name="check-circle" size={16} color={theme.colors.success} style={styles.modalConnectedIcon} />
+                      )}
+                    </TouchableOpacity>
+                    );
+                  };
+                  return (
+                    <View style={styles.modalPlatformColumnsRow}>
+                      <View style={styles.modalColumn}>{left.map(renderCard)}</View>
+                      <View style={styles.modalColumn}>{right.map(renderCard)}</View>
+                    </View>
+                  );
+                })()}
+
+              </ScrollView>
+              
             </View>
 
             <Button
@@ -2035,3 +1553,548 @@ const ProfileScreen = () => {
 };
 
 export default ProfileScreen; 
+
+
+// Move styles definition here to fix "used before declaration" errors
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F8F9FB',
+  },
+  scrollViewContent: {
+    padding: 16,
+    paddingTop: 60,
+  },
+  card: {
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    marginVertical: 16,
+  },
+  accountHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  avatar: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+  },
+  accountInfo: {
+    flex: 1,
+    marginLeft: 16,
+  },
+  accountName: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  accountEmail: {
+    fontSize: 14,
+    color: '#777',
+    marginBottom: 4,
+  },
+  planBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  planText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  editButton: {
+    padding: 8,
+  },
+  statsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+    paddingTop: 16,
+  },
+  statItem: {
+    alignItems: 'center',
+  },
+  statValue: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: '#777',
+  },
+  statDivider: {
+    width: 1,
+    height: '100%',
+    backgroundColor: '#f0f0f0',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  sectionAction: {
+    fontSize: 14,
+  },
+  integrationsContainer: {
+    marginBottom: 8,
+  },
+  integrationItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  integrationIcon: {
+    width: 32,
+    height: 32,
+    marginRight: 12,
+  },
+  integrationName: {
+    fontSize: 16,
+    flex: 1,
+    marginLeft: 12,
+  },
+  connectedBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  connectedText: {
+    fontSize: 14,
+    fontWeight: '500',
+    marginLeft: 4,
+  },
+  connectButton: {
+    height: 32,
+    paddingHorizontal: 12,
+    flex: 0,
+  },
+  connectButtonText: {
+    fontSize: 12,
+    color: '#FFFFFF',
+  },
+  settingItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  settingInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  settingIcon: {
+    marginRight: 16,
+  },
+  settingText: {
+    fontSize: 16,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 16,
+  },
+  menuItemBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  menuItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  menuIcon: {
+    marginRight: 16,
+  },
+  menuText: {
+    fontSize: 16,
+  },
+  menuBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  menuBadgeText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  footer: {
+    alignItems: 'center',
+    marginVertical: 24,
+  },
+  versionText: {
+    fontSize: 12,
+    color: '#999',
+  },
+  settingsContainer: {
+  },
+  menuContainer: {
+  },
+  errorContainer: {
+    padding: 15,
+    marginVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  errorText: {
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 5,
+    marginBottom: 10,
+  },
+  connectedContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 4,
+  },
+  connectedIcon: {
+    marginRight: 4,
+  },
+  manageButton: {
+    padding: 4, 
+    marginLeft: 8,
+  },
+  disconnectButton: {
+    padding: 4,
+    marginLeft: 4,
+  },
+  addConnectionButton: {
+    marginTop: 20,
+    marginBottom: 10,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20, 
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 25,
+    width: '90%', 
+    maxWidth: '90%',
+    maxHeight: '80%',
+    minHeight: '70%',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+    
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 20,
+    color: '#333',
+    textAlign: 'center',
+  },
+  modalPlatformGridContent: { 
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      justifyContent: 'space-between',
+      gap: 10,
+
+
+  },
+  modalPlatformColumns: {
+
+
+  },
+  modalPlatformColumnsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+    width: '100%',
+  },
+  modalColumn: {
+    width: '48%',
+  },
+  // --- NEW: Styles for Modal Platform Items ---
+  modalPlatformCard: {
+    width: '100%', // Two columns
+    aspectRatio: 1.2, // Adjust aspect ratio
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    margin: 10, 
+    borderRadius: 12, 
+    borderWidth: 1.5, 
+    borderColor: '#ddd', 
+    backgroundColor: '#fff', 
+   
+    position: 'relative', // For the checkmark icon positioning
+  },
+  modalPlatformCardDisabled: {
+    opacity: 0.5, // Make disabled cards faded
+    backgroundColor: '#f5f5f5',
+  },
+  modalPlatformName: {
+      fontSize: 13, 
+      fontWeight: '500', 
+      color: '#555', 
+      textAlign: 'center', 
+      marginTop: 8, 
+  },
+  modalConnectedIcon: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)', // Slight background for visibility
+    borderRadius: 10,
+  },
+  // --- END Modal Platform Item Styles ---
+  // --- NEW: Styles for Guided Flow --- 
+  guidedFlowText: {
+    // This style might be replaced by sectionDescription or removed
+  },
+  // --- END Guided Flow Styles ---
+  // --- NEW: Styles for Paste UI ---
+  pasteContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    marginBottom: 15, // Space before confirm button
+  },
+  pasteInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    marginRight: 8,
+    backgroundColor: '#fff',
+  },
+  pasteButton: {
+    paddingHorizontal: 12,
+    height: 42, // Match input height approximately
+    justifyContent: 'center', // Center icon vertically if needed
+    alignItems: 'center', // Center icon horizontally if needed
+    paddingLeft: 10, // Adjust padding for icon spacing
+  },
+  pasteButtonText: {
+    fontSize: 14, 
+  },
+  pasteIcon: {
+    // Specific styles for the icon itself if needed
+  },
+  pasteHintText: {
+    fontSize: 12,
+    color: '#777',
+    marginTop: 4,
+    width: '100%', // Take full width
+    textAlign: 'right', // Align hint text right below input
+  },
+  // --- END Paste UI Styles ---
+  noConnectionsText: { 
+    textAlign: 'center',
+    color: '#888',
+    paddingVertical: 20,
+    fontStyle: 'italic',
+  },
+  promptPasteContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+  },
+  promptPasteText: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginRight: 10,
+  },
+  pasteSectionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 8, // Adjusted spacing
+    color: '#333',
+    alignSelf: 'flex-start', // Align title left
+    width: '100%', // Take full width
+  },
+  manualInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    marginBottom: 10,
+    backgroundColor: '#fff',
+  },
+  // --- NEW Styles for Combined Modal & Shadcn feel ---
+  inputSection: {
+    width: '100%',
+    paddingBottom: 20,
+  },
+  inputSectionManualOnly: { // Style for the container of the manual input only
+    width: '100%',
+    paddingTop: 15, // Add some space above
+    marginTop: -10, // Adjust spacing relative to section above if needed
+  },
+  manualInputLabel: { // Style for the label above the manual input
+    fontSize: 14,
+    color: '#555',
+    marginBottom: 8,
+    fontWeight: '500',
+  },
+  sectionDescription: {
+
+    fontSize: 14,
+    color: '#555',
+    marginBottom: 40,
+    lineHeight: 20,
+  },
+  modalButton: {
+    alignSelf: 'stretch', // Make buttons take full width within their container
+    marginTop: 10,
+    // height: 45, // Slightly larger buttons
+  },
+  manualInputSingle: { // Style for the single manual input field
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    backgroundColor: '#fff',
+    width: '100%', // Take full width
+  },
+  dividerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '90%',
+    marginVertical: 15,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#ddd',
+  },
+  dividerText: {
+    marginHorizontal: 10,
+    color: '#777',
+    fontWeight: '500',
+  },
+  actionButtonContainer: {
+    flexDirection: 'row-reverse', // Put primary action (Connect) on the right
+    justifyContent: 'space-between', // Spread buttons
+    width: '100%',
+    marginTop: 20,
+    paddingTop: 20,
+    borderTopWidth: 1, // Separator line above actions
+    borderTopColor: '#eee',
+  },
+  cancelButton: {
+    // Properly define as a ViewStyle object with real properties
+    flex: 0.48, // Take slightly less than half the space
+    backgroundColor: '#f5f5f5', // Light gray background
+  },
+  connectButtonModal: {
+    // Properly define as a ViewStyle object with real properties
+    flex: 0.48, // Take slightly less than half the space
+    marginLeft: 10, // Add some space between buttons
+  },
+  // --- NEW: Style for Delete Button in Edit Mode ---
+  deleteButton: {
+    paddingHorizontal: 10, // Add padding to make it easier to tap
+    marginRight: 8, // Add some space between delete button and platform icon
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  // --- END Style ---
+  devModeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flex: 1,
+  },
+  devModeText: {
+    fontSize: 16,
+    color: '#555',
+  },
+  // --- NEW: Styles for Review & Sync Button ---
+  reviewSyncButton: {
+    marginLeft: 'auto',
+  },
+  manageText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  fallbackIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center', 
+    backgroundColor: '#FFA500' + '25', // Brighter background for pill
+    paddingHorizontal: 10, // More horizontal padding for pill shape
+    paddingVertical: 5,    // Vertical padding for pill shape
+    borderRadius: 15,      // Fully rounded corners for pill
+    marginLeft: 8,
+    marginTop: 2, // Add a small top margin if needed to separate from status text
+  },
+  fallbackText: {
+    fontSize: 11, // Slightly larger for better readability in a pill
+    color: '#FFA500', // Keep warning color for text
+    fontWeight: '500', // Make text a bit bolder
+    marginLeft: 4, // Adjust spacing from icon if needed
+  },
+  connectionInfoContainer: {
+    flex: 1,
+    marginLeft: 8,
+  },
+  statusContainer: {
+    marginBottom: 4,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusIcon: {
+    marginRight: 4,
+  },
+  statusText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  lastSyncText: {
+    fontSize: 11,
+    color: '#777',
+    marginTop: 2,
+  },
+  connectionActions: {
+    flexDirection: 'row',
+    marginTop: 4,
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    marginRight: 8,
+  },
+  actionButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+});

@@ -11,6 +11,7 @@ import { LegendStateControlContext } from './src/context/LegendStateControlConte
 import { initializeLegendState, LegendStateObservables } from './src/utils/SupaLegend';
 import { Session, AuthChangeEvent } from '@supabase/supabase-js';
 import FlashMessage from 'react-native-flash-message';
+import { PlatformConnectionsProvider } from './src/context/PlatformConnectionsContext';
 
 const App: React.FC = () => {
   const navigationRef = useRef<NavigationContainerRef<any>>(null);
@@ -148,9 +149,11 @@ const App: React.FC = () => {
       <LegendStateContext.Provider value={legendStateModules}>
         <ThemeProvider>
           <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-          <NavigationContainer ref={navigationRef}>
-            <AppNavigator />
-          </NavigationContainer>
+          <PlatformConnectionsProvider>
+            <NavigationContainer ref={navigationRef}>
+              <AppNavigator />
+            </NavigationContainer>
+          </PlatformConnectionsProvider>
           <FlashMessage position="top" />
         </ThemeProvider>
       </LegendStateContext.Provider>

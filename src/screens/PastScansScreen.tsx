@@ -37,7 +37,6 @@ interface MatchJob {
     lowConfidenceCount?: number;
     totalProducts?: number;
   };
-  // We don't need the full results here, just the ID to navigate
 }
 
 type PastScansScreenNavigationProp = StackNavigationProp<AppStackParamList, 'PastScans'>;

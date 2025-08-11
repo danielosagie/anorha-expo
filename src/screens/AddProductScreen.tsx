@@ -34,7 +34,7 @@ import { PanGestureHandler, TapGestureHandler, State } from 'react-native-gestur
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useIsFocused } from '@react-navigation/native';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { SvgXml } from 'react-native-svg';
@@ -214,6 +214,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   
   // Camera ref
   const cameraRef = useRef<CameraView>(null);
+  const isFocused = useIsFocused();
   
   // Debug useEffects to track state changes
   useEffect(() => {
@@ -230,19 +231,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   useEffect(() => {
     console.log('[EFFECT] activeItemId changed! New value:', activeItemId);
   }, [activeItemId]);
-  
-  // Camera state optimization tracking
-  useEffect(() => {
-    const isCameraActive = !showDeepSearchSheet && !showMatchSheet;
-    console.log('[CAMERA OPTIMIZATION] Camera active state changed:', {
-      isActive: isCameraActive,
-      showDeepSearchSheet,
-      showMatchSheet,
-      reason: showDeepSearchSheet ? 'Deep search sheet open' : 
-              showMatchSheet ? 'Match sheet open' : 
-              'All sheets closed'
-    });
-  }, [showDeepSearchSheet, showMatchSheet]);
+
   
   // Animation values
   const sheetTranslateY = useSharedValue(SCREEN_HEIGHT);
@@ -878,7 +867,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
        const token = await getToken();
        const response = await fetch('https://api.sssync.app/api/products/orchestrate/match', {
          method: 'POST',
-         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+         headers: { 
+          'Authorization': `Bearer ${token}`, 
+          'Content-Type': 'application/json' 
+        },
          body: JSON.stringify(finalPayload)
       });
 
@@ -1147,7 +1139,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         style={styles.camera}
         facing={facing}
         flash={flash}
-        active={!showDeepSearchSheet && !showMatchSheet} // Disable camera when sheets are open
+        active={isFocused && !showDeepSearchSheet && !showMatchSheet} // Disable camera when sheets are open
         onBarcodeScanned={handleBarCodeScanned}
         barcodeScannerSettings={{
           barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
@@ -1976,8 +1968,8 @@ const BulkItemsSheet: React.FC<{
                 console.error('[SEARCH] Error starting analysis:', error);
                 Alert.alert('Error', 'Failed to start analysis. Please try again.');
               }
-          }
-        }>
+            }
+          }>
             <Icon name="magnify" size={16} color={totalItems === 0 ? "#999" : "white"} />
             <Text style={[
               styles.searchForProductButtonText,

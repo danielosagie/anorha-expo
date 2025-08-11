@@ -42,6 +42,7 @@ import SyncRulesScreen from '../screens/SyncRulesScreen';
 import AddProductScreen from '../screens/AddProductScreen';
 import LoadingScreen from '../screens/LoadingScreen';
 import MatchSelectionScreen, { JobResponse } from '../screens/MatchSelectionScreen';
+import GenerateDetailsScreen from '../screens/GenerateDetailsScreen';
 
 // --- Define Param Lists for Type Safety --- //
 type AuthStackParamList = {
@@ -76,7 +77,7 @@ export type AppStackParamList = {
     payload: {
       jobId?: string;
       firstPhotos: any[];
-      bulkItems: any[];
+      bulkItems?: any[];
     };
     onCompleteRoute: {
       screen: keyof AppStackParamList;
@@ -186,6 +187,18 @@ export type AppStackParamList = {
       }
     }
   };
+  GenerateDetailsScreen: {
+    jobId: string,
+    status: string,
+    results: Array<{
+        productIndex: number,
+        platforms: any[],
+        scrapedData: any[],
+        originalSelection: any[],
+    }>,
+    summary: any[],
+    completedAt: string,
+  }
 };
 
 type RootStackParamList = {
@@ -296,6 +309,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="AddProduct" component={AddProductScreen} />
     <AppStackNav.Screen name="LoadingScreen" component={LoadingScreen} />
     <AppStackNav.Screen name="MatchSelectionScreen" component={MatchSelectionScreen} />
+    <AppStackNav.Screen name="GenerateDetailsScreen" component={GenerateDetailsScreen} />
   </AppStackNav.Navigator>
 );
 

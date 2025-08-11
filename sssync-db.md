@@ -121,9 +121,6 @@ CREATE INDEX idx_productimages_productvariantid ON "ProductImages"("ProductVaria
 CREATE INDEX idx_productimages_platformmappingid ON "ProductImages"("PlatformMappingId");
 
 
--- Enhanced Product Recognition System with Multi-Modal Embeddings
-CREATE EXTENSION IF NOT EXISTS vector;
-
 -- Core product embeddings table with multi-modal support
 CREATE TABLE IF NOT EXISTS "ProductEmbeddings" (
     "Id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -152,115 +149,6 @@ CREATE TABLE IF NOT EXISTS "ProductEmbeddings" (
     "UpdatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Product recognition matches and user feedback for training
-CREATE TABLE IF NOT EXISTS "ProductMatches" (
-    "Id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "UserId" UUID REFERENCES "Users"("Id") ON DELETE CASCADE,
-    "SourceImageUrl" TEXT NOT NULL,
-    "SourceImageHash" TEXT NOT NULL,
-    "ImageEmbedding" vector(1664),
-    "TextQuery" TEXT, -- Extracted or user-provided query
-    "TextEmbedding" vector(1024),
-    
-    -- Search results and scoring
-    "CandidateProducts" JSONB NOT NULL, -- Array of candidate products found
-    "VectorScores" REAL[], -- Initial vector similarity scores
-    "RerankerScores" REAL[], -- Qwen3-Reranker scores
-    "ConfidenceTier" TEXT NOT NULL CHECK ("ConfidenceTier" IN ('high', 'medium', 'low')),
-    "TopScore" REAL NOT NULL,
-    
-    -- User feedback (critical for training flywheel)
-    "UserSelection" INTEGER, -- Index of selected candidate (null if rejected all)
-    "UserRejected" BOOLEAN DEFAULT FALSE, -- True if user clicked "None of These"
-    "UserFeedback" TEXT, -- Optional user comment
-    "FeedbackType" TEXT CHECK ("FeedbackType" IN ('positive', 'negative', 'hard_negative')),
-    
-    -- System behavior
-    "SystemAction" TEXT NOT NULL, -- 'show_single_match', 'show_multiple_candidates', 'fallback_to_external'
-    "FallbackUsed" BOOLEAN DEFAULT FALSE,
-    "ProcessingTimeMs" INTEGER,
-    
-    "CreatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Training data collection for model improvement
-CREATE TABLE IF NOT EXISTS "TrainingExamples" (
-    "Id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "MatchId" UUID REFERENCES "ProductMatches"("Id") ON DELETE CASCADE,
-    "ExampleType" TEXT NOT NULL CHECK ("ExampleType" IN ('positive', 'hard_negative', 'easy_negative')),
-    
-    -- Image data
-    "ImageUrl" TEXT NOT NULL,
-    "ImageEmbedding" vector(1664) NOT NULL,
-    
-    -- Product data  
-    "ProductId" UUID REFERENCES "Products"("Id") ON DELETE SET NULL,
-    "ProductTitle" TEXT NOT NULL,
-    "ProductDescription" TEXT,
-    "ProductEmbedding" vector(1024) NOT NULL,
-    
-    -- Similarity scores at time of interaction
-    "VectorSimilarity" REAL NOT NULL,
-    "RerankerScore" REAL,
-    "UserLabel" BOOLEAN NOT NULL, -- True = positive match, False = negative
-    
-    -- Metadata for training
-    "BusinessTemplate" TEXT,
-    "DifficultyScore" REAL, -- How hard was this example (based on initial scores)
-    "UsedInTraining" BOOLEAN DEFAULT FALSE,
-    
-    "CreatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Evaluation and performance tracking
-CREATE TABLE IF NOT EXISTS "ModelEvaluations" (
-    "Id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "EvaluationType" TEXT NOT NULL, -- 'daily_batch', 'weekly_full', 'user_feedback'
-    "ModelVersions" JSONB NOT NULL,
-    
-    -- Performance metrics
-    "TotalSamples" INTEGER NOT NULL,
-    "HighConfidenceAccuracy" REAL, -- Accuracy when confidence > 0.95
-    "MediumConfidenceAccuracy" REAL, -- Accuracy when confidence 0.60-0.95
-    "OverallAccuracy" REAL,
-    "PrecisionAtK" REAL[], -- Precision at K=[1,3,5,10]
-    "RecallAtK" REAL[],
-    "MeanReciprocalRank" REAL,
-    
-    -- Tier distribution
-    "HighTierPercentage" REAL,
-    "MediumTierPercentage" REAL,
-    "LowTierPercentage" REAL,
-    "FallbackPercentage" REAL,
-    
-    -- User satisfaction proxy
-    "UserAcceptanceRate" REAL, -- How often users accept recommendations
-    "AverageSessionTime" REAL, -- Time to complete listing
-    
-    "EvaluatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Business template performance tracking
-CREATE TABLE IF NOT EXISTS "TemplatePerformance" (
-    "Id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "TemplateName" TEXT NOT NULL,
-    "Period" DATE NOT NULL, -- Daily aggregation
-    
-    -- Usage stats
-    "TotalQueries" INTEGER DEFAULT 0,
-    "HighConfidenceCount" INTEGER DEFAULT 0,
-    "MediumConfidenceCount" INTEGER DEFAULT 0,
-    "LowConfidenceCount" INTEGER DEFAULT 0,
-    
-    -- Performance metrics
-    "AverageAccuracy" REAL,
-    "AverageProcessingTime" INTEGER,
-    "UserSatisfactionScore" REAL,
-    
-    "CreatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE("TemplateName", "Period")
-);
-
 -- Create optimized indexes
 CREATE INDEX IF NOT EXISTS "idx_product_embeddings_product_id" ON "ProductEmbeddings"("ProductId");
 CREATE INDEX IF NOT EXISTS "idx_product_embeddings_variant_id" ON "ProductEmbeddings"("VariantId");
@@ -274,24 +162,6 @@ ON "ProductEmbeddings" USING ivfflat ("ImageEmbedding" vector_cosine_ops) WITH (
 CREATE INDEX IF NOT EXISTS "idx_product_embeddings_text_vector" 
 ON "ProductEmbeddings" USING ivfflat ("TextEmbedding" vector_cosine_ops) WITH (lists = 100);
 
-/*
--- This index is intentionally commented out.
--- The "CombinedEmbedding" column (2688 dimensions) exceeds the pgvector index limit of 2000.
--- We use a hybrid search approach in the `search_products_multimodal` function,
--- which queries the two indexed columns (`ImageEmbedding` and `TextEmbedding`) separately
--- and combines their scores at query time. This avoids the need to index the combined vector.
-CREATE INDEX IF NOT EXISTS "idx_product_embeddings_combined_vector" 
-ON "ProductEmbeddings" USING ivfflat ("CombinedEmbedding" vector_cosine_ops) WITH (lists = 100);
-*/
-
--- Indexes for training data queries
-CREATE INDEX IF NOT EXISTS "idx_product_matches_user_id" ON "ProductMatches"("UserId");
-CREATE INDEX IF NOT EXISTS "idx_product_matches_confidence" ON "ProductMatches"("ConfidenceTier");
-CREATE INDEX IF NOT EXISTS "idx_product_matches_feedback" ON "ProductMatches"("FeedbackType");
-CREATE INDEX IF NOT EXISTS "idx_product_matches_created_at" ON "ProductMatches"("CreatedAt");
-CREATE INDEX IF NOT EXISTS "idx_training_examples_match_id" ON "TrainingExamples"("MatchId");
-CREATE INDEX IF NOT EXISTS "idx_training_examples_type" ON "TrainingExamples"("ExampleType");
-CREATE INDEX IF NOT EXISTS "idx_training_examples_used" ON "TrainingExamples"("UsedInTraining");
 
 -- Update timestamp trigger
 CREATE OR REPLACE FUNCTION update_product_embeddings_updated_at()
@@ -307,180 +177,7 @@ CREATE TRIGGER trigger_update_product_embeddings_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_product_embeddings_updated_at();
 
--- Helper function: Log a product match interaction
-CREATE OR REPLACE FUNCTION log_product_match(
-    p_user_id UUID,
-    p_image_url TEXT,
-    p_image_hash TEXT,
-    p_image_embedding vector(1664),
-    p_text_query TEXT,
-    p_text_embedding vector(1024),
-    p_candidates JSONB,
-    p_vector_scores REAL[],
-    p_reranker_scores REAL[],
-    p_confidence_tier TEXT,
-    p_top_score REAL,
-    p_system_action TEXT,
-    p_processing_time_ms INTEGER
-) RETURNS UUID AS $$
-DECLARE
-    match_id UUID;
-BEGIN
-    INSERT INTO "ProductMatches" (
-        "UserId", "SourceImageUrl", "SourceImageHash", "ImageEmbedding",
-        "TextQuery", "TextEmbedding", "CandidateProducts", "VectorScores",
-        "RerankerScores", "ConfidenceTier", "TopScore", "SystemAction",
-        "ProcessingTimeMs"
-    ) VALUES (
-        p_user_id, p_image_url, p_image_hash, p_image_embedding,
-        p_text_query, p_text_embedding, p_candidates, p_vector_scores,
-        p_reranker_scores, p_confidence_tier, p_top_score, p_system_action,
-        p_processing_time_ms
-    ) RETURNING "Id" INTO match_id;
-    
-    RETURN match_id;
-END;
-$$ LANGUAGE plpgsql;
-
--- Helper function: Record user feedback and generate training examples
-CREATE OR REPLACE FUNCTION record_user_feedback(
-    p_match_id UUID,
-    p_user_selection INTEGER,
-    p_user_rejected BOOLEAN,
-    p_user_feedback TEXT
-) RETURNS VOID AS $$
-DECLARE
-    match_record RECORD;
-    candidate JSONB;
-    i INTEGER;
-    example_type TEXT;
-BEGIN
-    -- Get the match record
-    SELECT * INTO match_record FROM "ProductMatches" WHERE "Id" = p_match_id;
-    
-    -- Update the match with user feedback
-    UPDATE "ProductMatches" SET
-        "UserSelection" = p_user_selection,
-        "UserRejected" = p_user_rejected,
-        "UserFeedback" = p_user_feedback,
-        "FeedbackType" = CASE 
-            WHEN p_user_rejected THEN 'negative'
-            WHEN p_user_selection IS NOT NULL THEN 'positive'
-            ELSE 'hard_negative'
-        END
-    WHERE "Id" = p_match_id;
-    
-    -- Generate training examples
-    FOR i IN 0..jsonb_array_length(match_record."CandidateProducts")-1 LOOP
-        candidate := match_record."CandidateProducts" -> i;
-        
-        -- Determine example type
-        IF p_user_selection = i THEN
-            example_type := 'positive';
-        ELSIF match_record."RerankerScores"[i+1] > 0.8 THEN
-            example_type := 'hard_negative';  -- High score but user rejected
-        ELSE
-            example_type := 'easy_negative';
-        END IF;
-        
-        -- Insert training example
-        INSERT INTO "TrainingExamples" (
-            "MatchId", "ExampleType", "ImageUrl", "ImageEmbedding",
-            "ProductId", "ProductTitle", "ProductDescription", "ProductEmbedding",
-            "VectorSimilarity", "RerankerScore", "UserLabel",
-            "BusinessTemplate", "DifficultyScore"
-        ) VALUES (
-            p_match_id,
-            example_type,
-            match_record."SourceImageUrl",
-            match_record."ImageEmbedding",
-            (candidate->>'productId')::UUID, -- Correctly extract ProductId from the candidate JSON
-            candidate->>'title',
-            candidate->>'description',
-            match_record."TextEmbedding", -- Simplified: use query embedding
-            match_record."VectorScores"[i+1],
-            match_record."RerankerScores"[i+1],
-            (p_user_selection = i),
-            candidate->>'business_template',
-            1.0 - match_record."RerankerScores"[i+1] -- Higher difficulty for lower scores
-        );
-    END LOOP;
-END;
-$$ LANGUAGE plpgsql;
-
--- Helper function: Multi-modal product search
-CREATE OR REPLACE FUNCTION search_products_multimodal(
-    p_image_embedding vector(1664),
-    p_text_embedding vector(1024),
-    p_business_template TEXT DEFAULT NULL,
-    p_image_weight REAL DEFAULT 0.6,
-    p_text_weight REAL DEFAULT 0.4,
-    p_limit INTEGER DEFAULT 20,
-    p_threshold REAL DEFAULT 0.5
-) RETURNS TABLE (
-    product_id UUID,
-    variant_id UUID,
-    title TEXT,
-    description TEXT,
-    image_url TEXT,
-    business_template TEXT,
-    image_similarity REAL,
-    text_similarity REAL,
-    combined_score REAL
-) AS $$
-BEGIN
-    RETURN QUERY
-    SELECT 
-        pe."ProductId",
-        pe."VariantId",
-        pv."Title",
-        pv."Description",
-        pe."ImageUrl",
-        pe."BusinessTemplate",
-        (pe."ImageEmbedding" <=> p_image_embedding)::REAL as image_sim,
-        (pe."TextEmbedding" <=> p_text_embedding)::REAL as text_sim,
-        (p_image_weight * (pe."ImageEmbedding" <=> p_image_embedding) + 
-         p_text_weight * (pe."TextEmbedding" <=> p_text_embedding))::REAL as combined
-    FROM "ProductEmbeddings" pe
-    JOIN "ProductVariants" pv ON pe."VariantId" = pv."Id"
-    WHERE 
-        (p_business_template IS NULL OR pe."BusinessTemplate" = p_business_template)
-        AND (p_image_weight * (pe."ImageEmbedding" <=> p_image_embedding) + 
-             p_text_weight * (pe."TextEmbedding" <=> p_text_embedding)) < p_threshold
-    ORDER BY combined ASC
-    LIMIT p_limit;
-END;
-$$ LANGUAGE plpgsql;
-
--- Row Level Security
-ALTER TABLE "ProductEmbeddings" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE "ProductMatches" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE "TrainingExamples" ENABLE ROW LEVEL SECURITY;
-
--- RLS Policies
-CREATE POLICY "Users can access their own product embeddings"
-ON "ProductEmbeddings" FOR ALL USING (
-    "ProductId" IN (SELECT "Id" FROM "Products" WHERE "UserId" = auth.uid())
-);
-
-CREATE POLICY "Users can access their own product matches"
-ON "ProductMatches" FOR ALL USING ("UserId" = auth.uid());
-
-CREATE POLICY "Users can access training examples from their matches"
-ON "TrainingExamples" FOR ALL USING (
-    "MatchId" IN (SELECT "Id" FROM "ProductMatches" WHERE "UserId" = auth.uid())
-);
-
--- Grant permissions
 GRANT ALL ON "ProductEmbeddings" TO authenticated;
-GRANT ALL ON "ProductMatches" TO authenticated;
-GRANT ALL ON "TrainingExamples" TO authenticated;
-GRANT ALL ON "ModelEvaluations" TO authenticated;
-GRANT ALL ON "TemplatePerformance" TO authenticated; 
-
--- Create indexes for ProductEmbeddings
-CREATE INDEX idx_productembeddings_variant_id ON "ProductEmbeddings"("ProductVariantId");
-CREATE INDEX idx_productembeddings_embedding ON "ProductEmbeddings" USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100); -- Example HNSW or IVFFlat index
 
 -- Mappings and Levels (Depend on Products/Variants and Connections)
 CREATE TABLE "PlatformProductMappings" (
@@ -687,12 +384,153 @@ WHERE "Id" IN (
 );
 
 
+-- Create SearchTemplates table for user-customizable business templates
+CREATE TABLE IF NOT EXISTS "SearchTemplates" (
+    "Id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "UserId" UUID REFERENCES "Users"("Id") ON DELETE CASCADE,
+    "Name" TEXT NOT NULL,
+    "Category" TEXT NOT NULL,
+    "Description" TEXT,
+    "SearchPrompt" TEXT NOT NULL,
+    "SuggestedSites" TEXT[],
+    "ExtractionSchema" JSONB,
+    "SearchKeywords" TEXT[],
+    "IsDefault" BOOLEAN DEFAULT false,
+    "IsPublic" BOOLEAN DEFAULT false,
+    "UsageCount" INTEGER DEFAULT 0,
+    "CreatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    "UpdatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    "FieldSourceMappings" JSONB,
+    "isFavorite" BOOLEAN DEFAULT false,
+);
 
-CREATE TABLE IF NOT EXISTS public.ProductAnalysisJobs (
+-- Create indexes for better performance
+CREATE INDEX IF NOT EXISTS "idx_search_templates_user_id" ON "SearchTemplates"("UserId");
+CREATE INDEX IF NOT EXISTS "idx_search_templates_category" ON "SearchTemplates"("Category");
+CREATE INDEX IF NOT EXISTS "idx_search_templates_is_default" ON "SearchTemplates"("IsDefault") WHERE "IsDefault" = true;
+CREATE INDEX IF NOT EXISTS "idx_search_templates_is_public" ON "SearchTemplates"("IsPublic") WHERE "IsPublic" = true;
+CREATE INDEX IF NOT EXISTS "idx_search_templates_keywords" ON "SearchTemplates" USING gin("SearchKeywords");
+
+-- Create trigger for UpdatedAt
+CREATE OR REPLACE FUNCTION update_search_templates_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW."UpdatedAt" = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_update_search_templates_updated_at
+    BEFORE UPDATE ON "SearchTemplates"
+    FOR EACH ROW
+    EXECUTE FUNCTION update_search_templates_updated_at();
+
+-- Enable RLS
+ALTER TABLE "SearchTemplates" ENABLE ROW LEVEL SECURITY;
+
+-- Policy: Users can access their own templates and public templates
+CREATE POLICY "Users can access their own and public search templates"
+ON "SearchTemplates"
+FOR ALL
+USING (
+    "UserId" = auth.uid() OR "IsPublic" = true
+);
+
+
+INSERT INTO "SearchTemplates" ("Name", "Category", "Description", "SearchPrompt", "SuggestedSites", "ExtractionSchema", "SearchKeywords", "IsDefault", "IsPublic", "UserId") VALUES
+(
+    'Comic Books',
+    'Collectibles',
+    'Template for comic book product listings',
+    'Extract comic book details: title, issue number, variant cover, condition/grade, publisher, publication year, key characters, creators, story arcs, and market value',
+    ARRAY['metropoliscomics.com', 'mycomicshop.com', 'comicconnect.com', 'heritage-auctions.com', 'covrprice.com'],
+    '{
+        "title": "Comic book title and series name",
+        "issue_number": "Issue number and variant details",
+        "condition": "Condition grade (CGC, CBCS, raw)",
+        "publisher": "Publisher name (Marvel, DC, etc.)",
+        "year": "Publication year",
+        "characters": "Key characters featured",
+        "creators": "Writer, artist, cover artist",
+        "key_issues": "First appearances, deaths, major events"
+    }'::jsonb,
+    ARRAY['comic', 'issue', 'variant', 'cgc', 'cbcs', 'marvel', 'dc'],
+    true,
+    true,
+    NULL -- No specific user, applicable for all users
+),
+(
+    'Electronics',
+    'Technology',
+    'Template for electronic devices and gadgets',
+    'Extract electronics details: product name, brand, model number, specifications, compatibility, condition, warranty status, accessories included, and current market price',
+    ARRAY['bestbuy.com', 'newegg.com', 'amazon.com', 'bhphotovideo.com', 'adorama.com'],
+    '{
+        "product_name": "Device name and model",
+        "brand": "Manufacturer brand",
+        "model_number": "Specific model number",
+        "specifications": "Technical specifications",
+        "compatibility": "Compatible systems/devices",
+        "condition": "Working condition and cosmetic state",
+        "accessories": "Included accessories and cables"
+    }'::jsonb,
+    ARRAY['electronics', 'tech', 'device', 'model', 'specifications', 'warranty'],
+    true,
+    true,
+    NULL -- No specific user, applicable for all users
+),
+(
+    'Trading Cards',
+    'Collectibles',
+    'Template for trading cards and sports cards',
+    'Extract trading card details: player/character name, card number, set name, year, condition/grade, rookie status, parallel/insert type, and current market value',
+    ARRAY['cardmarket.com', 'tcgplayer.com', 'comc.com', 'psacard.com', 'beckett.com'],
+    '{
+        "player_name": "Player or character name",
+        "card_number": "Card number within set",
+        "set_name": "Set or series name",
+        "year": "Year of release",
+        "condition": "Grade or condition (PSA, BGS, raw)",
+        "card_type": "Base, rookie, insert, parallel, autograph",
+        "sport": "Sport or game type"
+    }'::jsonb,
+    ARRAY['card', 'rookie', 'psa', 'bgs', 'autograph', 'parallel', 'insert'],
+    true,
+    true,
+    NULL -- No specific user, applicable for all users
+),
+(
+    'General Products',
+    'General',
+    'Default template for any product type',
+    'Extract comprehensive product details: title, brand, model, price, description, specifications, dimensions, weight, materials, features, and condition',
+    ARRAY['amazon.com', 'ebay.com', 'walmart.com', 'target.com', 'google.com'],
+    '{
+        "title": "Product name and model",
+        "brand": "Manufacturer or brand name",
+        "price": "Current market price",
+        "description": "Detailed product description",
+        "specifications": "Technical specifications",
+        "condition": "Product condition (new, used, refurbished)",
+        "features": "Key features and benefits",
+        "dimensions": "Size and weight information"
+    }'::jsonb,
+    ARRAY['product', 'brand', 'model', 'specifications', 'features'],
+    true,
+    true,
+    NULL -- No specific user, applicable for all users
+);
+
+-- Grant permissions
+GRANT ALL ON "SearchTemplates" TO authenticated;
+
+-- Create match_jobs table for async match job tracking
+CREATE TABLE IF NOT EXISTS public.match_jobs (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     job_id TEXT UNIQUE NOT NULL,
     user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
     status TEXT NOT NULL CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'cancelled')),
+    current_stage TEXT,
     progress JSONB DEFAULT '{}',
     results JSONB DEFAULT '[]',
     summary JSONB DEFAULT '{}',
@@ -705,33 +543,61 @@ CREATE TABLE IF NOT EXISTS public.ProductAnalysisJobs (
 );
 
 -- Create indexes for efficient querying
-CREATE INDEX IF NOT EXISTS idx_ProductAnalysisJobs_job_id ON public.ProductAnalysisJobs(job_id);
-CREATE INDEX IF NOT EXISTS idx_ProductAnalysisJobs_user_id ON public.ProductAnalysisJobs(user_id);
-CREATE INDEX IF NOT EXISTS idx_ProductAnalysisJobs_status ON public.ProductAnalysisJobs(status);
-CREATE INDEX IF NOT EXISTS idx_ProductAnalysisJobs_created_at ON public.ProductAnalysisJobs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_match_jobs_job_id ON public.match_jobs(job_id);
+CREATE INDEX IF NOT EXISTS idx_match_jobs_user_id ON public.match_jobs(user_id);
+CREATE INDEX IF NOT EXISTS idx_match_jobs_status ON public.match_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_match_jobs_created_at ON public.match_jobs(created_at DESC);
+
+
+-- Create generate_jobs table
+CREATE TABLE IF NOT EXISTS public.generate_jobs (
+    id UUID DEFAULT gen_random_uuid(),
+    job_id TEXT UNIQUE NOT NULL,
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'cancelled')),
+    current_stage TEXT,
+    progress JSONB DEFAULT '{}',
+    results JSONB DEFAULT '[]',
+    summary JSONB DEFAULT '{}',
+    error TEXT, 
+    started_at TIMESTAMPTZ DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    estimated_completion_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_generate_jobs_job_id ON public.generate_jobs(job_id);
+CREATE INDEX IF NOT EXISTS idx_generate_jobs_user_id ON public.generate_jobs(user_id)
+CREATE INDEX IF NOT EXISTS idx_generate_jobs_status ON public.generate_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_generate_jobs_current_stage ON public.generate_jobs(current_stage);
+CREATE INDEX IF NOT EXISTS idx_generate_jobs_created_at ON public.generate_jobs(created_at);
+
 
 -- Enable RLS (Row Level Security)
-ALTER TABLE public.ProductAnalysisJobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.match_jobs ENABLE ROW LEVEL SECURITY;
 
 -- Create RLS policy so users can only see their own jobs
-CREATE POLICY "Users can view their own analysis jobs" ON public.ProductAnalysisJobs
+CREATE POLICY "Users can view their own match jobs" ON public.match_jobs
     FOR SELECT USING (auth.uid() = user_id);
 
-CREATE POLICY "Users can insert their own analysis jobs" ON public.ProductAnalysisJobs
+CREATE POLICY "Users can insert their own match jobs" ON public.match_jobs
     FOR INSERT WITH CHECK (auth.uid() = user_id);
 
-CREATE POLICY "Users can update their own analysis jobs" ON public.ProductAnalysisJobs
+CREATE POLICY "Users can update their own match jobs" ON public.match_jobs
     FOR UPDATE USING (auth.uid() = user_id);
 
 -- Add updated_at trigger
-CREATE OR REPLACE FUNCTION update_updated_at_column()
+CREATE OR REPLACE FUNCTION update_match_jobs_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at = NOW();
     RETURN NEW;
 END;
-$$ language 'plpgsql';
+$$ LANGUAGE plpgsql;
 
-CREATE TRIGGER update_ProductAnalysisJobs_updated_at 
-    BEFORE UPDATE ON public.ProductAnalysisJobs
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER trigger_update_match_jobs_updated_at
+    BEFORE UPDATE ON public.match_jobs
+    FOR EACH ROW
+    EXECUTE FUNCTION update_match_jobs_updated_at(); 
