@@ -8,6 +8,8 @@ import { AppStackParamList } from '../navigation/AppNavigator';
 import { FlashList } from '@shopify/flash-list';
 import { supabase } from '../lib/supabase';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { Boxes } from 'lucide-react-native';
+import ItemJobsModal from '../components/ItemJobsModal';
 import PlatformButton from '../components/PlatformButton';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -47,10 +49,10 @@ export interface Analysis {
 
 export interface JobResponse {
     jobId: string;
-    status: string;
-    estimatedTimeMinutes: number,
-    totalProducts: number,
-    message: string,
+    status?: string;
+    estimatedTimeMinutes?: number,
+    totalProducts?: number,
+    message?: string,
 }
 
 // Payload type for generate job submission
@@ -85,6 +87,9 @@ type TemplateDraft = {
 
 // --- Helper Functions & Constants ---
 const SSSYNC_API_BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+const AI_SERVER_URL = process.env.EXPO_PUBLIC_AI_SERVER_URL;
+const SSSYNC_API_BASE_URL_FE = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+const CLIENT_RERANK_ENABLED = String(process.env.EXPO_PUBLIC_CLIENT_RERANK || 'false') === 'true';
 const { width: screenWidth } = Dimensions.get('window');
 const GRID_PADDING = 16;
 const ITEM_SPACING = 12;
@@ -99,10 +104,11 @@ async function getToken() {
 // --- Reusable Components ---
 
 // Optimized ProductGridItem with instant feedback
-const ProductGridItem = React.memo(({ item, isSelected, onSelect }: { 
+const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: { 
     item: SerpApiData, 
     isSelected: boolean, 
-    onSelect: () => void 
+    onSelect: () => void,
+    isBest?: boolean,
 }) => {
     return (
         <Pressable 
@@ -114,6 +120,11 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect }: {
             ]}
         >
             <Image source={{ uri: item.thumbnail || item.image }} style={styles.itemImage} />
+            {isBest ? (
+                <View style={{ position: 'absolute', top: 6, left: 6, backgroundColor: 'rgba(147,200,34,0.95)', borderRadius: 10, paddingVertical: 2, paddingHorizontal: 6 }}>
+                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>BEST</Text>
+                </View>
+            ) : null}
             {isSelected && (
                 <View style={styles.selectionOverlay}>
                     <Icon name="check-circle" size={54} color="#FFFFFF" />
@@ -132,13 +143,15 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect }: {
 
 // --- Main Screen Component ---
 
-function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, 'MatchSelectionScreen'> }) {
+ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, 'MatchSelectionScreen'> }) {
     const navigation = useNavigation<any>();
     const { jobId } = route.params.response;
     const { isConnected } = usePlatformConnections();
+    const isNewScan = Boolean((route.params as any)?.isNewScan === true);
 
     // --- State Management ---
     const [analysisData, setAnalysisData] = useState<Analysis | null>(null);
+    const [currentProductIndex, setCurrentProductIndex] = useState<number>(0);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -175,6 +188,9 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
     const [hiddenDefaults, setHiddenDefaults] = useState<Set<string>>(new Set());
     const [unfavoritedDefaults, setUnfavoritedDefaults] = useState<Set<string>>(new Set());
     const [genResponse, setGenResponse] = useState<JobResponse | null>(null);
+  // Global jobs modal
+  const [jobsModalVisible, setJobsModalVisible] = useState(false);
+    const [itemGenerateJobs, setItemGenerateJobs] = useState<Record<number, { jobId: string; status?: string }>>({});
 
     // Dropdown options with icons
     const PLATFORM_OPTIONS = [
@@ -273,30 +289,57 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
     useEffect(() => {
         navigation.setOptions({ headerShown: false });
 
-        const fetchAnalysis = async () => {
+        let cancelled = false;
+        let timer: any;
+
+        const pollStatus = async () => {
             try {
                 const token = await getToken();
-                const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/match/jobs/${jobId}/results`, {
+                const res = await fetch(`${SSSYNC_API_BASE_URL}/api/products/match/jobs/${jobId}/status`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
-                if (!response.ok) throw new Error(`API Error: ${response.status}`);
-                const data: Analysis = await response.json();
-                setAnalysisData(data);
-            } catch (err: any) {
-                setError(err.message);
-            } finally {
+                if (!res.ok) throw new Error(`Status ${res.status}`);
+                const status = await res.json();
+                if (cancelled) return;
+
+                // Normalize to Analysis shape expected by screen
+                const results = Array.isArray(status?.results) ? status.results : [];
+                setAnalysisData({ jobId: status?.jobId, results });
                 setIsLoading(false);
+
+                if (status?.status === 'completed') {
+                    // Optionally hydrate with final results (summary/timing)
+                    try {
+                        const res2 = await fetch(`${SSSYNC_API_BASE_URL}/api/products/match/jobs/${jobId}/results`, {
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+                        if (res2.ok) {
+                            const finalData = await res2.json();
+                            setAnalysisData({ jobId: finalData?.jobId, results: finalData?.results || [] });
+                        }
+                    } catch {}
+                    return; // stop polling
+                }
+
+                timer = setTimeout(pollStatus, 700);
+            } catch (err: any) {
+                if (!cancelled) {
+                    setError(err.message);
+                    setIsLoading(false);
+                }
             }
         };
 
-        fetchAnalysis();
-        // load current user for template ownership/save
+        pollStatus();
+
         (async () => {
             try {
                 const { data } = await supabase.auth.getUser();
                 setCurrentUserId(data.user?.id || null);
             } catch {}
         })();
+
+        return () => { cancelled = true; if (timer) clearTimeout(timer); };
     }, [jobId]);
 
     const fetchTemplatesPage = useCallback(async (offset: number, replace: boolean = false) => {
@@ -334,6 +377,8 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         setTemplateOffset(nextOffset);
         setIsLoadingMoreTemplates(false);
     }, [hasMoreTemplates, isLoadingMoreTemplates, templateOffset, pageSize, fetchTemplatesPage]);
+
+  // No tabs/jobs list; ItemJobsModal shows items by default.
 
     // Helpers for template
     const parseDomain = (input: string): string | null => {
@@ -472,13 +517,14 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
 
     const handleGenerate = useCallback(async () => {
         const token = await getToken();
-        const serpApiData = analysisData?.results[0]?.serpApiData || [];
-        const selectedMatches = selectedIndices.map(i => serpApiData[i]).filter(Boolean);
+        const serpApiData = analysisData?.results[currentProductIndex]?.serpApiData || [];
+        const indicesToUse = selectedIndices.length > 0 ? selectedIndices : [0];
+        const selectedMatches = indicesToUse.map(i => serpApiData[i]).filter(Boolean);
 
         const payload: GenerateJobSubmitPayload = {
             products: [
                 {
-                    productIndex: 0,
+                    productIndex: currentProductIndex,
                     imageUrls: selectedMatches.length > 0 ? [selectedMatches[0].image || selectedMatches[0].thumbnail || ''] : [],
                     coverImageIndex: 0,
                     selectedMatches,
@@ -506,27 +552,156 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         }
 
         const data = await response.json();
+        console.log('[GENERATE] Submitted job', data?.jobId, 'for productIndex', currentProductIndex, 'selectedCount', selectedIndices.length);
 
         return data;
 
-    }, [selectedIndices, analysisData, selectedTemplate, selectedPlatforms]);
+    }, [selectedIndices, analysisData, selectedTemplate, selectedPlatforms, currentProductIndex]);
 
     // Memoize expensive computations
-    const serpApiData = useMemo(() => {
-        return analysisData?.results[0]?.serpApiData || [];
-    }, [analysisData]);
+    const baseSerpApiData = useMemo(() => {
+        if (!analysisData || !analysisData.results || analysisData.results.length === 0) return [];
+        const safeIndex = Math.min(Math.max(currentProductIndex, 0), analysisData.results.length - 1);
+        return analysisData.results[safeIndex]?.serpApiData || [];
+    }, [analysisData, currentProductIndex]);
+
+    const [clientRerankedSerp, setClientRerankedSerp] = useState<SerpApiData[] | null>(null);
+
+    // Kick off client-side rerank in background (optional)
+    useEffect(() => {
+        if (!CLIENT_RERANK_ENABLED) { setClientRerankedSerp(null); return; }
+        if (!AI_SERVER_URL) { setClientRerankedSerp(null); return; }
+        const list = baseSerpApiData;
+        if (!list || list.length === 0) { setClientRerankedSerp(null); return; }
+        // Do NOT run if user has already made a selection
+        if (selectedIndices.length > 0) { setClientRerankedSerp(null); return; }
+        // Do NOT run if this is not a new scan (e.g., returning to prior job)
+        if (!isNewScan) { setClientRerankedSerp(null); return; }
+
+        const query = list[0]?.title || 'product listing';
+        const candidates = list.map((c, i) => ({ id: String(i), title: c.title || '', description: '' }));
+        let aborted = false;
+        (async () => {
+            try {
+                const res = await fetch(`${AI_SERVER_URL}/rerank`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query, candidates, top_k: Math.min(10, candidates.length) })
+                });
+                if (!res.ok) throw new Error(`Client rerank failed ${res.status}`);
+                const data = await res.json();
+                if (aborted) return;
+                const ranked = (data?.ranked_candidates || []) as Array<{ title?: string }>;
+                if (!ranked.length) { setClientRerankedSerp(null); return; }
+                const reordered: SerpApiData[] = [];
+                const remaining = [...list];
+                ranked.forEach(rc => {
+                    const idx = remaining.findIndex(x => x.title === rc.title);
+                    if (idx >= 0) { reordered.push(remaining[idx]); remaining.splice(idx, 1); }
+                });
+                setClientRerankedSerp([...reordered, ...remaining]);
+            } catch { setClientRerankedSerp(null); }
+        })();
+        return () => { aborted = true; };
+    }, [baseSerpApiData, currentProductIndex, selectedIndices.length, isNewScan]);
+
+    const serpApiData = clientRerankedSerp || baseSerpApiData;
 
     const selectedCount = selectedIndices.length;
+
+    // Find best reranked index for current item (only if rerankedResults exist)
+    const bestIndex = useMemo(() => {
+        if (!analysisData || !analysisData.results || analysisData.results.length === 0) return null;
+        const safeIndex = Math.min(Math.max(currentProductIndex, 0), analysisData.results.length - 1);
+        const resAny: any = analysisData.results[safeIndex] as any;
+        const rr = Array.isArray(resAny?.rerankedResults) ? resAny.rerankedResults : [];
+        if (!rr.length) return null;
+        const best = rr[0];
+        const serp = (analysisData.results[safeIndex]?.serpApiData || []) as SerpApiData[];
+        let idx = serp.findIndex(x => (best?.link && x.link === best.link));
+        if (idx >= 0) return idx;
+        idx = serp.findIndex(x => (best?.title && x.title === best.title));
+        return idx >= 0 ? idx : null;
+    }, [analysisData, currentProductIndex]);
+
+    // Auto-select best only if rerankedResults exist and nothing selected
+    useEffect(() => {
+        if (selectedIndices.length > 0) return;
+        if (bestIndex !== null) {
+            setSelectedIndices([bestIndex]);
+            setBottomNavState('selection');
+        }
+    }, [bestIndex]);
+
+    // Client-side rerank feedback: if background rerank reorders and user had already selected a different item
+    useEffect(() => {
+        if (!CLIENT_RERANK_ENABLED) return;
+        if (!clientRerankedSerp) return;
+        if (selectedIndices.length === 0) return; // no selection yet
+        if (!SSSYNC_API_BASE_URL_FE) return;
+
+        // Determine top pick in client rerank and current user pick
+        const rerankerTop = clientRerankedSerp[0];
+        const userPick = serpApiData[selectedIndices[0]];
+        if (!rerankerTop || !userPick) return;
+
+        // If they differ, log feedback (non-blocking, fire once per change)
+        if (rerankerTop.link !== userPick.link || rerankerTop.title !== userPick.title) {
+            (async () => {
+                try {
+                    const token = await getToken();
+                    const payload = {
+                        productIndex: currentProductIndex,
+                        userPick: { title: userPick.title, link: userPick.link, sourceUrl: userPick.link, price: userPick.price?.extracted_value },
+                        rerankerPick: { title: rerankerTop.title, link: rerankerTop.link, sourceUrl: rerankerTop.link, price: rerankerTop.price?.extracted_value },
+                        candidatesSnapshot: serpApiData.map(c => ({ title: c.title, link: c.link })),
+                        modelVersion: 'client-qwen3',
+                    };
+                    await fetch(`${SSSYNC_API_BASE_URL_FE}/api/products/recognize/feedback`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                        body: JSON.stringify({
+                            matchId: `${jobId}:${currentProductIndex}`,
+                            userSelection: selectedIndices[0],
+                            userFeedback: JSON.stringify(payload),
+                        }),
+                    });
+                    // Also log to new rerank feedback endpoint if added in future
+                } catch {
+                    // swallow
+                }
+            })();
+        }
+    }, [clientRerankedSerp, selectedIndices, currentProductIndex]);
 
     // --- Render Logic ---
     if (isLoading) return <View style={styles.centerContainer}><ActivityIndicator size="large" color="#93C822" /></View>;
     if (error) return <View style={styles.centerContainer}><Text style={styles.errorText}>Error: {error}</Text></View>;
     if (!analysisData || analysisData.results.length === 0 || serpApiData.length === 0) {
-        return <View style={styles.centerContainer}><Text style={styles.infoText}>No results found.</Text></View>;
+        // Initial SerpAPI scan failed → present Rescan CTA in place of scan stage
+        return (
+          <View style={styles.centerContainer}>
+            <Text style={styles.infoText}>We couldn't find matches for this item.</Text>
+            <TouchableOpacity
+              style={[styles.mainEmptyButton, { marginTop: 16 }]}
+              onPress={() => {
+                navigation.navigate('AddProduct' as never, { focusItemIndex: currentProductIndex, message: 'Retake core photo to improve results', resumeJobId: jobId } as never);
+              }}
+            >
+              <Icon name="camera" size={20} color="#000" style={{ marginRight: 8 }} />
+              <Text style={styles.secondaryButtonText}>Rescan This Item</Text>
+            </TouchableOpacity>
+          </View>
+        );
     }
 
     return (
         <View style={styles.container}>
+            
+      {/* Tiny bulk button top-left */}
+      <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ position: 'absolute', top: 64, left: 32, zIndex: 4000, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)',minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center', gap: 6 as any }}>
+        <Boxes size={18} color="#000" />
+        <Text style={{ color: '#000', fontWeight: '600' }}>Current Jobs</Text>
+      </TouchableOpacity>
 
             <FlashList
                 data={serpApiData}
@@ -540,6 +715,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                         item={item}
                         isSelected={selectedIndices.includes(index)}
                         onSelect={() => handleSelectProduct(index)}
+                        isBest={index === (bestIndex ?? 0)}
                     />
                 )}
                 removeClippedSubviews={false}
@@ -697,6 +873,17 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                                         
                                 
                                         if (jobId) {
+                                            setItemGenerateJobs(prev => ({ ...prev, [currentProductIndex]: { jobId } }));
+                                            const itemsForModal = (analysisData?.results || []).map((res, idx) => {
+                                                const first = res?.serpApiData?.[0];
+                                                return {
+                                                    index: idx,
+                                                    title: first?.title || `Item ${idx + 1}`,
+                                                    thumb: first?.image || first?.thumbnail || '',
+                                                    matchesCount: res?.serpApiData?.length || 0,
+                                                };
+                                            });
+                                            const jobMap = { ...itemGenerateJobs, [currentProductIndex]: { jobId } };
                                             navigation.navigate("LoadingScreen", {
                                                 processType: 'generate',
                                                 payload: {
@@ -710,6 +897,8 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                                                     params: {
                                                         jobResponse: submitResult,
                                                         jobId: jobId,
+                                                        items: itemsForModal,
+                                                        jobMap,
                                                     }
                                                 }
                                             });
@@ -1221,6 +1410,115 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                     </View>
                 </View>
             </Modal>
+
+            {/* Global Item Jobs Modal (no tabs UI) */}
+            <ItemJobsModal
+              visible={jobsModalVisible}
+              onClose={() => setJobsModalVisible(false)}
+              items={(analysisData?.results || []).map((res, idx) => {
+                const first = res?.serpApiData?.[0];
+                return { index: idx, title: first?.title || `Item ${idx + 1}`, thumb: first?.image || first?.thumbnail || '', matchesCount: res?.serpApiData?.length || 0 };
+              })}
+              currentIndex={currentProductIndex}
+              scanColor={() => (analysisData ? '#93C822' : (isLoading ? '#FFD700' : '#4B5563'))}
+              matchColor={(idx) => (idx === currentProductIndex && selectedIndices.length > 0 ? '#93C822' : '#FFD700')}
+              detailsColor={(idx) => {
+                const s = itemGenerateJobs[idx]?.status;
+                if (s === 'completed') return '#93C822';
+                if (s === 'failed') return '#e11d48';
+                if (s) return '#FFD700';
+                return '#4B5563';
+              }}
+              detailsEnabled={(idx) => !!itemGenerateJobs[idx]?.jobId}
+              enableMultiSelect
+              onBatchGenerateSelected={async (indices) => {
+                try {
+                  // Generate for each selected index sequentially to avoid overwhelming backend
+                  for (const idx of indices) {
+                    setCurrentProductIndex(idx);
+                    const submit: JobResponse = await handleGenerate();
+                    const jid = submit?.jobId;
+                    if (jid) setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: jid } }));
+                  }
+                  setJobsModalVisible(false);
+                } catch {
+                  Alert.alert('Batch generate failed', 'Please try again');
+                }
+              }}
+              onBatchRescanSelected={async (indices) => {
+                try {
+                  const token = await getToken();
+                  // Build minimal match payload using current best/cover images
+                  const productsPayload = indices.map((idx) => {
+                    const serp = analysisData?.results[idx]?.serpApiData || [];
+                    const firstImage = serp[0]?.image || serp[0]?.thumbnail || '';
+                    return {
+                      productIndex: idx,
+                      images: [{ url: firstImage }],
+                    };
+                  });
+                  const res = await fetch(`${SSSYNC_API_BASE_URL}/api/products/match/jobs`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ products: productsPayload, options: { useReranking: true } }),
+                  });
+                  if (!res.ok) throw new Error(`Rescan failed (${res.status})`);
+                  setJobsModalVisible(false);
+                  Alert.alert('Rescan started', `${indices.length} item(s) queued`);
+                } catch (e) {
+                  Alert.alert('Rescan failed', 'Please try again');
+                }
+              }}
+              onRescan={(idx) => {
+                // Navigate user to AddProduct to retake the core photo for this item
+                setJobsModalVisible(false);
+                navigation.navigate('AddProduct' as never, { focusItemIndex: idx, message: 'Retake core photo to improve results' } as never);
+              }}
+              onQuickGenerate={async (idx) => {
+                try {
+                  setCurrentProductIndex(idx);
+                  setJobsModalVisible(false);
+                  const submitResult: JobResponse = await handleGenerate();
+                  const jid = submitResult?.jobId;
+                  if (jid) {
+                    setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: jid } }));
+                    navigation.navigate('LoadingScreen' as never, {
+                      processType: 'generate',
+                      payload: { jobId: jid, firstPhotos: [] },
+                      onCompleteRoute: { screen: 'GenerateDetailsScreen', params: { jobId: jid } }
+                    } as never);
+                  }
+                } catch (e) {
+                  Alert.alert('Generate failed', 'Please try again');
+                }
+              }}
+              onPickScan={(idx) => {
+                setCurrentProductIndex(idx);
+                setSelectedIndices([]);
+                setSelectedPlatforms([]);
+                setSelectedTemplate(null);
+                setJobsModalVisible(false);
+                setBottomNavState('empty');
+              }}
+              onPickMatch={(idx) => {
+                setCurrentProductIndex(idx);
+                setJobsModalVisible(false);
+                setBottomNavState('selection');
+              }}
+              onPickDetails={(idx) => {
+                const jobId = itemGenerateJobs[idx]?.jobId;
+                if (jobId) {
+                  navigation.navigate('LoadingScreen' as never, {
+                    processType: 'generate',
+                    payload: { jobId, firstPhotos: [] },
+                    onCompleteRoute: { screen: 'GenerateDetailsScreen', params: { jobId } }
+                  } as never);
+                  setJobsModalVisible(false);
+                }
+              }}
+            />
+
+      {/* old bulk modal removed in favor of ItemJobsModal */}
         </View>
     );
 }

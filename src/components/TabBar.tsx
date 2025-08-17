@@ -4,7 +4,7 @@ import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { CirclePlus } from 'lucide-react';
 
-const getTabIcon = (routeName) => {
+const getTabIcon = (routeName: string): string => {
   switch (routeName) {
     case 'Dashboard':
       return 'view-dashboard-outline';
@@ -12,6 +12,8 @@ const getTabIcon = (routeName) => {
       return 'cube-outline';
     case 'Marketplace':
       return 'store-outline';
+    case 'MarketplaceChat':
+      return 'message-outline';
     case 'AddProduct':
       return 'plus-circle';
     case 'Profile':
@@ -21,12 +23,18 @@ const getTabIcon = (routeName) => {
   }
 };
 
-const TabBar = ({ state, descriptors, navigation }) => {
+type TabBarProps = {
+  state: any;
+  descriptors: Record<string, any>;
+  navigation: any;
+};
+
+const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation }) => {
   const theme = useTheme();
   
   return (
     <View style={[styles.tabBar, theme.shadows.small]}>
-      {state.routes.map((route, index) => {
+      {state.routes.map((route: any, index: number) => {
         const { options } = descriptors[route.key];
         const label = options.tabBarLabel || route.name;
         const isFocused = state.index === index;

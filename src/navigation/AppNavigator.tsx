@@ -43,6 +43,8 @@ import AddProductScreen from '../screens/AddProductScreen';
 import LoadingScreen from '../screens/LoadingScreen';
 import MatchSelectionScreen, { JobResponse } from '../screens/MatchSelectionScreen';
 import GenerateDetailsScreen from '../screens/GenerateDetailsScreen';
+import MarketplaceChatScreen from '../screens/MarketplaceChatScreen';
+import { isFeatureEnabled } from '../config/features';
 
 // --- Define Param Lists for Type Safety --- //
 type AuthStackParamList = {
@@ -94,7 +96,7 @@ export type AppStackParamList = {
     bulkItems: any[];
   }
   MatchSelectionScreen: {
-    jobResponse: JobResponse;
+    jobResponse?: JobResponse;
     response: {
       jobId?: string;
       bulkItems?: any[];
@@ -198,6 +200,7 @@ export type AppStackParamList = {
     }>,
     summary: any[],
     completedAt: string,
+    initialData?: Array<{}>,
   }
 };
 
@@ -223,7 +226,7 @@ const TabNavigator = () => {
         tabBarStyle: styles.tabBar,
       }}
       tabBar={(props) => <TabBar {...props} />}
-      initialRouteName="OrdersTab"
+      initialRouteName="Dashboard"
     >
       <Tab.Screen 
         name="Dashboard" 
@@ -255,16 +258,29 @@ const TabNavigator = () => {
           ),
         }}
       />
-      <Tab.Screen 
-        name="Marketplace" 
-        component={MarketplaceScreen}
-        options={{
-          tabBarLabel: 'Marketplace',
-          tabBarIcon: ({ color, size }) => (
-            <Icon name="store-outline" color={color} size={size} />
-          ),
-        }}
-      />
+      {isFeatureEnabled('MARKETPLACE_ENABLED') ? (
+        <Tab.Screen 
+          name="Marketplace" 
+          component={MarketplaceScreen}
+          options={{
+            tabBarLabel: 'Marketplace',
+            tabBarIcon: ({ color, size }) => (
+              <Icon name="store-outline" color={color} size={size} />
+            ),
+          }}
+        />
+      ) : isFeatureEnabled('MARKETPLACE_CHAT_ENABLED') ? (
+        <Tab.Screen 
+          name="MarketplaceChat" 
+          component={MarketplaceChatScreen}
+          options={{
+            tabBarLabel: 'Chat',
+            tabBarIcon: ({ color, size }) => (
+              <Icon name="message-outline" color={color} size={size} />
+            ),
+          }}
+        />
+      ) : null}
       <Tab.Screen 
         name="Profile" 
         component={ProfileScreen}

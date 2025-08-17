@@ -111,6 +111,8 @@ const MappingReviewScreen = () => {
   const legendState: LegendStateObservables | null = useLegendState();
 
   const [suggestions, setSuggestions] = useState<MappingSuggestion[] | null>(null);
+  // Persist review progress
+  const [hasLoadedDraft, setHasLoadedDraft] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [summaryData, setSummaryData] = useState<any>(null); // Summary might not exist anymore
@@ -327,6 +329,66 @@ const MappingReviewScreen = () => {
       setLoading(false);
     }
   }, []);
+
+  // Load any saved draft selections on mount/when connection changes
+  useEffect(() => {
+    (async () => {
+      if (!connectionId || hasLoadedDraft) return;
+      try {
+        const session = await supabase.auth.getSession();
+        const token = session?.data.session?.access_token;
+        if (!token) return;
+        const resp = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/draft-mappings`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!resp.ok) { setHasLoadedDraft(true); return; }
+        const data = await resp.json();
+        const draftMatches = Array.isArray(data?.confirmedMatches) ? data.confirmedMatches : [];
+        if (draftMatches.length > 0 && Array.isArray(suggestions)) {
+          // Merge draft into current suggestions by platformProductId
+          const mapById: Record<string, any> = {};
+          for (const d of draftMatches) {
+            mapById[d.platformProductId || d.sourceId] = d;
+          }
+          setSuggestions(prev => (prev || []).map(s => {
+            const d = mapById[s.platformProduct.id];
+            if (!d) return s;
+            const action = d.action?.toUpperCase?.() === 'LINK' ? 'LINK_EXISTING' : d.action?.toUpperCase?.() === 'CREATE' ? 'CREATE_NEW' : 'IGNORE';
+            return {
+              ...s,
+              action: action as any,
+              isSelected: action !== 'IGNORE',
+              suggestedCanonicalProduct: d.sssyncVariantId ? { id: d.sssyncVariantId, sku: s.suggestedCanonicalProduct?.sku || '', title: s.suggestedCanonicalProduct?.title || '' } : s.suggestedCanonicalProduct,
+            };
+          }));
+        }
+      } catch {}
+      setHasLoadedDraft(true);
+    })();
+  }, [connectionId, suggestions, hasLoadedDraft]);
+
+  // Debounced autosave of current review selections as draft
+  useEffect(() => {
+    const handle = setTimeout(async () => {
+      try {
+        if (!connectionId || !Array.isArray(suggestions)) return;
+        const confirmedMatches = suggestions.map(s => ({
+          platformProductId: s.platformProduct.id,
+          sssyncVariantId: s.action === 'LINK_EXISTING' ? s.suggestedCanonicalProduct?.id : null,
+          action: s.action === 'LINK_EXISTING' ? 'link' : (s.action === 'CREATE_NEW' ? 'create' : 'ignore'),
+        }));
+        const session = await supabase.auth.getSession();
+        const token = session?.data.session?.access_token;
+        if (!token) return;
+        await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/draft-mappings`, {
+          method: 'PUT',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirmedMatches }),
+        });
+      } catch {}
+    }, 600);
+    return () => clearTimeout(handle);
+  }, [suggestions, connectionId]);
 
   // --- NEW: Function to fetch existing mappings from Supabase ---
   // This is the fallback data source when the API returns no results

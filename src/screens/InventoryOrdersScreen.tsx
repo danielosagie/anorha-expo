@@ -586,24 +586,7 @@ const InventoryOrdersScreen = observer(() => {
             ]}>Inventory</Text>
           </TouchableOpacity>
           
-          <TouchableOpacity 
-            style={[
-              styles.tab, 
-              activeTab === 'orders' && [styles.activeTab, { backgroundColor: theme.colors.primary + '20' }]
-            ]}
-            onPress={() => setActiveTab('orders')}
-          >
-            <Icon 
-              name="shopping-outline" 
-              size={20} 
-              color={activeTab === 'orders' ? theme.colors.primary : '#777'} 
-              style={styles.tabIcon}
-            />
-            <Text style={[
-              styles.tabText,
-              { color: activeTab === 'orders' ? theme.colors.primary : '#777' }
-            ]}>Orders</Text>
-          </TouchableOpacity>
+          {/* Orders temporarily disabled */}
         </View>
         
         <View style={styles.searchContainer}>

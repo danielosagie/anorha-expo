@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Dimensions, TouchableOpacity, TextInput } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
 import Animated, { FadeInUp, FadeInRight } from 'react-native-reanimated';
@@ -9,6 +9,7 @@ import ChannelSalesBar from '../components/ChannelSalesBar';
 import OrderListItem from '../components/OrderListItem';
 import { mockSalesData, mockOrders, mockChannelData } from '../data/mockData';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useLegendState } from '../context/LegendStateContext';
 
 const DashboardScreen = () => {
   const theme = useTheme();
@@ -16,9 +17,18 @@ const DashboardScreen = () => {
   const [timeFrame, setTimeFrame] = useState('12 months');
   const [selectedTab, setSelectedTab] = useState('All');
   const [selectedPlatform, setSelectedPlatform] = useState('All');
+  const legend = useLegendState();
+
+  const liveCounts = useMemo(() => {
+    const pv = legend.productVariants$?.get() || {};
+    const images = legend.productImages$?.get() || {};
+    const productsCount = Object.keys(pv).length;
+    const imagesCount = Object.keys(images).length;
+    return { productsCount, imagesCount };
+  }, [legend.productVariants$, legend.productImages$]);
   
   return (
-    <View style={styles.fullScreenContainer} paddingTop={60}>
+    <View style={[styles.fullScreenContainer, { paddingTop: 60 }]}>
       <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
         <Animated.View entering={FadeInUp.delay(100).duration(500)}>
           <View style={styles.searchContainer}>
@@ -45,7 +55,7 @@ const DashboardScreen = () => {
                 <Icon name="alert" size={18} color="#FF9500" />
               </View>
               <View style={styles.alertContent}>
-                <Text style={styles.alertText}>Low stock on 3 products</Text>
+                <Text style={styles.alertText}>Inventory active: {liveCounts.productsCount} products, {liveCounts.imagesCount} images</Text>
                 <Text style={styles.alertTime}>2 hours ago</Text>
               </View>
               <Icon name="chevron-right" size={20} color="#CCC" />
@@ -106,7 +116,7 @@ const DashboardScreen = () => {
           
 
           {/* Order Summary */}
-          <Card>
+          <Card style={{}}>
             <Text style={[styles.sectionTitle, {marginBottom: 16}]}>Order Summary</Text>
             
             {/* Platform Filter Tabs */}
@@ -232,11 +242,9 @@ const DashboardScreen = () => {
                 )
                 .slice(0, 5) // Show only first 5 orders
                 .map((order, index) => (
-                  <OrderListItem 
-                    key={order.id} 
-                    order={order} 
-                    delay={index * 100}
-                  />
+                  <Animated.View key={order.id} entering={FadeInUp.delay(index * 100).duration(300)}>
+                    <OrderListItem order={order} />
+                  </Animated.View>
                 ))}
                 
               {mockOrders.filter(order => 
@@ -253,14 +261,7 @@ const DashboardScreen = () => {
               )}
             </View>
             
-            <TouchableOpacity 
-              style={styles.viewAllButton}
-              onPress={() => navigation.navigate('Orders')}
-            >
-              <Text style={[styles.viewAllButtonText, {color: theme.colors.primary}]}>
-                View All Orders
-              </Text>
-            </TouchableOpacity>
+            {/* Orders list is preview-only for now */}
           </Card>
 
           {/* Channel Sales Card */}

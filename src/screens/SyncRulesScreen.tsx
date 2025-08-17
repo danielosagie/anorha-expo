@@ -20,7 +20,9 @@ const SyncRulesScreen = () => {
   const route = useRoute<SyncRulesScreenRouteProp>();
   const navigation = useNavigation<SyncRulesScreenNavigationProp>();
   const { connectionId } = route.params;
-  const platformName = 'Platform'; // Default platform name
+  const [platformName, setPlatformName] = useState<string>('Platform');
+  const [displayName, setDisplayName] = useState<string>('');
+  const SSSYNC_API_BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
 
   // Sync Rules State
   const [syncDirection, setSyncDirection] = useState<SyncDirection>('two-way');
@@ -32,11 +34,49 @@ const SyncRulesScreen = () => {
   const [showAdvancedRules, setShowAdvancedRules] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [step, setStep] = useState<number>(1);
+  const [availableConnections, setAvailableConnections] = useState<Array<{ Id: string; DisplayName: string; PlatformType: string }>>([]);
+  const [selectedDestinations, setSelectedDestinations] = useState<string[]>([]);
+  const [syncMode, setSyncMode] = useState<'manual' | 'auto' | 'batch'>('manual');
+  const [batchTime, setBatchTime] = useState<string>('02:00');
 
   // Load existing sync rules
   useEffect(() => {
+    loadConnectionMeta();
     loadSyncRules();
   }, [connectionId]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data: userRes } = await supabase.auth.getUser();
+        const userId = userRes?.user?.id;
+        if (!userId) return;
+        const { data } = await supabase
+          .from('PlatformConnections')
+          .select('Id, DisplayName, PlatformType, IsEnabled')
+          .eq('UserId', userId)
+          .eq('IsEnabled', true);
+        const rows = (data || []).map((r: any) => ({ Id: r.Id, DisplayName: r.DisplayName, PlatformType: r.PlatformType }));
+        setAvailableConnections(rows);
+        setSelectedDestinations((prev) => (prev.length ? prev : [connectionId]));
+      } catch {}
+    })();
+  }, [connectionId]);
+
+  const loadConnectionMeta = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('PlatformConnections')
+        .select('DisplayName, PlatformType')
+        .eq('Id', connectionId)
+        .single();
+      if (!error && data) {
+        setDisplayName(data.DisplayName || '');
+        setPlatformName(data.PlatformType || 'Platform');
+      }
+    } catch {}
+  };
 
   const loadSyncRules = async () => {
     setLoading(true);
@@ -78,6 +118,9 @@ const SyncRulesScreen = () => {
         autoUpdate,
         syncInventory,
         syncPricing,
+        mode: syncMode,
+        schedule: syncMode === 'batch' ? { dailyTimeUtc: batchTime } : null,
+        destinations: { connectionIds: selectedDestinations },
         updatedAt: new Date().toISOString(),
       };
 
@@ -100,6 +143,27 @@ const SyncRulesScreen = () => {
       Alert.alert('Error', 'Failed to save sync rules. Please try again.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const gotoReview = () => {
+    navigation.navigate('MappingReview', { connectionId, platformName });
+  };
+
+  const disconnectPlatform = async () => {
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const token = session?.session?.access_token;
+      if (!token) throw new Error('Auth required');
+      const res = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections/${connectionId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`Failed (${res.status})`);
+      Alert.alert('Disconnected', `${platformName} connection disabled.`);
+      navigation.goBack();
+    } catch (e: any) {
+      Alert.alert('Disconnect failed', e?.message || 'Please try again');
     }
   };
 
@@ -331,134 +395,118 @@ const SyncRulesScreen = () => {
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Icon name="arrow-left" size={24} color={theme.colors.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Sync Settings for {platformName}</Text>
+        <Text style={styles.headerTitle}>Sync Settings for {displayName || platformName}</Text>
       </View>
 
       <ScrollView style={styles.content}>
-        {/* Quick Setup Presets */}
-      <Card style={styles.ruleSection}>
-          <Text style={styles.sectionTitle}>Quick Setup</Text>
-          <Text style={styles.sectionSubtitle}>Choose a preset that matches your needs, then customize below</Text>
-          
-          <TouchableOpacity style={styles.presetCard} onPress={() => applyPreset('conservative')}>
-            <Text style={styles.presetTitle}>🛡️ Conservative</Text>
-            <Text style={styles.presetDescription}>
-              Only pull data from {platformName}. No automatic changes to your platform.
-            </Text>
-            <View style={styles.presetButton}>
-              <Text style={styles.presetButtonText}>Apply Conservative</Text>
-            </View>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.presetCard} onPress={() => applyPreset('balanced')}>
-            <Text style={styles.presetTitle}>⚖️ Balanced (Recommended)</Text>
-            <Text style={styles.presetDescription}>
-              Two-way sync with SSSync as the source of truth. Good for most users.
-            </Text>
-            <View style={styles.presetButton}>
-              <Text style={styles.presetButtonText}>Apply Balanced</Text>
-            </View>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.presetCard} onPress={() => applyPreset('aggressive')}>
-            <Text style={styles.presetTitle}>🚀 Aggressive</Text>
-            <Text style={styles.presetDescription}>
-              Push SSSync data to {platformName}. Use when SSSync is your primary system.
-            </Text>
-            <View style={styles.presetButton}>
-              <Text style={styles.presetButtonText}>Apply Aggressive</Text>
-            </View>
-          </TouchableOpacity>
-      </Card>
-
-      <Card style={styles.ruleSection}>
-          <Text style={styles.sectionTitle}>Sync Direction</Text>
-          <Text style={styles.sectionSubtitle}>How should data flow between SSSync and {platformName}?</Text>
-          {renderSyncDirectionOption('two-way', 'Two-way sync', 'Changes flow in both directions', 'sync')}
-          {renderSyncDirectionOption('push-only', 'Push to platform', 'SSSync updates your platform only', 'upload')}
-          {renderSyncDirectionOption('pull-only', 'Pull from platform', 'Platform updates SSSync only', 'download')}
-      </Card>
-
+        {/* Stepper */}
         <Card style={styles.ruleSection}>
-          <Text style={styles.sectionTitle}>Conflict Resolution</Text>
-          <Text style={styles.sectionSubtitle}>When product details differ, which should win?</Text>
-          {renderSourceOption('sssync', 'SSSync wins', 'Use SSSync data when conflicts occur', 'shield-check')}
-          {renderSourceOption('platform', `${platformName} wins`, `Use ${platformName} data when conflicts occur`, 'store')}
-        </Card>
-
-        <Card style={styles.ruleSection}>
-          <Text style={styles.sectionTitle}>What to Sync</Text>
-          <View style={styles.switchRow}>
-            <View style={styles.switchLabelContainer}>
-              <Icon name="package-variant" size={20} color={theme.colors.text} />
-              <Text style={styles.switchLabel}>Inventory levels</Text>
-            </View>
-            <TouchableOpacity onPress={() => setSyncInventory(!syncInventory)}>
-              <Icon 
-                name={syncInventory ? 'toggle-switch' : 'toggle-switch-off'} 
-                size={32} 
-                color={syncInventory ? theme.colors.primary : theme.colors.textSecondary} 
-              />
-            </TouchableOpacity>
-          </View>
-          <View style={styles.switchRow}>
-            <View style={styles.switchLabelContainer}>
-              <Icon name="currency-usd" size={20} color={theme.colors.text} />
-              <Text style={styles.switchLabel}>Pricing</Text>
-            </View>
-            <TouchableOpacity onPress={() => setSyncPricing(!syncPricing)}>
-              <Icon 
-                name={syncPricing ? 'toggle-switch' : 'toggle-switch-off'} 
-                size={32} 
-                color={syncPricing ? theme.colors.primary : theme.colors.textSecondary} 
-              />
-            </TouchableOpacity>
+          <Text style={styles.sectionTitle}>Setup</Text>
+          <Text style={styles.sectionSubtitle}>Step {step} of 4</Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            {[1,2,3,4].map((n) => (
+              <TouchableOpacity key={n} onPress={() => setStep(n)}>
+                <Icon name={step===n? 'checkbox-marked-circle' : 'checkbox-blank-circle-outline'} size={18} color={step===n? theme.colors.primary : theme.colors.textSecondary} />
+              </TouchableOpacity>
+            ))}
           </View>
         </Card>
 
-        <TouchableOpacity 
-          style={styles.advancedToggle} 
-          onPress={() => setShowAdvancedRules(!showAdvancedRules)}
-        >
-          <Icon 
-            name={showAdvancedRules ? 'chevron-down' : 'chevron-right'} 
-            size={22} 
-            color={theme.colors.primary} 
-          />
-          <Text style={styles.advancedText}>Advanced Settings</Text>
-        </TouchableOpacity>
-        
-        {showAdvancedRules && (
+        {step === 1 && (
           <Card style={styles.ruleSection}>
-            <Text style={styles.sectionTitle}>Automatic Actions</Text>
-            <View style={styles.switchRow}>
-              <View style={styles.switchLabelContainer}>
-                <Icon name="plus-circle" size={20} color={theme.colors.text} />
-                <Text style={styles.switchLabel}>Auto-create new products</Text>
-              </View>
-              <TouchableOpacity onPress={() => setAutoCreate(!autoCreate)}>
-                <Icon 
-                  name={autoCreate ? 'toggle-switch' : 'toggle-switch-off'} 
-                  size={32} 
-                  color={autoCreate ? theme.colors.primary : theme.colors.textSecondary} 
-                />
-              </TouchableOpacity>
+            <Text style={styles.sectionTitle}>Pulling data</Text>
+            <Text style={styles.sectionSubtitle}>We fetch your latest products. You can reconcile now or continue.</Text>
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <Button title="Reconcile now" onPress={gotoReview} icon="clipboard-list" />
+              <Button title="Continue" onPress={() => setStep(2)} icon="arrow-right" />
             </View>
-            <View style={styles.switchRow}>
-              <View style={styles.switchLabelContainer}>
-                <Icon name="update" size={20} color={theme.colors.text} />
-                <Text style={styles.switchLabel}>Auto-update existing products</Text>
+          </Card>
+        )}
+
+        {step === 2 && (
+          <Card style={styles.ruleSection}>
+            <Text style={styles.sectionTitle}>Destinations</Text>
+            <Text style={styles.sectionSubtitle}>Choose platforms to sync this inventory to.</Text>
+            {availableConnections.map((c) => {
+              const selected = selectedDestinations.includes(c.Id);
+              return (
+                <TouchableOpacity key={c.Id} style={styles.optionButton} onPress={() => setSelectedDestinations((prev) => selected ? prev.filter(id => id!==c.Id) : [...prev, c.Id])}>
+                  <Icon name={selected? 'checkbox-marked' : 'checkbox-blank-outline'} size={20} color={selected? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.optionTitle}>{c.DisplayName}</Text>
+                    <Text style={styles.optionSubtitle}>{c.PlatformType}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+            <View style={{ marginTop: 10 }}>
+              <Button title="Next" onPress={() => setStep(3)} icon="arrow-right" />
+            </View>
+          </Card>
+        )}
+
+        {step === 3 && (
+          <Card style={styles.ruleSection}>
+            <Text style={styles.sectionTitle}>Sync behavior</Text>
+            <Text style={styles.sectionSubtitle}>Pick how and when changes flow.</Text>
+            {/* Mode */}
+            <TouchableOpacity style={styles.optionButton} onPress={() => setSyncMode('manual')}>
+              <Icon name={syncMode==='manual' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode==='manual'? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.optionTitle}>Manual only</Text>
+                <Text style={styles.optionSubtitle}>You decide when to sync</Text>
               </View>
-              <TouchableOpacity onPress={() => setAutoUpdate(!autoUpdate)}>
-                <Icon 
-                  name={autoUpdate ? 'toggle-switch' : 'toggle-switch-off'} 
-                  size={32} 
-                  color={autoUpdate ? theme.colors.primary : theme.colors.textSecondary} 
-                />
-              </TouchableOpacity>
-          </View>
-        </Card>
-      )}
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.optionButton} onPress={() => setSyncMode('auto')}>
+              <Icon name={syncMode==='auto' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode==='auto'? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.optionTitle}>Automatic</Text>
+                <Text style={styles.optionSubtitle}>Sync as changes happen</Text>
+              </View>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.optionButton} onPress={() => setSyncMode('batch')}>
+              <Icon name={syncMode==='batch' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode==='batch'? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.optionTitle}>Batched</Text>
+                <Text style={styles.optionSubtitle}>Run once daily</Text>
+              </View>
+            </TouchableOpacity>
+            {syncMode==='batch' && (
+              <View style={{ marginTop: 8 }}>
+                <Text style={styles.optionSubtitle}>Time (UTC): {batchTime}</Text>
+              </View>
+            )}
+
+            {/* Direction */}
+            <View style={{ height: 8 }} />
+            {renderSyncDirectionOption('two-way', 'Two-way sync', 'Changes flow in both directions', 'sync')}
+            {renderSyncDirectionOption('push-only', 'Push to platform', 'SSSync updates your platform only', 'upload')}
+            {renderSyncDirectionOption('pull-only', 'Pull from platform', 'Platform updates SSSync only', 'download')}
+
+            <View style={{ marginTop: 10 }}>
+              <Button title="Next" onPress={() => setStep(4)} icon="arrow-right" />
+            </View>
+          </Card>
+        )}
+
+        {step === 4 && (
+          <Card style={styles.ruleSection}>
+            <Text style={styles.sectionTitle}>Confirm</Text>
+            <Text style={styles.sectionSubtitle}>Summary</Text>
+            <Text style={styles.optionTitle}>Destinations</Text>
+            {availableConnections.filter(c=>selectedDestinations.includes(c.Id)).map(c => (
+              <Text key={c.Id} style={styles.optionSubtitle}>• {c.DisplayName} ({c.PlatformType})</Text>
+            ))}
+            <Text style={[styles.optionTitle, { marginTop: 8 }]}>Mode</Text>
+            <Text style={styles.optionSubtitle}>{syncMode}</Text>
+            <Text style={[styles.optionTitle, { marginTop: 8 }]}>Direction</Text>
+            <Text style={styles.optionSubtitle}>{syncDirection}</Text>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+              <Button title="Back" onPress={() => setStep(3)} icon="arrow-left" />
+              <Button title="Save" onPress={saveSyncRules} loading={saving} icon="content-save" />
+            </View>
+          </Card>
+        )}
       </ScrollView>
 
         <Button
@@ -468,6 +516,12 @@ const SyncRulesScreen = () => {
         style={styles.saveButton}
         icon="content-save"
         />
+
+        <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>
+          <Button title="Review & Sync" onPress={gotoReview} icon="playlist-check" />
+          <View style={{ height: 10 }} />
+          <Button title={`Disconnect ${platformName}`} onPress={disconnectPlatform} icon="link-off" />
+        </View>
       </View>
   );
 };

@@ -18,6 +18,8 @@ import { RealtimeChannel } from '@supabase/supabase-js';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import * as Crypto from 'expo-crypto'; // For generating random string
 import { showMessage } from 'react-native-flash-message';
+import { logError, logInfo } from '../utils/logger';
+import { fetchUserEntitlements } from '../utils/entitlements';
 
 import { AuthContext } from '../context/AuthContext';
 import { useLegendStateControl } from '../context/LegendStateControlContext';
@@ -173,11 +175,11 @@ const getStatusDisplay = (status: string, isNewConnection: boolean = false): { l
     case CONNECTION_STATUS.NEEDS_REVIEW:
       return { label: 'Products Need Review', color: '#FF3B30', icon: 'sync-alert' };
     case CONNECTION_STATUS.SCANNING:
-      return { label: 'Scanning Products...', color: '#5856D6', icon: 'sync' };
+      return { label: 'Scanning...', color: '#5856D6', icon: 'loading' };
     case CONNECTION_STATUS.SYNCING:
-      return { label: 'Syncing...', color: '#007AFF', icon: 'sync' };
+      return { label: 'Syncing...', color: '#93C822', icon: 'loading' };
     case CONNECTION_STATUS.RECONCILING:
-      return { label: 'Reconciling...', color: '#5856D6', icon: 'sync' };
+      return { label: 'Reconciling...', color: '#5856D6', icon: 'loading' };
     case CONNECTION_STATUS.ERROR:
       return { label: 'Connection Error', color: '#FF3B30', icon: 'alert-circle' };
     case 'reconcile': // Match the string value used in code
@@ -234,6 +236,7 @@ const ProfileScreen = () => {
   const [platformConnections, setPlatformConnections] = useState<PlatformConnection[]>([]);
   const [isLoadingConnections, setIsLoadingConnections] = useState(true);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [entitlements, setEntitlements] = useState<{ planName: string | null; maxConnections: number; aiScanLimit: number | null; isPaid: boolean } | null>(null);
   // New state for tracking which connections are using fallback data
   const [fallbackConnectionIds, setFallbackConnectionIds] = useState<string[]>([]);
   const [userName, setUserName] = useState('');
@@ -253,11 +256,48 @@ const ProfileScreen = () => {
   const [manualShopName, setManualShopName] = useState('');
   // --- END REVISED Guided Shopify Flow State ---
   
-  const accountInfo = {
-    name: 'African Caribbean Seafood',
-    email: 'support@theacsm.com',
-    plan: 'Business Pro',
-  };
+  const [accountName, setAccountName] = useState('');
+  const [accountEmail, setAccountEmail] = useState('');
+  const [planName, setPlanName] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+        setAccountEmail(user.email ?? '');
+        // Profile name
+        const { data: profile } = await supabase
+          .from('UserProfiles')
+          .select('DisplayName')
+          .eq('UserId', user.id)
+          .maybeSingle();
+        if (profile?.DisplayName) setAccountName(profile.DisplayName);
+
+        // Subscription tier (optional)
+        const { data: usr } = await supabase
+          .from('Users')
+          .select('SubscriptionTierId')
+          .eq('Id', user.id)
+          .maybeSingle();
+        if (usr?.SubscriptionTierId) {
+          const { data: tier } = await supabase
+            .from('SubscriptionTiers')
+            .select('Name')
+            .eq('Id', usr.SubscriptionTierId)
+            .maybeSingle();
+          if (tier?.Name) setPlanName(tier.Name);
+        }
+
+        // Entitlements
+        const e = await fetchUserEntitlements();
+        setEntitlements(e);
+        logInfo('entitlements_loaded', 'Fetched user entitlements', e);
+      } catch (e) {
+        logError('profile_load_account', 'Failed to load profile/account info', { error: String(e) });
+      }
+    })();
+  }, []);
   
   const integrations = [
     {
@@ -437,6 +477,36 @@ const ProfileScreen = () => {
     );
   };
   // --- END Delete Connection Logic ---
+
+  // --- NEW: Fix & Resume for error/disabled connections ---
+  const fixAndResumeConnection = async (connectionId: string, platformName: string) => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) throw new Error('Not authenticated');
+
+      const res = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections/${connectionId}/enable`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({} as any));
+        throw new Error(body?.message || `Enable failed (${res.status})`);
+      }
+      logInfo('connection_enable', 'Connection enabled, resuming scan', { connectionId, platformName });
+      // Refresh local list first
+      await loadConnections();
+      // Kick off scan to make it seamless
+      await startPlatformScan(connectionId, platformName);
+    } catch (err) {
+      logError('connection_enable_error', 'Failed to enable/reactivate connection', { connectionId, error: String(err) });
+      Alert.alert('Resume Failed', err instanceof Error ? err.message : String(err));
+    }
+  };
+  // --- END: Fix & Resume ---
 
   // --- NEW: Logic for Guided Shopify Flow Step 4 (Open Browser) ---
   const openShopifyForCopy = async () => {
@@ -789,6 +859,24 @@ const ProfileScreen = () => {
   };
   // --- END Handler for Review & Sync ---
 
+  // --- Simple audit log viewer: open recent ActivityLogs for this connection ---
+  const openAuditLogs = async (connectionId: string) => {
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const token = session?.session?.access_token;
+      if (!token) throw new Error('Auth required');
+      const base = SSSYNC_API_BASE_URL;
+      const res = await fetch(`${base}/api/products/activities?platformConnectionId=${encodeURIComponent(connectionId)}&limit=50`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`Failed to load logs (${res.status})`);
+      const logs = await res.json();
+      Alert.alert('Recent Activity', Array.isArray(logs) && logs.length > 0 ? `Showing ${logs.length} events (latest first).` : 'No recent activity.');
+    } catch (e: any) {
+      Alert.alert('Audit Logs', e?.message || 'Failed to fetch logs');
+    }
+  };
+
   const handleLogout = async () => {
     console.log("[ProfileScreen] handleLogout initiated..."); // Add log
     try {
@@ -871,7 +959,7 @@ const ProfileScreen = () => {
 
   // Modify the menuItems array to be dynamic based on dev mode
   const menuItems = [
-    { icon: 'credit-card', title: 'Subscription & Billing', badge: 'Pro' },
+    { icon: 'credit-card', title: 'Subscription & Billing', badge: entitlements?.planName || 'Free' },
     { icon: 'shield-check', title: 'Privacy & Security' },
     { icon: 'bell', title: 'Notifications' },
     { icon: 'help-circle', title: 'Help & Support' },
@@ -889,6 +977,31 @@ const ProfileScreen = () => {
           />
         </View>
       )
+    },
+    // Billing portal entry
+    {
+      icon: 'credit-card-outline',
+      title: 'Manage Billing',
+      onPress: async () => {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          const token = session?.access_token;
+          if (!token) throw new Error('Not authenticated');
+          const res = await fetch(`${SSSYNC_API_BASE_URL}/billing/portal`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+          });
+          if (!res.ok) throw new Error(`Portal error ${res.status}`);
+          const { url } = await res.json();
+          await WebBrowser.openBrowserAsync(url);
+        } catch (err) {
+          logError('billing_portal_error', 'Failed to open billing portal', { error: String(err) });
+          Alert.alert('Billing', 'Could not open billing portal.');
+        }
+      },
     },
     // "Show Auth Token" button is now always present
     {
@@ -1033,6 +1146,16 @@ const ProfileScreen = () => {
     >
       <Animated.View entering={FadeInUp.delay(100).duration(500)}>
         <Text style={[styles.title, { color: theme.colors.text }]}>Profile</Text>
+        {/* Stale data banner when using saved fallback */}
+        {fallbackConnectionIds.length > 0 && (
+          <View style={{ padding: 10, backgroundColor: '#FFF4CC', borderRadius: 8, marginBottom: 12, flexDirection: 'row', alignItems: 'center' }}>
+            <Icon name="cloud-off-outline" size={18} color="#A15C00" style={{ marginRight: 8 }} />
+            <Text style={{ color: '#A15C00', flex: 1 }}>Some connection statuses are from saved data. They’ll update automatically when webhooks arrive.</Text>
+            <TouchableOpacity onPress={loadConnections}>
+              <Text style={{ color: theme.colors.primary, fontWeight: '600' }}>Refresh</Text>
+            </TouchableOpacity>
+          </View>
+        )}
         
         {/* Account Card */}
         <Card style={styles.card}>
@@ -1044,12 +1167,14 @@ const ProfileScreen = () => {
               type="gradient"
               text="AC"
             />
-            <View style={styles.accountInfo}>
-              <Text style={styles.accountName}>{accountInfo.name}</Text>
-              <Text style={styles.accountEmail}>{accountInfo.email}</Text>
-              <View style={[styles.planBadge, { backgroundColor: theme.colors.primary + '20' }]}>
-                <Text style={[styles.planText, { color: theme.colors.primary }]}>{accountInfo.plan}</Text>
-              </View>
+      <View style={styles.accountInfo}>
+              <Text style={styles.accountName}>{accountName || 'Your Business'}</Text>
+              <Text style={styles.accountEmail}>{accountEmail || 'you@example.com'}</Text>
+              {planName ? (
+                <View style={[styles.planBadge, { backgroundColor: theme.colors.primary + '20' }]}>
+                  <Text style={[styles.planText, { color: theme.colors.primary }]}>{planName}</Text>
+                </View>
+              ) : null}
             </View>
             <TouchableOpacity style={styles.editButton}>
               <Icon name="pencil" size={20} color={theme.colors.primary} />
@@ -1163,7 +1288,7 @@ const ProfileScreen = () => {
                           
                           {/* --- Conditional Right-Side Elements (Not Edit Mode) --- */}
                           {!isEditMode && connection && (
-                            <View style={styles.connectionInfoContainer}>
+            <View style={styles.connectionInfoContainer}>
                               {/* Status display section */}
                               <View style={styles.statusContainer}>
                                 {(() => {
@@ -1171,7 +1296,12 @@ const ProfileScreen = () => {
                                   const statusInfo = getStatusDisplay(connection.Status, isRecentlyCreated(connection));
                                   return (
                                     <View style={styles.statusRow}>
-                                      <Icon name={statusInfo.icon} size={18} color={statusInfo.color} style={styles.statusIcon} />
+                      {/* Spinner for in-progress states */}
+                      {statusInfo.icon === 'loading' ? (
+                        <ActivityIndicator size="small" color={statusInfo.color} style={styles.statusIcon} />
+                      ) : (
+                        <Icon name={statusInfo.icon} size={18} color={statusInfo.color} style={styles.statusIcon} />
+                      )}
                                       <Text style={[styles.statusText, { color: statusInfo.color }]}>{statusInfo.label}</Text>
                                       
                                       {/* Display fallback data indicator */}
@@ -1207,15 +1337,13 @@ const ProfileScreen = () => {
                                 )}
 
                                 {/* For connections that need review (not new), show the Review & Sync button */}
-                                {!isRecentlyCreated(connection) && (connection.Status === CONNECTION_STATUS.NEEDS_REVIEW || connection.Status === 'reconcile') && (
+                                {!isRecentlyCreated(connection) && (connection.Status === CONNECTION_STATUS.NEEDS_REVIEW) && (
                               <TouchableOpacity 
                                     style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
                                     onPress={() => handleReviewAndSync(connection.Id, platformConfig.name)}
                               >
                                     <Icon name="sync-alert" size={18} color={theme.colors.primary} />
-                                    <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>
-                                      {connection.Status === 'reconcile' ? 'Reconcile Data' : 'Review & Sync'}
-                                    </Text>
+                                        <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Review & Sync</Text>
                               </TouchableOpacity>
                                 )}
                                 
@@ -1230,13 +1358,24 @@ const ProfileScreen = () => {
                               </TouchableOpacity>
                                 )}
                                 
-                                {connection.Status === CONNECTION_STATUS.INACTIVE && (
+                                {(connection.Status === CONNECTION_STATUS.INACTIVE) && (
                                   <TouchableOpacity 
                                     style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
                                     onPress={() => startPlatformScan(connection.Id, platformConfig.name)}
                                   >
                                     <Icon name="play-circle" size={18} color={theme.colors.success} />
                                     <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Activate</Text>
+                                  </TouchableOpacity>
+                                )}
+
+                                {/* For error state, show a single Fix & Resume action */}
+                                {connection.Status === CONNECTION_STATUS.ERROR && (
+                                  <TouchableOpacity 
+                                    style={[styles.actionButton, { backgroundColor: theme.colors.warning + '15' }]}
+                                    onPress={() => fixAndResumeConnection(connection.Id, platformConfig.name)}
+                                  >
+                                    <Icon name="refresh" size={18} color={theme.colors.warning} />
+                                    <Text style={[styles.actionButtonText, { color: theme.colors.warning }]}>Fix & Resume</Text>
                                   </TouchableOpacity>
                                 )}
                                 

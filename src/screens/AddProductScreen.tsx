@@ -404,50 +404,35 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             performQuickScan(newPhoto);
           }, 500);
           
-        } else if (activeItemId) {
-          // Add to existing active item
-          console.log('[ITEM CREATION] Adding photo to existing active item:', activeItemId);
-          setBulkItems(prev => prev.map(item => {
-            if (item.id === activeItemId) {
-              const isFirstPhoto = item.photos.length === 0;
-              const updatedItem = { ...item, photos: [...item.photos, newPhoto] };
-              
-              console.log('[ITEM CREATION] Updated item:', {
-                itemId: item.id,
-                wasFirstPhoto: isFirstPhoto,
-                newPhotoCount: updatedItem.photos.length
-              });
-              
-              // Quick scan first photo of each item
-              if (isFirstPhoto) {
-                console.log('[ITEM CREATION] Triggering quick scan (first photo of item)');
-                setTimeout(() => {
-                  performQuickScan(newPhoto);
-                }, 500);
-              }
-              
-              return updatedItem;
-            }
-            return item;
-          }));
-          
         } else {
-          // Items exist but no active item - create new one
-          console.log('[ITEM CREATION] Creating new item (items exist but no active item)');
-          const newItem = {
-            id: `item-${Date.now()}`,
-            photos: [newPhoto],
-            title: undefined,
-            isActive: true
-          };
-          setBulkItems(prev => [...prev.map(item => ({ ...item, isActive: false })), newItem]);
-          setActiveItemId(newItem.id);
-          console.log('[ITEM CREATION] Created new item:', newItem.id);
-          console.log('[ITEM CREATION] Triggering quick scan (first photo of new item)');
-          
-          setTimeout(() => {
-            performQuickScan(newPhoto);
-          }, 500);
+          // Use current state (prev) to avoid stale closures. Prefer active item by isActive flag.
+          setBulkItems(prev => {
+            if (prev.length === 0) {
+              // First item
+              const firstId = `item-${Date.now()}`;
+              setActiveItemId(firstId);
+              setTimeout(() => performQuickScan(newPhoto), 500);
+              return [{ id: firstId, photos: [newPhoto], title: undefined, isActive: true }];
+            }
+
+            const activeIndex = prev.findIndex(it => it.isActive);
+            if (activeIndex >= 0) {
+              const next = prev.map((it, idx) => {
+                if (idx !== activeIndex) return it;
+                const wasFirstPhoto = it.photos.length === 0;
+                const updated = { ...it, photos: [...it.photos, newPhoto] };
+                if (wasFirstPhoto) setTimeout(() => performQuickScan(newPhoto), 500);
+                return updated;
+              });
+              return next;
+            }
+
+            // No active item flagged; create a new active item
+            const newId = `item-${Date.now()}`;
+            setActiveItemId(newId);
+            setTimeout(() => performQuickScan(newPhoto), 500);
+            return [...prev.map(it => ({ ...it, isActive: false })), { id: newId, photos: [newPhoto], title: undefined, isActive: true }];
+          });
         }
         
         setCurrentInstruction('ready');
@@ -806,7 +791,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             setCurrentInstruction('matches_found');
             stopProgressAnimation();
             setShowMatchSheet(true);
-            sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
+            sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2); // Taller sheet (80% height visible)
           } else {
             console.log('[QUICK SCAN] Low confidence or no matches, creating item automatically');
             // NO FALLBACK TO ANALYZE - just create item and show deep search
@@ -1546,44 +1531,57 @@ const MatchResultsSheet: React.FC<{
 }> = ({ matchData, onClose, sheetStyle }) => {
   return (
     <Animated.View style={[styles.matchSheet, sheetStyle]}>
-      <View style={styles.sheetHeader}>
-        <Text style={styles.sheetTitle}>
-          {matchData.totalMatches} Match{matchData.totalMatches > 1 ? 'es' : ''} Found
-        </Text>
-        <TouchableOpacity onPress={onClose}>
-          <Icon name="close" size={24} color="#333" />
-          </TouchableOpacity>
-      </View>
-      
-      <View style={styles.matchResults}>
-        {matchData.rankedCandidates.map((candidate, index) => (
-          <View key={candidate.id} style={styles.matchCard}>
-            <Image source={{ uri: candidate.imageUrl }} style={styles.matchImage} />
-            <View style={styles.matchInfo}>
-              <Text style={styles.matchTitle}>{candidate.title}</Text>
-              <Text style={styles.matchDescription}>{candidate.description}</Text>
-              <Text style={styles.matchPrice}>${candidate.price}</Text>
-              <Text style={styles.matchPercentage}>{candidate.matchPercentage}% match</Text>
-            </View>
-          </View>
-        ))}
-      </View>
-      
-      <View style={styles.sheetActions}>
-        <TouchableOpacity style={styles.primaryButton}>
-          <Text style={styles.primaryButtonText}>List Product</Text>
-        </TouchableOpacity>
-        
-        <View style={styles.secondaryActions}>
-          <TouchableOpacity style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>Show More</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>Not My Product</Text>
-          </TouchableOpacity>
+      <ScrollView 
+          style={[
+            styles.itemsScrollContainer, 
+          ]}
+          showsVerticalScrollIndicator={true}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { 
+              flexGrow: 1
+            }
+          ]}
+        >
+        <View style={styles.sheetHeader}>
+          <Text style={styles.sheetTitle}>
+            {matchData.totalMatches} Match{matchData.totalMatches > 1 ? 'es' : ''} Found
+          </Text>
+          <TouchableOpacity onPress={onClose}>
+            <Icon name="close" size={24} color="#333" />
+            </TouchableOpacity>
         </View>
-      </View>
-        </Animated.View>
+        
+        <View style={styles.matchResults}>
+          {matchData.rankedCandidates.map((candidate, index) => (
+            <View key={candidate.id} style={styles.matchCard}>
+              <Image source={{ uri: candidate.imageUrl }} style={styles.matchImage} />
+              <View style={styles.matchInfo}>
+                <Text style={styles.matchTitle}>{candidate.title}</Text>
+                <Text style={styles.matchDescription}>{candidate.description}</Text>
+                <Text style={styles.matchPrice}>${candidate.price}</Text>
+                <Text style={styles.matchPercentage}>{candidate.matchPercentage}% match</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+        
+        <View style={styles.sheetActions}>
+          <TouchableOpacity style={styles.primaryButton}>
+            <Text style={styles.primaryButtonText}>List Product</Text>
+          </TouchableOpacity>
+          
+          <View style={styles.secondaryActions}>
+            <TouchableOpacity style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>Show More</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>Not My Product</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </ScrollView>
+    </Animated.View>
   );
 };
 
@@ -2253,8 +2251,9 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
     paddingTop: 20,
     paddingBottom: Platform.OS === 'ios' ? 34 : 20,
-    minHeight: SCREEN_HEIGHT * 0.5,
-    maxHeight: SCREEN_HEIGHT * 0.8,
+    marginBottom: 30,
+    minHeight: SCREEN_HEIGHT * 0.9,
+    maxHeight: SCREEN_HEIGHT * 0.9,
   },
   bulkItemsSheet: {
     position: 'absolute',

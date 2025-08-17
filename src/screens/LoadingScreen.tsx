@@ -21,6 +21,8 @@ import PyramidGrid from '../components/PyramidGrid';
 import { Blurred } from '../components/Blurred';
 import StepLoader from '../components/StepLoader';
 import { supabase } from '../lib/supabase';
+import ItemJobsModal from '../components/ItemJobsModal';
+import { Boxes } from 'lucide-react-native';
 
 
 type LoadingScreenProps = StackScreenProps<AppStackParamList, 'LoadingScreen'>;
@@ -34,6 +36,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
 
   const [currentStageIndex, setCurrentStageIndex] = useState(0);
   const [jobStatus, setJobStatus] = useState('queued');
+  const [jobsModalVisible, setJobsModalVisible] = useState(false);
 
   // Define the stages for different processes
   const stages = {
@@ -120,6 +123,8 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
           if (status.status === 'completed') {
             console.log(`Process "${processType}" complete! Navigating...`);
             setTimeout(() => {
+              // Build items list for GenerateDetails modal
+              const itemsForModal = ((onCompleteRoute?.params as any)?.items || []);
               navigation.replace(onCompleteRoute.screen, {
                 ...onCompleteRoute.params,
                 jobId: status.jobId,
@@ -127,6 +132,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
                 results: status.results,
                 summary: status.summary,
                 completedAt: status.completedAt,
+                items: itemsForModal,
               });
             }, 500);
           } else if (status.status === 'failed') {
@@ -202,14 +208,42 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
 
   return (
     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'white', width: '100%', height: '100%'  }}>
+      <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ position: 'absolute', top: 48, left: 24, zIndex: 4000, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}>
+        <Boxes size={18} color={'#000'} />
+        <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Current Jobs</Text>
+      </TouchableOpacity>
       <View style={styles.container}>
-        <PyramidGrid items={firstPhotos} style={{ justifyContent: 'center', alignItems: 'center', maxHeight: '50%'}} />
+        <PyramidGrid items={(firstPhotos || []).map((u, i) => ({ id: `img-${i}-${u}`, uri: String(u) }))} style={{ justifyContent: 'center', alignItems: 'center', maxHeight: '50%'}} />
         <StepLoader 
           stages={activeStages} 
           currentStageIndex={currentStageIndex}
           style={{ paddingTop: 60, marginBottom: 10, maxHeight: '25%', minHeight: '10%' }}
         />
       </View>
+
+      <ItemJobsModal
+        visible={jobsModalVisible}
+        onClose={() => setJobsModalVisible(false)}
+        items={[{ index: 0, title: 'Item 1', thumb: firstPhotos?.[0], matchesCount: 0 }]}
+        currentIndex={0}
+        scanColor={() => (jobStatus === 'failed' ? '#EF4444' : '#10B981')}
+        matchColor={() => '#4B5563'}
+        detailsColor={() => (jobStatus === 'completed' ? '#10B981' : jobStatus === 'failed' ? '#EF4444' : '#4B5563')}
+        detailsEnabled={() => true}
+        onPickScan={() => {
+          if (jobStatus === 'failed') {
+            navigation.replace('AddProduct' as any, {
+              firstPhotos: firstPhotos || [],
+              bulkItems: bulkItems || [],
+              errorMessage: 'Scan failed. Please retake clearer photos and try again.'
+            });
+          } else {
+            setJobsModalVisible(false);
+          }
+        }}
+        onPickMatch={() => setJobsModalVisible(false)}
+        onPickDetails={() => setJobsModalVisible(false)}
+      />
     </View>
   );
 };

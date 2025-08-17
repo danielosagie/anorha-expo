@@ -8,6 +8,7 @@ import Card from '../components/Card';
 import Button from '../components/Button';
 import { supabase } from '../../lib/supabase';
 import { AppStackParamList } from '../navigation/AppNavigator';
+import { JobResponse } from './MatchSelectionScreen';
 
 // --- Interfaces for Data Types ---
 
@@ -39,6 +40,18 @@ interface MatchJob {
   };
 }
 
+interface GenerationJob {
+  id: string; // This is the job_id from the table
+  created_at: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
+  summary: {
+    highConfidenceCount?: number;
+    mediumConfidenceCount?: number;
+    lowConfidenceCount?: number;
+    totalProducts?: number;
+  };
+}
+
 type PastScansScreenNavigationProp = StackNavigationProp<AppStackParamList, 'PastScans'>;
 
 const PastScansScreen = () => {
@@ -47,7 +60,7 @@ const PastScansScreen = () => {
   
   const [activeTab, setActiveTab] = useState<'matches' | 'listings'>('matches');
   const [matchJobs, setMatchJobs] = useState<MatchJob[]>([]);
-  const [scans, setScans] = useState<PastScan[]>([]);
+  const [generationJobs, setGenerationJobs] = useState<GenerationJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -80,7 +93,7 @@ const PastScansScreen = () => {
     }
   }, []);
 
-  const fetchPastScans = useCallback(async () => {
+  const fetchPastGenerations = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -88,65 +101,85 @@ const PastScansScreen = () => {
       
       if (!user) throw new Error('No authenticated user');
 
-      const { data: products, error: productsError } = await supabase
-        .from('Products')
-        .select(`
-          Id,
-          CreatedAt,
-          IsArchived,
-          ProductVariants (
-            Id,
-            Title,
-            Description,
-            Price,
-            Sku,
-            Barcode,
-            Options,
-            ProductImages!ProductImages_ProductVariantId_fkey ( ImageUrl, Position )
-          )
-        `)
-        .eq('UserId', user.id)
-        .order('CreatedAt', { ascending: false });
+      const {data, error} = await supabase
+        .from("generate_jobs")
+        .select('job_id, created_at, status, summary')
+        .eq('user_id', user.id)
+        .order('created_at', {ascending: false});
 
-      if (productsError) {
-        console.error('Database error:', productsError);
+
+      const { data: products, error: productsError } = await supabase
+      .from('Products')
+      .select(`
+        Id,
+        CreatedAt,
+        IsArchived,
+        ProductVariants (
+          Id,
+          Title,
+          Description,
+          Price,
+          Sku,
+          Barcode,
+          Options,
+          ProductImages!ProductImages_ProductVariantId_fkey ( ImageUrl, Position )
+        )
+      `)
+      .eq('UserId', user.id)
+      .order('CreatedAt', { ascending: false });
+
+    if (productsError) {
+      console.error('Database error:', productsError);
+      throw new Error('Failed to fetch products');
+    }
+
+    if (!products) {
+      return;
+    }
+
+    const transformedScans = products.reduce((acc: PastScan[], product) => {
+      const variant = product.ProductVariants?.[0];
+      if (!variant) return acc;
+
+      const sortedImages = variant.ProductImages
+        ?.sort((a, b) => (a.Position || 0) - (b.Position || 0))
+        ?.map(img => img.ImageUrl) || [];
+
+      let status: 'draft' | 'active' | 'archived' = product.IsArchived ? 'archived' : (variant.Title ? 'active' : 'draft');
+      
+      acc.push({
+        id: product.Id,
+        variantId: variant.Id,
+        created_at: product.CreatedAt,
+        title: variant.Title || 'Untitled Product',
+        description: variant.Description || '',
+        price: variant.Price || 0,
+        sku: variant.Sku || '',
+        barcode: variant.Barcode || '',
+        images: sortedImages,
+        platform_details: variant.Options || {},
+        status
+      });
+      return acc;
+    }, []);
+
+      if (error) {
+        console.error('Database error:', error);
         throw new Error('Failed to fetch products');
       }
 
-      if (!products) {
-        setScans([]);
+      if (!data) {
+        setGenerationJobs([]);
         return;
       }
 
-      const transformedScans = products.reduce((acc: PastScan[], product) => {
-        const variant = product.ProductVariants?.[0];
-        if (!variant) return acc;
+      // The table has `job_id`, but our keyExtractor needs `id`. Let's map it.
+      const formattedJobs = data.map(job => ({ ...job, id: job.job_id })) as GenerationJob[];
+      console.log(formattedJobs);
 
-        const sortedImages = variant.ProductImages
-          ?.sort((a, b) => (a.Position || 0) - (b.Position || 0))
-          ?.map(img => img.ImageUrl) || [];
-
-        let status: 'draft' | 'active' | 'archived' = product.IsArchived ? 'archived' : (variant.Title ? 'active' : 'draft');
-        
-        acc.push({
-          id: product.Id,
-          variantId: variant.Id,
-          created_at: product.CreatedAt,
-          title: variant.Title || 'Untitled Product',
-          description: variant.Description || '',
-          price: variant.Price || 0,
-          sku: variant.Sku || '',
-          barcode: variant.Barcode || '',
-          images: sortedImages,
-          platform_details: variant.Options || {},
-          status
-        });
-        return acc;
-      }, []);
-
-      setScans(transformedScans);
+      setGenerationJobs(formattedJobs);
     } catch (err: any) {
-      console.error('Error in fetchPastScans:', err);
+      console.error('Error in fetchPastGenerations:', err);
       setError(err.message || 'Failed to fetch past scans');
     } finally {
       setLoading(false);
@@ -157,9 +190,9 @@ const PastScansScreen = () => {
     if (activeTab === 'matches') {
       fetchMatchJobs();
     } else {
-      fetchPastScans();
+      fetchPastGenerations();
     }
-  }, [activeTab, fetchMatchJobs, fetchPastScans]);
+  }, [activeTab, fetchMatchJobs, fetchPastGenerations]);
 
   const handleLoadMatchJob = (job: MatchJob) => {
     if (job.status === 'completed') {
@@ -173,23 +206,16 @@ const PastScansScreen = () => {
     }
   };
 
-  const handleLoadScan = (scan: PastScan) => {
-    navigation.navigate('AddListing', {
-      initialData: {
-        title: scan.title,
-        description: scan.description,
-        price: scan.price,
-        sku: scan.sku,
-        barcode: scan.barcode,
-        images: scan.images,
-        platformDetails: scan.platform_details,
-        status: scan.status,
-        initialStage: 'FORM_REVIEW',
-        productId: scan.id,
-        variantId: scan.variantId,
-        uploadedImageUrls: scan.images,
+  const handleLoadGeneration = (job: GenerationJob) => {
+    if (job.status === 'completed') {
+      navigation.navigate('GenerateDetailsScreen', {
+        response: { jobId: job.id } 
+
+      });
+    } else {
+
+        console.log(`Job status is '${job.status}', cannot view results yet.`)
       }
-    });
   };
 
   const renderMatchJobItem = ({ item }: { item: MatchJob }) => (
@@ -234,39 +260,47 @@ const PastScansScreen = () => {
     </Card>
   );
 
-  const renderScanItem = ({ item }: { item: PastScan }) => (
+  const renderScanItem = ({ item }: { item: GenerationJob }) => (
     <Card style={styles.scanCard}>
       <TouchableOpacity 
         style={styles.scanItem}
-        onPress={() => handleLoadScan(item)}
+        onPress={() => handleLoadGeneration(item)}
       >
         <View style={styles.scanInfo}>
-          <Text style={styles.scanTitle}>{item.title}</Text>
+          {/*<Text style={styles.scanTitle}>{item.title}</Text>*/}
           <Text style={styles.scanDate}>
             {new Date(item.created_at).toLocaleDateString()}
           </Text>
           <View style={styles.scanDetails}>
-            <Text style={styles.scanDetail}>SKU: {item.sku || 'N/A'}</Text>
-            <Text style={styles.scanDetail}>Price: ${item.price.toFixed(2)}</Text>
+           {/*<Text style={styles.scanDetail}>SKU: {item.sku || 'N/A'}</Text>*/}
+            {/*<Text style={styles.scanDetail}>Price: ${item.price.toFixed(2)}</Text>*/}
           </View>
+          <View style={styles.scanDetails}>
+             <Text style={styles.scanDetail}>
+                High: {item.summary?.highConfidenceCount ?? 0}
+             </Text>
+             <Text style={styles.scanDetail}>
+                Med: {item.summary?.mediumConfidenceCount ?? 0}
+             </Text>
+             <Text style={styles.scanDetail}>
+                Low: {item.summary?.lowConfidenceCount ?? 0}
+             </Text>
+          </View>
+
           <View style={styles.scanStatus}>
             <Icon 
-              name={item.status === 'active' ? 'check-circle' : 
-                    item.status === 'archived' ? 'archive' : 'pencil'} 
+              name={item.status === 'completed' ? 'check-circle' : 'cogs'} 
               size={16} 
-              color={item.status === 'active' ? theme.colors.success : 
-                     item.status === 'archived' ? theme.colors.textSecondary : 
-                     theme.colors.primary} 
+              color={item.status === 'completed' ? theme.colors.success : theme.colors.primary} 
             />
             <Text style={[
               styles.statusText,
-              { color: item.status === 'active' ? theme.colors.success : 
-                      item.status === 'archived' ? theme.colors.textSecondary : 
-                      theme.colors.primary }
+              { color: item.status === 'completed' ? theme.colors.success : theme.colors.primary }
             ]}>
               {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
             </Text>
           </View>
+          
         </View>
         <Icon name="chevron-right" size={24} color={theme.colors.textSecondary} />
       </TouchableOpacity>
@@ -288,7 +322,7 @@ const PastScansScreen = () => {
           <Text style={styles.errorText}>{error}</Text>
           <Button 
             title="Try Again" 
-            onPress={activeTab === 'matches' ? fetchMatchJobs : fetchPastScans}
+            onPress={activeTab === 'matches' ? fetchMatchJobs : fetchPastGenerations}
             style={styles.retryButton}
           />
         </View>
@@ -297,7 +331,7 @@ const PastScansScreen = () => {
 
     return (
       <FlatList
-        data={activeTab === 'matches' ? matchJobs : scans}
+        data={activeTab === 'matches' ? matchJobs : generationJobs}
         renderItem={activeTab === 'matches' ? renderMatchJobItem : renderScanItem}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.listContent}

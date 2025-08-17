@@ -1,8 +1,13 @@
 import React from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, ViewStyle } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 
-const Card = ({ children, style }) => {
+interface CardProps {
+  children: React.ReactNode;
+  style?: ViewStyle | ViewStyle[] | any;
+}
+
+const Card: React.FC<CardProps> = ({ children, style }) => {
   const theme = useTheme();
   
   return (

@@ -1,13 +1,20 @@
-import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import React, { useMemo, useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
+import ItemJobsModal from '../components/ItemJobsModal';
+import { Boxes, X } from 'lucide-react-native';
+import BottomActionBar from '../components/BottomActionBar';
+import ListingEditorForm from '../components/ListingEditorForm';
 
 type Props = StackScreenProps<AppStackParamList, 'GenerateDetailsScreen'>;
 
 type GeneratedPlatformDetails = Record<string, any>;
 type GeneratedResult = {
   productIndex: number;
+  productId?: string;
+  variantId?: string;
   platforms: GeneratedPlatformDetails;
   sourceImageUrl?: string;
   processingTimeMs?: number;
@@ -23,35 +30,245 @@ function GenerateDetailsScreen({ route }: Props) {
     completedAt?: string;
   };
 
+  console.log('[GEN-DETAILS] route.params keys:', Object.keys((route.params || {}) as any));
+  console.log('[GEN-DETAILS] jobId:', jobId, 'status:', status);
+  console.log('[GEN-DETAILS] results raw:', Array.isArray(results) ? `len=${results.length}` : typeof results);
+
   const first: GeneratedResult | null = useMemo(() => Array.isArray(results) && results.length > 0 ? results[0] : null, [results]);
   const platforms: GeneratedPlatformDetails = (first && first.platforms) ? first.platforms : {};
+  const [displayedPlatforms, setDisplayedPlatforms] = useState<GeneratedPlatformDetails>(platforms);
   const platformKeys: string[] = Object.keys(platforms as Record<string, any>);
+  const [jobsModalVisible, setJobsModalVisible] = useState(false);
+  const [checklist, setChecklist] = useState<Record<string, { missing: string[]; ready: boolean }>>({});
+  const [versionsSheetOpen, setVersionsSheetOpen] = useState(false);
+  const [versions, setVersions] = useState<Array<{ id: string; jobId: string; createdAt: string; platforms: any; sources?: Array<{ url: string; usedForFields?: string[] }> }>>([]);
+  const [selectedFieldKey, setSelectedFieldKey] = useState<string | null>(null);
+  const [versionsTab, setVersionsTab] = useState<'versions'|'sources'>('versions');
+  // Try to pull items list from params if provided; fallback to single
+  const items = useMemo(() => {
+    const raw = ((route.params as any)?.items || []) as Array<{ index: number; title?: string; thumb?: string; matchesCount?: number }>;
+    const normalized = (Array.isArray(raw) ? raw : []).map((it, i) => ({
+      index: it.index ?? i,
+      title: it.title ?? `Item ${i + 1}`,
+      thumb: it.thumb ?? '',
+      matchesCount: it.matchesCount ?? 0,
+    }));
+    if (normalized.length) return normalized;
+    // Build from results if items not passed
+    const fallback = Array.isArray(results) ? results.map((r, i) => ({ index: r.productIndex ?? i, title: `Item ${i + 1}`, thumb: r.sourceImageUrl || '', matchesCount: 0 })) : [];
+    if (fallback.length) return fallback;
+    return [{ index: first?.productIndex ?? 0, title: 'Item 1', thumb: first?.sourceImageUrl || '', matchesCount: 0 }];
+  }, [route.params, first, results]);
+
+  const jobMap = ((route.params as any)?.jobMap || {}) as Record<number, { jobId: string; status?: string }>;
+
+  // Keep displayed platforms in sync with first result changes
+  useEffect(() => {
+    setDisplayedPlatforms(platforms);
+    // compute per-platform readiness: simple required fields heuristic
+    const requiredByPlatform: Record<string, string[]> = {
+      shopify: ['title', 'price', 'description', 'images'],
+      amazon: ['title', 'price', 'description', 'images'],
+      ebay: ['title', 'price', 'description', 'images'],
+      clover: ['title', 'price'],
+      square: ['title', 'price'],
+      facebook: ['title', 'price', 'description', 'images'],
+    };
+    const next: Record<string, { missing: string[]; ready: boolean }> = {};
+    for (const key of Object.keys(platforms)) {
+      const data = platforms[key] || {};
+      const req = requiredByPlatform[key] || [];
+      const missing = req.filter(f => {
+        if (f === 'images') {
+          const imgs = data.images || data.imageUris || data.files || [];
+          return !Array.isArray(imgs) || imgs.length < 1;
+        }
+        const v = data[f];
+        return v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+      });
+      next[key] = { missing, ready: missing.length === 0 };
+    }
+    setChecklist(next);
+  }, [platforms]);
+
+  // Fetch versions when sheet opens
+  useEffect(() => {
+    if (!versionsSheetOpen) return;
+    // Attempt to infer productId/variantId from current result if available in params
+    const productId = (route.params as any)?.productId || first?.productId || null;
+    const variantId = (route.params as any)?.variantId || first?.variantId || null;
+    const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+    if (!baseUrl || !productId) return;
+    (async () => {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData?.session?.access_token;
+        const res = await fetch(`${baseUrl}/api/products/generate/versions?productId=${encodeURIComponent(productId)}${variantId ? `&variantId=${encodeURIComponent(variantId)}` : ''}&limit=20&offset=0`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
+        if (!res.ok) throw new Error(`Versions fetch failed ${res.status}`);
+        const data = await res.json();
+        if (Array.isArray(data)) setVersions(data);
+      } catch (e) {
+        // non-blocking
+      }
+    })();
+  }, [versionsSheetOpen, first, route.params]);
+
+  // Helper: compute overall readiness
+  const canPublish = useMemo(() => Object.values(checklist || {}).some(x => x.ready), [checklist]);
+
+  // Field panel open handler
+  const handleOpenFieldPanel = (fieldKey: string) => {
+    setSelectedFieldKey(fieldKey);
+    setVersionsTab('versions');
+    setVersionsSheetOpen(true);
+  };
+
+  // Build publish/save payloads from displayed data
+  const buildPlatformPayload = () => {
+    // canonical: prefer "shopify" as base, else first platform
+    const keys = Object.keys(displayedPlatforms || {});
+    const canonicalKey = keys.includes('shopify') ? 'shopify' : keys[0];
+    const canonical = (displayedPlatforms?.[canonicalKey] || {}) as any;
+    return {
+      platformDetails: {
+        canonical: {
+          title: canonical.title || '',
+          sku: canonical.sku || `DRAFT-${(first?.productId||'').slice(0,8)}`,
+          price: Number(canonical.price || 0),
+          description: canonical.description || '',
+          compareAtPrice: canonical.compareAtPrice || undefined,
+          barcode: canonical.barcode || undefined,
+          weight: canonical.weight || undefined,
+          weightUnit: canonical.weightUnit || undefined,
+          tags: Array.isArray(canonical.tags) ? canonical.tags : undefined,
+          vendor: canonical.vendor || undefined,
+          productType: canonical.productType || undefined,
+          status: canonical.status || undefined,
+          brand: canonical.brand || undefined,
+          condition: canonical.condition || undefined,
+          categorySuggestion: canonical.categorySuggestion || undefined,
+        },
+        ...displayedPlatforms,
+      },
+      media: (() => {
+        // collect image urls from any platform or use sourceImageUrl
+        const imgs = new Set<string>();
+        for (const k of Object.keys(displayedPlatforms||{})) {
+          const p = (displayedPlatforms as any)[k] || {};
+          const arr = p.images || p.imageUris || [];
+          if (Array.isArray(arr)) arr.forEach((u:string)=>{ if (typeof u === 'string' && u) imgs.add(u); });
+        }
+        if (imgs.size === 0 && first?.sourceImageUrl) imgs.add(first.sourceImageUrl);
+        const imageUris = Array.from(imgs);
+        return { imageUris, coverImageIndex: 0 };
+      })(),
+      selectedPlatformsToPublish: Object.keys(displayedPlatforms||{}),
+    };
+  };
+
+  const doSaveDraft = async () => {
+    try {
+      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      const productId = (route.params as any)?.productId || first?.productId;
+      const variantId = (route.params as any)?.variantId || first?.variantId;
+      if (!baseUrl || !productId || !variantId) return;
+      const payload = buildPlatformPayload();
+      const res = await fetch(`${baseUrl}/api/products/save-or-publish`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productId,
+          variantId,
+          publishIntent: 'SAVE_SSSYNC_DRAFT',
+          platformDetails: payload.platformDetails,
+          media: payload.media,
+          selectedPlatformsToPublish: payload.selectedPlatformsToPublish,
+        })
+      });
+      // non-blocking UX - you can add a toast here
+    } catch {}
+  };
+
+  const doPublish = async () => {
+    try {
+      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      const productId = (route.params as any)?.productId || first?.productId;
+      const variantId = (route.params as any)?.variantId || first?.variantId;
+      if (!baseUrl || !productId || !variantId) return;
+      const payload = buildPlatformPayload();
+      const res = await fetch(`${baseUrl}/api/products/save-or-publish`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productId,
+          variantId,
+          publishIntent: 'PUBLISH_PLATFORM_DRAFT',
+          platformDetails: payload.platformDetails,
+          media: payload.media,
+          selectedPlatformsToPublish: payload.selectedPlatformsToPublish,
+        })
+      });
+    } catch {}
+  };
 
   return (
+    <View style={{ flex: 1 }}>
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <View style={{ position: 'absolute', top: 16, right: 16, zIndex: 4000, flexDirection: 'row', gap: 8 }}>
+        <TouchableOpacity onPress={() => setVersionsSheetOpen(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5' }}>
+          <Text style={{ color: '#000', fontWeight: '600' }}>•••</Text>
+        </TouchableOpacity>
+      </View>
+      <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ position: 'absolute', top: -32, left: 16, zIndex: 4000, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}>
+        <Boxes size={18} color={'#000'} />
+        <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Current Jobs</Text>
+      </TouchableOpacity>
       <Text style={styles.heading}>Generate Results</Text>
       <Text style={styles.meta}>Job: {jobId}</Text>
       <Text style={styles.meta}>Status: {status}</Text>
       {completedAt ? <Text style={styles.meta}>Completed: {completedAt}</Text> : null}
 
       {first ? (
-        <View style={styles.card}>
-          <Text style={styles.subheading}>Product {first.productIndex + 1}</Text>
-          <Text style={styles.meta}>Image: {first.sourceImageUrl}</Text>
-          <Text style={styles.meta}>Processing: {first.processingTimeMs} ms</Text>
-          <Text style={styles.meta}>Source: {first.source}</Text>
-
-          {platformKeys.map((p) => (
-            <View key={p} style={styles.section}>
-              <Text style={styles.platform}>{p.toUpperCase()}</Text>
-              {platforms[p]?.title ? <Text style={styles.field}>Title: {String(platforms[p].title)}</Text> : null}
-              {platforms[p]?.price !== undefined ? <Text style={styles.field}>Price: {String(platforms[p].price)}</Text> : null}
-              {platforms[p]?.description ? (
-                <Text style={styles.field} numberOfLines={4}>Desc: {String(platforms[p].description)}</Text>
-              ) : null}
-            </View>
-          ))}
-        </View>
+        <>
+          {/* Lightweight readiness checklist */}
+          <View style={styles.card}>
+            <Text style={styles.subheading}>Publish readiness</Text>
+            {Object.keys(displayedPlatforms || {}).map((key) => {
+              const c = checklist[key] || { missing: [], ready: false };
+              return (
+                <View key={key} style={{ marginTop: 6 }}>
+                  <Text style={{ color: '#000', fontWeight: '600' }}>{key}</Text>
+                  {c.ready ? (
+                    <Text style={{ color: '#10B981' }}>Ready to publish</Text>
+                  ) : (
+                    <Text style={{ color: '#EA580C' }}>
+                      Missing: {c.missing.join(', ') || '—'}
+                    </Text>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+          <View style={styles.card}>
+            <Text style={styles.subheading}>Product {first.productIndex + 1}</Text>
+            <Text style={styles.meta}>Image: {first.sourceImageUrl}</Text>
+            <Text style={styles.meta}>Processing: {first.processingTimeMs} ms</Text>
+            <Text style={styles.meta}>Source: {first.source}</Text>
+          </View>
+          {/* Editor form that matches the product page design */}
+          <ListingEditorForm
+            platforms={displayedPlatforms}
+            images={[first.sourceImageUrl || ''].filter(Boolean)}
+            onChangePlatforms={setDisplayedPlatforms}
+            onOpenFieldPanel={handleOpenFieldPanel}
+          />
+        </>
       ) : (
         <Text style={styles.meta}>No results</Text>
       )}
@@ -65,14 +282,126 @@ function GenerateDetailsScreen({ route }: Props) {
           <Text style={styles.meta}>Avg ms: {String(summary.averageProcessingTimeMs)}</Text>
         </View>
       ) : null}
+
+
+      <ItemJobsModal
+        visible={jobsModalVisible}
+        onClose={() => setJobsModalVisible(false)}
+        items={items}
+        currentIndex={items[0]?.index || 0}
+        scanColor={() => '#10B981'}
+        matchColor={() => '#10B981'}
+        detailsColor={(idx) => (jobMap[idx]?.status === 'completed' ? '#10B981' : jobMap[idx]?.status === 'failed' ? '#e11d48' : '#4B5563')}
+        detailsEnabled={(idx) => !!jobMap[idx]?.jobId}
+         onQuickGenerate={(idx) => {
+           // Navigate back to match screen keeping items list and jobMap context intact
+           (route as any).navigation?.navigate?.('MatchSelectionScreen', { focusIndex: idx, items } as any);
+           setJobsModalVisible(false);
+         }}
+        onPickScan={(idx) => setJobsModalVisible(false)}
+        onPickMatch={(idx) => setJobsModalVisible(false)}
+         onPickDetails={(idx) => {
+          const jid = jobMap[idx]?.jobId;
+          if (jid) {
+            // Re-open loading to that job
+            // Note: not passing items again here; keep this screen simple
+            (route as any).navigation?.navigate?.('LoadingScreen', {
+              processType: 'generate',
+              payload: { jobId: jid, firstPhotos: [] },
+               onCompleteRoute: { screen: 'GenerateDetailsScreen', params: { jobId: jid, items, jobMap } }
+            });
+            setJobsModalVisible(false);
+          }
+        }}
+      />
+      {/* Bottom actions for generate mode */}
+      {first ? (
+        <BottomActionBar
+          secondaryLabel="Save Draft"
+          onSecondary={doSaveDraft}
+          primaryLabel="Publish Listing"
+          primaryDisabled={!canPublish}
+          onPrimary={doPublish}
+        />
+      ) : null}
     </ScrollView>
+    {versionsSheetOpen && (
+        <>
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={() => setVersionsSheetOpen(false)}
+            style={styles.versionsBackdrop}
+          />
+          <View style={styles.versionsSheet}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TouchableOpacity onPress={() => setVersionsTab('versions')} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: versionsTab==='versions'? '#93C822':'#E5E5E5', backgroundColor: versionsTab==='versions'?'rgba(147,200,34,0.08)':'#fff' }}>
+                  <Text style={{ color: '#000', fontWeight: '600' }}>Versions</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setVersionsTab('sources')} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: versionsTab==='sources'? '#93C822':'#E5E5E5', backgroundColor: versionsTab==='sources'?'rgba(147,200,34,0.08)':'#fff' }}>
+                  <Text style={{ color: '#000', fontWeight: '600' }}>Sources</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <TouchableOpacity onPress={() => setVersionsSheetOpen(false)} accessibilityLabel="Close versions panel" style={{ padding: 6 }}>
+                  <X size={20} color={'#000'} />
+                </TouchableOpacity>
+              </View>
+            </View>
+            <ScrollView style={{ marginTop: 12 }}>
+              {versionsTab === 'versions' ? (
+                versions.length === 0 ? (
+                  <Text style={{ color: '#666' }}>No versions recorded yet.</Text>
+                ) : versions.map(v => (
+                  <TouchableOpacity key={v.id} onPress={() => {
+                    setDisplayedPlatforms(v.platforms || {});
+                    setVersionsSheetOpen(false);
+                  }} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, padding: 10, marginBottom: 8 }}>
+                    <Text style={{ color: '#000', fontWeight: '600' }}>{new Date(v.createdAt).toLocaleString()}</Text>
+                    <Text style={{ color: '#000' }}>Platforms: {Object.keys(v.platforms || {}).join(', ')}</Text>
+                    {Array.isArray(v.sources) && v.sources.length > 0 ? (
+                      <Text style={{ color: '#000' }}>Sources: {v.sources.slice(0, 3).map(s=>s.url).join(', ')}{v.sources.length > 3 ? '…' : ''}</Text>
+                    ) : null}
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <View>
+                  {!selectedFieldKey ? (
+                    <Text style={{ color: '#666' }}>Tap the info icon next to a field to view sources for that field.</Text>
+                  ) : (
+                    <>
+                      <Text style={{ color: '#000', fontWeight: '700', marginBottom: 6 }}>Sources for “{selectedFieldKey}”</Text>
+                      {(() => {
+                        const rows: Array<{ url: string }>= [];
+                        for (const v of versions) {
+                          const src = (v.sources || []).filter(s => !s.usedForFields || s.usedForFields.includes(selectedFieldKey));
+                          src.forEach(s => rows.push({ url: s.url }));
+                        }
+                        const unique = Array.from(new Set(rows.map(r=>r.url)));
+                        return unique.length === 0 ? (
+                          <Text style={{ color: '#666' }}>No recorded field-level sources.</Text>
+                        ) : unique.map(u => (
+                          <View key={u} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, padding: 10, marginBottom: 8 }}>
+                            <Text style={{ color: '#000' }}>{u}</Text>
+                          </View>
+                        ));
+                      })()}
+                    </>
+                  )}
+                </View>
+              )}
+            </ScrollView>
+          </View>
+        </>
+      )}
+    </View>
   );
 }
 
 export default GenerateDetailsScreen;
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
+  container: { flex: 1, backgroundColor: '#fff', paddingTop: "20%" },
   content: { padding: 16, paddingBottom: 80 },
   heading: { color: '#000', fontSize: 24, fontWeight: '700', marginBottom: 6 },
   subheading: { color: '#000', fontSize: 18, fontWeight: '600', marginBottom: 4 },
@@ -81,4 +410,6 @@ const styles = StyleSheet.create({
   section: { marginTop: 8 },
   platform: { color: '#000', fontWeight: '700', marginBottom: 4 },
   field: { color: '#000', marginBottom: 2 },
+  versionsBackdrop: { position: 'absolute', top: 0, left: 0, bottom: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.2)' },
+  versionsSheet: { position: 'absolute', top: 0, right: 0, bottom: 0, width: '70%', backgroundColor: '#fff', borderLeftColor: '#E5E5E5', borderLeftWidth: 1, padding: 16 },
 });
