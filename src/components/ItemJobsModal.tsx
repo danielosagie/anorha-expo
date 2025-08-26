@@ -27,6 +27,8 @@ type Props = {
   onBatchGenerateSelected?: (indices: number[]) => void;
   onBatchRescanSelected?: (indices: number[]) => void;
   onRescan?: (index: number) => void;
+  countLabel?: string;
+  getSecondaryText?: (index: number) => string | null;
 };
 
 export default function ItemJobsModal({
@@ -46,6 +48,8 @@ export default function ItemJobsModal({
   onBatchGenerateSelected,
   onBatchRescanSelected,
   onRescan,
+  countLabel,
+  getSecondaryText,
   }: Props) {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -94,7 +98,8 @@ export default function ItemJobsModal({
                   {!!it.thumb && <Image source={{ uri: it.thumb }} style={{ width: 36, height: 36, borderRadius: 6, marginRight: 10 }} />}
                   <View style={{ flex: 1 }}>
                     <Text style={styles.title}>{it.title}</Text>
-                    <Text style={{ color: '#000' }}>Matches: {it.matchesCount}</Text>
+                    <Text style={{ color: '#000' }}>{(countLabel || 'Matches')}: {it.matchesCount}</Text>
+                    {getSecondaryText ? (() => { const txt = getSecondaryText(it.index); return txt ? <Text style={{ color: '#71717A', marginTop: 2 }}>{txt}</Text> : null; })() : null}
                     <View style={{ flexDirection: 'row', marginTop: 6 }}>
                       {/* Scan */}
                       <TouchableOpacity onPress={() => onPickScan(it.index)} style={styles.pill}>

@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Image } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
+import PyramidGrid from '../components/PyramidGrid';
 import Button from '../components/Button';
 import { supabase } from '../../lib/supabase';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -38,6 +39,7 @@ interface MatchJob {
     lowConfidenceCount?: number;
     totalProducts?: number;
   };
+  results?: any[];
 }
 
 interface GenerationJob {
@@ -49,7 +51,10 @@ interface GenerationJob {
     mediumConfidenceCount?: number;
     lowConfidenceCount?: number;
     totalProducts?: number;
+    firstTitle?: string;
+    firstThumb?: string;
   };
+  results?: any[];
 }
 
 type PastScansScreenNavigationProp = StackNavigationProp<AppStackParamList, 'PastScans'>;
@@ -73,7 +78,7 @@ const PastScansScreen = () => {
 
       const { data, error } = await supabase
         .from('match_jobs')
-        .select('job_id, created_at, status, summary')
+        .select('job_id, created_at, status, summary, results')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
@@ -103,7 +108,7 @@ const PastScansScreen = () => {
 
       const {data, error} = await supabase
         .from("generate_jobs")
-        .select('job_id, created_at, status, summary')
+        .select('job_id, created_at, status, summary, results')
         .eq('user_id', user.id)
         .order('created_at', {ascending: false});
 
@@ -174,7 +179,15 @@ const PastScansScreen = () => {
       }
 
       // The table has `job_id`, but our keyExtractor needs `id`. Let's map it.
-      const formattedJobs = data.map(job => ({ ...job, id: job.job_id })) as GenerationJob[];
+      const formattedJobs = (data as any[]).map(job => {
+        const results = Array.isArray(job.results) ? job.results : [];
+        const first = results[0] || null;
+        const platforms = (first && first.platforms) ? first.platforms : {};
+        const title = platforms?.shopify?.title || platforms?.amazon?.title || platforms?.ebay?.title || 'Generated Listing';
+        const thumb = first?.sourceImageUrl || '';
+        const summary = { ...(job.summary || {}), firstTitle: title, firstThumb: thumb };
+        return { ...job, id: job.job_id, summary, results } as GenerationJob;
+      });
       console.log(formattedJobs);
 
       setGenerationJobs(formattedJobs);
@@ -195,27 +208,20 @@ const PastScansScreen = () => {
   }, [activeTab, fetchMatchJobs, fetchPastGenerations]);
 
   const handleLoadMatchJob = (job: MatchJob) => {
-    if (job.status === 'completed') {
-      navigation.navigate('MatchSelectionScreen', {
-        // Pass the job ID to the selection screen
-        response: { jobId: job.id } 
-      });
-    } else {
-      // Handle other statuses if needed (e.g., show an alert)
-      console.log(`Job status is '${job.status}', cannot view results yet.`);
-    }
+    // Always navigate to selection; the screen will poll status and hydrate when ready
+    navigation.navigate('MatchSelectionScreen', {
+      response: { jobId: job.id }
+    });
   };
 
   const handleLoadGeneration = (job: GenerationJob) => {
     if (job.status === 'completed') {
       navigation.navigate('GenerateDetailsScreen', {
-        response: { jobId: job.id } 
-
-      });
+        jobId: job.id
+      } as any);
     } else {
-
-        console.log(`Job status is '${job.status}', cannot view results yet.`)
-      }
+      console.log(`Job status is '${job.status}', cannot view results yet.`)
+    }
   };
 
   const renderMatchJobItem = ({ item }: { item: MatchJob }) => (
@@ -223,9 +229,22 @@ const PastScansScreen = () => {
       <TouchableOpacity 
         style={styles.scanItem}
         onPress={() => handleLoadMatchJob(item)}
-        disabled={item.status !== 'completed'}
       >
+        <View style={styles.thumbRow}>
+            {Array.isArray((item as any)?.results) && (item as any).results.length > 1 ? (
+              <PyramidGrid
+                style={{ marginRight: 10, height: 48, width: 48 }}
+                items={(item as any).results
+                  .map((r: any, idx: number) => ({ id: String(idx), uri: r?.serpApiData?.[0]?.image || '' }))
+                  .filter((x: any) => !!x.uri)
+                }
+              />
+            ) : ((item as any)?.results?.[0]?.serpApiData?.[0]?.image ? (
+              <Image source={{ uri: (item as any).results[0].serpApiData[0].image }} style={styles.thumb} />
+            ) : null)}
+          </View>
         <View style={styles.scanInfo}>
+        
           <Text style={styles.scanTitle}>Match Job</Text>
           <Text style={styles.scanDate}>
             {new Date(item.created_at).toLocaleString()}
@@ -266,15 +285,24 @@ const PastScansScreen = () => {
         style={styles.scanItem}
         onPress={() => handleLoadGeneration(item)}
       >
+        <View style={styles.scanDetails}>
+            {Array.isArray(item.results) && item.results.length > 1 ? (
+              <PyramidGrid
+                style={{ marginRight: 10 }}
+                items={item.results
+                  .map((r: any, idx: number) => ({ id: String(idx), uri: r?.sourceImageUrl || '' }))
+                  .filter((x: any) => !!x.uri)
+                }
+              />
+            ) : ((item as any)?.summary?.firstThumb ? (
+              <Image source={{ uri: (item as any).summary.firstThumb }} style={styles.thumb} />
+            ) : null)}
+          </View>
         <View style={styles.scanInfo}>
-          {/*<Text style={styles.scanTitle}>{item.title}</Text>*/}
+          <Text style={styles.scanTitle}>{(item as any)?.summary?.firstTitle || 'Generated Listing'}</Text>
           <Text style={styles.scanDate}>
             {new Date(item.created_at).toLocaleDateString()}
           </Text>
-          <View style={styles.scanDetails}>
-           {/*<Text style={styles.scanDetail}>SKU: {item.sku || 'N/A'}</Text>*/}
-            {/*<Text style={styles.scanDetail}>Price: ${item.price.toFixed(2)}</Text>*/}
-          </View>
           <View style={styles.scanDetails}>
              <Text style={styles.scanDetail}>
                 High: {item.summary?.highConfidenceCount ?? 0}
@@ -496,6 +524,18 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
     textAlign: 'center',
+  },
+  thumbRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  thumb: {
+    width: 48,
+    height: 48,
+    borderRadius: 6,
+    marginRight: 10,
+    backgroundColor: '#f1f5f9',
   },
 });
 

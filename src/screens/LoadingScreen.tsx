@@ -20,7 +20,7 @@ import { AppStackParamList } from '../navigation/AppNavigator';
 import PyramidGrid from '../components/PyramidGrid';
 import { Blurred } from '../components/Blurred';
 import StepLoader from '../components/StepLoader';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../../lib/supabase';
 import ItemJobsModal from '../components/ItemJobsModal';
 import { Boxes } from 'lucide-react-native';
 
@@ -76,6 +76,9 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
 
 
   // Poll job status using the jobId
+  const [navigatedEarly, setNavigatedEarly] = useState(false);
+  const BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
+
   useEffect(() => {
     if (!jobId) return;
 
@@ -142,7 +145,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
           
         } else {
 
-          const response = await fetch(`https://api.sssync.app/api/products/match/jobs/${jobId}/status`, {
+          const response = await fetch(`${BASE_URL}/api/products/match/jobs/${jobId}/status`, {
             headers: {
               'Authorization': `Bearer ${token}`,
               'Content-Type': 'application/json',
@@ -161,15 +164,36 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
             setCurrentStageIndex(stageIndex);
           }
           
-          // If completed, navigate to next screen
-          if (status.status === 'completed') {
+          // Early navigate: as soon as we have initial results, go to selection screen (non-blocking rerank/embeddings continue server-side)
+          if (!navigatedEarly && Array.isArray(status.results) && status.results.length > 0) {
+            setNavigatedEarly(true);
+            const itemsForModal = (status.results || []).map((res: any, idx: number) => {
+              const first = res?.serpApiData?.[0];
+              return {
+                index: idx,
+                title: first?.title || `Item ${idx + 1}`,
+                thumb: first?.image || first?.thumbnail || '',
+                matchesCount: Array.isArray(res?.serpApiData) ? res.serpApiData.length : 0,
+              };
+            });
+            navigation.replace(onCompleteRoute.screen, {
+              ...onCompleteRoute.params,
+              // Prefer passing just jobId so destination polls and hydrates continuously
+              response: { jobId: status.jobId },
+              items: itemsForModal,
+            });
+            return; // stop further handling in this tick
+          }
+
+          // If completed, navigate (redundant if we already navigated early)
+          if (status.status === 'completed' && !navigatedEarly) {
             console.log(`Process "${processType}" complete! Navigating...`);
             setTimeout(() => {
               navigation.replace(onCompleteRoute.screen, {
                 ...onCompleteRoute.params,
                 jobResults: status.results
               });
-            }, 1000);
+            }, 500);
           } else if (status.status === 'failed') {
             console.error('Job failed:', status.error);
             // Handle error - maybe go back or show error screen

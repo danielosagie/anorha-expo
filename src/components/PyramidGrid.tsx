@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, Dimensions, TouchableOpacity, StyleSheet, Image } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, Text, Dimensions, TouchableOpacity, StyleSheet, Image, LayoutChangeEvent, StyleProp, ViewStyle } from 'react-native';
 
 // It's better to define the shape of the objects you expect.
 // This gives you type safety and autocomplete.
@@ -8,9 +8,20 @@ interface GridItem {
   uri: string;
 }
 
-const PyramidGrid = ( { items, style }: { items: GridItem[], style: any } ) => {
+const PyramidGrid = ( { items, style }: { items: GridItem[], style?: StyleProp<ViewStyle> } ) => {
   const screenWidth = Dimensions.get('window').width;
-  console.log('[PYRAMID] Items:', items);
+  const [containerWidth, setContainerWidth] = useState<number | null>(null);
+  const onLayout = (e: LayoutChangeEvent) => {
+    const w = e.nativeEvent.layout.width;
+    if (w && w !== containerWidth) setContainerWidth(w);
+  };
+  const availableWidth = useMemo(() => {
+    // Prefer measured width; fallback to explicit style width; else screen width
+    if (containerWidth && containerWidth > 0) return containerWidth;
+    const flat = StyleSheet.flatten(style) as ViewStyle | undefined;
+    const fromStyle = typeof flat?.width === 'number' ? flat?.width : undefined;
+    return (fromStyle && fromStyle > 0) ? fromStyle : screenWidth;
+  }, [containerWidth, style, screenWidth]);
 
   // State to manage whether to show the full list or only the top 6
   const [showFullList, setShowFullList] = useState(false);
@@ -41,10 +52,10 @@ const PyramidGrid = ( { items, style }: { items: GridItem[], style: any } ) => {
   let itemIndex = 0;
 
   // Calculate the maximum number of items in any given row to normalize width
-  const maxItemsInAnyRow = Math.max(...pyramidRows);
+  const maxItemsInAnyRow = Math.max(...pyramidRows, 1);
 
   return (
-    <View style={[styles.container, style]}>
+    <View style={[styles.container, style]} onLayout={onLayout}>
       {pyramidRows.map((numItemsInRow, rowIndex) => (
         <View key={rowIndex} style={styles.row}>
           {Array.from({ length: numItemsInRow }).map((_, colIndex) => {
@@ -53,7 +64,7 @@ const PyramidGrid = ( { items, style }: { items: GridItem[], style: any } ) => {
 
             // Calculate item width for responsiveness based on screenWidth and numItemsInRow
             // Using maxItemsInAnyRow for a more consistent item size across rows
-            const itemWidth = (screenWidth / (maxItemsInAnyRow + 1)) * 0.9; // Adjust multiplier and +1 for spacing
+            const itemWidth = (availableWidth / (maxItemsInAnyRow + 1)) * 0.9; // Adjust multiplier and +1 for spacing
 
             return (
               <View

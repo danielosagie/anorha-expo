@@ -4,12 +4,127 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'your-supabase-url';
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'your-supabase-anon-key';
+// Prefer SSSYNC-specific base if present; fall back to generic API base; default to production API
+const apiBaseCandidate = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+const apiBaseUrl = apiBaseCandidate;
+console.log('[supabase.ts] EXPO_PUBLIC_SSSYNC_API_BASE_URL =', process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL);
+console.log('[supabase.ts] EXPO_PUBLIC_API_BASE_URL =', process.env.EXPO_PUBLIC_API_BASE_URL);
+console.log('[supabase.ts] Computed apiBaseUrl candidate =', apiBaseUrl);
+
+let currentSupabaseJwt: string | null = null;
+let refreshIntervalHandle: ReturnType<typeof setInterval> | null = null;
+let getClerkTokenFn: (() => Promise<string | null>) | null = null;
+
+// Custom fetch for Supabase client to inject Authorization and handle 401 refresh
+const realFetch = globalThis.fetch.bind(globalThis);
+async function supabaseFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers || {});
+  if (currentSupabaseJwt) {
+    headers.set('Authorization', `Bearer ${currentSupabaseJwt}`);
+  }
+
+  const doFetch = () => realFetch(input as any, { ...init, headers });
+
+  let res = await doFetch();
+  if (res.status !== 401) return res;
+
+  // Attempt on-demand refresh once if we hit 401
+  console.warn('[supabase.ts] Received 401 from Supabase API, attempting token refresh...');
+  const refreshed = await refreshSupabaseToken();
+  if (!refreshed) return res;
+
+  headers.set('Authorization', `Bearer ${currentSupabaseJwt}`);
+  res = await doFetch();
+  return res;
+}
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  // We are not using GoTrue; we keep storage to avoid breaking other code paths
   auth: {
     storage: AsyncStorage,
-    autoRefreshToken: true,
-    persistSession: true,
+    autoRefreshToken: false,
+    persistSession: false,
     detectSessionInUrl: false,
   },
-}); 
+  global: {
+    fetch: supabaseFetch,
+  },
+});
+
+async function exchangeClerkForSupabase(): Promise<boolean> {
+  if (!getClerkTokenFn) return false;
+  try {
+    const clerkToken = await getClerkTokenFn();
+    const hasClerk = !!clerkToken;
+    console.log('[supabase.ts] exchangeClerkForSupabase start. hasClerkToken =', hasClerk);
+    if (!clerkToken) return false;
+    const base = apiBaseUrl.endsWith('/api') ? apiBaseUrl : `${apiBaseUrl}/api`;
+    const url = `${base}/auth/exchange`;
+    console.log('[supabase.ts] EXCHANGE URL =', url);
+    const resp = await realFetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${clerkToken}` },
+    });
+    console.log('[supabase.ts] exchange response status =', resp.status);
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '<no body>');
+      console.warn('[supabase.ts] exchange failed. status:', resp.status, 'body:', text);
+      return false;
+    }
+    const body = await resp.json();
+    currentSupabaseJwt = body.supabase_token as string;
+    console.log('[supabase.ts] received supabase_token length =', currentSupabaseJwt ? currentSupabaseJwt.length : 0);
+    return !!currentSupabaseJwt;
+  } catch (e) {
+    console.error('[supabase.ts] exchangeClerkForSupabase error:', e);
+    return false;
+  }
+}
+
+async function refreshSupabaseToken(): Promise<boolean> {
+  // Reuse the same exchange flow
+  return exchangeClerkForSupabase();
+}
+
+export async function configureClerkSupabaseBridge(options: {
+  getClerkToken: () => Promise<string | null>;
+  autoRefreshMinutes?: number;
+}) {
+  getClerkTokenFn = options.getClerkToken;
+  console.log('[supabase.ts] configureClerkSupabaseBridge called. autoRefreshMinutes =', options.autoRefreshMinutes);
+  const ok = await exchangeClerkForSupabase();
+  if (!ok) throw new Error('Failed to exchange Clerk token for Supabase JWT');
+
+  // Start background refresh slightly before expiry
+  const mins = options.autoRefreshMinutes ?? 9; // token ttl is ~10m on server
+  if (refreshIntervalHandle) clearInterval(refreshIntervalHandle);
+  refreshIntervalHandle = setInterval(() => {
+    refreshSupabaseToken().catch(() => void 0);
+  }, mins * 60 * 1000);
+}
+
+export function stopClerkSupabaseBridge() {
+  if (refreshIntervalHandle) clearInterval(refreshIntervalHandle);
+  refreshIntervalHandle = null;
+  currentSupabaseJwt = null;
+  getClerkTokenFn = null;
+}
+
+// Compatibility shim: replace supabase.auth.getUser() with a view-based lookup
+// so existing screens can continue to call supabase.auth.getUser().
+// We return the same shape: { data: { user }, error }
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(supabase as any).auth.getUser = async () => {
+  const { data, error } = await supabase.from('me').select('*').maybeSingle();
+  if (error || !data) {
+    return { data: { user: null }, error };
+  }
+  return { data: { user: { id: data.Id, email: data.Email } }, error: null };
+};
+
+// Optional explicit helper if you want to import directly
+export async function getUserLike() {
+  const { data, error } = await supabase.from('me').select('*').maybeSingle();
+  if (error || !data) return { user: null };
+  return { user: { id: data.Id, email: data.Email } };
+}

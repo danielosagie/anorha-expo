@@ -5,9 +5,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import TabBar from '../components/TabBar';
 import styles from '../styles/styles';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { Camera } from 'lucide-react';
+// import { Camera } from 'lucide-react-native';
 import { AppState, AppStateStatus } from 'react-native';
 import { CommonActions } from '@react-navigation/native';
+import { useAuth } from '@clerk/clerk-expo';
 import { NavigationContainer, useNavigation } from '@react-navigation/native';
 import { ActivityIndicator, View } from 'react-native';
 import { Asset } from 'expo-asset';
@@ -18,12 +19,11 @@ import {
   PlusJakartaSans_500Medium,
   PlusJakartaSans_700Bold,
 } from '@expo-google-fonts/plus-jakarta-sans';
-import { CirclePlus } from 'lucide-react';
+// import { CirclePlus } from 'lucide-react-native';
 
 // Import the context from its new location
 import { AuthContext, AuthContextType } from '../context/AuthContext';
-import { supabase } from '../../lib/supabase';
-
+import { supabase, stopClerkSupabaseBridge } from '../lib/supabase';
 // Screens
 import InitialScreen from '../screens/InitialScreen';
 import OnboardingSlides from '../screens/OnboardingSlides';
@@ -43,14 +43,17 @@ import AddProductScreen from '../screens/AddProductScreen';
 import LoadingScreen from '../screens/LoadingScreen';
 import MatchSelectionScreen, { JobResponse } from '../screens/MatchSelectionScreen';
 import GenerateDetailsScreen from '../screens/GenerateDetailsScreen';
+import VerifyCodeScreen from '../screens/VerifyCodeScreen';
 import MarketplaceChatScreen from '../screens/MarketplaceChatScreen';
 import { isFeatureEnabled } from '../config/features';
+import { SessionContext } from '../context/SessionContext';
 
 // --- Define Param Lists for Type Safety --- //
 type AuthStackParamList = {
   InitialScreen: undefined;
   OnboardingSlides: undefined;
   Auth: undefined;
+  VerifyCode: { contactLabel?: string; mode?: 'signup' | 'signin' } | undefined;
   // PhoneAuthScreen: { phoneNumber: string } | undefined; // Commented out
 };
 
@@ -202,6 +205,9 @@ export type AppStackParamList = {
     completedAt: string,
     initialData?: Array<{}>,
   }
+  PhotoUpload: {
+    onDone: (uris: string[]) => void;
+  }
 };
 
 type RootStackParamList = {
@@ -225,7 +231,7 @@ const TabNavigator = () => {
         headerShown: false,
         tabBarStyle: styles.tabBar,
       }}
-      tabBar={(props) => <TabBar {...props} />}
+      tabBar={(props: any) => <TabBar {...props} />}
       initialRouteName="Dashboard"
     >
       <Tab.Screen 
@@ -233,7 +239,7 @@ const TabNavigator = () => {
         component={DashboardScreen}
         options={{
           tabBarLabel: 'Dashboard',
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Icon name="view-dashboard-outline" color={color} size={size} />
           ),
         }}
@@ -243,7 +249,7 @@ const TabNavigator = () => {
         component={InventoryOrdersScreen}
         options={{
           tabBarLabel: 'Inventory',
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Icon name="package-variant-closed" color={color} size={size} />
           ),
         }}
@@ -253,7 +259,7 @@ const TabNavigator = () => {
         component={AddProductScreen}
         options={{
           tabBarLabel: 'Add Products',
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Icon name="plus-circle-outline" color={color} size={size} />
           ),
         }}
@@ -264,7 +270,7 @@ const TabNavigator = () => {
           component={MarketplaceScreen}
           options={{
             tabBarLabel: 'Marketplace',
-            tabBarIcon: ({ color, size }) => (
+            tabBarIcon: ({ color, size }: { color: string; size: number }) => (
               <Icon name="store-outline" color={color} size={size} />
             ),
           }}
@@ -275,7 +281,7 @@ const TabNavigator = () => {
           component={MarketplaceChatScreen}
           options={{
             tabBarLabel: 'Chat',
-            tabBarIcon: ({ color, size }) => (
+            tabBarIcon: ({ color, size }: { color: string; size: number }) => (
               <Icon name="message-outline" color={color} size={size} />
             ),
           }}
@@ -286,7 +292,7 @@ const TabNavigator = () => {
         component={ProfileScreen}
         options={{
           tabBarLabel: 'Settings',
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Icon name="cog-outline" color={color} size={size} />
           ),
         }}
@@ -304,6 +310,7 @@ const AuthStack = ({ isFirstLaunch, devForceOnboarding }: { isFirstLaunch: boole
       </>
     ) : null}
     <AuthStackNav.Screen name="Auth" component={AuthScreen} />
+    <AuthStackNav.Screen name="VerifyCode" component={VerifyCodeScreen} />
     {/* Comment out PhoneAuthScreen */}
     {/* <AuthStackNav.Screen name="PhoneAuthScreen" component={PhoneAuthScreen} /> */}
   </AuthStackNav.Navigator>
@@ -333,7 +340,8 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
 SplashScreen.preventAutoHideAsync();
 
 const AppNavigator = () => {
-  const navigation = useNavigation<StackScreenProps<RootStackParamList>['navigation']>();
+  const { isLoaded: clerkLoaded, isSignedIn, signOut: clerkSignOut } = useAuth();
+  const session = React.useContext(SessionContext);
   const [isLoading, setIsLoading] = useState(true);
   const [userToken, setUserToken] = useState<string | null>(null);
   const [isFirstLaunch, setIsFirstLaunch] = useState<boolean | null>(null);
@@ -377,6 +385,19 @@ const AppNavigator = () => {
     }
   }, [appIsReady]);
 
+  // Fallback: force-hide splash after 2s in case onLayout isn't triggered
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      SplashScreen.hideAsync().catch(() => {});
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Log render state changes for debugging without injecting void into JSX
+  useEffect(() => {
+    console.log('[AppNavigator] render', { initialStackName, initialAppScreen, isLoading, clerkLoaded });
+  }, [initialStackName, initialAppScreen, isLoading, clerkLoaded]);
+
   // Create authentication functions (Update signOut slightly)
   const authContext = React.useMemo((): AuthContextType => ({
     signIn: async (token: string) => {
@@ -389,11 +410,24 @@ const AppNavigator = () => {
       }
     },
     // Make signOut effectively synchronous for state update, but return Promise for type compatibility
-    signOut: () => { 
-      console.log("[AuthContext] signOut called, setting userToken to null.")
+    signOut: async () => { 
+      console.log("[AuthContext] signOut called, clearing tokens and Clerk session.")
       setUserToken(null); 
-      // Removal of AsyncStorage token will happen in handleLogout
-      return Promise.resolve(); // Satisfy AuthContextType
+      AsyncStorage.removeItem('userToken').catch(() => {});
+      try { stopClerkSupabaseBridge(); } catch {}
+      if (clerkSignOut) {
+        try {
+          await clerkSignOut();
+        } catch (e: any) {
+          // Handle "You are signed out" gracefully - it means we're already signed out
+          if (e?.message?.includes('signed out')) {
+            console.log('[AuthContext] Already signed out, continuing...');
+          } else {
+            console.error('[AuthContext] Sign out error:', e);
+          }
+        }
+      }
+      return Promise.resolve();
     },
     signUp: async (token: string) => {
       // Don't set isLoading false here
@@ -404,79 +438,40 @@ const AppNavigator = () => {
         console.log(e);
       }
     }
-  }), []); // Remove navigation dependency
+  }), [clerkSignOut]); // Remove navigation dependency
 
-  // Initial auth check - UPDATED to set initialStackName
+  // Initial launch check: only determine onboarding slides visibility; don't infer auth from legacy tokens
   useEffect(() => {
-    const bootstrapAsync = async () => {
-      setIsLoading(true);
-      let token: string | null = null;
-      let firstLaunch: boolean = true;
-      let stackName: 'AuthStack' | 'AppStack' = 'AuthStack'; // Default to Auth
-
+    (async () => {
       try {
-        token = await AsyncStorage.getItem('userToken');
         const alreadyLaunched = await AsyncStorage.getItem('alreadyLaunched');
-        firstLaunch = alreadyLaunched === null;
-        
-        if (firstLaunch) {
-          await AsyncStorage.setItem('alreadyLaunched', 'true');
-        }
-
-        if (token) {
-          stackName = 'AppStack';
-        } else {
-          stackName = 'AuthStack';
-        }
-
+        const firstLaunch = alreadyLaunched === null;
+        if (firstLaunch) await AsyncStorage.setItem('alreadyLaunched', 'true');
+        setIsFirstLaunch(firstLaunch);
       } catch (e) {
-        console.log("Bootstrap Error:", e);
-        stackName = 'AuthStack'; // Default to Auth on error
-      } finally {
-      setUserToken(token);
-      setIsFirstLaunch(firstLaunch);
-        setInitialStackName(stackName);
-
-        if (!token) {
-      setIsLoading(false);
-        }
+        console.log('Initial launch check error:', e);
+        setIsFirstLaunch(true);
       }
-    };
-
-    bootstrapAsync();
+    })();
   }, []);
+  
 
-  // --- Effect to handle token changes (Login/Logout) --- //
+  // Simplified: just determine which stack to show based on auth state
   useEffect(() => {
-    if (userToken === undefined) return; // Skip initial undefined state
-
-    if (userToken) {
-      // --- LOGIN ---
-      setInitialStackName('AppStack'); // Set stack to App
-      setIsLoading(true);            // Set loading true
-      setInitialAppScreen(null);     // Reset target screen state
-      // Call check after a tiny delay, allowing state to settle
-      const timer = setTimeout(() => {
-          checkOnboardingAndNavigate();
-      }, 10); // Minimal delay
-      return () => clearTimeout(timer); // Cleanup timer
-
+    if (!clerkLoaded) return;
+    const next = isSignedIn ? 'AppStack' : 'AuthStack';
+    setInitialStackName(next);
+    if (isSignedIn) {
+      // Default to TabNavigator to avoid blank UI, then refine after check
+      setInitialAppScreen('TabNavigator');
+      setIsLoading(true);
+      checkOnboardingAndNavigate();
     } else {
-      // --- LOGOUT ---
-       if (initialStackName !== null && navigation) { // Check ref is ready
-           console.log("[AppNavigator] User token is null, resetting navigation to AuthStack"); 
-           // Explicitly reset navigation state to the Auth stack
-           navigation.reset({ 
-             index: 0, 
-             routes: [{ name: 'AuthStack', params: { screen: 'Auth' } }], // Reset to AuthStack -> Auth screen
-           });
-           // Set state *after* reset is dispatched (might help avoid conflicts)
-           setInitialAppScreen(null);        
-           setInitialStackName('AuthStack');  
-           setIsLoading(false); // Set loading false directly now
-       }
+      setInitialAppScreen(null);
+      setIsLoading(false);
     }
-  }, [userToken, initialStackName]); // Add initialStackName dependency
+  }, [clerkLoaded, isSignedIn]);
+
 
   // Add AppState listener for session expiry
   useEffect(() => {
@@ -534,7 +529,23 @@ const AppNavigator = () => {
     }
   };
 
-  if (!appIsReady || isLoading || !initialStackName) {
+  // Fallback: if we're signed in and session bridge is ready but no destination after 1.5s, default to TabNavigator
+  useEffect(() => {
+    if (!clerkLoaded) return;
+    if (!isSignedIn) return;
+    if (initialAppScreen) return;
+    const t = setTimeout(() => {
+      if (!initialAppScreen) {
+        console.log('[AppNavigator] Fallback setting initialAppScreen=TabNavigator');
+        setInitialAppScreen('TabNavigator');
+        setIsLoading(false);
+      }
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [clerkLoaded, isSignedIn, initialAppScreen]);
+
+  // Keep UI hidden only until assets are ready (avoid full blank on auth state transitions)
+  if (!appIsReady) {
     return null;
   }
 
@@ -542,7 +553,8 @@ const AppNavigator = () => {
     <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
       <AuthContext.Provider value={authContext}>
         <Stack.Navigator 
-          initialRouteName={initialStackName ?? 'AuthStack'}
+          key={`${initialStackName}-${isSignedIn}-${initialAppScreen ?? 'none'}`}
+          initialRouteName={initialStackName ?? (isSignedIn ? 'AppStack' : 'AuthStack')}
           screenOptions={{ 
             headerShown: false,
             headerShadowVisible: false,
@@ -551,17 +563,22 @@ const AppNavigator = () => {
           }}
         >
           <Stack.Screen name="AuthStack">
-            {(props) => <AuthStack {...props} isFirstLaunch={isFirstLaunch ?? true} devForceOnboarding={devForceOnboarding} />}
+            {(props: any) => <AuthStack {...props} isFirstLaunch={isFirstLaunch ?? true} devForceOnboarding={devForceOnboarding} />}
           </Stack.Screen>
 
           <Stack.Screen name="AppStack">
-             {(props) =>
-                initialAppScreen ? (
-                  <AppStack initialScreenName={initialAppScreen} />
+             {(props: any) => {
+                // Check both navigation params and local state for initial screen
+                const navInitialScreen = props?.route?.params?.initialScreenName;
+                const effectiveInitialScreen = navInitialScreen || initialAppScreen;
+                console.log('[AppNavigator] AppStack render - navInitialScreen:', navInitialScreen, 'localInitialScreen:', initialAppScreen, 'effective:', effectiveInitialScreen);
+                
+                return effectiveInitialScreen ? (
+                  <AppStack initialScreenName={effectiveInitialScreen} />
                 ) : (
                   <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator /></View>
-                )
-             }
+                );
+             }}
             </Stack.Screen>
 
         </Stack.Navigator>

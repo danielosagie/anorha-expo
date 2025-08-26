@@ -1,10 +1,13 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../../lib/supabase';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { CameraView } from 'expo-camera';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import ItemJobsModal from '../components/ItemJobsModal';
-import { Boxes, X } from 'lucide-react-native';
+import PyramidGrid from '../components/PyramidGrid';
+import { getPlatformRequirements } from '../utils/platformRequirements';
+import { Boxes, X, Sparkles } from 'lucide-react-native';
 import BottomActionBar from '../components/BottomActionBar';
 import ListingEditorForm from '../components/ListingEditorForm';
 
@@ -22,28 +25,80 @@ type GeneratedResult = {
 };
 
 function GenerateDetailsScreen({ route }: Props) {
-  const { jobId, status, results, summary, completedAt } = ((route.params || {}) as unknown) as {
-    jobId: string;
-    status: string;
-    results: GeneratedResult[];
-    summary?: { totalProducts: number; completed: number; failed: number; averageProcessingTimeMs: number };
-    completedAt?: string;
-  };
+  // Support both direct props and nested { response: {...} }
+  const params: any = (route.params || {}) as any;
+  const jobId = params.jobId ?? params.response?.jobId;
+  const matchJobId = params.matchJobId ?? params.response?.matchJobId;
+  const statusParam = params.status ?? params.response?.status;
+  const resultsParam = params.results ?? params.response?.results;
+  const summaryParam = params.summary ?? params.response?.summary;
+  const completedAtParam = params.completedAt ?? params.response?.completedAt;
 
+  const [fetched, setFetched] = useState(false);
+  const [jobData, setJobData] = useState<{ status?: string; results?: GeneratedResult[]; summary?: any; completedAt?: string } | null>(null);
+
+  // If we only get a jobId, fetch the job payload from Supabase once
+  useEffect(() => {
+    if (!jobId) return;
+    if ((Array.isArray(resultsParam) && resultsParam.length > 0) || fetched) return;
+    let canceled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('generate_jobs')
+          .select('status, results, summary, completed_at')
+          .eq('job_id', jobId)
+          .maybeSingle();
+        if (error) return;
+        if (!canceled && data) {
+          setJobData({
+            status: data.status,
+            results: Array.isArray(data.results) ? data.results : [],
+            summary: data.summary,
+            completedAt: data.completed_at,
+          });
+        }
+      } catch {}
+      finally {
+        if (!canceled) setFetched(true);
+      }
+    })();
+    return () => { canceled = true };
+  }, [jobId, resultsParam, fetched]);
+
+  const status = jobData?.status ?? statusParam;
+  const results = jobData?.results ?? resultsParam;
+  const summary = jobData?.summary ?? summaryParam;
+  const completedAt = jobData?.completedAt ?? completedAtParam;
+
+  // Debug (safe)
   console.log('[GEN-DETAILS] route.params keys:', Object.keys((route.params || {}) as any));
   console.log('[GEN-DETAILS] jobId:', jobId, 'status:', status);
   console.log('[GEN-DETAILS] results raw:', Array.isArray(results) ? `len=${results.length}` : typeof results);
 
-  const first: GeneratedResult | null = useMemo(() => Array.isArray(results) && results.length > 0 ? results[0] : null, [results]);
-  const platforms: GeneratedPlatformDetails = (first && first.platforms) ? first.platforms : {};
+  const first: GeneratedResult | null = useMemo(() => (Array.isArray(results) && results.length > 0 ? results[0] : null), [results]);
+  const platforms: GeneratedPlatformDetails = useMemo(
+    () => ((first && first.platforms) ? first.platforms : {}),
+    [first]
+  );
   const [displayedPlatforms, setDisplayedPlatforms] = useState<GeneratedPlatformDetails>(platforms);
-  const platformKeys: string[] = Object.keys(platforms as Record<string, any>);
+  const platformKeys: string[] = useMemo(() => Object.keys(platforms as Record<string, any>), [platforms]);
   const [jobsModalVisible, setJobsModalVisible] = useState(false);
+  const [userGenerateJobs, setUserGenerateJobs] = useState<Array<{ jobId: string; status: string; createdAt: string; completedAt?: string }>>([]);
   const [checklist, setChecklist] = useState<Record<string, { missing: string[]; ready: boolean }>>({});
   const [versionsSheetOpen, setVersionsSheetOpen] = useState(false);
   const [versions, setVersions] = useState<Array<{ id: string; jobId: string; createdAt: string; platforms: any; sources?: Array<{ url: string; usedForFields?: string[] }> }>>([]);
   const [selectedFieldKey, setSelectedFieldKey] = useState<string | null>(null);
   const [versionsTab, setVersionsTab] = useState<'versions'|'sources'>('versions');
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [isFilling, setIsFilling] = useState(false);
+  const [recentlyFilledByPlatform, setRecentlyFilledByPlatform] = useState<Record<string, string[]>>({});
+  const [fillSelectedFields, setFillSelectedFields] = useState<string[]>([
+    'title','description','tags','price','sku','barcode','seoTitle','seoDescription','options'
+  ]);
+  const [lastFillCount, setLastFillCount] = useState<number>(0);
+  const [refilledFieldsByPlatform, setRefilledFieldsByPlatform] = useState<Record<string, string[]>>({});
+  const [fillOverlayOpen, setFillOverlayOpen] = useState<boolean>(false);
   // Try to pull items list from params if provided; fallback to single
   const items = useMemo(() => {
     const raw = ((route.params as any)?.items || []) as Array<{ index: number; title?: string; thumb?: string; matchesCount?: number }>;
@@ -65,15 +120,7 @@ function GenerateDetailsScreen({ route }: Props) {
   // Keep displayed platforms in sync with first result changes
   useEffect(() => {
     setDisplayedPlatforms(platforms);
-    // compute per-platform readiness: simple required fields heuristic
-    const requiredByPlatform: Record<string, string[]> = {
-      shopify: ['title', 'price', 'description', 'images'],
-      amazon: ['title', 'price', 'description', 'images'],
-      ebay: ['title', 'price', 'description', 'images'],
-      clover: ['title', 'price'],
-      square: ['title', 'price'],
-      facebook: ['title', 'price', 'description', 'images'],
-    };
+    const requiredByPlatform = getPlatformRequirements();
     const next: Record<string, { missing: string[]; ready: boolean }> = {};
     for (const key of Object.keys(platforms)) {
       const data = platforms[key] || {};
@@ -114,6 +161,28 @@ function GenerateDetailsScreen({ route }: Props) {
       }
     })();
   }, [versionsSheetOpen, first, route.params]);
+
+  // Fetch user's generate jobs for modal display (counts and last generated timestamps)
+  useEffect(() => {
+    let canceled = false;
+    (async () => {
+      try {
+        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+        if (!baseUrl) return;
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData?.session?.access_token;
+        const res = await fetch(`${baseUrl}/api/products/generate/jobs?limit=50`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!canceled && Array.isArray(data?.jobs)) {
+          setUserGenerateJobs(data.jobs.map((j: any) => ({ jobId: j.jobId, status: j.status, createdAt: j.createdAt, completedAt: j.completedAt })));
+        }
+      } catch {}
+    })();
+    return () => { canceled = true };
+  }, []);
 
   // Helper: compute overall readiness
   const canPublish = useMemo(() => Object.values(checklist || {}).some(x => x.ready), [checklist]);
@@ -168,6 +237,131 @@ function GenerateDetailsScreen({ route }: Props) {
     };
   };
 
+  const fillTheRest = async () => {
+    if (isFilling) return;
+    try {
+      setIsFilling(true);
+      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      const productId = (route.params as any)?.productId || first?.productId;
+      const variantId = (route.params as any)?.variantId || first?.variantId;
+      if (!baseUrl || !productId || !variantId) return;
+
+      const payload = buildPlatformPayload();
+      const selectedPlatforms = Object.keys(displayedPlatforms || {});
+
+      const res = await fetch(`${baseUrl}/api/products/generate-details`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productId,
+          variantId,
+          imageUris: payload.media.imageUris,
+          coverImageIndex: payload.media.coverImageIndex,
+          selectedPlatforms,
+          selectedMatch: null,
+          enhancedWebData: null,
+        })
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const gen = (data?.generatedDetails || data || {}) as any;
+      const genPlatforms = (gen.platforms || {}) as Record<string, any>;
+
+      const mergeFields = ['title','description','tags','price','weight','weightUnit','sku','barcode','images','options','seoTitle','seoDescription'];
+      const next = { ...displayedPlatforms } as any;
+      const changedMap: Record<string,string[]> = {};
+      for (const k of Object.keys(genPlatforms)) {
+        const incoming = genPlatforms[k] || {};
+        const curr = next[k] || {};
+        const merged: any = { ...curr };
+        for (const f of mergeFields) {
+          if (!fillSelectedFields.includes(f)) continue;
+          const currVal = curr?.[f];
+          const incomingVal = incoming?.[f];
+          const isEmpty = (v: any) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '') || (Array.isArray(v) && v.length === 0);
+          if (isEmpty(currVal) && incomingVal !== undefined) {
+            merged[f] = Array.isArray(incomingVal) ? [...incomingVal] : incomingVal;
+            if (!changedMap[k]) changedMap[k] = [];
+            changedMap[k].push(f);
+          }
+        }
+        next[k] = merged;
+      }
+      setDisplayedPlatforms(next);
+      setRecentlyFilledByPlatform(changedMap);
+      // Track refilled fields per platform for pill badges
+      setRefilledFieldsByPlatform(prev => {
+        const merged: Record<string,string[]> = { ...prev };
+        for (const k of Object.keys(changedMap)) {
+          const prevArr = merged[k] || [];
+          merged[k] = Array.from(new Set([ ...prevArr, ...changedMap[k] ]));
+        }
+        return merged;
+      });
+      // write into platform state so ListingEditorForm can render badge without screen prop threading
+      setDisplayedPlatforms(prev => {
+        const out: any = { ...prev };
+        for (const k of Object.keys(changedMap)) {
+          out[k] = { ...(out[k]||{}), __refilled: Array.from(new Set([ ...((out[k]?.__refilled)||[]), ...changedMap[k] ])) };
+        }
+        return out;
+      });
+    } catch {}
+    finally {
+      setIsFilling(false);
+    }
+  };
+
+  const regenerateField = async (platformKey: string, fieldKey: string) => {
+    try {
+      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      const productId = (route.params as any)?.productId || first?.productId;
+      const variantId = (route.params as any)?.variantId || first?.variantId;
+      if (!baseUrl || !productId || !variantId) return;
+      const payload = buildPlatformPayload();
+      const res = await fetch(`${baseUrl}/api/products/generate-details`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productId,
+          variantId,
+          imageUris: payload.media.imageUris,
+          coverImageIndex: payload.media.coverImageIndex,
+          selectedPlatforms: [platformKey],
+          fields: [fieldKey],
+          selectedMatch: null,
+          enhancedWebData: null,
+        })
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const gen = (data?.generatedDetails || data || {}) as any;
+      const incomingPlatform = (gen.platforms || {})[platformKey] || {};
+      if (incomingPlatform && Object.prototype.hasOwnProperty.call(incomingPlatform, fieldKey)) {
+        setDisplayedPlatforms(prev => ({
+          ...prev,
+          [platformKey]: (() => {
+            const curr = prev?.[platformKey] || {} as any;
+            const __refilled = Array.from(new Set([...(curr.__refilled || []), fieldKey]));
+            return {
+              ...curr,
+              [fieldKey]: Array.isArray(incomingPlatform[fieldKey]) ? [...incomingPlatform[fieldKey]] : incomingPlatform[fieldKey],
+              __refilled,
+            };
+          })()
+        }));
+        setRefilledFieldsByPlatform(prev => ({
+          ...prev,
+          [platformKey]: Array.from(new Set([ ...(prev[platformKey]||[]), fieldKey ]))
+        }));
+      }
+    } catch {}
+  };
+
   const doSaveDraft = async () => {
     try {
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
@@ -220,111 +414,152 @@ function GenerateDetailsScreen({ route }: Props) {
   return (
     <View style={{ flex: 1 }}>
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <View style={{ position: 'absolute', top: 16, right: 16, zIndex: 4000, flexDirection: 'row', gap: 8 }}>
+      <View style={{ position: 'absolute', top: -32, right: 16, zIndex: 4000, flexDirection: 'row', gap: 8 }}>
         <TouchableOpacity onPress={() => setVersionsSheetOpen(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5' }}>
           <Text style={{ color: '#000', fontWeight: '600' }}>•••</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => setFillOverlayOpen(true)} disabled={isFilling} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: isFilling ? 'rgba(147,200,34,0.15)' : 'rgba(147,200,34,0.1)', borderRadius: 8, borderWidth: 1, borderColor: '#93C822', flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <Sparkles size={14} color={'#111'} />
+          <Text style={{ color: '#000', fontWeight: '600' }}>{isFilling ? 'Filling…' : 'Fill remaining'}</Text>
         </TouchableOpacity>
       </View>
       <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ position: 'absolute', top: -32, left: 16, zIndex: 4000, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}>
         <Boxes size={18} color={'#000'} />
         <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Current Jobs</Text>
       </TouchableOpacity>
-      <Text style={styles.heading}>Generate Results</Text>
-      <Text style={styles.meta}>Job: {jobId}</Text>
-      <Text style={styles.meta}>Status: {status}</Text>
-      {completedAt ? <Text style={styles.meta}>Completed: {completedAt}</Text> : null}
 
-      {first ? (
-        <>
-          {/* Lightweight readiness checklist */}
-          <View style={styles.card}>
-            <Text style={styles.subheading}>Publish readiness</Text>
-            {Object.keys(displayedPlatforms || {}).map((key) => {
-              const c = checklist[key] || { missing: [], ready: false };
-              return (
-                <View key={key} style={{ marginTop: 6 }}>
-                  <Text style={{ color: '#000', fontWeight: '600' }}>{key}</Text>
-                  {c.ready ? (
-                    <Text style={{ color: '#10B981' }}>Ready to publish</Text>
-                  ) : (
-                    <Text style={{ color: '#EA580C' }}>
-                      Missing: {c.missing.join(', ') || '—'}
-                    </Text>
-                  )}
-                </View>
-              );
-            })}
-          </View>
-          <View style={styles.card}>
-            <Text style={styles.subheading}>Product {first.productIndex + 1}</Text>
-            <Text style={styles.meta}>Image: {first.sourceImageUrl}</Text>
-            <Text style={styles.meta}>Processing: {first.processingTimeMs} ms</Text>
-            <Text style={styles.meta}>Source: {first.source}</Text>
-          </View>
-          {/* Editor form that matches the product page design */}
-          <ListingEditorForm
-            platforms={displayedPlatforms}
-            images={[first.sourceImageUrl || ''].filter(Boolean)}
-            onChangePlatforms={setDisplayedPlatforms}
-            onOpenFieldPanel={handleOpenFieldPanel}
-          />
-        </>
-      ) : (
-        <Text style={styles.meta}>No results</Text>
-      )}
-
-      {summary ? (
-        <View style={styles.card}>
-          <Text style={styles.subheading}>Summary</Text>
-          <Text style={styles.meta}>Total: {String(summary.totalProducts)}</Text>
-          <Text style={styles.meta}>Completed: {String(summary.completed)}</Text>
-          <Text style={styles.meta}>Failed: {String(summary.failed)}</Text>
-          <Text style={styles.meta}>Avg ms: {String(summary.averageProcessingTimeMs)}</Text>
-        </View>
-      ) : null}
+      <ScrollView>
+        {first ? (
+          
+          <>
+          
+            
+            {/* Editor form that matches the product page design */}
+            <ListingEditorForm
+              platforms={displayedPlatforms}
+              images={[first.sourceImageUrl || ''].filter(Boolean)}
+              onChangePlatforms={setDisplayedPlatforms}
+              onOpenFieldPanel={handleOpenFieldPanel}
+              onRegenerateField={regenerateField}
+              onOpenBarcodeScanner={(onResult)=>{
+                setScannerOpen(true);
+                // handler stored on closure
+                (GenerateDetailsScreen as any)._scannerResultHandler = onResult;
+              }}
+              onOpenImageCapture={(done)=>{
+                // Use AddProduct camera flow; pass a callback for captured images (photos only)
+                (route as any).navigation?.navigate?.('AddProduct', { firstPhotos: [], bulkItems: [], captureOnly: true, onDone: (uris: string[]) => done(uris) } as any);
+              }}
+            />
+          </>
+        ) : (
+          <Text style={styles.meta}>No results</Text>
+        )}
+      </ScrollView>
+      
 
 
       <ItemJobsModal
         visible={jobsModalVisible}
         onClose={() => setJobsModalVisible(false)}
         items={items}
-        currentIndex={items[0]?.index || 0}
+        currentIndex={(first?.productIndex as number) ?? (items[0]?.index || 0)}
         scanColor={() => '#10B981'}
         matchColor={() => '#10B981'}
         detailsColor={(idx) => (jobMap[idx]?.status === 'completed' ? '#10B981' : jobMap[idx]?.status === 'failed' ? '#e11d48' : '#4B5563')}
         detailsEnabled={(idx) => !!jobMap[idx]?.jobId}
+        countLabel={'Generations'}
+        getSecondaryText={(idx) => {
+          const jid = jobMap[idx]?.jobId;
+          const rec = jid ? userGenerateJobs.find(j => j.jobId === jid) : null;
+          if (!rec) return null;
+          const date = rec.completedAt || rec.createdAt;
+          return date ? `Last: ${new Date(date).toLocaleString()}` : null;
+        }}
          onQuickGenerate={(idx) => {
            // Navigate back to match screen keeping items list and jobMap context intact
-           (route as any).navigation?.navigate?.('MatchSelectionScreen', { focusIndex: idx, items } as any);
+           (route as any).navigation?.navigate?.('MatchSelectionScreen', { focusIndex: idx, items, jobMap } as any);
            setJobsModalVisible(false);
          }}
         onPickScan={(idx) => setJobsModalVisible(false)}
-        onPickMatch={(idx) => setJobsModalVisible(false)}
+        onPickMatch={(idx) => {
+          // Jump to match selection for this item, preserve match job id if we have it
+          (route as any).navigation?.navigate?.('MatchSelectionScreen', { jobId: matchJobId, focusIndex: idx, items, jobMap } as any);
+          setJobsModalVisible(false);
+        }}
          onPickDetails={(idx) => {
           const jid = jobMap[idx]?.jobId;
           if (jid) {
-            // Re-open loading to that job
-            // Note: not passing items again here; keep this screen simple
-            (route as any).navigation?.navigate?.('LoadingScreen', {
-              processType: 'generate',
-              payload: { jobId: jid, firstPhotos: [] },
-               onCompleteRoute: { screen: 'GenerateDetailsScreen', params: { jobId: jid, items, jobMap } }
-            });
+            (route as any).navigation?.navigate?.('GenerateDetailsScreen', { jobId: jid, items, jobMap } as any);
             setJobsModalVisible(false);
           }
         }}
       />
-      {/* Bottom actions for generate mode */}
-      {first ? (
-        <BottomActionBar
-          secondaryLabel="Save Draft"
-          onSecondary={doSaveDraft}
-          primaryLabel="Publish Listing"
-          primaryDisabled={!canPublish}
-          onPrimary={doPublish}
-        />
-      ) : null}
+  
     </ScrollView>
+    <View style={{backgroundColor: 'white'}}>
+      <BottomActionBar
+        primaryLabel={canPublish ? 'Publish listing' : 'Publish listing'}
+        primaryDisabled={!canPublish}
+        onPrimary={doPublish}
+        secondaryLabel={'Save draft'}
+        onSecondary={doSaveDraft}
+      />
+    </View>
+    {!!lastFillCount && (
+      <View style={{ position: 'absolute', bottom: 96, left: 16, right: 16, backgroundColor: 'rgba(17,17,17,0.92)', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, alignItems: 'center' }}>
+        <Text style={{ color: '#fff', fontWeight: '600' }}>Filled {lastFillCount} field{lastFillCount === 1 ? '' : 's'}</Text>
+      </View>
+    )}
+    {fillOverlayOpen && (
+      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 6000 }} pointerEvents="box-none">
+        <TouchableOpacity activeOpacity={1} onPress={() => setFillOverlayOpen(false)} style={{ height: 8 }} />
+        <View style={{ backgroundColor: '#fff', borderBottomLeftRadius: 14, borderBottomRightRadius: 14, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderColor: '#E5E5E5' }}>
+          <Text style={{ color: '#000', fontWeight: '700', marginBottom: 8 }}>Choose fields to fill</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+            {['title','description','tags','price','sku','barcode','seoTitle','seoDescription','options'].map((f) => {
+              const selected = fillSelectedFields.includes(f);
+              return (
+                <TouchableOpacity key={f} onPress={() => setFillSelectedFields(prev => selected ? prev.filter(x=>x!==f) : [...prev, f])} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: selected ? '#93C822' : '#E5E5E5', backgroundColor: selected ? 'rgba(147,200,34,0.08)' : '#fff', marginRight: 8, marginBottom: 8 }}>
+                  <Text style={{ color: '#000' }}>{f}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
+            <TouchableOpacity onPress={() => setFillOverlayOpen(false)} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12 }}>
+              <Text style={{ color: '#000' }}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => { setFillOverlayOpen(false); fillTheRest(); }} style={{ backgroundColor: '#93C822', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Sparkles size={16} color={'#111'} />
+              <Text style={{ color: '#000', fontWeight: '700' }}>Fill selected</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    )}
+    {scannerOpen && (
+      <View style={styles.scannerDockFull} pointerEvents="box-none">
+        <View style={styles.scannerFullBleed}>
+          <CameraView
+            style={{ width: '100%', height: 240 }}
+            facing={'back'}
+            onBarcodeScanned={(result:any) => {
+              const code = result?.data || result?.rawValue;
+              if (code && (GenerateDetailsScreen as any)._scannerResultHandler) {
+                (GenerateDetailsScreen as any)._scannerResultHandler(code);
+                setScannerOpen(false);
+                (GenerateDetailsScreen as any)._scannerResultHandler = null;
+              }
+            }}
+            barcodeScannerSettings={{ barcodeTypes: ['qr','ean13','upc_a','upc_e','code128'] }}
+          />
+          <TouchableOpacity onPress={() => { setScannerOpen(false); (GenerateDetailsScreen as any)._scannerResultHandler = null; }} style={styles.scannerCloseFull}>
+            <Text style={{ color: '#fff', fontSize: 28 }}>×</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    )}
     {versionsSheetOpen && (
         <>
           <TouchableOpacity
@@ -402,7 +637,7 @@ export default GenerateDetailsScreen;
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff', paddingTop: "20%" },
-  content: { padding: 16, paddingBottom: 80 },
+  content: { padding: 16, paddingBottom: 140 },
   heading: { color: '#000', fontSize: 24, fontWeight: '700', marginBottom: 6 },
   subheading: { color: '#000', fontSize: 18, fontWeight: '600', marginBottom: 4 },
   meta: { color: '#000', marginBottom: 4 },
@@ -411,5 +646,13 @@ const styles = StyleSheet.create({
   platform: { color: '#000', fontWeight: '700', marginBottom: 4 },
   field: { color: '#000', marginBottom: 2 },
   versionsBackdrop: { position: 'absolute', top: 0, left: 0, bottom: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.2)' },
-  versionsSheet: { position: 'absolute', top: 0, right: 0, bottom: 0, width: '70%', backgroundColor: '#fff', borderLeftColor: '#E5E5E5', borderLeftWidth: 1, padding: 16 },
+  versionsSheet: { position: 'absolute', top: 0, right: 0, bottom: 0, width: '70%', backgroundColor: '#fff', borderLeftColor: '#E5E5E5', borderLeftWidth: 1, paddingVertical: 70, paddingHorizontal: 20 },
+  // Docked scanner close to the notch / bezel
+  scannerDock: { position: 'absolute', top: 6, left: 56, right: 56, zIndex: 5000 },
+  scannerCard: { backgroundColor: '#000', borderRadius: 18, borderWidth: 2, borderColor: '#111', overflow: 'hidden' },
+  scannerClose: { position: 'absolute', top: 14, right: 6, backgroundColor: 'rgba(0,0,0,0.6)', width: 48, height: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  // Full-bleed variant that hugs the top bezel
+  scannerDockFull: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 5000 },
+  scannerFullBleed: { backgroundColor: '#000', borderBottomLeftRadius: 16, borderBottomRightRadius: 16, overflow: 'hidden' },
+  scannerCloseFull: { position: 'absolute', top: 100, right: 12, backgroundColor: 'rgba(0,0,0,0.5)', width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
 });

@@ -19,6 +19,7 @@ export default {
       "**/*.{ttf,png,jpg,jpeg,gif,webp,svg}"
     ],
     plugins: [
+      "expo-secure-store",
       [
         "react-native-vision-camera",
         {
@@ -26,6 +27,7 @@ export default {
           "enableMicrophonePermission": true,
           "microphonePermissionText": "sssync needs access to your Microphone."
         }
+         
       ]
     ],
     extra: {

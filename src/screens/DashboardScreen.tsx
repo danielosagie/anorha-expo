@@ -9,23 +9,31 @@ import ChannelSalesBar from '../components/ChannelSalesBar';
 import OrderListItem from '../components/OrderListItem';
 import { mockSalesData, mockOrders, mockChannelData } from '../data/mockData';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { useLegendState } from '../context/LegendStateContext';
+import { LegendStateContext } from '../context/LegendStateContext';
+import { ActivityIndicator } from 'react-native';
 
 const DashboardScreen = () => {
   const theme = useTheme();
   const navigation = useNavigation();
+  const legendCtx = React.useContext(LegendStateContext);
+  console.log('[Dashboard] mount, hasLegendCtx =', !!legendCtx);
+  if (!legendCtx) {
+    return <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F8F9FB' }}>
+      <ActivityIndicator />
+    </View>;
+  }
   const [timeFrame, setTimeFrame] = useState('12 months');
   const [selectedTab, setSelectedTab] = useState('All');
   const [selectedPlatform, setSelectedPlatform] = useState('All');
-  const legend = useLegendState();
+  const legend = legendCtx;
 
   const liveCounts = useMemo(() => {
-    const pv = legend.productVariants$?.get() || {};
-    const images = legend.productImages$?.get() || {};
+    const pv = legend?.productVariants$?.get?.() || {};
+    const images = legend?.productImages$?.get?.() || {};
     const productsCount = Object.keys(pv).length;
     const imagesCount = Object.keys(images).length;
     return { productsCount, imagesCount };
-  }, [legend.productVariants$, legend.productImages$]);
+  }, [legend?.productVariants$, legend?.productImages$]);
   
   return (
     <View style={[styles.fullScreenContainer, { paddingTop: 60 }]}>

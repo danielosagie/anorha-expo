@@ -6,7 +6,7 @@ import {
 } from 'react-native';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { FlashList } from '@shopify/flash-list';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../../lib/supabase';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes } from 'lucide-react-native';
 import ItemJobsModal from '../components/ItemJobsModal';
@@ -145,12 +145,17 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
 
  function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, 'MatchSelectionScreen'> }) {
     const navigation = useNavigation<any>();
-    const { jobId } = route.params.response;
+    // Accept jobId from response or directly, and optional focusIndex/items/jobMap
+    const jobId: string | undefined = (route.params as any)?.response?.jobId || (route.params as any)?.jobId;
+    const initialFocusIndex: number | undefined = (route.params as any)?.focusIndex;
+    const initialItems: Array<{ index: number; title?: string; thumb?: string; matchesCount?: number }> = (route.params as any)?.items || [];
+    const initialJobMap: Record<number, { jobId: string; status?: string }> = (route.params as any)?.jobMap || {};
     const { isConnected } = usePlatformConnections();
     const isNewScan = Boolean((route.params as any)?.isNewScan === true);
 
     // --- State Management ---
     const [analysisData, setAnalysisData] = useState<Analysis | null>(null);
+    const [jobStatus, setJobStatus] = useState<'queued' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown'>('unknown');
     const [currentProductIndex, setCurrentProductIndex] = useState<number>(0);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -190,7 +195,8 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
     const [genResponse, setGenResponse] = useState<JobResponse | null>(null);
   // Global jobs modal
   const [jobsModalVisible, setJobsModalVisible] = useState(false);
-    const [itemGenerateJobs, setItemGenerateJobs] = useState<Record<number, { jobId: string; status?: string }>>({});
+    const [itemGenerateJobs, setItemGenerateJobs] = useState<Record<number, { jobId: string; status?: string }>>(initialJobMap || {});
+    const [externalItems, setExternalItems] = useState<Array<{ index: number; title?: string; thumb?: string; matchesCount?: number }>>(initialItems || []);
 
     // Dropdown options with icons
     const PLATFORM_OPTIONS = [
@@ -295,6 +301,12 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
         const pollStatus = async () => {
             try {
                 const token = await getToken();
+                if (!jobId) {
+                    // If no jobId provided (e.g., navigated from details via modal), stay in a safe empty/loading state
+                    setIsLoading(false);
+                    setJobStatus('unknown');
+                    return;
+                }
                 const res = await fetch(`${SSSYNC_API_BASE_URL}/api/products/match/jobs/${jobId}/status`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
@@ -305,7 +317,10 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
                 // Normalize to Analysis shape expected by screen
                 const results = Array.isArray(status?.results) ? status.results : [];
                 setAnalysisData({ jobId: status?.jobId, results });
-                setIsLoading(false);
+                setJobStatus((status?.status as any) || 'unknown');
+                // Render as soon as we have serpApiData (initial scan). Don't block on rerank/embeddings.
+                const shouldKeepLoading = results.length === 0 && (status?.status === 'queued' || status?.status === 'processing');
+                setIsLoading(shouldKeepLoading);
 
                 if (status?.status === 'completed') {
                     // Optionally hydrate with final results (summary/timing)
@@ -338,6 +353,17 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
                 setCurrentUserId(data.user?.id || null);
             } catch {}
         })();
+
+        // Initialize focus index and any shared state coming from other screens
+        if (typeof initialFocusIndex === 'number') {
+            setCurrentProductIndex(initialFocusIndex as number);
+        }
+        if (Array.isArray(initialItems) && initialItems.length > 0) {
+            setExternalItems(initialItems);
+        }
+        if (initialJobMap && Object.keys(initialJobMap).length > 0) {
+            setItemGenerateJobs(prev => ({ ...initialJobMap, ...prev }));
+        }
 
         return () => { cancelled = true; if (timer) clearTimeout(timer); };
     }, [jobId]);
@@ -674,10 +700,13 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
     }, [clientRerankedSerp, selectedIndices, currentProductIndex]);
 
     // --- Render Logic ---
-    if (isLoading) return <View style={styles.centerContainer}><ActivityIndicator size="large" color="#93C822" /></View>;
+    if (isLoading) return <View style={styles.centerContainer}><ActivityIndicator size="large" color="#93C822" /><Text style={styles.infoText}>Finding matches…</Text></View>;
     if (error) return <View style={styles.centerContainer}><Text style={styles.errorText}>Error: {error}</Text></View>;
-    if (!analysisData || analysisData.results.length === 0 || serpApiData.length === 0) {
-        // Initial SerpAPI scan failed → present Rescan CTA in place of scan stage
+    if (!analysisData || serpApiData.length === 0) {
+        if (jobStatus === 'queued' || jobStatus === 'processing') {
+            return <View style={styles.centerContainer}><ActivityIndicator size="large" color="#93C822" /><Text style={styles.infoText}>Finding matches…</Text></View>;
+        }
+        // No results and not processing -> offer rescan
         return (
           <View style={styles.centerContainer}>
             <Text style={styles.infoText}>We couldn't find matches for this item.</Text>
@@ -897,6 +926,7 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
                                                     params: {
                                                         jobResponse: submitResult,
                                                         jobId: jobId,
+                                                        matchJobId: analysisData?.jobId,
                                                         items: itemsForModal,
                                                         jobMap,
                                                     }
@@ -1415,10 +1445,14 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
             <ItemJobsModal
               visible={jobsModalVisible}
               onClose={() => setJobsModalVisible(false)}
-              items={(analysisData?.results || []).map((res, idx) => {
-                const first = res?.serpApiData?.[0];
-                return { index: idx, title: first?.title || `Item ${idx + 1}`, thumb: first?.image || first?.thumbnail || '', matchesCount: res?.serpApiData?.length || 0 };
-              })}
+              items={(() => {
+                const built = (analysisData?.results || []).map((res, idx) => {
+                  const first = res?.serpApiData?.[0];
+                  return { index: idx, title: first?.title || `Item ${idx + 1}`, thumb: first?.image || first?.thumbnail || '', matchesCount: res?.serpApiData?.length || 0 };
+                });
+                if (built.length > 0) return built;
+                return (externalItems || []).map((it, i) => ({ index: it.index ?? i, title: it.title || `Item ${i + 1}`, thumb: it.thumb || '', matchesCount: it.matchesCount || 0 }));
+              })()}
               currentIndex={currentProductIndex}
               scanColor={() => (analysisData ? '#93C822' : (isLoading ? '#FFD700' : '#4B5563'))}
               matchColor={(idx) => (idx === currentProductIndex && selectedIndices.length > 0 ? '#93C822' : '#FFD700')}
@@ -1485,7 +1519,7 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
                     navigation.navigate('LoadingScreen' as never, {
                       processType: 'generate',
                       payload: { jobId: jid, firstPhotos: [] },
-                      onCompleteRoute: { screen: 'GenerateDetailsScreen', params: { jobId: jid } }
+                      onCompleteRoute: { screen: 'GenerateDetailsScreen', params: { jobId: jid, matchJobId: analysisData?.jobId } }
                     } as never);
                   }
                 } catch (e) {

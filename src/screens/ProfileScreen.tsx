@@ -9,7 +9,7 @@ import PlaceholderImage from '../components/Placeholder';
 import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
-import { supabase } from '../../lib/supabase';
+import { supabase } from '../lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CommonActions } from '@react-navigation/native';
 import * as WebBrowser from 'expo-web-browser';
@@ -878,34 +878,14 @@ const ProfileScreen = () => {
   };
 
   const handleLogout = async () => {
-    console.log("[ProfileScreen] handleLogout initiated..."); // Add log
+    console.log("[ProfileScreen] handleLogout initiated...");
     try {
-      // Call context signOut first (now synchronous state update)
-      if (authContext && authContext.signOut) {
-        authContext.signOut(); 
-        console.log("[ProfileScreen] authContext.signOut() called."); // Add log
-      } else {
-        console.warn("[ProfileScreen] AuthContext not available during logout.");
-      }
-      
-      // Then sign out from Supabase
-      console.log("[ProfileScreen] Calling Supabase signOut..."); // Add log
-      const { error } = await supabase.auth.signOut();
-      if (error) {
-        console.error("[ProfileScreen] Supabase signOut error:", error); // Log specific error
-        throw error; // Re-throw to be caught below
-      }
-      console.log("[ProfileScreen] Supabase signOut successful."); // Add log
-      
-      // Then remove local token
-      console.log("[ProfileScreen] Removing userToken from AsyncStorage..."); // Add log
-      await AsyncStorage.removeItem('userToken');
-      console.log("[ProfileScreen] AsyncStorage token removed."); // Add log
-      
-    } catch (error: unknown) {
-      console.error('Logout Error in handleLogout:', error); // Change console message
-      const message = error instanceof Error ? error.message : String(error);
-      Alert.alert('Logout Error', message);
+      // Use global auth context signOut which also stops Supabase bridge and Clerk session
+      await authContext?.signOut();
+      // Don't manually reset to a root route from a child navigator; SignedOut gating will switch the shell.
+      // If you want an immediate visual change, you can optionally navigate to a local screen here.
+    } catch (error) {
+      console.error('Logout Error in handleLogout:', error);
     }
   };
 
@@ -1150,7 +1130,7 @@ const ProfileScreen = () => {
         {fallbackConnectionIds.length > 0 && (
           <View style={{ padding: 10, backgroundColor: '#FFF4CC', borderRadius: 8, marginBottom: 12, flexDirection: 'row', alignItems: 'center' }}>
             <Icon name="cloud-off-outline" size={18} color="#A15C00" style={{ marginRight: 8 }} />
-            <Text style={{ color: '#A15C00', flex: 1 }}>Some connection statuses are from saved data. They’ll update automatically when webhooks arrive.</Text>
+            <Text style={{ color: '#A15C00', flex: 1 }}>Some connection statuses are from saved data. They'll update automatically when webhooks arrive.</Text>
             <TouchableOpacity onPress={loadConnections}>
               <Text style={{ color: theme.colors.primary, fontWeight: '600' }}>Refresh</Text>
             </TouchableOpacity>

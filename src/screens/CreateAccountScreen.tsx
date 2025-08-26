@@ -13,7 +13,7 @@ import {
 import DropDownPicker from 'react-native-dropdown-picker';
 import AnimatedGradientBackground from '../components/AnimatedGradientBackground';
 import Button from '../components/Button';
-import { supabase } from '../../lib/supabase';
+import { supabase } from '../lib/supabase';
 import { AuthContext } from '../context/AuthContext';
 import { useNavigation } from '@react-navigation/native';
 import { Image } from 'react-native'; // Added for logo

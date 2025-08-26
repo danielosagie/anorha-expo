@@ -9,6 +9,7 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@clerk/clerk-expo": "^2.14.20",
     "@expo-google-fonts/plus-jakarta-sans": "^0.3.0",
     "@expo/metro-runtime": "~5.0.4",
     "@johnn-e/react-mesh-gradient": "^1.1.1",
@@ -30,13 +31,14 @@
     "expo-camera": "^16.1.8",
     "expo-clipboard": "~7.1.4",
     "expo-constants": "^17.0.8",
-    "expo-crypto": "^14.1.4",
+    "expo-crypto": "~14.1.5",
     "expo-dev-client": "~5.2.4",
     "expo-file-system": "^18.0.12",
     "expo-font": "~13.3.0",
     "expo-image-manipulator": "~13.1.5",
     "expo-image-picker": "~16.1.4",
     "expo-linear-gradient": "~14.1.5",
+    "expo-secure-store": "~14.2.3",
     "expo-splash-screen": "~0.30.7",
     "expo-status-bar": "~2.2.3",
     "expo-web-browser": "~14.1.6",
@@ -67,7 +69,8 @@
     "react-native-web": "^0.20.0",
     "react-native-webview": "^13.13.5",
     "react-native-worklets-core": "^1.5.0",
-    "readable-stream": "^4.7.0"
+    "readable-stream": "^4.7.0",
+    "expo-auth-session": "~6.2.1"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",

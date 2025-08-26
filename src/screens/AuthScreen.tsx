@@ -10,6 +10,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 // Import Phone Number Input (Commented out for now)
 // import PhoneInput from 'react-native-phone-number-input';
 // import { useRef } from 'react';
+import { useSignIn, useSignUp, useAuth, getClerkInstance } from '@clerk/clerk-expo';
 
 // Flag to use static gradient for better performance
 const USE_STATIC_GRADIENT = true;
@@ -139,6 +140,9 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
   // const [countryCode, setCountryCode] = useState('US');
   
   const authContext = useContext(AuthContext);
+  const { signIn, isLoaded: isSignInLoaded } = useSignIn();
+  const { signUp, isLoaded: isSignUpLoaded } = useSignUp();
+  const auth = useAuth() as any; // setActive may not be typed in some versions
   // Comment out phone ref for now
   // const phoneInputRef = useRef<PhoneInput>(null);
   
@@ -153,101 +157,104 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
     
     try {
       if (isLogin) {
-        // Handle login
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email,
-          password
-        });
-        
-        if (error) throw error;
-        
-        if (data?.session) {
-          authContext.signIn(data.session.access_token);
-          // Now the AppNavigator will automatically navigate to the main app
+        if (!isSignInLoaded || !signIn) return;
+        console.log('[AuthScreen] Attempting signIn.create with email:', email);
+        const res = await signIn.create({ identifier: email, password });
+        console.log('[AuthScreen] signIn.create result:', res.status, res.createdSessionId ? 'has session' : 'no session');
+        if (res.status === 'complete' && res.createdSessionId) {
+          try {
+            const clerk = getClerkInstance?.();
+            const setActiveFn = auth?.setActive || clerk?.setActive;
+            console.log('[AuthScreen] setActive available:', !!setActiveFn);
+            await setActiveFn?.({ session: res.createdSessionId });
+            // Force resource reload to propagate state in-process on native
+            try { await (clerk as any)?.__internal_reloadInitialResources?.(); } catch {}
+            console.log('[AuthScreen] ✓ setActive + resources reload; App will switch branches when Clerk updates.');
+            return; // Do not navigate here; App.tsx will react to isSignedIn
+          } catch (e) {
+            console.error('[AuthScreen] setActive failed:', e);
+          }
+        } else if ((res as any)?.status === 'needs_first_factor') {
+          const r2 = await signIn.attemptFirstFactor({ strategy: 'password', password });
+          if (r2.status === 'complete' && r2.createdSessionId) {
+            try {
+              const clerk = getClerkInstance?.();
+              const setActiveFn = auth?.setActive || clerk?.setActive;
+              console.log('[AuthScreen] setActive available (first factor):', !!setActiveFn);
+              await setActiveFn?.({ session: r2.createdSessionId });
+              try { await (clerk as any)?.__internal_reloadInitialResources?.(); } catch {}
+              console.log('[AuthScreen] ✓ First factor login successful; App will switch branches when Clerk updates.');
+              return;
+            } catch (e) {
+              console.error('[AuthScreen] setActive failed after first factor:', e);
+            }
+          } else {
+            Alert.alert('Login', 'Additional authentication required.');
+          }
+        } else {
+          Alert.alert('Login', 'Unable to complete sign-in.');
         }
       } else {
-        // Handle signup
-        if (!firstName || !lastName) {
-          Alert.alert('Error', 'Please enter your first and last name');
+        // Handle signup with Clerk (email + password)
+        if (!email || !password) {
+          Alert.alert('Error', 'Please enter email and password');
           setLoading(false);
           return;
         }
-        
-        // --- Phone validation removed --- //
-        // const checkValid = phoneInputRef.current?.isValidNumber(phoneNumber);
-        // ... rest of phone validation ...
-        // ------------------------------- //
-
-        // Step 1: Sign up the user WITHOUT the phone number
-        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-          email,
-          password,
-          // phone: formattedPhoneNumber, // REMOVED phone from signup
-          options: {
-            data: {
-              firstName: firstName,
-              lastName: lastName,
-            }
-          }
-        });
-        
-        if (signUpError) {
-            // Handle specific errors, e.g., user already exists
-             if (signUpError.message.includes('User already registered')) {
-                Alert.alert('Error', 'An account with this email already exists. Please log in.');
-                // Optionally switch to login view
-                // setIsLogin(true);
-             } else {
-                throw signUpError; // Rethrow other signup errors
-             }
-             setLoading(false);
-             return; // Stop execution if signup failed
-        }
-
-        // --- Skip OTP, Navigate Directly to CreateAccountScreen --- //
-        // Alert.alert('Account Created', 'Please complete your profile.'); // Inform user - Handled by arriving at CreateAccountScreen
-        // navigation.navigate('CreateAccountScreen'); // REMOVE: AppNavigator handles navigation based on token change
-        // --------------------------------------------------------- //
-
-        /* // --- Original OTP Logic (Commented Out) ---
-        // Step 2: If signup seems successful... attempt to send OTP
-        if (signUpData.user || !signUpError) {
+        if (!isSignUpLoaded || !signUp) return;
+        const res = await signUp.create({ emailAddress: email, password, firstName, lastName });
+        if (res.status === 'complete' && res.createdSessionId) {
           try {
-              console.log(`Signup successful for ${email}, attempting to send OTP to ${formattedPhoneNumber}`);
-              const { error: otpError } = await supabase.auth.signInWithOtp({
-                phone: formattedPhoneNumber,
-              });
-
-              if (otpError) {
-                console.error("OTP Send Error after signup:", otpError);
-                Alert.alert(
-                    'Account Created (Verification Needed)',
-                    `Your account was created, but we failed to send a verification OTP to ${formattedPhoneNumber}. Please verify your email (if sent) and try phone verification later.\nError: ${otpError.message}`
-                );
-
-              } else {
-                console.log(`OTP sent successfully to ${formattedPhoneNumber}, navigating to verification.`);
-                navigation.navigate('PhoneAuthScreen', { phoneNumber: formattedPhoneNumber });
-                Alert.alert('Account Created', 'Please verify your phone number with the OTP sent.');
-              }
-          } catch (otpRelatedError: any) {
-              console.error("Error during OTP send/navigation phase:", otpRelatedError);
-              Alert.alert('Error', `Account created, but an error occurred during phone verification setup: ${otpRelatedError.message}`);
+            const clerk = getClerkInstance?.();
+            const setActiveFn = auth?.setActive || clerk?.setActive;
+            console.log('[AuthScreen] setActive available (signup):', !!setActiveFn);
+            await setActiveFn?.({ session: res.createdSessionId });
+            try { await (clerk as any)?.__internal_reloadInitialResources?.(); } catch {}
+            console.log('[AuthScreen] ✓ Signup successful; App will switch branches when Clerk updates.');
+            return;
+          } catch (e) {
+            console.error('[AuthScreen] setActive failed during sign-up:', e);
           }
         } else {
-             console.error("Signup reported no error, but no user object returned and email verification might be off.");
-             Alert.alert('Error', 'Account creation incomplete. Please try again.');
+          try {
+            await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
+            navigation.navigate('VerifyCode', { contactLabel: email, mode: 'signup' });
+          } catch {
+            Alert.alert('Verify Email', 'Please verify your email to complete signup.');
+          }
         }
-        */ // --- End of Original OTP Logic ---
       }
     } catch (error: any) {
-      // Catch errors from the initial validation or the signUp call itself
-      console.error("Overall Auth Error:", error);
-      Alert.alert('Error', error.message || 'An error occurred');
+      // Handle "already signed in" error specifically
+      if (error.message?.includes('already signed in')) {
+        console.log('[AuthScreen] User is already signed in, checking current state...');
+        console.log('[AuthScreen] Current auth.isSignedIn:', auth.isSignedIn);
+        console.log('[AuthScreen] Current auth.isLoaded:', auth.isLoaded);
+        
+        // If Clerk says we're signed in but our UI doesn't reflect it, something is wrong
+        if (auth.isSignedIn) {
+          console.log('[AuthScreen] Auth state indicates signed in, waiting for UI to catch up...');
+          setLoading(false);
+          return;
+        } else {
+          console.log('[AuthScreen] Auth state shows not signed in despite error, clearing session...');
+          try {
+            await auth.signOut?.();
+            console.log('[AuthScreen] Signed out successfully, please try again');
+            Alert.alert('Please try again', 'There was a session conflict. Please sign in again.');
+          } catch (signOutError) {
+            console.error('[AuthScreen] Failed to sign out:', signOutError);
+            Alert.alert('Error', 'Please restart the app and try again.');
+          }
+        }
+      } else {
+        console.error("Overall Auth Error:", error);
+        Alert.alert('Error', error.message || 'An error occurred');
+      }
     } finally {
       setLoading(false);
     }
-  }, [authContext, isLogin, email, password, firstName, lastName]);
+  }, [authContext, isLogin, email, password, firstName, lastName, isSignInLoaded, isSignUpLoaded, signIn, signUp, auth, navigation]);
   
   const handleForgotPassword = useCallback(async () => {
     if (!email) {
@@ -348,8 +355,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
       )}
       
       <View style={styles.logoContainer}>
-        <Image source={require('../assets/rounded_sssync.png')} style={styles.logo} />
-        <Text style={styles.title}>sssync</Text>
+        <Image source={require('../assets/rounded_anorha.png')} style={styles.logo} />
+        <Text style={styles.title}>Anorha</Text>
       </View>
       
       {DISABLE_FORM_ANIMATIONS ? (

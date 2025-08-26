@@ -1,3 +1,10 @@
 {
-  "urlRandomness": "FsF4Txk"
+  "urlRandomness": "FsF4Txk",
+  "dev": true,
+  "minify": false,
+  "https": false,
+  "scheme": "exp+sssync",
+  "hostType": "lan",
+  "lanType": "ip",
+  "devClient": false
 }
