@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { supabase } from '../../lib/supabase';
+import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { CameraView } from 'expo-camera';
 import { StackScreenProps } from '@react-navigation/stack';
@@ -99,6 +99,7 @@ function GenerateDetailsScreen({ route }: Props) {
   const [lastFillCount, setLastFillCount] = useState<number>(0);
   const [refilledFieldsByPlatform, setRefilledFieldsByPlatform] = useState<Record<string, string[]>>({});
   const [fillOverlayOpen, setFillOverlayOpen] = useState<boolean>(false);
+  
   // Try to pull items list from params if provided; fallback to single
   const items = useMemo(() => {
     const raw = ((route.params as any)?.items || []) as Array<{ index: number; title?: string; thumb?: string; matchesCount?: number }>;
@@ -116,6 +117,16 @@ function GenerateDetailsScreen({ route }: Props) {
   }, [route.params, first, results]);
 
   const jobMap = ((route.params as any)?.jobMap || {}) as Record<number, { jobId: string; status?: string }>;
+  // Derive quick lookups for presence of jobs
+  const hasGenerateForIndex = useMemo(() => (idx: number) => Boolean(jobMap[idx]?.jobId), [jobMap]);
+  
+  // Navigation state for modal integration (like MatchSelectionScreen)
+  const [currentProductIndex, setCurrentProductIndex] = useState((first?.productIndex as number) ?? (items[0]?.index || 0));
+  const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
+  const [bottomNavState, setBottomNavState] = useState<'empty' | 'selection' | 'template' | 'platform'>('empty');
+  const [itemGenerateJobs, setItemGenerateJobs] = useState<Record<number, { jobId: string; status?: string }>>(jobMap || {});
 
   // Keep displayed platforms in sync with first result changes
   useEffect(() => {
@@ -148,8 +159,7 @@ function GenerateDetailsScreen({ route }: Props) {
     if (!baseUrl || !productId) return;
     (async () => {
       try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData?.session?.access_token;
+        const token = await ensureSupabaseJwt();
         const res = await fetch(`${baseUrl}/api/products/generate/versions?productId=${encodeURIComponent(productId)}${variantId ? `&variantId=${encodeURIComponent(variantId)}` : ''}&limit=20&offset=0`, {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         });
@@ -169,15 +179,39 @@ function GenerateDetailsScreen({ route }: Props) {
       try {
         const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
         if (!baseUrl) return;
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData?.session?.access_token;
+        const token = await ensureSupabaseJwt();
         const res = await fetch(`${baseUrl}/api/products/generate/jobs?limit=50`, {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         });
         if (!res.ok) return;
         const data = await res.json();
         if (!canceled && Array.isArray(data?.jobs)) {
-          setUserGenerateJobs(data.jobs.map((j: any) => ({ jobId: j.jobId, status: j.status, createdAt: j.createdAt, completedAt: j.completedAt })));
+          const jobs = data.jobs.map((j: any) => ({ jobId: j.jobId, status: j.status, createdAt: j.createdAt, completedAt: j.completedAt }));
+          setUserGenerateJobs(jobs);
+          
+          // Update itemGenerateJobs with the latest job data for each product index
+          const jobsByIndex: Record<number, { jobId: string; status?: string }> = {};
+          
+          // First, include any jobs passed in via jobMap
+          Object.entries(jobMap || {}).forEach(([indexStr, jobInfo]) => {
+            const idx = parseInt(indexStr, 10);
+            if (!isNaN(idx)) {
+              jobsByIndex[idx] = jobInfo;
+            }
+          });
+          
+          // Then add jobs from the API response
+          jobs.forEach((job: any) => {
+            // For generate jobs, we need to fetch results to map to indices
+            // For now, if current jobId matches, map to current product index
+            if (job.jobId === jobId) {
+              const currentIdx = (first?.productIndex as number) ?? 0;
+              jobsByIndex[currentIdx] = { jobId: job.jobId, status: job.status };
+            }
+          });
+          
+          console.log('[GenerateDetails] Updated jobsByIndex:', jobsByIndex);
+          setItemGenerateJobs(jobsByIndex);
         }
       } catch {}
     })();
@@ -463,35 +497,77 @@ function GenerateDetailsScreen({ route }: Props) {
         visible={jobsModalVisible}
         onClose={() => setJobsModalVisible(false)}
         items={items}
-        currentIndex={(first?.productIndex as number) ?? (items[0]?.index || 0)}
+        currentIndex={currentProductIndex}
         scanColor={() => '#10B981'}
         matchColor={() => '#10B981'}
-        detailsColor={(idx) => (jobMap[idx]?.status === 'completed' ? '#10B981' : jobMap[idx]?.status === 'failed' ? '#e11d48' : '#4B5563')}
-        detailsEnabled={(idx) => !!jobMap[idx]?.jobId}
+        detailsColor={(idx) => {
+          const s = itemGenerateJobs[idx]?.status;
+          if (s === 'completed') return '#93C822';
+          if (s === 'failed') return '#e11d48';
+          if (s) return '#FFD700';
+          return '#4B5563';
+        }}
+        detailsEnabled={(idx) => !!itemGenerateJobs[idx]?.jobId}
         countLabel={'Generations'}
         getSecondaryText={(idx) => {
-          const jid = jobMap[idx]?.jobId;
+          const jid = itemGenerateJobs[idx]?.jobId;
           const rec = jid ? userGenerateJobs.find(j => j.jobId === jid) : null;
           if (!rec) return null;
+          if (rec.status === 'completed') return 'Generated';
+          if (rec.status === 'failed') return 'Generation failed';
+          if (rec.status === 'processing' || rec.status === 'queued') return 'Generating…';
           const date = rec.completedAt || rec.createdAt;
           return date ? `Last: ${new Date(date).toLocaleString()}` : null;
         }}
-         onQuickGenerate={(idx) => {
-           // Navigate back to match screen keeping items list and jobMap context intact
-           (route as any).navigation?.navigate?.('MatchSelectionScreen', { focusIndex: idx, items, jobMap } as any);
-           setJobsModalVisible(false);
+         onQuickGenerate={async (idx) => {
+           try {
+             // TODO: Implement quick generate for this specific item
+             // For now, navigate back to match selection to start the flow
+             setCurrentProductIndex(idx);
+             setJobsModalVisible(false);
+             (route as any).navigation?.navigate?.('MatchSelectionScreen', { focusIndex: idx, items, jobMap: itemGenerateJobs } as any);
+           } catch (e) {
+             console.error('Quick generate failed:', e);
+           }
          }}
-        onPickScan={(idx) => setJobsModalVisible(false)}
+         onPickScan={(idx) => {
+          setCurrentProductIndex(idx);
+          setSelectedIndices([]);
+          setSelectedPlatforms([]);
+          setSelectedTemplate(null);
+          setJobsModalVisible(false);
+          setBottomNavState('empty');
+        }}
         onPickMatch={(idx) => {
           // Jump to match selection for this item, preserve match job id if we have it
-          (route as any).navigation?.navigate?.('MatchSelectionScreen', { jobId: matchJobId, focusIndex: idx, items, jobMap } as any);
+          setCurrentProductIndex(idx);
           setJobsModalVisible(false);
+          (route as any).navigation?.navigate?.('MatchSelectionScreen', { 
+            jobId: matchJobId, 
+            focusIndex: idx, 
+            items, 
+            jobMap: itemGenerateJobs 
+          } as any);
         }}
          onPickDetails={(idx) => {
-          const jid = jobMap[idx]?.jobId;
+          const jid = itemGenerateJobs[idx]?.jobId;
           if (jid) {
-            (route as any).navigation?.navigate?.('GenerateDetailsScreen', { jobId: jid, items, jobMap } as any);
+            setCurrentProductIndex(idx);
             setJobsModalVisible(false);
+            // Navigate via LoadingScreen to show proper loading state
+            (route as any).navigation?.navigate?.('LoadingScreen', {
+              processType: 'generate',
+              payload: { jobId: jid, firstPhotos: [] },
+              onCompleteRoute: { 
+                screen: 'GenerateDetailsScreen', 
+                params: { 
+                  jobId: jid, 
+                  items, 
+                  jobMap: itemGenerateJobs,
+                  focusIndex: idx 
+                } 
+              }
+            } as any);
           }
         }}
       />

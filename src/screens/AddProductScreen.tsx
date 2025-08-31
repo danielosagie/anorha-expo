@@ -41,7 +41,7 @@ import { SvgXml } from 'react-native-svg';
 import PhotoStack, { CapturedPhoto } from '../components/camera/PhotoStack';
 import CameraControls from '../components/camera/CameraControls';
 import BusinessTemplateModal, { BusinessTemplate } from '../components/camera/BusinessTemplateModal';
-import { supabase } from '../lib/supabase';
+import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import * as FileSystem from 'expo-file-system';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -189,6 +189,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [showMatchSheet, setShowMatchSheet] = useState(false);
   const [showDeepSearchSheet, setShowDeepSearchSheet] = useState(false);
   const [matchData, setMatchData] = useState<MatchResponse | null>(null);
+  // Quick scan storage per item and current sheet context
+  const [quickScanStore, setQuickScanStore] = useState<Record<string, { matchData: MatchResponse; serpApiData: any[] }>>({});
+  const [currentMatchItemId, setCurrentMatchItemId] = useState<string | null>(null);
+  
+  // Loading state tracking per item
+  const [itemLoadingStates, setItemLoadingStates] = useState<Record<string, { isLoading: boolean; stage: string; }>>({});
   
   // Bulk mode state
   const [isBulkMode, setIsBulkMode] = useState(false);
@@ -233,8 +239,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }, [activeItemId]);
 
   
-  // Animation values
+  // Animation values - separate for each modal
   const sheetTranslateY = useSharedValue(SCREEN_HEIGHT);
+  const matchSheetTranslateY = useSharedValue(SCREEN_HEIGHT);
   
   // Force re-render counter for debugging
   const [forceRenderCount, setForceRenderCount] = useState(0);
@@ -300,6 +307,31 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     progressWidth.value = 0;
     spinRotation.value = 0;
   }, [progressWidth, spinRotation]);
+
+  // Transform quick-scan ranked candidates to serpApiData for MatchSelection overrides
+  const candidatesToSerpApiData = useCallback((candidates: Array<{
+    id: string;
+    title?: string;
+    description?: string;
+    price?: number;
+    imageUrl?: string;
+    sourceUrl?: string;
+  }>): any[] => {
+    const out: any[] = [];
+    candidates.forEach((c, idx) => {
+      out.push({
+        position: idx + 1,
+        title: c.title || 'Unknown Product',
+        link: c.sourceUrl || '',
+        source: 'quickscan',
+        source_icon: '',
+        thumbnail: c.imageUrl || '',
+        image: c.imageUrl || '',
+        price: typeof c.price === 'number' ? { value: `$${c.price}`, extracted_value: c.price, currency: 'USD' } : undefined,
+      });
+    });
+    return out;
+  }, []);
 
   // Instructions mapping
   const getInstructionText = (instruction: CameraInstruction): string => {
@@ -400,8 +432,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           console.log('[ITEM CREATION] Created first item:', firstItem.id);
           console.log('[ITEM CREATION] Triggering quick scan (first photo of first item)');
           
+          console.log('[FIRST ITEM] Created first item with ID:', firstItem.id);
           setTimeout(() => {
-            performQuickScan(newPhoto);
+            console.log('[FIRST ITEM] About to call performQuickScan for first item:', firstItem.id);
+            performQuickScan(newPhoto, firstItem.id);
           }, 500);
           
         } else {
@@ -411,17 +445,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               // First item
               const firstId = `item-${Date.now()}`;
               setActiveItemId(firstId);
-              setTimeout(() => performQuickScan(newPhoto), 500);
+              setTimeout(() => performQuickScan(newPhoto, firstId), 500);
               return [{ id: firstId, photos: [newPhoto], title: undefined, isActive: true }];
             }
 
             const activeIndex = prev.findIndex(it => it.isActive);
             if (activeIndex >= 0) {
+              const activeItemIdLocal = prev[activeIndex].id;
               const next = prev.map((it, idx) => {
                 if (idx !== activeIndex) return it;
                 const wasFirstPhoto = it.photos.length === 0;
                 const updated = { ...it, photos: [...it.photos, newPhoto] };
-                if (wasFirstPhoto) setTimeout(() => performQuickScan(newPhoto), 500);
+                if (wasFirstPhoto) setTimeout(() => performQuickScan(newPhoto, activeItemIdLocal), 500);
                 return updated;
               });
               return next;
@@ -430,7 +465,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             // No active item flagged; create a new active item
             const newId = `item-${Date.now()}`;
             setActiveItemId(newId);
-            setTimeout(() => performQuickScan(newPhoto), 500);
+            setTimeout(() => performQuickScan(newPhoto, newId), 500);
             return [...prev.map(it => ({ ...it, isActive: false })), { id: newId, photos: [newPhoto], title: undefined, isActive: true }];
           });
         }
@@ -561,6 +596,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         setBulkItems([firstItem]);
         setActiveItemId(firstItem.id);
         console.log('[IMAGE UPLOAD] Created first item with uploaded photo');
+        console.log('[IMAGE UPLOAD] Created first item with uploaded photo, ID:', firstItem.id);
+        setTimeout(() => {
+          console.log('[IMAGE UPLOAD] About to call performQuickScan for first item:', firstItem.id);
+          performQuickScan(newPhoto, firstItem.id);
+        }, 500);
       } else if (activeItemId) {
         // Add to existing active item
         setBulkItems(prev => prev.map(item => {
@@ -574,6 +614,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           return item;
         }));
         console.log('[IMAGE UPLOAD] Added to active item:', activeItemId);
+        // Trigger quick scan only if it was the first photo in this item
+        const activeItem = bulkItems.find(i => i.id === activeItemId);
+        if (activeItem && activeItem.photos.length === 0) {
+          console.log('[IMAGE UPLOAD] First photo for existing active item:', activeItemId);
+          setTimeout(() => {
+            console.log('[IMAGE UPLOAD] About to call performQuickScan for existing active item:', activeItemId);
+            performQuickScan(newPhoto, activeItemId);
+          }, 500);
+        }
       } else {
         // Create new item
         const newItem = {
@@ -584,7 +633,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         };
         setBulkItems(prev => [...prev.map(item => ({ ...item, isActive: false })), newItem]);
         setActiveItemId(newItem.id);
-        console.log('[IMAGE UPLOAD] Created new item with uploaded photo');
+        console.log('[IMAGE UPLOAD] Created new item with uploaded photo, ID:', newItem.id);
+        setTimeout(() => {
+          console.log('[IMAGE UPLOAD] About to call performQuickScan for new item:', newItem.id);
+          performQuickScan(newPhoto, newItem.id);
+        }, 500);
       }
       
       // Also keep legacy array for backward compatibility during transition
@@ -641,9 +694,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Get auth headers
   async function getAuthHeaders() {
   try {
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    const session = await supabase.auth.getSession();
-    const token = session?.data.session?.access_token;
+    const token = await ensureSupabaseJwt();
     return {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
@@ -658,10 +709,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }
   
   async function getToken() {
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    const session = await supabase.auth.getSession();
-    const token = session?.data.session?.access_token;
-    return token;
+    return await ensureSupabaseJwt();
   }
 
   // Upload image to Supabase Storage and get public URL
@@ -719,12 +767,34 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }, []);
 
   // Auto-quick scan when photo is captured
-  const performQuickScan = useCallback(async (photo: CapturedPhoto) => {
+  const performQuickScan = useCallback(async (photo: CapturedPhoto, itemId: string) => {
     if (!isAutoScanning) {
       setIsAutoScanning(true);
       setCurrentInstruction('processing');
       
+      // Set loading state for this item
+      setItemLoadingStates(prev => ({
+        ...prev,
+        [itemId]: { isLoading: true, stage: 'Quick Scanning...' }
+      }));
+      
       try {
+        // Ensure auth bridge is ready and we have a Supabase JWT before any network calls
+        const tokenMaybe = await ensureSupabaseJwt();
+        if (!tokenMaybe) {
+          console.warn('[QUICK SCAN] No Supabase JWT available. Are you signed in and the Clerk bridge configured?');
+          showNotificationMessage('Sign in required to scan. Please log in and try again.', 3000);
+          setCurrentInstruction('ready');
+          stopProgressAnimation();
+          setIsAutoScanning(false);
+          
+          // Clear loading state for this item (auth error)
+          setItemLoadingStates(prev => {
+            const { [itemId]: removed, ...rest } = prev;
+            return rest;
+          });
+          return;
+        }
         console.log('[QUICK SCAN] Starting quick scan for photo:', photo.id);
         console.log('[QUICK SCAN] Photo URI:', photo.uri);
         console.log('[QUICK SCAN] Timestamp:', new Date().toISOString());
@@ -734,7 +804,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         const publicImageUrl = await uploadImageToSupabase(photo.uri, photo.id);
         console.log('[QUICK SCAN] Image uploaded to:', publicImageUrl);
 
-        const token = await getToken();
+        const token = tokenMaybe;
         
         // Call the actual backend /orchestrate/quick-scan endpoint
         const response = await fetch('https://api.sssync.app/api/products/orchestrate/quick-scan', {
@@ -774,7 +844,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               (quickScanResult.overallConfidence === 'high' && allMatches.length > 0)) {
             console.log('[QUICK SCAN] High confidence match found, showing match sheet');
             setQuickScanResults(allMatches);
-            setMatchData({
+            const nextMatchData: MatchResponse = {
               systemAction: 'show_single_match',
               confidence: quickScanResult.overallConfidence,
               totalMatches: allMatches.length,
@@ -787,11 +857,24 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 matchPercentage: Math.round((match.combinedScore || 0) * 100),
                 sourceUrl: match.link || '',
               }))
+            };
+            setMatchData(nextMatchData);
+            // Persist per-item for reopening and for MatchSelection overrides
+            console.log('[QUICK SCAN] Storing results for itemId:', itemId);
+            console.log('[QUICK SCAN] Match data:', nextMatchData);
+            setQuickScanStore(prev => {
+              const updated = {
+                ...prev,
+                [itemId]: { matchData: nextMatchData, serpApiData: candidatesToSerpApiData(nextMatchData.rankedCandidates as any) }
+              };
+              console.log('[QUICK SCAN] Updated quickScanStore keys:', Object.keys(updated));
+              return updated;
             });
+            setCurrentMatchItemId(itemId);
             setCurrentInstruction('matches_found');
             stopProgressAnimation();
             setShowMatchSheet(true);
-            sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2); // Taller sheet (80% height visible)
+            matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2); // Taller sheet (80% height visible)
           } else {
             console.log('[QUICK SCAN] Low confidence or no matches, creating item automatically');
             // NO FALLBACK TO ANALYZE - just create item and show deep search
@@ -804,6 +887,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             }, 1000);
           }
           setIsAutoScanning(false);
+          
+          // Clear loading state for this item
+          setItemLoadingStates(prev => {
+            const { [itemId]: removed, ...rest } = prev;
+            return rest;
+          });
         }, 500);
         
       } catch (error) {
@@ -818,9 +907,51 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
         }, 1000);
         setIsAutoScanning(false);
+        
+        // Clear loading state for this item (error case)
+        setItemLoadingStates(prev => {
+          const { [itemId]: removed, ...rest } = prev;
+          return rest;
+        });
       }
     }
-  }, [isAutoScanning, sheetTranslateY, stopProgressAnimation, uploadImageToSupabase]);
+  }, [isAutoScanning, sheetTranslateY, stopProgressAnimation, uploadImageToSupabase, candidatesToSerpApiData]);
+
+  // Open Match Selection screen using quick scan results for a given item
+  const openMatchSelectionForItem = useCallback((itemId?: string | null) => {
+    const id = itemId || currentMatchItemId;
+    if (!id) {
+      showNotificationMessage('No item selected for quick matches.', 2000);
+      return;
+    }
+    const store = quickScanStore[id];
+    if (!store || !Array.isArray(store.serpApiData) || store.serpApiData.length === 0) {
+      showNotificationMessage('No quick matches available for this item.', 2000);
+      return;
+    }
+    (navigation as any).navigate('MatchSelectionScreen', {
+      overrideResults: [
+        { productIndex: 0, serpApiData: store.serpApiData }
+      ],
+      overrideFocusIndex: 0,
+      isNewScan: true
+    });
+    setShowMatchSheet(false);
+    setCurrentInstruction('ready');
+  }, [quickScanStore, currentMatchItemId, navigation, showNotificationMessage]);
+
+  // Reopen quick matches sheet for an item from the bulk items list
+  const openQuickMatchesForItem = useCallback((itemId: string) => {
+    const store = quickScanStore[itemId];
+    if (!store) {
+      showNotificationMessage('No quick matches for this item yet.', 2000);
+      return;
+    }
+    setMatchData(store.matchData);
+    setCurrentMatchItemId(itemId);
+    setShowMatchSheet(true);
+    matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2);
+  }, [quickScanStore, matchSheetTranslateY, showNotificationMessage]);
 
   // Send payload of first photos for analysis/matching
   const performAnalyze = useCallback(async (firstPhotos: CapturedPhoto[]) => {
@@ -976,6 +1107,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Select item as active
   const selectActiveItem = useCallback((itemId: string) => {
     console.log('[SELECT ITEM] Setting active item to:', itemId);
+    console.log('[SELECT ITEM] quickScanStore keys:', Object.keys(quickScanStore));
+    console.log('[SELECT ITEM] quickScanStore for itemId:', quickScanStore[itemId] ? 'EXISTS' : 'MISSING');
     setBulkItems(prev => prev.map(item => ({
       ...item,
       isActive: item.id === itemId
@@ -985,11 +1118,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     // Show notification of which item is now active
     const itemIndex = bulkItems.findIndex(item => item.id === itemId) + 1;
     showNotificationMessage(`Switched to Item ${itemIndex}`, 1500);
-  }, [bulkItems, showNotificationMessage]);
+  }, [bulkItems, showNotificationMessage, quickScanStore]);
 
   // Delete bulk item
   const deleteBulkItem = useCallback((itemId: string) => {
     setBulkItems(prev => prev.filter(item => item.id !== itemId));
+    // Clean up quickScanStore for deleted item
+    setQuickScanStore(prev => {
+      const { [itemId]: removed, ...rest } = prev;
+      console.log('[DELETE ITEM] Cleaned up quickScanStore for item:', itemId);
+      return rest;
+    });
   }, []);
 
   // Move photo between items
@@ -1052,16 +1191,35 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }));
   }, []);
 
-  // Close sheets - much faster
-  const closeSheets = useCallback(() => {
+  // Close bulk items sheet
+  const closeBulkItemsSheet = useCallback(() => {
     sheetTranslateY.value = withTiming(SCREEN_HEIGHT, {
-      duration: 200, // Fast close
+      duration: 200,
     }, () => {
-      runOnJS(setShowMatchSheet)(false);
       runOnJS(setShowDeepSearchSheet)(false);
       runOnJS(setCurrentInstruction)('ready');
     });
   }, [sheetTranslateY]);
+
+  // Close match results sheet
+  const closeMatchSheet = useCallback(() => {
+    matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, {
+      duration: 200,
+    }, () => {
+      runOnJS(setShowMatchSheet)(false);
+      runOnJS(setCurrentInstruction)('ready');
+    });
+  }, [matchSheetTranslateY]);
+
+  // Close all sheets (for tap-to-focus)
+  const closeAllSheets = useCallback(() => {
+    if (showMatchSheet) {
+      closeMatchSheet();
+    }
+    if (showDeepSearchSheet) {
+      closeBulkItemsSheet();
+    }
+  }, [showMatchSheet, showDeepSearchSheet, closeMatchSheet, closeBulkItemsSheet]);
 
   // Animated styles
   const captureButtonAnimatedStyle = useAnimatedStyle(() => ({
@@ -1074,6 +1232,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   const sheetAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: sheetTranslateY.value }],
+  }));
+
+  const matchSheetAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: matchSheetTranslateY.value }],
   }));
 
   const overlayAnimatedStyle = useAnimatedStyle(() => ({
@@ -1150,7 +1312,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           onPress={(event) => {
             // Close sheets if open - instant close
             if (showMatchSheet || showDeepSearchSheet) {
-              closeSheets();
+              closeAllSheets();
               return;
             }
             // Otherwise handle focus
@@ -1167,23 +1329,29 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         
         {/* Photo stack (top left) - shows active item's photos in bulk mode */}
         {(() => {
-          const displayPhotos = activeItemId 
-            ? bulkItems.find(item => item.id === activeItemId)?.photos || []
-            : [];
+          const activeItem = activeItemId ? bulkItems.find(item => item.id === activeItemId) : null;
+          const displayPhotos = activeItem?.photos || [];
+          const itemIndex = activeItem ? bulkItems.findIndex(item => item.id === activeItemId) + 1 : 0;
+          
+          console.log('[PHOTO STACK] Rendering for activeItemId:', activeItemId);
+          console.log('[PHOTO STACK] Found activeItem:', activeItem ? 'YES' : 'NO');
+          console.log('[PHOTO STACK] displayPhotos count:', displayPhotos.length);
+          console.log('[PHOTO STACK] displayPhotos IDs:', displayPhotos.map(p => p.id));
           
           return (
-            <View style={styles.photoStackContainer}>
+            <View style={styles.photoStackContainer} key={`photo-stack-${activeItemId || 'none'}`}>
               {/* Active item indicator - always show if there's an active item */}
-              {activeItemId && (
+              {activeItemId && itemIndex > 0 && (
                 <View style={styles.activeItemIndicator}>
                   <Text style={styles.activeItemIndicatorText}>
-                    Item {bulkItems.findIndex(item => item.id === activeItemId) + 1}
+                    Item {itemIndex}
                   </Text>
           </View>
               )}
               
               {displayPhotos.length > 0 && (
                 <PhotoStack 
+                  key={`photos-${activeItemId}-${displayPhotos.length}`}
                   photos={displayPhotos}
                   onSetCover={activeItemId 
                     ? (photoId: string) => setBulkItemCoverPhoto(activeItemId, photoId)
@@ -1318,8 +1486,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       {showMatchSheet && matchData && (
         <MatchResultsSheet 
           matchData={matchData}
-          onClose={closeSheets}
-          sheetStyle={sheetAnimatedStyle}
+          onClose={closeMatchSheet}
+          onUseForSelection={() => openMatchSelectionForItem(currentMatchItemId)}
+          sheetStyle={matchSheetAnimatedStyle}
         />
       )}
 
@@ -1350,7 +1519,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         
         return (
           <BulkItemsSheet 
-            onClose={closeSheets}
+            onClose={closeBulkItemsSheet}
             sheetStyle={sheetAnimatedStyle}
             photos={capturedPhotos}
             isBulkMode={isBulkMode}
@@ -1368,6 +1537,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             navigation={navigation}
             jobResponse={jobResponse}
             setJobResponse={setJobResponse}
+            quickScanStore={quickScanStore}
+            onOpenQuickMatches={openQuickMatchesForItem}
+            itemLoadingStates={itemLoadingStates}
+            setItemLoadingStates={setItemLoadingStates}
           />
         );
       })()}
@@ -1528,7 +1701,8 @@ const MatchResultsSheet: React.FC<{
   matchData: MatchResponse;
   onClose: () => void;
   sheetStyle: any;
-}> = ({ matchData, onClose, sheetStyle }) => {
+  onUseForSelection?: () => void;
+}> = ({ matchData, onClose, sheetStyle, onUseForSelection }) => {
   return (
     <Animated.View style={[styles.matchSheet, sheetStyle]}>
       <ScrollView 
@@ -1575,6 +1749,9 @@ const MatchResultsSheet: React.FC<{
             <TouchableOpacity style={styles.secondaryButton}>
               <Text style={styles.secondaryButtonText}>Show More</Text>
             </TouchableOpacity>
+            <TouchableOpacity style={styles.secondaryButton} onPress={onUseForSelection}>
+              <Text style={styles.secondaryButtonText}>Use in Selection</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.secondaryButton}>
               <Text style={styles.secondaryButtonText}>Not My Product</Text>
             </TouchableOpacity>
@@ -1605,7 +1782,11 @@ const BulkItemsSheet: React.FC<{
   sheetTranslateY: Animated.SharedValue<number>;
   jobResponse: JobResponse | null;
   navigation: any;
-}> = ({ onClose, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse }) => {
+  quickScanStore?: Record<string, { matchData: MatchResponse; serpApiData: any[] }>;
+  onOpenQuickMatches?: (itemId: string) => void;
+  itemLoadingStates: Record<string, { isLoading: boolean; stage: string; }>;
+  setItemLoadingStates: React.Dispatch<React.SetStateAction<Record<string, { isLoading: boolean; stage: string; }>>>;
+}> = ({ onClose, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, itemLoadingStates, setItemLoadingStates }) => {
   
   console.log('[SHEET RENDER] ==================');
   console.log('[SHEET RENDER] BulkItemsSheet RE-RENDERED at:', new Date().toISOString());
@@ -1775,10 +1956,15 @@ const BulkItemsSheet: React.FC<{
             (() => {
               console.log('[RENDER] Showing', displayItems.length, 'ITEMS');
               return displayItems.map((item, id) => {
+                const loadingState = itemLoadingStates[item.id];
                 console.log(`[RENDER] Rendering Item ${id + 1}:`, {
                   id: item.id,
                   photosCount: item.photos.length,
-                  isActive: item.isActive
+                  isActive: item.isActive,
+                  hasQuickMatches: quickScanStore?.[item.id] ? 'YES' : 'NO',
+                  quickMatchCount: quickScanStore?.[item.id]?.matchData?.totalMatches || 0,
+                  isLoading: loadingState?.isLoading || false,
+                  loadingStage: loadingState?.stage
                 });
                 return (
             <TouchableOpacity 
@@ -1804,6 +1990,12 @@ const BulkItemsSheet: React.FC<{
                       <Text style={styles.activeItemBadgeText}>ACTIVE</Text>
                     </View>
                   )}
+                  {loadingState?.isLoading && (
+                    <View style={styles.loadingBadge}>
+                      <Icon name="loading" size={12} color="#93C822" />
+                      <Text style={styles.loadingBadgeText}>{loadingState.stage}</Text>
+                    </View>
+                  )}
                 </View>
                 {/* Show delete button if there are multiple items OR if in bulk mode */}
                 {(isBulkMode && bulkItems.length > 0) && (
@@ -1816,6 +2008,23 @@ const BulkItemsSheet: React.FC<{
                 )}
             </View>
             
+              {/* Optional quick matches reopen button if present */}
+              {(() => {
+                const hasQuickMatches = quickScanStore?.[item.id];
+                console.log(`[RENDER QUICK BUTTON] Item ${id + 1} (${item.id}): hasQuickMatches = ${hasQuickMatches ? 'YES' : 'NO'}`);
+                if (hasQuickMatches) {
+                  console.log(`[RENDER QUICK BUTTON] Item ${id + 1} match count:`, quickScanStore[item.id].matchData.totalMatches);
+                }
+                return hasQuickMatches && (
+                  <TouchableOpacity 
+                    style={[styles.secondaryButton, { marginBottom: 10 }]}
+                    onPress={() => onOpenQuickMatches?.(item.id)}
+                  >
+                    <Text style={styles.secondaryButtonText}>View Quick Matches ({quickScanStore[item.id].matchData.totalMatches || 0})</Text>
+                  </TouchableOpacity>
+                );
+              })()}
+
               <View style={styles.photoSlotsContainer}>
                 {item.photos.map((photo: CapturedPhoto, photoIndex: number) => (
                   <TapGestureHandler
@@ -1926,6 +2135,15 @@ const BulkItemsSheet: React.FC<{
                 Alert.alert('No Photos', 'Please take some photos first before searching.');
                 return;
               }
+              
+              // Set loading state for all items
+              const loadingStates: Record<string, { isLoading: boolean; stage: string; }> = {};
+              bulkItems.forEach(item => {
+                if (item.photos.length > 0) {
+                  loadingStates[item.id] = { isLoading: true, stage: 'Processing...' };
+                }
+              });
+              setItemLoadingStates(loadingStates);
               
               try {
                 
@@ -2632,6 +2850,23 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 10,
     fontWeight: '600',
+  },
+  loadingBadge: {
+    backgroundColor: '#f0f8ff',
+    borderColor: '#93C822',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginLeft: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  loadingBadgeText: {
+    color: '#93C822',
+    fontSize: 10,
+    fontWeight: '600',
+    marginLeft: 4,
   },
   bulkPhotoDeleteButton: {
     position: 'absolute',

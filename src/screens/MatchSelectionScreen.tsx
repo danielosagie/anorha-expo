@@ -6,7 +6,7 @@ import {
 } from 'react-native';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { FlashList } from '@shopify/flash-list';
-import { supabase } from '../../lib/supabase';
+import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes } from 'lucide-react-native';
 import ItemJobsModal from '../components/ItemJobsModal';
@@ -89,6 +89,7 @@ type TemplateDraft = {
 const SSSYNC_API_BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
 const AI_SERVER_URL = process.env.EXPO_PUBLIC_AI_SERVER_URL;
 const SSSYNC_API_BASE_URL_FE = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+const BASE_URL = SSSYNC_API_BASE_URL || 'https://api.sssync.app';
 const CLIENT_RERANK_ENABLED = String(process.env.EXPO_PUBLIC_CLIENT_RERANK || 'false') === 'true';
 const { width: screenWidth } = Dimensions.get('window');
 const GRID_PADDING = 16;
@@ -97,8 +98,8 @@ const COLUMNS = 3;
 const ITEM_WIDTH = (screenWidth - GRID_PADDING * 2 - ITEM_SPACING * (COLUMNS - 1)) / COLUMNS;
 
 async function getToken() {
-    const session = await supabase.auth.getSession();
-    return session?.data.session?.access_token;
+    const jwt = await ensureSupabaseJwt();
+    return jwt;
 }
 
 // --- Reusable Components ---
@@ -307,7 +308,12 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
                     setJobStatus('unknown');
                     return;
                 }
-                const res = await fetch(`${SSSYNC_API_BASE_URL}/api/products/match/jobs/${jobId}/status`, {
+                if (!token) {
+                    setError('Sign-in required to view match jobs.');
+                    setIsLoading(false);
+                    return;
+                }
+                const res = await fetch(`${BASE_URL}/api/products/match/jobs/${jobId}/status`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
                 if (!res.ok) throw new Error(`Status ${res.status}`);
@@ -325,7 +331,7 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
                 if (status?.status === 'completed') {
                     // Optionally hydrate with final results (summary/timing)
                     try {
-                        const res2 = await fetch(`${SSSYNC_API_BASE_URL}/api/products/match/jobs/${jobId}/results`, {
+                        const res2 = await fetch(`${BASE_URL}/api/products/match/jobs/${jobId}/results`, {
                             headers: { 'Authorization': `Bearer ${token}` }
                         });
                         if (res2.ok) {
@@ -563,7 +569,10 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
             platformRequests: buildPlatformRequests(),
         };
 
-        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/generate/jobs`, {
+        if (!SSSYNC_API_BASE_URL && !process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL) {
+            throw new Error('API base URL not configured');
+        }
+        const response = await fetch(`${BASE_URL}/api/products/generate/jobs`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${token}`,
@@ -1464,6 +1473,12 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
                 return '#4B5563';
               }}
               detailsEnabled={(idx) => !!itemGenerateJobs[idx]?.jobId}
+              countLabel={'Matches'}
+              getSecondaryText={(idx) => {
+                const s = itemGenerateJobs[idx]?.status;
+                if (!s) return null;
+                return s === 'completed' ? 'Generated' : s === 'failed' ? 'Generation failed' : 'Generating…';
+              }}
               enableMultiSelect
               onBatchGenerateSelected={async (indices) => {
                 try {
@@ -1491,7 +1506,7 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
                       images: [{ url: firstImage }],
                     };
                   });
-                  const res = await fetch(`${SSSYNC_API_BASE_URL}/api/products/match/jobs`, {
+                  const res = await fetch(`${BASE_URL}/api/products/match/jobs`, {
                     method: 'POST',
                     headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
                     body: JSON.stringify({ products: productsPayload, options: { useReranking: true } }),

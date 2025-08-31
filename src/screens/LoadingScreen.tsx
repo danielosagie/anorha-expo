@@ -20,7 +20,7 @@ import { AppStackParamList } from '../navigation/AppNavigator';
 import PyramidGrid from '../components/PyramidGrid';
 import { Blurred } from '../components/Blurred';
 import StepLoader from '../components/StepLoader';
-import { supabase } from '../../lib/supabase';
+import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import ItemJobsModal from '../components/ItemJobsModal';
 import { Boxes } from 'lucide-react-native';
 
@@ -88,12 +88,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
         
 
         // Get current user
-        async function getToken() {
-          const { data: { user }, error: userError } = await supabase.auth.getUser();
-          const session = await supabase.auth.getSession();
-          const token = session?.data.session?.access_token;
-          return token;
-        }
+        async function getToken() { return await ensureSupabaseJwt(); }
 
         
         // Get auth token

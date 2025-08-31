@@ -51,6 +51,17 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 });
 
+// Expose current Supabase JWT for backend API calls (SupabaseAuthGuard expects this)
+export function getCurrentSupabaseJwt(): string | null {
+  return currentSupabaseJwt;
+}
+
+export async function ensureSupabaseJwt(): Promise<string | null> {
+  if (currentSupabaseJwt) return currentSupabaseJwt;
+  const ok = await refreshSupabaseToken();
+  return ok ? currentSupabaseJwt : null;
+}
+
 async function exchangeClerkForSupabase(): Promise<boolean> {
   if (!getClerkTokenFn) return false;
   try {
