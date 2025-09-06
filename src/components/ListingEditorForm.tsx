@@ -21,6 +21,8 @@ type Props = {
   onOpenBarcodeScanner?: (onResult: (code: string) => void) => void;
   onOpenImageCapture?: (onResult: (uris: string[]) => void) => void;
   onRegenerateField?: (platformKey: string, fieldKey: string) => void;
+  onAddMissingField?: (platformKey: string) => void;
+  getMissingFieldsCount?: (platformKey: string) => number;
 };
 
 type Variant = {
@@ -76,7 +78,7 @@ const DEFAULT_INVENTORY_TYPE_BY_PLATFORM: Record<string, InventoryType> = {
   depop: 'BASIC',
 };
 
-export default function ListingEditorForm({ platforms, images, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField }: Props) {
+export default function ListingEditorForm({ platforms, images, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount }: Props) {
   const platformKeys = useMemo(() => Object.keys(platforms || {}), [platforms]);
   const [activeTab, setActiveTab] = useState<string>(platformKeys[0] || 'all');
   const [showSEO, setShowSEO] = useState<boolean>(false);
@@ -643,6 +645,93 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
           </View>
         )}
 
+      {/* Dynamic Additional Fields - render any fields not covered by standard form */}
+      {activeTab !== 'all' && (() => {
+        const standardFields = new Set([
+          'title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode',
+          'images', 'options', 'variants', 'locations', 'locationQuantities', 'seoTitle', 'seoDescription',
+          '__refilled', '_rawResponse', '_parseError', '_extractedJson' // Exclude internal fields
+        ]);
+        
+        const additionalFields = Object.entries(activeData || {})
+          .filter(([key, value]) => 
+            !standardFields.has(key) && 
+            value !== undefined && 
+            value !== null &&
+            !key.startsWith('_') // Skip internal fields
+          );
+        
+        if (additionalFields.length === 0) return null;
+        
+        return (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Additional Fields</Text>
+            <Text style={styles.subtle}>Fields automatically detected from AI response</Text>
+            {additionalFields.map(([key, value]) => {
+              const isArray = Array.isArray(value);
+              const isObject = typeof value === 'object' && !isArray;
+              const displayValue = isObject ? JSON.stringify(value, null, 2) : 
+                                  isArray ? value.join(', ') : String(value);
+              
+              return (
+                <View key={key} style={{ marginTop: 12 }}>
+                  {isArray ? (
+                    <ChipsField
+                      label={key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, ' $1')}
+                      valueArray={value}
+                      onChangeArray={(arr) => patchField(key, arr)}
+                      onInfo={() => onOpenFieldPanel?.(key)}
+                      onRegenerate={onRegenerateField ? () => onRegenerateField(activePlatformKey, key) : undefined}
+                      refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes(key)}
+                    />
+                  ) : (
+                    <Field
+                      label={key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, ' $1')}
+                      value={displayValue}
+                      multiline={isObject || displayValue.length > 50}
+                      onChangeText={(t) => {
+                        // Try to parse back to original type
+                        if (isObject) {
+                          try {
+                            patchField(key, JSON.parse(t));
+                          } catch {
+                            patchField(key, t); // Fallback to string
+                          }
+                        } else if (typeof value === 'number') {
+                          patchField(key, Number(t) || 0);
+                        } else if (typeof value === 'boolean') {
+                          patchField(key, t.toLowerCase() === 'true');
+                        } else {
+                          patchField(key, t);
+                        }
+                      }}
+                      onInfo={() => onOpenFieldPanel?.(key)}
+                      onRegenerate={onRegenerateField ? () => onRegenerateField(activePlatformKey, key) : undefined}
+                      refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes(key)}
+                    />
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        );
+      })()}
+
+      {/* Add Missing Field Button for current platform */}
+      {activeTab !== 'all' && onAddMissingField && (
+        <TouchableOpacity 
+          style={styles.addMissingFieldButton} 
+          onPress={() => onAddMissingField(activePlatformKey)}
+        >
+          <Icon name="plus" size={18} color="#71717A" />
+          <Text style={styles.addMissingFieldText}>
+            Add Missing Field
+            {getMissingFieldsCount && getMissingFieldsCount(activePlatformKey) > 0 && (
+              <Text style={{ color: '#ef4444' }}> ({getMissingFieldsCount(activePlatformKey)} missing)</Text>
+            )}
+          </Text>
+        </TouchableOpacity>
+      )}
       
     </View>
   );
@@ -652,7 +741,7 @@ function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, re
   return (
     <View style={{ marginBottom: 12 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 10 }}>
           <Text style={styles.fieldLabel}>{label}{required ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
           {refilled ? (
             <View style={{ backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
@@ -695,9 +784,12 @@ function ChipsField({ label, valueArray, onChangeArray, onInfo, onRegenerate, re
             </View>
           ) : null}
           {!!onRegenerate && (
+          
             <TouchableOpacity onPress={onRegenerate} style={{ borderWidth: 1, borderColor: '#E5E5E5', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: '#fff' }}>
               <Sparkles size={14} color={'#000'} />
             </TouchableOpacity>
+            
+
           )}
         </View>
         {!!onInfo && (
@@ -795,6 +887,25 @@ const styles = StyleSheet.create({
   platformPickerDock: { position: 'absolute', top: 6, left: 24, right: 24, zIndex: 5000 },
   platformPickerCapsule: { backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: '#E5E5E5', padding: 12 },
   platformPill: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 8, paddingHorizontal: 12, margin: 6, flexDirection: 'row', alignItems: 'center' },
+  // Add Missing Field Button
+  addMissingFieldButton: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'center',
+    paddingVertical: 12, 
+    paddingHorizontal: 16, 
+    borderRadius: 12, 
+    borderWidth: 1, 
+    borderStyle: 'dashed', 
+    borderColor: '#71717A', 
+    marginTop: 16,
+    gap: 8
+  },
+  addMissingFieldText: { 
+    color: '#71717A', 
+    fontSize: 14, 
+    fontWeight: '600' 
+  },
 });
 
 

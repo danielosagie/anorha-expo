@@ -39,7 +39,32 @@ interface SerpApiData {
 
 interface Result {
     productIndex: number;
-    serpApiData: SerpApiData[];
+    productId: string;
+    variantId: string;
+    serpApiData: SerpApiData[]; // Array of SerpAPI results
+    rerankedResults: Array<{
+      rank: number;
+      score: number;
+      serpApiIndex: number; // Index in original SerpAPI results
+      title: string;
+      link: string;
+      imageUrl?: string;
+      snippet?: string;
+      embeddingId?: string; // Reference to stored embedding
+    }>;
+    confidence: 'high' | 'medium' | 'low';
+    vectorSearchFoundResults: boolean;
+    originalTargetImage: string;
+    processingTimeMs: number;
+    timing: {
+      quickScanMs: number;
+      serpApiMs: number;
+      embeddingMs: number;
+      vectorSearchMs: number;
+      rerankingMs: number;
+      totalMs: number;
+    };
+    error?: string;
 }
 
 export interface Analysis {
@@ -556,6 +581,8 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
         const payload: GenerateJobSubmitPayload = {
             products: [
                 {
+                    productId: analysisData?.results[currentProductIndex]?.productId,
+                    variantId: analysisData?.results[currentProductIndex]?.variantId,
                     productIndex: currentProductIndex,
                     imageUrls: selectedMatches.length > 0 ? [selectedMatches[0].image || selectedMatches[0].thumbnail || ''] : [],
                     coverImageIndex: 0,

@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 'react-native';
 import { CameraView } from 'expo-camera';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -10,6 +10,22 @@ import { getPlatformRequirements } from '../utils/platformRequirements';
 import { Boxes, X, Sparkles } from 'lucide-react-native';
 import BottomActionBar from '../components/BottomActionBar';
 import ListingEditorForm from '../components/ListingEditorForm';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+
+// Feature flag to hide AI refill functionality
+const ENABLE_AI_REFILL_FEATURES = false;
+
+// Platform metadata for UI display
+const PLATFORM_META: Record<string, { label: string; icon: string }> = {
+  shopify: { label: 'Shopify', icon: 'shopping' },
+  amazon: { label: 'Amazon', icon: 'amazon' },
+  ebay: { label: 'eBay', icon: 'shopping' },
+  clover: { label: 'Clover', icon: 'leaf' },
+  square: { label: 'Square', icon: 'square-outline' },
+  facebook: { label: 'Facebook', icon: 'facebook' },
+  whatnot: { label: 'Whatnot', icon: 'shopping' },
+  depop: { label: 'Depop', icon: 'shopping' },
+};
 
 type Props = StackScreenProps<AppStackParamList, 'GenerateDetailsScreen'>;
 
@@ -22,6 +38,369 @@ type GeneratedResult = {
   sourceImageUrl?: string;
   processingTimeMs?: number;
   source?: string;
+};
+
+// Platform field schema for hierarchical structure
+const PLATFORM_FIELD_SCHEMA: Record<string, any> = {
+  shopify: {
+    // Core product fields
+    title: { type: 'string', label: 'Title', required: true },
+    description: { type: 'string', label: 'Description', multiline: true },
+    vendor: { type: 'string', label: 'Vendor' },
+    productCategory: { type: 'string', label: 'Product Category' },
+    productType: { type: 'string', label: 'Product Type' },
+    tags: { type: 'array', label: 'Tags' },
+    status: { type: 'select', label: 'Status', options: ['active', 'draft', 'archived'] },
+    // Variant structure
+    variants: {
+      type: 'array',
+      label: 'Variants',
+      schema: {
+        option1_name: { type: 'string', label: 'Option 1 Name' },
+        option1_value: { type: 'string', label: 'Option 1 Value' },
+        option2_name: { type: 'string', label: 'Option 2 Name' },
+        option2_value: { type: 'string', label: 'Option 2 Value' },
+        option3_name: { type: 'string', label: 'Option 3 Name' },
+        option3_value: { type: 'string', label: 'Option 3 Value' },
+        sku: { type: 'string', label: 'SKU' },
+        barcode: { type: 'string', label: 'Barcode' },
+        price: { type: 'number', label: 'Price' },
+        compareAtPrice: { type: 'number', label: 'Compare At Price' },
+        costPerItem: { type: 'number', label: 'Cost Per Item' },
+        chargeTax: { type: 'boolean', label: 'Charge Tax' },
+        taxCode: { type: 'string', label: 'Tax Code' },
+        inventoryTracker: { type: 'string', label: 'Inventory Tracker' },
+        inventoryQuantity: { type: 'number', label: 'Inventory Quantity' },
+        continueSellingWhenOutOfStock: { type: 'boolean', label: 'Continue Selling When Out Of Stock' },
+        weightValueGrams: { type: 'number', label: 'Weight Value (Grams)' },
+        requiresShipping: { type: 'boolean', label: 'Requires Shipping' },
+        fulfillmentService: { type: 'string', label: 'Fulfillment Service' },
+        variantImageURL: { type: 'string', label: 'Variant Image URL' }
+      }
+    },
+    // Images structure
+    images: {
+      type: 'array',
+      label: 'Images',
+      schema: {
+        productImageURL: { type: 'string', label: 'Product Image URL' },
+        imagePosition: { type: 'number', label: 'Image Position' },
+        imageAltText: { type: 'string', label: 'Image Alt Text' }
+      }
+    },
+    publishedOnOnlineStore: { type: 'boolean', label: 'Published On Online Store' },
+    giftCard: { type: 'boolean', label: 'Gift Card' },
+    // SEO structure
+    seo: {
+      type: 'object',
+      label: 'SEO',
+      schema: {
+        seoTitle: { type: 'string', label: 'SEO Title' },
+        seoDescription: { type: 'string', label: 'SEO Description', multiline: true }
+      }
+    },
+    // Google Shopping structure
+    googleShopping: {
+      type: 'object',
+      label: 'Google Shopping',
+      schema: {
+        googleProductCategory: { type: 'string', label: 'Google Product Category' },
+        gender: { type: 'select', label: 'Gender', options: ['Unisex', 'Male', 'Female'] },
+        ageGroup: { type: 'select', label: 'Age Group', options: ['Adult', 'Kids', 'Toddler', 'Infant', 'Newborn'] },
+        mpn: { type: 'string', label: 'MPN' },
+        adWordsGrouping: { type: 'string', label: 'AdWords Grouping' },
+        adWordsLabels: { type: 'string', label: 'AdWords Labels' },
+        condition: { type: 'select', label: 'Condition', options: ['new', 'refurbished', 'used'] },
+        customProduct: { type: 'boolean', label: 'Custom Product' },
+        customLabel0: { type: 'string', label: 'Custom Label 0' },
+        customLabel1: { type: 'string', label: 'Custom Label 1' },
+        customLabel2: { type: 'string', label: 'Custom Label 2' },
+        customLabel3: { type: 'string', label: 'Custom Label 3' },
+        customLabel4: { type: 'string', label: 'Custom Label 4' }
+      }
+    }
+  },
+  amazon: {
+    sku: { type: 'string', label: 'SKU', required: true },
+    productId: { type: 'string', label: 'Product ID' },
+    productIdType: { type: 'select', label: 'Product ID Type', options: ['UPC', 'EAN', 'ASIN'] },
+    title: { type: 'string', label: 'Title', required: true },
+    brand: { type: 'string', label: 'Brand' },
+    manufacturer: { type: 'string', label: 'Manufacturer' },
+    description: { type: 'string', label: 'Description', multiline: true },
+    bullet_points: { type: 'array', label: 'Bullet Points' },
+    search_terms: { type: 'array', label: 'Search Terms' },
+    price: { type: 'number', label: 'Price', required: true },
+    quantity: { type: 'number', label: 'Quantity' },
+    mainImageURL: { type: 'string', label: 'Main Image URL' },
+    otherImageURLs: { type: 'array', label: 'Other Image URLs' },
+    categorySuggestion: { type: 'string', label: 'Category Suggestion' },
+    amazonProductType: { type: 'select', label: 'Amazon Product Type', options: ['BEAUTY', 'KITCHEN', 'TOOLS_AND_HOME_IMPROVEMENT', 'CLOTHING_SHOES_AND_JEWELRY', 'COLLECTIBLES', 'BOOKS', 'HEALTH_PERSONAL_CARE', 'ELECTRONICS', 'SPORTS_OUTDOORS', 'TOYS_AND_GAMES'] },
+    condition: { type: 'select', label: 'Condition', options: ['New', 'Refurbished', 'Used'] }
+  },
+  ebay: {
+    action: { type: 'string', label: 'Action' },
+    customLabel: { type: 'string', label: 'Custom Label' },
+    category: { type: 'string', label: 'Category' },
+    storeCategory: { type: 'string', label: 'Store Category' },
+    title: { type: 'string', label: 'Title', required: true },
+    subtitle: { type: 'string', label: 'Subtitle' },
+    relationship: { type: 'string', label: 'Relationship' },
+    relationshipDetails: { type: 'string', label: 'Relationship Details' },
+    scheduleTime: { type: 'string', label: 'Schedule Time' },
+    conditionID: { type: 'number', label: 'Condition ID' },
+    conditionDetails: {
+      type: 'object',
+      label: 'Condition Details',
+      schema: {
+        professionalGrader: { type: 'string', label: 'Professional Grader' },
+        grade: { type: 'string', label: 'Grade' },
+        certificationNumber: { type: 'string', label: 'Certification Number' },
+        cardCondition: { type: 'string', label: 'Card Condition' }
+      }
+    },
+    itemSpecifics: { type: 'object', label: 'Item Specifics' },
+    media: {
+      type: 'object',
+      label: 'Media',
+      schema: {
+        picURL: { type: 'string', label: 'Picture URL' },
+        galleryType: { type: 'string', label: 'Gallery Type' },
+        videoID: { type: 'string', label: 'Video ID' }
+      }
+    },
+    description: { type: 'string', label: 'Description', multiline: true },
+    listingDetails: {
+      type: 'object',
+      label: 'Listing Details',
+      schema: {
+        format: { type: 'select', label: 'Format', options: ['FixedPrice', 'Auction'] },
+        duration: { type: 'string', label: 'Duration' },
+        startPrice: { type: 'number', label: 'Start Price' },
+        buyItNowPrice: { type: 'number', label: 'Buy It Now Price' },
+        bestOfferEnabled: { type: 'boolean', label: 'Best Offer Enabled' },
+        bestOfferAutoAcceptPrice: { type: 'number', label: 'Best Offer Auto Accept Price' },
+        minimumBestOfferPrice: { type: 'number', label: 'Minimum Best Offer Price' },
+        quantity: { type: 'number', label: 'Quantity' },
+        immediatePayRequired: { type: 'boolean', label: 'Immediate Pay Required' },
+        location: { type: 'string', label: 'Location' }
+      }
+    },
+    shippingDetails: {
+      type: 'object',
+      label: 'Shipping Details',
+      schema: {
+        shippingType: { type: 'string', label: 'Shipping Type' },
+        dispatchTimeMax: { type: 'number', label: 'Dispatch Time Max' },
+        promotionalShippingDiscount: { type: 'boolean', label: 'Promotional Shipping Discount' },
+        shippingDiscountProfileID: { type: 'string', label: 'Shipping Discount Profile ID' },
+        services: {
+          type: 'array',
+          label: 'Services',
+          schema: {
+            option: { type: 'string', label: 'Option' },
+            cost: { type: 'number', label: 'Cost' }
+          }
+        }
+      }
+    },
+    returnPolicy: {
+      type: 'object',
+      label: 'Return Policy',
+      schema: {
+        returnsAcceptedOption: { type: 'string', label: 'Returns Accepted Option' },
+        returnsWithinOption: { type: 'string', label: 'Returns Within Option' },
+        refundOption: { type: 'string', label: 'Refund Option' },
+        shippingCostPaidByOption: { type: 'string', label: 'Shipping Cost Paid By Option' },
+        additionalDetails: { type: 'string', label: 'Additional Details', multiline: true }
+      }
+    }
+  },
+  facebook: {
+    id: { type: 'string', label: 'ID' },
+    title: { type: 'string', label: 'Title', required: true },
+    description: { type: 'string', label: 'Description', multiline: true },
+    availability: { type: 'select', label: 'Availability', options: ['in stock', 'out of stock', 'preorder'] },
+    condition: { type: 'select', label: 'Condition', options: ['new', 'refurbished', 'used'] },
+    price: { type: 'string', label: 'Price' },
+    link: { type: 'string', label: 'Link' },
+    image_link: { type: 'string', label: 'Image Link' },
+    brand: { type: 'string', label: 'Brand' },
+    google_product_category: { type: 'string', label: 'Google Product Category' },
+    categorySuggestion: { type: 'string', label: 'Category Suggestion' }
+  },
+  square: {
+    object: {
+      type: 'object',
+      label: 'Object',
+      schema: {
+        type: { type: 'string', label: 'Type' },
+        id: { type: 'string', label: 'ID' },
+        itemData: {
+          type: 'object',
+          label: 'Item Data',
+          schema: {
+            name: { type: 'string', label: 'Name', required: true },
+            description: { type: 'string', label: 'Description', multiline: true },
+            categorySuggestion: { type: 'string', label: 'Category Suggestion' },
+            gtin: { type: 'string', label: 'GTIN' },
+            variations: {
+              type: 'array',
+              label: 'Variations',
+              schema: {
+                type: { type: 'string', label: 'Type' },
+                id: { type: 'string', label: 'ID' },
+                itemVariationData: {
+                  type: 'object',
+                  label: 'Item Variation Data',
+                  schema: {
+                    sku: { type: 'string', label: 'SKU' },
+                    name: { type: 'string', label: 'Name' },
+                    pricingType: { type: 'string', label: 'Pricing Type' },
+                    priceMoney: {
+                      type: 'object',
+                      label: 'Price Money',
+                      schema: {
+                        amount: { type: 'number', label: 'Amount' },
+                        currency: { type: 'string', label: 'Currency' }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            locations: { type: 'string', label: 'Locations' }
+          }
+        }
+      }
+    }
+  },
+  clover: {
+    name: { type: 'string', label: 'Name', required: true },
+    price: { type: 'number', label: 'Price', required: true },
+    priceType: { type: 'string', label: 'Price Type' },
+    sku: { type: 'string', label: 'SKU' },
+    category: {
+      type: 'object',
+      label: 'Category',
+      schema: {
+        name: { type: 'string', label: 'Name' }
+      }
+    },
+    modifierGroups: { type: 'array', label: 'Modifier Groups' },
+    availability: { type: 'select', label: 'Availability', options: ['in stock', 'out of stock'] },
+    brand: { type: 'string', label: 'Brand' }
+  },
+  whatnot: {
+    category: { type: 'string', label: 'Category' },
+    subCategory: { type: 'string', label: 'Sub Category' },
+    title: { type: 'string', label: 'Title', required: true },
+    description: { type: 'string', label: 'Description', multiline: true },
+    quantity: { type: 'number', label: 'Quantity' },
+    type: { type: 'string', label: 'Type' },
+    price: { type: 'number', label: 'Price', required: true },
+    shippingProfile: { type: 'string', label: 'Shipping Profile' },
+    offerable: { type: 'boolean', label: 'Offerable' },
+    hazmat: { type: 'string', label: 'Hazmat' },
+    condition: { type: 'string', label: 'Condition' },
+    costPerItem: { type: 'number', label: 'Cost Per Item' },
+    sku: { type: 'string', label: 'SKU' },
+    imageUrls: { type: 'array', label: 'Image URLs' }
+  }
+};
+
+// Helper function to flatten the new AI response format with full backwards compatibility
+const flattenPlatformData = (platformData: any): any => {
+  if (!platformData || typeof platformData !== 'object') {
+    return platformData;
+  }
+
+  console.log(platformData)
+
+  const flattened: any = {};
+  
+  for (const [platformKey, platformValue] of Object.entries(platformData)) {
+    if (!platformValue || typeof platformValue !== 'object') {
+      // Simple key-value pair (old format)
+      flattened[platformKey] = platformValue;
+      continue;
+    }
+
+    const platformObj = platformValue as any;
+    
+    // Check if this looks like the new detailed format
+    const hasNewStructure = platformObj.variants || platformObj.seo || platformObj.googleShopping || 
+                           platformObj.listingDetails || platformObj.shippingDetails || platformObj.object;
+    
+    if (hasNewStructure) {
+      // New format: flatten nested structures while preserving important data
+      const flatPlatform: any = {};
+      
+      // Extract top-level fields
+      Object.entries(platformObj).forEach(([key, value]) => {
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+          flatPlatform[key] = value;
+        } else {
+          // Handle nested objects - extract useful fields to top level
+          const nestedObj = value as any;
+          
+          if (key === 'seo') {
+            flatPlatform.seoTitle = nestedObj.seoTitle;
+            flatPlatform.seoDescription = nestedObj.seoDescription;
+          } else if (key === 'object' && nestedObj.itemData) {
+            // Square format
+            Object.assign(flatPlatform, nestedObj.itemData);
+            if (nestedObj.itemData.variations && nestedObj.itemData.variations[0]) {
+              const firstVariation = nestedObj.itemData.variations[0];
+              if (firstVariation.itemVariationData) {
+                Object.assign(flatPlatform, firstVariation.itemVariationData);
+                if (firstVariation.itemVariationData.priceMoney) {
+                  flatPlatform.price = firstVariation.itemVariationData.priceMoney.amount / 100; // Convert cents to dollars
+                }
+              }
+            }
+          } else if (key === 'listingDetails') {
+            // eBay listing details
+            Object.entries(nestedObj).forEach(([subKey, subValue]) => {
+              flatPlatform[`listing_${subKey}`] = subValue;
+            });
+            // Also preserve price from buyItNowPrice
+            if (nestedObj.buyItNowPrice) {
+              flatPlatform.price = nestedObj.buyItNowPrice;
+            }
+          } else if (key === 'media' && nestedObj.picURL) {
+            // eBay media
+            flatPlatform.imageUrl = nestedObj.picURL;
+          } else {
+            // For other nested objects, preserve the structure AND flatten key fields
+            flatPlatform[key] = value;
+            
+            // Extract common fields to top level for easier access
+            if (nestedObj.name && !flatPlatform.name) flatPlatform.name = nestedObj.name;
+            if (nestedObj.title && !flatPlatform.title) flatPlatform.title = nestedObj.title;
+            if (nestedObj.description && !flatPlatform.description) flatPlatform.description = nestedObj.description;
+            if (nestedObj.price && !flatPlatform.price) flatPlatform.price = nestedObj.price;
+            
+            // Also flatten all nested properties with prefixed keys to make them accessible
+            Object.entries(nestedObj).forEach(([nestedKey, nestedValue]) => {
+              const flatKey = `${key}_${nestedKey}`;
+              if (!flatPlatform[nestedKey] && !flatPlatform[flatKey]) {
+                flatPlatform[flatKey] = nestedValue;
+              }
+            });
+          }
+        }
+      });
+      
+      flattened[platformKey] = flatPlatform;
+    } else {
+      // Either old simple format, new fields from backend, or nested object - preserve everything
+      flattened[platformKey] = typeof platformObj === 'object' ? 
+        flattenPlatformData(platformObj) : platformObj;
+    }
+  }
+  
+  return flattened;
 };
 
 function GenerateDetailsScreen({ route }: Props) {
@@ -77,17 +456,29 @@ function GenerateDetailsScreen({ route }: Props) {
   console.log('[GEN-DETAILS] results raw:', Array.isArray(results) ? `len=${results.length}` : typeof results);
 
   const first: GeneratedResult | null = useMemo(() => (Array.isArray(results) && results.length > 0 ? results[0] : null), [results]);
+  
+  // Flatten the new AI response format to maintain compatibility
   const platforms: GeneratedPlatformDetails = useMemo(
-    () => ((first && first.platforms) ? first.platforms : {}),
+    () => {
+      if (!first || !first.platforms) return {};
+      
+      // Handle the new detailed AI response format
+      const rawPlatforms = first.platforms;
+      const flattened = flattenPlatformData(rawPlatforms);
+      
+      console.log('[GEN-DETAILS] Flattened platforms:', Object.keys(flattened));
+      return flattened;
+    },
     [first]
   );
+  
   const [displayedPlatforms, setDisplayedPlatforms] = useState<GeneratedPlatformDetails>(platforms);
   const platformKeys: string[] = useMemo(() => Object.keys(platforms as Record<string, any>), [platforms]);
   const [jobsModalVisible, setJobsModalVisible] = useState(false);
   const [userGenerateJobs, setUserGenerateJobs] = useState<Array<{ jobId: string; status: string; createdAt: string; completedAt?: string }>>([]);
   const [checklist, setChecklist] = useState<Record<string, { missing: string[]; ready: boolean }>>({});
   const [versionsSheetOpen, setVersionsSheetOpen] = useState(false);
-  const [versions, setVersions] = useState<Array<{ id: string; jobId: string; createdAt: string; platforms: any; sources?: Array<{ url: string; usedForFields?: string[] }> }>>([]);
+  const [versions, setVersions] = useState<Array<{ id: string; jobId: string; createdAt: string; platforms: any; sources?: Array<{ url: string; usedForFields?: string[] }>; matchJobId?: string; source?: string }>>([]);
   const [selectedFieldKey, setSelectedFieldKey] = useState<string | null>(null);
   const [versionsTab, setVersionsTab] = useState<'versions'|'sources'>('versions');
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -99,6 +490,17 @@ function GenerateDetailsScreen({ route }: Props) {
   const [lastFillCount, setLastFillCount] = useState<number>(0);
   const [refilledFieldsByPlatform, setRefilledFieldsByPlatform] = useState<Record<string, string[]>>({});
   const [fillOverlayOpen, setFillOverlayOpen] = useState<boolean>(false);
+  const [missingFieldsModalOpen, setMissingFieldsModalOpen] = useState<boolean>(false);
+  const [selectedMissingPlatform, setSelectedMissingPlatform] = useState<string>('');
+  const [fieldSearchQuery, setFieldSearchQuery] = useState<string>('');
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
+    'Core Fields': true,
+    'SEO': false,
+    'Google Shopping': false,
+    'Listing Details': false,
+    'Shipping Details': false,
+    'Return Policy': false
+  });
   
   // Try to pull items list from params if provided; fallback to single
   const items = useMemo(() => {
@@ -128,9 +530,41 @@ function GenerateDetailsScreen({ route }: Props) {
   const [bottomNavState, setBottomNavState] = useState<'empty' | 'selection' | 'template' | 'platform'>('empty');
   const [itemGenerateJobs, setItemGenerateJobs] = useState<Record<number, { jobId: string; status?: string }>>(jobMap || {});
 
-  // Keep displayed platforms in sync with first result changes
+  // Keep displayed platforms in sync with first result changes and merge new fields
   useEffect(() => {
-    setDisplayedPlatforms(platforms);
+    // Merge new backend fields with existing displayed platforms
+    setDisplayedPlatforms(prev => {
+      const merged: any = { ...prev };
+      
+      // For each platform in the new response
+      Object.entries(platforms).forEach(([platformKey, newPlatformData]) => {
+        const existing = merged[platformKey] || {};
+        const newData = newPlatformData || {};
+        
+        // Smart merge: keep user edits but add new fields from backend
+        const mergedPlatformData: any = { ...existing };
+        
+        // Add any new fields from backend that don't exist in current data
+        Object.entries(newData).forEach(([fieldKey, fieldValue]) => {
+          // Only add if field doesn't exist or is empty in current data
+          const currentValue = existing[fieldKey];
+          const isEmpty = currentValue === undefined || 
+                         currentValue === null || 
+                         (typeof currentValue === 'string' && currentValue.trim() === '') ||
+                         (Array.isArray(currentValue) && currentValue.length === 0);
+          
+          if (isEmpty && fieldValue !== undefined && fieldValue !== null) {
+            mergedPlatformData[fieldKey] = fieldValue;
+          }
+        });
+        
+        merged[platformKey] = mergedPlatformData;
+      });
+      
+      return merged;
+    });
+    
+    // Update checklist
     const requiredByPlatform = getPlatformRequirements();
     const next: Record<string, { missing: string[]; ready: boolean }> = {};
     for (const key of Object.keys(platforms)) {
@@ -152,25 +586,64 @@ function GenerateDetailsScreen({ route }: Props) {
   // Fetch versions when sheet opens
   useEffect(() => {
     if (!versionsSheetOpen) return;
-    // Attempt to infer productId/variantId from current result if available in params
+    
+    // Try to get versions from generate jobs related to this match
     const productId = (route.params as any)?.productId || first?.productId || null;
     const variantId = (route.params as any)?.variantId || first?.variantId || null;
-    const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
-    if (!baseUrl || !productId) return;
+    const currentMatchJobId = matchJobId;
+    
     (async () => {
       try {
+        // First try to get versions from the backend API
+        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+        if (baseUrl && productId) {
+          const token = await ensureSupabaseJwt();
+          const res = await fetch(`${baseUrl}/api/products/generate/versions?productId=${encodeURIComponent(productId)}${variantId ? `&variantId=${encodeURIComponent(variantId)}` : ''}&limit=20&offset=0`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data)) {
+              setVersions(data);
+              return;
+            }
+          }
+        }
+        
+        // Fallback: get all generate jobs and filter by current match context
         const token = await ensureSupabaseJwt();
-        const res = await fetch(`${baseUrl}/api/products/generate/versions?productId=${encodeURIComponent(productId)}${variantId ? `&variantId=${encodeURIComponent(variantId)}` : ''}&limit=20&offset=0`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        if (!res.ok) throw new Error(`Versions fetch failed ${res.status}`);
-        const data = await res.json();
-        if (Array.isArray(data)) setVersions(data);
+        const { data: generateJobs, error } = await supabase
+          .from('generate_jobs')
+          .select('job_id, status, created_at, results, match_job_id')
+          .eq('status', 'completed')
+          .order('created_at', { ascending: false })
+          .limit(20);
+          
+        if (!error && generateJobs) {
+          const relatedVersions = generateJobs
+            .filter(job => {
+              // Include jobs that either have the same match_job_id or contain results for the same product
+              return job.match_job_id === currentMatchJobId || 
+                     (Array.isArray(job.results) && job.results.some((r: any) => 
+                       r.productId === productId || r.productIndex === first?.productIndex
+                     ));
+            })
+            .map(job => ({
+              id: job.job_id,
+              jobId: job.job_id,
+              createdAt: job.created_at,
+              platforms: job.results?.[0]?.platforms || {},
+              matchJobId: job.match_job_id,
+              source: job.results?.[0]?.source || 'generated'
+            }));
+            
+          setVersions(relatedVersions);
+        }
       } catch (e) {
-        // non-blocking
+        console.error('Error fetching versions:', e);
       }
     })();
-  }, [versionsSheetOpen, first, route.params]);
+  }, [versionsSheetOpen, first, route.params, matchJobId]);
 
   // Fetch user's generate jobs for modal display (counts and last generated timestamps)
   useEffect(() => {
@@ -220,6 +693,154 @@ function GenerateDetailsScreen({ route }: Props) {
 
   // Helper: compute overall readiness
   const canPublish = useMemo(() => Object.values(checklist || {}).some(x => x.ready), [checklist]);
+
+  // Helper: get missing fields for a platform
+  const getMissingFields = (platformKey: string) => {
+    const schema = PLATFORM_FIELD_SCHEMA[platformKey] || {};
+    const currentData = displayedPlatforms[platformKey] || {};
+    const missing: Array<{ path: string; label: string; type: string; required?: boolean }> = [];
+    
+    const checkFields = (obj: any, data: any, prefix = '') => {
+      Object.entries(obj).forEach(([key, fieldDef]: [string, any]) => {
+        const path = prefix ? `${prefix}.${key}` : key;
+        const value = data?.[key];
+        const isEmpty = value === undefined || value === null || 
+                       (typeof value === 'string' && value.trim() === '') ||
+                       (Array.isArray(value) && value.length === 0);
+        
+        if (fieldDef.type === 'object' && fieldDef.schema) {
+          // Nested object - check recursively
+          checkFields(fieldDef.schema, value || {}, path);
+        } else if (fieldDef.type === 'array' && fieldDef.schema) {
+          // Array with schema - check if empty or missing
+          if (isEmpty) {
+            missing.push({
+              path,
+              label: fieldDef.label || key,
+              type: fieldDef.type,
+              required: fieldDef.required
+            });
+          }
+        } else if (isEmpty) {
+          // Simple field
+          missing.push({
+            path,
+            label: fieldDef.label || key,
+            type: fieldDef.type,
+            required: fieldDef.required
+          });
+        }
+      });
+    };
+    
+    checkFields(schema, currentData);
+    return missing;
+  };
+
+  // Helper: search and filter fields
+  const getFilteredFields = (platformKey: string) => {
+    const schema = PLATFORM_FIELD_SCHEMA[platformKey] || {};
+    const query = fieldSearchQuery.toLowerCase();
+    const filtered: Array<{ path: string; label: string; type: string; required?: boolean; group?: string }> = [];
+    
+    const searchFields = (obj: any, prefix = '', group = '') => {
+      Object.entries(obj).forEach(([key, fieldDef]: [string, any]) => {
+        const path = prefix ? `${prefix}.${key}` : key;
+        const label = fieldDef.label || key;
+        
+        if (fieldDef.type === 'object' && fieldDef.schema) {
+          // Group header
+          if (!query || label.toLowerCase().includes(query) || key.toLowerCase().includes(query)) {
+            const groupName = group ? `${group} > ${label}` : label;
+            searchFields(fieldDef.schema, path, groupName);
+          }
+        } else {
+          // Individual field
+          if (!query || label.toLowerCase().includes(query) || key.toLowerCase().includes(query)) {
+            filtered.push({
+              path,
+              label,
+              type: fieldDef.type,
+              required: fieldDef.required,
+              group: group || 'Core Fields'
+            });
+          }
+        }
+      });
+    };
+    
+    searchFields(schema);
+    return filtered;
+  };
+
+  // Helper: add field to platform
+  const addFieldToPlatform = (platformKey: string, fieldPath: string) => {
+    const pathParts = fieldPath.split('.');
+    const schema = PLATFORM_FIELD_SCHEMA[platformKey] || {};
+    
+    // Navigate to the field definition
+    let fieldDef = schema;
+    for (const part of pathParts.slice(0, -1)) {
+      fieldDef = fieldDef[part]?.schema || fieldDef[part] || {};
+    }
+    const finalField = fieldDef[pathParts[pathParts.length - 1]];
+    
+    // Determine default value based on field type
+    let defaultValue: any;
+    if (finalField?.type) {
+      switch (finalField.type) {
+        case 'string':
+          defaultValue = '';
+          break;
+        case 'number':
+          defaultValue = 0;
+          break;
+        case 'boolean':
+          defaultValue = false;
+          break;
+        case 'array':
+          defaultValue = [];
+          break;
+        case 'object':
+          defaultValue = {};
+          break;
+        case 'select':
+          defaultValue = finalField.options?.[0] || '';
+          break;
+        default:
+          defaultValue = '';
+      }
+    } else {
+      // If no field definition found, default to empty string (this allows adding any field)
+      defaultValue = '';
+    }
+    
+    // Set the field value in the platform data
+    setDisplayedPlatforms(prev => {
+      const next = { ...prev };
+      const platformData = { ...(next[platformKey] || {}) };
+      
+      // For simple fields (no dots), add directly to platform
+      if (pathParts.length === 1) {
+        platformData[fieldPath] = defaultValue;
+      } else {
+        // Navigate to the correct nested location and set the value
+        let current = platformData;
+        for (const part of pathParts.slice(0, -1)) {
+          if (!current[part] || typeof current[part] !== 'object') {
+            current[part] = {};
+          }
+          current = current[part];
+        }
+        current[pathParts[pathParts.length - 1]] = defaultValue;
+      }
+      
+      next[platformKey] = platformData;
+      return next;
+    });
+    
+    setMissingFieldsModalOpen(false);
+  };
 
   // Field panel open handler
   const handleOpenFieldPanel = (fieldKey: string) => {
@@ -272,7 +893,7 @@ function GenerateDetailsScreen({ route }: Props) {
   };
 
   const fillTheRest = async () => {
-    if (isFilling) return;
+    if (isFilling || !ENABLE_AI_REFILL_FEATURES) return;
     try {
       setIsFilling(true);
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
@@ -349,6 +970,7 @@ function GenerateDetailsScreen({ route }: Props) {
   };
 
   const regenerateField = async (platformKey: string, fieldKey: string) => {
+    if (!ENABLE_AI_REFILL_FEATURES) return;
     try {
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
       const { data: sessionData } = await supabase.auth.getSession();
@@ -452,10 +1074,12 @@ function GenerateDetailsScreen({ route }: Props) {
         <TouchableOpacity onPress={() => setVersionsSheetOpen(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5' }}>
           <Text style={{ color: '#000', fontWeight: '600' }}>•••</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => setFillOverlayOpen(true)} disabled={isFilling} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: isFilling ? 'rgba(147,200,34,0.15)' : 'rgba(147,200,34,0.1)', borderRadius: 8, borderWidth: 1, borderColor: '#93C822', flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-          <Sparkles size={14} color={'#111'} />
-          <Text style={{ color: '#000', fontWeight: '600' }}>{isFilling ? 'Filling…' : 'Fill remaining'}</Text>
-        </TouchableOpacity>
+        {ENABLE_AI_REFILL_FEATURES && (
+          <TouchableOpacity onPress={() => setFillOverlayOpen(true)} disabled={isFilling} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: isFilling ? 'rgba(147,200,34,0.15)' : 'rgba(147,200,34,0.1)', borderRadius: 8, borderWidth: 1, borderColor: '#93C822', flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Sparkles size={14} color={'#111'} />
+            <Text style={{ color: '#000', fontWeight: '600' }}>{isFilling ? 'Filling…' : 'Fill remaining'}</Text>
+          </TouchableOpacity>
+        )}
       </View>
       <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ position: 'absolute', top: -32, left: 16, zIndex: 4000, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}>
         <Boxes size={18} color={'#000'} />
@@ -474,7 +1098,7 @@ function GenerateDetailsScreen({ route }: Props) {
               images={[first.sourceImageUrl || ''].filter(Boolean)}
               onChangePlatforms={setDisplayedPlatforms}
               onOpenFieldPanel={handleOpenFieldPanel}
-              onRegenerateField={regenerateField}
+              onRegenerateField={ENABLE_AI_REFILL_FEATURES ? regenerateField : undefined}
               onOpenBarcodeScanner={(onResult)=>{
                 setScannerOpen(true);
                 // handler stored on closure
@@ -484,6 +1108,12 @@ function GenerateDetailsScreen({ route }: Props) {
                 // Use AddProduct camera flow; pass a callback for captured images (photos only)
                 (route as any).navigation?.navigate?.('AddProduct', { firstPhotos: [], bulkItems: [], captureOnly: true, onDone: (uris: string[]) => done(uris) } as any);
               }}
+              onAddMissingField={(platformKey: string) => {
+                setSelectedMissingPlatform(platformKey);
+                setFieldSearchQuery('');
+                setMissingFieldsModalOpen(true);
+              }}
+              getMissingFieldsCount={(platformKey: string) => getMissingFields(platformKey).length}
             />
           </>
         ) : (
@@ -582,12 +1212,12 @@ function GenerateDetailsScreen({ route }: Props) {
         onSecondary={doSaveDraft}
       />
     </View>
-    {!!lastFillCount && (
+    {!!lastFillCount && ENABLE_AI_REFILL_FEATURES && (
       <View style={{ position: 'absolute', bottom: 96, left: 16, right: 16, backgroundColor: 'rgba(17,17,17,0.92)', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, alignItems: 'center' }}>
         <Text style={{ color: '#fff', fontWeight: '600' }}>Filled {lastFillCount} field{lastFillCount === 1 ? '' : 's'}</Text>
       </View>
     )}
-    {fillOverlayOpen && (
+    {fillOverlayOpen && ENABLE_AI_REFILL_FEATURES && (
       <View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 6000 }} pointerEvents="box-none">
         <TouchableOpacity activeOpacity={1} onPress={() => setFillOverlayOpen(false)} style={{ height: 8 }} />
         <View style={{ backgroundColor: '#fff', borderBottomLeftRadius: 14, borderBottomRightRadius: 14, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderColor: '#E5E5E5' }}>
@@ -663,25 +1293,79 @@ function GenerateDetailsScreen({ route }: Props) {
               {versionsTab === 'versions' ? (
                 versions.length === 0 ? (
                   <Text style={{ color: '#666' }}>No versions recorded yet.</Text>
-                ) : versions.map(v => (
-                  <TouchableOpacity key={v.id} onPress={() => {
-                    setDisplayedPlatforms(v.platforms || {});
-                    setVersionsSheetOpen(false);
-                  }} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, padding: 10, marginBottom: 8 }}>
-                    <Text style={{ color: '#000', fontWeight: '600' }}>{new Date(v.createdAt).toLocaleString()}</Text>
-                    <Text style={{ color: '#000' }}>Platforms: {Object.keys(v.platforms || {}).join(', ')}</Text>
-                    {Array.isArray(v.sources) && v.sources.length > 0 ? (
-                      <Text style={{ color: '#000' }}>Sources: {v.sources.slice(0, 3).map(s=>s.url).join(', ')}{v.sources.length > 3 ? '…' : ''}</Text>
-                    ) : null}
-                  </TouchableOpacity>
-                ))
+                ) : versions.map((v, index) => {
+                  const isCurrentVersion = v.jobId === jobId;
+                  const flattenedPlatforms = flattenPlatformData(v.platforms || {});
+                  const platformCount = Object.keys(flattenedPlatforms).length;
+                  
+                  return (
+                    <TouchableOpacity 
+                      key={v.id} 
+                      onPress={() => {
+                        const flattened = flattenPlatformData(v.platforms || {});
+                        setDisplayedPlatforms(flattened);
+                        setVersionsSheetOpen(false);
+                      }} 
+                      style={[
+                        { 
+                          borderWidth: 1, 
+                          borderColor: isCurrentVersion ? '#93C822' : '#E5E5E5', 
+                          backgroundColor: isCurrentVersion ? 'rgba(147,200,34,0.05)' : '#fff',
+                          borderRadius: 10, 
+                          padding: 12, 
+                          marginBottom: 8 
+                        }
+                      ]}
+                    >
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+                        <Text style={{ color: '#000', fontWeight: '600', flex: 1 }}>
+                          Version {versions.length - index}
+                          {isCurrentVersion && <Text style={{ color: '#93C822' }}> (Current)</Text>}
+                        </Text>
+                        <Text style={{ color: '#666', fontSize: 12 }}>
+                          {new Date(v.createdAt).toLocaleDateString()}
+                        </Text>
+                      </View>
+                      
+                      <Text style={{ color: '#666', fontSize: 12, marginBottom: 4 }}>
+                        {new Date(v.createdAt).toLocaleTimeString()}
+                      </Text>
+                      
+                      {platformCount > 0 ? (
+                        <Text style={{ color: '#000', fontSize: 13 }}>
+                          {platformCount} platform{platformCount !== 1 ? 's' : ''}: {Object.keys(flattenedPlatforms).map(k => PLATFORM_META[k]?.label || k).join(', ')}
+                        </Text>
+                      ) : (
+                        <Text style={{ color: '#999', fontSize: 13, fontStyle: 'italic' }}>No platform data</Text>
+                      )}
+                      
+                      {v.matchJobId && (
+                        <Text style={{ color: '#666', fontSize: 11, marginTop: 4 }}>
+                          Match ID: {v.matchJobId.slice(0, 8)}...
+                        </Text>
+                      )}
+                      
+                      {v.source && (
+                        <Text style={{ color: '#666', fontSize: 11 }}>
+                          Source: {v.source}
+                        </Text>
+                      )}
+                      
+                      {Array.isArray(v.sources) && v.sources.length > 0 ? (
+                        <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>
+                          Sources: {v.sources.slice(0, 2).map((s:any)=>s.url || s).join(', ')}{v.sources.length > 2 ? '...' : ''}
+                        </Text>
+                      ) : null}
+                    </TouchableOpacity>
+                  );
+                })
               ) : (
                 <View>
                   {!selectedFieldKey ? (
                     <Text style={{ color: '#666' }}>Tap the info icon next to a field to view sources for that field.</Text>
                   ) : (
                     <>
-                      <Text style={{ color: '#000', fontWeight: '700', marginBottom: 6 }}>Sources for “{selectedFieldKey}”</Text>
+                      <Text style={{ color: '#000', fontWeight: '700', marginBottom: 6 }}>Sources for "{selectedFieldKey}"</Text>
                       {(() => {
                         const rows: Array<{ url: string }>= [];
                         for (const v of versions) {
@@ -705,6 +1389,104 @@ function GenerateDetailsScreen({ route }: Props) {
           </View>
         </>
       )}
+    {missingFieldsModalOpen && (
+      <>
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setMissingFieldsModalOpen(false)}
+          style={styles.modalBackdrop}
+        />
+        <View style={styles.missingFieldsModal}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: '#000' }}>Add Missing Field</Text>
+            <TouchableOpacity onPress={() => setMissingFieldsModalOpen(false)}>
+              <X size={24} color={'#000'} />
+            </TouchableOpacity>
+          </View>
+          
+          {/* Search field */}
+          <View style={{ marginBottom: 16 }}>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search fields..."
+              value={fieldSearchQuery}
+              onChangeText={setFieldSearchQuery}
+            />
+          </View>
+          
+          {/* Platform info */}
+          <Text style={{ fontSize: 14, color: '#666', marginBottom: 12 }}>
+            Platform: {PLATFORM_META[selectedMissingPlatform]?.label || selectedMissingPlatform}
+          </Text>
+          
+          <ScrollView style={{ maxHeight: 400 }}>
+            {(() => {
+              const filteredFields = getFilteredFields(selectedMissingPlatform);
+              const missingFields = getMissingFields(selectedMissingPlatform);
+              const missingPaths = new Set(missingFields.map(f => f.path));
+              
+              // Group fields by their group
+              const groupedFields: Record<string, Array<{ path: string; label: string; type: string; required?: boolean }>> = {};
+              filteredFields.forEach(field => {
+                const group = field.group || 'Core Fields';
+                if (!groupedFields[group]) groupedFields[group] = [];
+                groupedFields[group].push(field);
+              });
+              
+              return Object.entries(groupedFields).map(([groupName, fields]) => (
+                <View key={groupName} style={{ marginBottom: 16 }}>
+                  <TouchableOpacity
+                    onPress={() => setExpandedGroups(prev => ({ ...prev, [groupName]: !prev[groupName] }))}
+                    style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}
+                  >
+                    <Icon name={expandedGroups[groupName] ? 'chevron-down' : 'chevron-right'} size={18} color="#666" />
+                    <Text style={{ fontSize: 16, fontWeight: '600', color: '#000', marginLeft: 4 }}>{groupName}</Text>
+                  </TouchableOpacity>
+                  
+                  {expandedGroups[groupName] && fields.map(field => {
+                    const isMissing = missingPaths.has(field.path);
+                    const isCurrentlyEmpty = !displayedPlatforms[selectedMissingPlatform]?.[field.path];
+                    
+                    return (
+                      <TouchableOpacity
+                        key={field.path}
+                        onPress={() => addFieldToPlatform(selectedMissingPlatform, field.path)}
+                        style={[
+                          styles.fieldOption,
+                          isMissing && styles.missingFieldOption
+                        ]}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 14, fontWeight: '600', color: '#000' }}>
+                            {field.label}
+                            {field.required && <Text style={{ color: '#ef4444' }}> *</Text>}
+                          </Text>
+                          <Text style={{ fontSize: 12, color: '#666' }}>
+                            {field.type} • {field.path}
+                          </Text>
+                        </View>
+                        {isMissing && (
+                          <View style={styles.missingBadge}>
+                            <Text style={{ fontSize: 10, color: '#ef4444' }}>Missing</Text>
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              ));
+            })()}
+          </ScrollView>
+          
+          <TouchableOpacity
+            onPress={() => setMissingFieldsModalOpen(false)}
+            style={styles.modalCancelButton}
+          >
+            <Text style={{ color: '#000', fontWeight: '600' }}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </>
+    )}
     </View>
   );
 }
@@ -731,4 +1513,12 @@ const styles = StyleSheet.create({
   scannerDockFull: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 5000 },
   scannerFullBleed: { backgroundColor: '#000', borderBottomLeftRadius: 16, borderBottomRightRadius: 16, overflow: 'hidden' },
   scannerCloseFull: { position: 'absolute', top: 100, right: 12, backgroundColor: 'rgba(0,0,0,0.5)', width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  // Missing fields modal
+  modalBackdrop: { position: 'absolute', top: 0, left: 0, bottom: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 6000 },
+  missingFieldsModal: { position: 'absolute', top: '10%', left: 16, right: 16, backgroundColor: '#fff', borderRadius: 16, padding: 20, maxHeight: '80%', zIndex: 6001 },
+  searchInput: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 16 },
+  fieldOption: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, marginBottom: 8, backgroundColor: '#fff' },
+  missingFieldOption: { borderColor: '#fecaca', backgroundColor: '#fef2f2' },
+  missingBadge: { backgroundColor: '#fecaca', borderRadius: 999, paddingHorizontal: 6, paddingVertical: 2 },
+  modalCancelButton: { marginTop: 16, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
 });
