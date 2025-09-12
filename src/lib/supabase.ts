@@ -107,10 +107,13 @@ export async function configureClerkSupabaseBridge(options: {
   if (!ok) throw new Error('Failed to exchange Clerk token for Supabase JWT');
 
   // Start background refresh slightly before expiry
-  const mins = options.autoRefreshMinutes ?? 9; // token ttl is ~10m on server
+  const mins = options.autoRefreshMinutes ?? 30; // Extended from 9 to 30 minutes
   if (refreshIntervalHandle) clearInterval(refreshIntervalHandle);
   refreshIntervalHandle = setInterval(() => {
-    refreshSupabaseToken().catch(() => void 0);
+    console.log(`[supabase.ts] Background token refresh triggered (${mins}min interval)`);
+    refreshSupabaseToken().catch((e) => {
+      console.error('[supabase.ts] Background token refresh failed:', e);
+    });
   }, mins * 60 * 1000);
 }
 

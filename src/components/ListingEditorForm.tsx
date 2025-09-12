@@ -23,6 +23,8 @@ type Props = {
   onRegenerateField?: (platformKey: string, fieldKey: string) => void;
   onAddMissingField?: (platformKey: string) => void;
   getMissingFieldsCount?: (platformKey: string) => number;
+  onGeneratePlatform?: (platformKey: string) => Promise<void>;
+  enableAIRefill?: boolean;
 };
 
 type Variant = {
@@ -48,9 +50,9 @@ type PlatformState = {
   locationQuantities?: Record<string, number>; // simple per-location inventory
   options?: Array<{ name: string; values: string[] }>; // e.g., [{name:'Size', values:['S','M','L']}]
   variants?: Variant[];
-  // SEO
-  seoTitle?: string;
-  seoDescription?: string;
+  // SEO fields removed - replaced with dynamic Additional Fields
+  // Additional Fields
+  
   // Inventory behavior
   inventoryType?: InventoryType;
 };
@@ -78,16 +80,17 @@ const DEFAULT_INVENTORY_TYPE_BY_PLATFORM: Record<string, InventoryType> = {
   depop: 'BASIC',
 };
 
-export default function ListingEditorForm({ platforms, images, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount }: Props) {
+export default function ListingEditorForm({ platforms, images, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill }: Props) {
   const platformKeys = useMemo(() => Object.keys(platforms || {}), [platforms]);
   const [activeTab, setActiveTab] = useState<string>(platformKeys[0] || 'all');
-  const [showSEO, setShowSEO] = useState<boolean>(false);
+  const [showAdditionalFields, setShowAdditionalFields] = useState<boolean>(true);
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [optionEditorOpen, setOptionEditorOpen] = useState<boolean>(false);
   const [newOptionName, setNewOptionName] = useState<string>('');
   const [newOptionValues, setNewOptionValues] = useState<string[]>(['']);
   const [openImagePickerFor, setOpenImagePickerFor] = useState<string | null>(null);
   const [showPlatformPicker, setShowPlatformPicker] = useState<boolean>(false);
+  const [generatingPlatforms, setGeneratingPlatforms] = useState<Set<string>>(new Set());
 
   const canonicalKey = useMemo(() => (platformKeys.includes('shopify') ? 'shopify' : (platformKeys[0] || '')), [platformKeys]);
   const activePlatformKey = activeTab === 'all' ? canonicalKey : activeTab;
@@ -254,7 +257,7 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
 
   // Hydrate platform with generated data if missing
   const fieldsToAutoFill: Array<keyof PlatformState> = [
-    'title','description','tags','price','weight','weightUnit','sku','barcode','images','options','seoTitle','seoDescription'
+    'title','description','tags','price','weight','weightUnit','sku','barcode','images','options'
   ];
 
   const autofillMissingFromCanonical = () => {
@@ -265,11 +268,7 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
       let changed = false;
       for (const key of fieldsToAutoFill) {
         const curr = (next as any)[key];
-        let val = (base as any)[key];
-        if ((key === 'seoTitle' || key === 'seoDescription') && val === undefined) {
-          // derive from canonical title/description if not explicitly present
-          val = key === 'seoTitle' ? (base as any).title : (base as any).description;
-        }
+        const val = (base as any)[key];
         if ((curr === undefined || (Array.isArray(curr) && curr.length === 0)) && val !== undefined) {
           (next as any)[key] = Array.isArray(val) ? [...val] : val;
           changed = true;
@@ -300,19 +299,50 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
   const pills = ['all', ...platformKeys];
   // Add a couple of extra platforms for quick swap-in
   const allKnownPlatforms = Array.from(new Set([...Object.keys(PLATFORM_META), 'whatnot', 'depop']));
-  const addPlatform = (platformKey: string) => {
+  const addPlatform = async (platformKey: string, shouldGenerate: boolean = false) => {
     if (!platformKey || platformKeys.includes(platformKey)) return;
-    const base = (platforms[canonicalKey] || {}) as PlatformState;
-    const newData: PlatformState = {} as PlatformState;
-    for (const key of fieldsToAutoFill) {
-      const val = (base as any)[key];
-      if (val !== undefined) (newData as any)[key] = Array.isArray(val) ? [...val] : val;
+    
+    if (shouldGenerate && onGeneratePlatform) {
+      // Start generation process
+      setGeneratingPlatforms(prev => new Set([...prev, platformKey]));
+      setShowPlatformPicker(false);
+      
+      // Add empty platform data first to show loading state
+      const base = (platforms[canonicalKey] || {}) as PlatformState;
+      const newData: PlatformState = {} as PlatformState;
+      for (const key of fieldsToAutoFill) {
+        const val = (base as any)[key];
+        if (val !== undefined) (newData as any)[key] = Array.isArray(val) ? [...val] : val;
+      }
+      const next = { ...platforms, [platformKey]: newData } as PlatformsData;
+      onChangePlatforms(next);
+      setActiveTab(platformKey);
+      
+      try {
+        await onGeneratePlatform(platformKey);
+      } catch (error) {
+        console.error('Platform generation failed:', error);
+      } finally {
+        setGeneratingPlatforms(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(platformKey);
+          return newSet;
+        });
+      }
+    } else {
+      // Regular platform addition without generation
+      const base = (platforms[canonicalKey] || {}) as PlatformState;
+      const newData: PlatformState = {} as PlatformState;
+      for (const key of fieldsToAutoFill) {
+        const val = (base as any)[key];
+        if (val !== undefined) (newData as any)[key] = Array.isArray(val) ? [...val] : val;
+      }
+      const next = { ...platforms, [platformKey]: newData } as PlatformsData;
+      onChangePlatforms(next);
+      setShowPlatformPicker(false);
+      setActiveTab(platformKey);
+      setTimeout(recomputeVariants, 0);
     }
-    const next = { ...platforms, [platformKey]: newData } as PlatformsData;
-    onChangePlatforms(next);
-    setShowPlatformPicker(false);
-    setActiveTab(platformKey);
-    setTimeout(recomputeVariants, 0);
   };
   const removePlatform = (platformKey: string) => {
     if (!platformKey) return;
@@ -381,19 +411,47 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
               <Text style={[styles.pillText, activeTab === key && styles.pillTextActive]}>All</Text>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity key={key} onPress={() => setActiveTab(key)} style={[styles.pill, activeTab === key && styles.pillActive, { flexDirection: 'row', alignItems: 'center', gap: 6 }] }>
+            <TouchableOpacity 
+              key={key} 
+              onPress={() => !generatingPlatforms.has(key) && setActiveTab(key)} 
+              style={[
+                styles.pill, 
+                activeTab === key && styles.pillActive, 
+                generatingPlatforms.has(key) && styles.pillGenerating,
+                { flexDirection: 'row', alignItems: 'center', gap: 6 }
+              ]}
+              disabled={generatingPlatforms.has(key)}
+            >
               {/* X inside pill */}
-              <TouchableOpacity onPress={() => removePlatform(key)} style={styles.pillClose}>
-                <Icon name="close" size={12} color="#6B7280" />
-              </TouchableOpacity>
-              {/* Small SVG logo */}
-              {(() => {
-                const map: Record<string, any> = { shopify: ShopifySvg, amazon: AmazonSvg, facebook: FacebookSvg, ebay: EbaySvg, clover: CloverSvg, square: SquareSvg };
-                const SVG = map[key];
-                return SVG ? <SVG width={12} height={12} /> : null;
-              })()}
-              <Text style={[styles.pillText, activeTab === key && styles.pillTextActive]}>{PLATFORM_META[key]?.label || key}</Text>
-              {Array.isArray((platforms as any)[key]?.__refilled) && (platforms as any)[key].__refilled.length > 0 && (
+              {!generatingPlatforms.has(key) && (
+                <TouchableOpacity onPress={() => removePlatform(key)} style={styles.pillClose}>
+                  <Icon name="close" size={12} color="#6B7280" />
+                </TouchableOpacity>
+              )}
+              
+              {/* Small SVG logo or loading spinner */}
+              {generatingPlatforms.has(key) ? (
+                <View style={{ width: 12, height: 12, justifyContent: 'center', alignItems: 'center' }}>
+                  <Icon name="loading" size={12} color="#6B7280" />
+                </View>
+              ) : (
+                (() => {
+                  const map: Record<string, any> = { shopify: ShopifySvg, amazon: AmazonSvg, facebook: FacebookSvg, ebay: EbaySvg, clover: CloverSvg, square: SquareSvg };
+                  const SVG = map[key];
+                  return SVG ? <SVG width={12} height={12} /> : null;
+                })()
+              )}
+              
+              <Text style={[
+                styles.pillText, 
+                activeTab === key && styles.pillTextActive,
+                generatingPlatforms.has(key) && styles.pillTextGenerating
+              ]}>
+                {PLATFORM_META[key]?.label || key}
+                {generatingPlatforms.has(key) && ' (Generating...)'}
+              </Text>
+              
+              {Array.isArray((platforms as any)[key]?.__refilled) && (platforms as any)[key].__refilled.length > 0 && !generatingPlatforms.has(key) && (
                 <View style={{ marginLeft: 6, backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
                   <Text style={{ color: '#3f6212', fontSize: 10 }}>{(platforms as any)[key].__refilled.length} refilled</Text>
                 </View>
@@ -411,10 +469,18 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
             <Text style={{ color: '#000', fontWeight: '700', marginBottom: 10, textAlign: 'center' }}>Add Platform</Text>
             <View style={styles.platformGrid}>
               {allKnownPlatforms.filter(k => !platformKeys.includes(k)).map(k => (
-                <TouchableOpacity key={k} onPress={() => addPlatform(k)} style={styles.platformPill}>
-                  {(() => { const map: Record<string, any> = { shopify: ShopifySvg, amazon: AmazonSvg, facebook: FacebookSvg, ebay: EbaySvg, clover: CloverSvg, square: SquareSvg }; const SVG = map[k]; return SVG ? <SVG width={22} height={22} /> : null; })()}
-                  <Text style={{ color: '#000', marginLeft: 8 }}>{PLATFORM_META[k]?.label || k}</Text>
-                </TouchableOpacity>
+                <View key={k} style={{ marginBottom: 8 }}>
+                  <TouchableOpacity onPress={() => addPlatform(k, false)} style={styles.platformPill}>
+                    {(() => { const map: Record<string, any> = { shopify: ShopifySvg, amazon: AmazonSvg, facebook: FacebookSvg, ebay: EbaySvg, clover: CloverSvg, square: SquareSvg }; const SVG = map[k]; return SVG ? <SVG width={22} height={22} /> : null; })()}
+                    <Text style={{ color: '#000', marginLeft: 8 }}>{PLATFORM_META[k]?.label || k}</Text>
+                  </TouchableOpacity>
+                  {onGeneratePlatform && (
+                    <TouchableOpacity onPress={() => addPlatform(k, true)} style={[styles.platformPill, styles.generatePlatformPill]}>
+                      <Sparkles size={18} color="#93C822" />
+                      <Text style={{ color: '#93C822', marginLeft: 8, fontWeight: '600' }}>Generate {PLATFORM_META[k]?.label || k}</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               ))}
             </View>
             <TouchableOpacity style={[styles.btnSecondary, { alignSelf: 'center', marginTop: 10 }]} onPress={() => setShowPlatformPicker(false)}>
@@ -433,7 +499,7 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
           multiline
           onChangeText={(t) => patchField('title', t)}
           onInfo={() => onOpenFieldPanel?.('title')}
-          onRegenerate={activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'title') : undefined}
+          onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'title') : undefined}
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('title')}
         />
 
@@ -443,7 +509,7 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
           multiline
           onChangeText={(t) => patchField('description', t)}
           onInfo={() => onOpenFieldPanel?.('description')}
-          onRegenerate={activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'description') : undefined}
+          onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'description') : undefined}
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('description')}
         />
         
@@ -452,7 +518,7 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
           valueArray={activeData.tags}
           onChangeArray={(arr) => patchField('tags', arr)}
           onInfo={() => onOpenFieldPanel?.('tags')}
-          onRegenerate={activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'tags') : undefined}
+          onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'tags') : undefined}
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('tags')}
         />
         
@@ -463,7 +529,7 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
           value={String(activeData.price ?? '')}
           onChangeText={(t) => patchField('price', t)}
           onInfo={() => onOpenFieldPanel?.('price')}
-          onRegenerate={activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'price') : undefined}
+          onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'price') : undefined}
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('price')}
         />
        
@@ -482,7 +548,7 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
           value={activeData.sku}
           onChangeText={(t) => patchField('sku', t)}
           onInfo={() => onOpenFieldPanel?.('sku')}
-          onRegenerate={activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'sku') : undefined}
+          onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'sku') : undefined}
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('sku')}
         />
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -633,105 +699,112 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
           )}
         
       </View>
-      {/* SEO basic toggle */}
-        <TouchableOpacity style={styles.toggleRow} onPress={() => setShowSEO(v=>!v)}>
-          <Icon name={showSEO ? 'chevron-down' : 'chevron-right'} size={18} color="#000" />
-          <Text style={styles.sectionTitle}>SEO</Text>
-        </TouchableOpacity>
-        {showSEO && (
-          <View style={styles.card}>
-            <Field label="SEO Title" value={(activeData as any).seoTitle} onChangeText={(t)=>patchField('seoTitle', t)} onInfo={() => onOpenFieldPanel?.('seoTitle')} />
-            <Field label="SEO Description" value={(activeData as any).seoDescription} multiline onChangeText={(t)=>patchField('seoDescription', t)} onInfo={() => onOpenFieldPanel?.('seoDescription')} />
-          </View>
-        )}
 
-      {/* Dynamic Additional Fields - render any fields not covered by standard form */}
-      {activeTab !== 'all' && (() => {
-        const standardFields = new Set([
-          'title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode',
-          'images', 'options', 'variants', 'locations', 'locationQuantities', 'seoTitle', 'seoDescription',
-          '__refilled', '_rawResponse', '_parseError', '_extractedJson' // Exclude internal fields
-        ]);
-        
-        const additionalFields = Object.entries(activeData || {})
-          .filter(([key, value]) => 
-            !standardFields.has(key) && 
-            value !== undefined && 
-            value !== null &&
-            !key.startsWith('_') // Skip internal fields
-          );
-        
-        if (additionalFields.length === 0) return null;
-        
-        return (
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Additional Fields</Text>
-            <Text style={styles.subtle}>Fields automatically detected from AI response</Text>
-            {additionalFields.map(([key, value]) => {
-              const isArray = Array.isArray(value);
-              const isObject = typeof value === 'object' && !isArray;
-              const displayValue = isObject ? JSON.stringify(value, null, 2) : 
-                                  isArray ? value.join(', ') : String(value);
-              
+      
+      {/* Additional fields basic toggle */}
+        <TouchableOpacity style={styles.toggleRow} onPress={() => setShowAdditionalFields(v=>!v)}>
+          <Icon name={showAdditionalFields ? 'chevron-down' : 'chevron-right'} size={18} color="#000" />
+          <Text style={styles.sectionTitle}>Additional Fields</Text>
+        </TouchableOpacity>
+        {showAdditionalFields && (
+          <>
+            {activeTab !== 'all' && (() => {
+            const standardFields = new Set([
+              'title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode',
+              'images', 'options', 'variants', 'locations', 'locationQuantities', 'inventoryType',
+              '__refilled', '_rawResponse', '_parseError', '_extractedJson' // Exclude internal fields
+            ]);
+            
+            const additionalFields = Object.entries(activeData || {})
+              .filter(([key, value]) => 
+                !standardFields.has(key) && 
+                value !== undefined && 
+                value !== null &&
+                !key.startsWith('_') // Skip internal fields
+              );
+            
+            if (additionalFields.length === 0) {
               return (
-                <View key={key} style={{ marginTop: 12 }}>
-                  {isArray ? (
-                    <ChipsField
-                      label={key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, ' $1')}
-                      valueArray={value}
-                      onChangeArray={(arr) => patchField(key, arr)}
-                      onInfo={() => onOpenFieldPanel?.(key)}
-                      onRegenerate={onRegenerateField ? () => onRegenerateField(activePlatformKey, key) : undefined}
-                      refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes(key)}
-                    />
-                  ) : (
-                    <Field
-                      label={key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, ' $1')}
-                      value={displayValue}
-                      multiline={isObject || displayValue.length > 50}
-                      onChangeText={(t) => {
-                        // Try to parse back to original type
-                        if (isObject) {
-                          try {
-                            patchField(key, JSON.parse(t));
-                          } catch {
-                            patchField(key, t); // Fallback to string
-                          }
-                        } else if (typeof value === 'number') {
-                          patchField(key, Number(t) || 0);
-                        } else if (typeof value === 'boolean') {
-                          patchField(key, t.toLowerCase() === 'true');
-                        } else {
-                          patchField(key, t);
-                        }
-                      }}
-                      onInfo={() => onOpenFieldPanel?.(key)}
-                      onRegenerate={onRegenerateField ? () => onRegenerateField(activePlatformKey, key) : undefined}
-                      refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes(key)}
-                    />
-                  )}
+                <View style={styles.card}>
+                  <Text style={styles.sectionTitle}>Additional Fields</Text>
+                  <Text style={styles.subtle}>No additional fields detected from AI response</Text>
                 </View>
               );
-            })}
-          </View>
-        );
-      })()}
+            }
+            
+            return (
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Additional Fields</Text>
+                <Text style={styles.subtle}>Fields automatically detected from AI response</Text>
+                {additionalFields.map(([key, value]) => {
+                  const isArray = Array.isArray(value);
+                  const isObject = typeof value === 'object' && !isArray;
+                  const displayValue = isObject ? JSON.stringify(value, null, 2) : 
+                                      isArray ? value.join(', ') : String(value);
+                  
+                  return (
+                    <View key={key} style={{ marginTop: 12 }}>
+                      {isArray && value.every((item: any) => typeof item === 'string') ? (
+                        <ChipsField
+                          label={key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, ' $1')}
+                          valueArray={value as string[]}
+                          onChangeArray={(arr) => patchField(key, arr)}
+                          onInfo={() => onOpenFieldPanel?.(key)}
+                          onRegenerate={enableAIRefill && onRegenerateField ? () => onRegenerateField(activePlatformKey, key) : undefined}
+                          refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes(key)}
+                        />
+                      ) : (
+                        <Field
+                          label={key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, ' $1')}
+                          value={displayValue}
+                          multiline={isObject || displayValue.length > 50}
+                          onChangeText={(t) => {
+                            // Try to parse back to original type
+                            if (isObject) {
+                              try {
+                                patchField(key, JSON.parse(t));
+                              } catch {
+                                patchField(key, t); // Fallback to string
+                              }
+                            } else if (typeof value === 'number') {
+                              patchField(key, Number(t) || 0);
+                            } else if (typeof value === 'boolean') {
+                              patchField(key, t.toLowerCase() === 'true');
+                            } else {
+                              patchField(key, t);
+                            }
+                          }}
+                          onInfo={() => onOpenFieldPanel?.(key)}
+                          onRegenerate={enableAIRefill && onRegenerateField ? () => onRegenerateField(activePlatformKey, key) : undefined}
+                          refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes(key)}
+                        />
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+            );
+          })()}
 
-      {/* Add Missing Field Button for current platform */}
-      {activeTab !== 'all' && onAddMissingField && (
-        <TouchableOpacity 
-          style={styles.addMissingFieldButton} 
-          onPress={() => onAddMissingField(activePlatformKey)}
-        >
-          <Icon name="plus" size={18} color="#71717A" />
-          <Text style={styles.addMissingFieldText}>
-            Add Missing Field
-            {getMissingFieldsCount && getMissingFieldsCount(activePlatformKey) > 0 && (
-              <Text style={{ color: '#ef4444' }}> ({getMissingFieldsCount(activePlatformKey)} missing)</Text>
-            )}
-          </Text>
-        </TouchableOpacity>
-      )}
+          {/* Add Missing Field Button for current platform */}
+          {activeTab !== 'all' && onAddMissingField && (
+            <TouchableOpacity 
+              style={styles.addMissingFieldButton} 
+              onPress={() => onAddMissingField(activePlatformKey)}
+            >
+              <Icon name="plus" size={18} color="#71717A" />
+              <Text style={styles.addMissingFieldText}>
+                Add Missing Field
+                {getMissingFieldsCount && getMissingFieldsCount(activePlatformKey) > 0 && (
+                  <Text style={{ color: '#ef4444' }}> ({getMissingFieldsCount(activePlatformKey)} missing)</Text>
+                )}
+              </Text>
+            </TouchableOpacity>
+          )}
+          </>
+        )}
+
+      
       
     </View>
   );
@@ -905,6 +978,19 @@ const styles = StyleSheet.create({
     color: '#71717A', 
     fontSize: 14, 
     fontWeight: '600' 
+  },
+  // Platform generation styles
+  pillGenerating: {
+    opacity: 0.7,
+    backgroundColor: '#F3F4F6',
+  },
+  pillTextGenerating: {
+    color: '#6B7280',
+  },
+  generatePlatformPill: {
+    borderColor: '#93C822',
+    backgroundColor: 'rgba(147,200,34,0.05)',
+    marginTop: 4,
   },
 });
 

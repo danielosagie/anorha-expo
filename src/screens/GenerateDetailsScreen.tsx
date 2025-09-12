@@ -309,6 +309,37 @@ const PLATFORM_FIELD_SCHEMA: Record<string, any> = {
   }
 };
 
+// Helper function to group versions by match job ID, showing latest as primary
+const groupVersionsByMatchId = (versions: Array<{ id: string; jobId: string; createdAt: string; platforms: any; sources?: Array<{ url: string; usedForFields?: string[] }>; matchJobId?: string; source?: string }>): Array<{ id: string; jobId: string; createdAt: string; platforms: any; sources?: Array<{ url: string; usedForFields?: string[] }>; matchJobId?: string; source?: string; versionCount?: number; allVersions?: Array<any> }> => {
+  if (!Array.isArray(versions)) return [];
+
+  // Group by match job ID
+  const grouped = versions.reduce((acc, version) => {
+    const key = version.matchJobId || 'no-match-id';
+    if (!acc[key]) {
+      acc[key] = [];
+    }
+    acc[key].push(version);
+    return acc;
+  }, {} as Record<string, typeof versions>);
+
+  // For each group, return the latest version as primary with version count
+  const result = Object.entries(grouped).map(([matchJobId, versionGroup]) => {
+    // Sort by creation date (newest first)
+    const sortedVersions = versionGroup.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const latestVersion = sortedVersions[0];
+    
+    return {
+      ...latestVersion,
+      versionCount: sortedVersions.length,
+      allVersions: sortedVersions // Store all versions for access
+    };
+  });
+
+  // Sort results by creation date (newest first)
+  return result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+};
+
 // Helper function to flatten the new AI response format with full backwards compatibility
 const flattenPlatformData = (platformData: any): any => {
   if (!platformData || typeof platformData !== 'object') {
@@ -478,7 +509,7 @@ function GenerateDetailsScreen({ route }: Props) {
   const [userGenerateJobs, setUserGenerateJobs] = useState<Array<{ jobId: string; status: string; createdAt: string; completedAt?: string }>>([]);
   const [checklist, setChecklist] = useState<Record<string, { missing: string[]; ready: boolean }>>({});
   const [versionsSheetOpen, setVersionsSheetOpen] = useState(false);
-  const [versions, setVersions] = useState<Array<{ id: string; jobId: string; createdAt: string; platforms: any; sources?: Array<{ url: string; usedForFields?: string[] }>; matchJobId?: string; source?: string }>>([]);
+  const [versions, setVersions] = useState<Array<{ id: string; jobId: string; createdAt: string; platforms: any; sources?: Array<{ url: string; usedForFields?: string[] }>; matchJobId?: string; source?: string; versionCount?: number; allVersions?: Array<any> }>>([]);
   const [selectedFieldKey, setSelectedFieldKey] = useState<string | null>(null);
   const [versionsTab, setVersionsTab] = useState<'versions'|'sources'>('versions');
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -494,7 +525,7 @@ function GenerateDetailsScreen({ route }: Props) {
   const [selectedMissingPlatform, setSelectedMissingPlatform] = useState<string>('');
   const [fieldSearchQuery, setFieldSearchQuery] = useState<string>('');
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
-    'Core Fields': true,
+    'Core Fields': false,
     'SEO': false,
     'Google Shopping': false,
     'Listing Details': false,
@@ -504,19 +535,32 @@ function GenerateDetailsScreen({ route }: Props) {
   
   // Try to pull items list from params if provided; fallback to single
   const items = useMemo(() => {
-    const raw = ((route.params as any)?.items || []) as Array<{ index: number; title?: string; thumb?: string; matchesCount?: number }>;
+    const raw = ((route.params as any)?.items || []) as Array<{ index: number; title?: string; thumb?: string; matchesCount?: number; matchJobId?: string }>;
     const normalized = (Array.isArray(raw) ? raw : []).map((it, i) => ({
       index: it.index ?? i,
       title: it.title ?? `Item ${i + 1}`,
       thumb: it.thumb ?? '',
       matchesCount: it.matchesCount ?? 0,
+      matchJobId: it.matchJobId ?? matchJobId, // Fallback to global matchJobId if not specified per item
     }));
     if (normalized.length) return normalized;
     // Build from results if items not passed
-    const fallback = Array.isArray(results) ? results.map((r, i) => ({ index: r.productIndex ?? i, title: `Item ${i + 1}`, thumb: r.sourceImageUrl || '', matchesCount: 0 })) : [];
+    const fallback = Array.isArray(results) ? results.map((r, i) => ({ 
+      index: r.productIndex ?? i, 
+      title: `Item ${i + 1}`, 
+      thumb: r.sourceImageUrl || '', 
+      matchesCount: 0,
+      matchJobId: matchJobId // Use global matchJobId for fallback items
+    })) : [];
     if (fallback.length) return fallback;
-    return [{ index: first?.productIndex ?? 0, title: 'Item 1', thumb: first?.sourceImageUrl || '', matchesCount: 0 }];
-  }, [route.params, first, results]);
+    return [{ 
+      index: first?.productIndex ?? 0, 
+      title: 'Item 1', 
+      thumb: first?.sourceImageUrl || '', 
+      matchesCount: 0,
+      matchJobId: matchJobId // Use global matchJobId for single item
+    }];
+  }, [route.params, first, results, matchJobId]);
 
   const jobMap = ((route.params as any)?.jobMap || {}) as Record<number, { jobId: string; status?: string }>;
   // Derive quick lookups for presence of jobs
@@ -604,7 +648,9 @@ function GenerateDetailsScreen({ route }: Props) {
           if (res.ok) {
             const data = await res.json();
             if (Array.isArray(data)) {
-              setVersions(data);
+              // Group versions by match job ID and show latest version as primary
+              const groupedVersions = groupVersionsByMatchId(data);
+              setVersions(groupedVersions);
               return;
             }
           }
@@ -617,7 +663,7 @@ function GenerateDetailsScreen({ route }: Props) {
           .select('job_id, status, created_at, results, match_job_id')
           .eq('status', 'completed')
           .order('created_at', { ascending: false })
-          .limit(20);
+          .limit(50); // Increased limit to get more versions for grouping
           
         if (!error && generateJobs) {
           const relatedVersions = generateJobs
@@ -637,7 +683,9 @@ function GenerateDetailsScreen({ route }: Props) {
               source: job.results?.[0]?.source || 'generated'
             }));
             
-          setVersions(relatedVersions);
+          // Group versions by match job ID  
+          const groupedVersions = groupVersionsByMatchId(relatedVersions);
+          setVersions(groupedVersions);
         }
       } catch (e) {
         console.error('Error fetching versions:', e);
@@ -1067,6 +1115,73 @@ function GenerateDetailsScreen({ route }: Props) {
     } catch {}
   };
 
+  const generatePlatform = async (platformKey: string) => {
+    try {
+      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      const productId = (route.params as any)?.productId || first?.productId;
+      const variantId = (route.params as any)?.variantId || first?.variantId;
+      if (!baseUrl || !productId || !variantId) return;
+
+      const payload = buildPlatformPayload();
+      const res = await fetch(`${baseUrl}/api/products/generate-details`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productId,
+          variantId,
+          imageUris: payload.media.imageUris,
+          coverImageIndex: payload.media.coverImageIndex,
+          selectedPlatforms: [platformKey],
+          selectedMatch: null,
+          enhancedWebData: null,
+          matchJobId: matchJobId, // Include match job ID for persistence
+        })
+      });
+      
+      if (!res.ok) {
+        throw new Error(`Platform generation failed: ${res.status}`);
+      }
+      
+      const data = await res.json();
+      const generatedDetails = (data?.generatedDetails || data || {}) as any;
+      const generatedPlatforms = (generatedDetails.platforms || {}) as Record<string, any>;
+      
+      if (generatedPlatforms[platformKey]) {
+        // Update displayed platforms with the new generated data
+        setDisplayedPlatforms(prev => ({
+          ...prev,
+          [platformKey]: {
+            ...prev[platformKey],
+            ...flattenPlatformData(generatedPlatforms[platformKey])
+          }
+        }));
+
+        // Save the updated data to persist it
+        const updatedPayload = buildPlatformPayload();
+        await fetch(`${baseUrl}/api/products/save-or-publish`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            productId,
+            variantId,
+            publishIntent: 'SAVE_SSSYNC_DRAFT',
+            platformDetails: {
+              ...updatedPayload.platformDetails,
+              [platformKey]: generatedPlatforms[platformKey]
+            },
+            media: updatedPayload.media,
+            selectedPlatformsToPublish: [...(updatedPayload.selectedPlatformsToPublish || []), platformKey],
+          })
+        });
+      }
+    } catch (error) {
+      console.error('Platform generation failed:', error);
+      throw error;
+    }
+  };
+
   return (
     <View style={{ flex: 1 }}>
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -1081,10 +1196,24 @@ function GenerateDetailsScreen({ route }: Props) {
           </TouchableOpacity>
         )}
       </View>
-      <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ position: 'absolute', top: -32, left: 16, zIndex: 4000, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}>
-        <Boxes size={18} color={'#000'} />
-        <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Current Jobs</Text>
-      </TouchableOpacity>
+      {/* Back button and Current Jobs buttons */}
+      <View style={{ position: 'absolute', top: -32, left: 16, zIndex: 4000, flexDirection: 'row', gap: 8 }}>
+        <TouchableOpacity 
+          onPress={() => {
+            // Navigate back to past scans page
+            (route as any).navigation?.goBack?.() || (route as any).navigation?.navigate?.('TabNavigator', { screen: 'PastScans' });
+          }} 
+          style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}
+        >
+          <Icon name="arrow-left" size={18} color={'#000'} />
+          <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Back</Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}>
+          <Boxes size={18} color={'#000'} />
+          <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Current Jobs</Text>
+        </TouchableOpacity>
+      </View>
 
       <ScrollView>
         {first ? (
@@ -1114,6 +1243,8 @@ function GenerateDetailsScreen({ route }: Props) {
                 setMissingFieldsModalOpen(true);
               }}
               getMissingFieldsCount={(platformKey: string) => getMissingFields(platformKey).length}
+              onGeneratePlatform={generatePlatform}
+              enableAIRefill={ENABLE_AI_REFILL_FEATURES}
             />
           </>
         ) : (
@@ -1169,11 +1300,13 @@ function GenerateDetailsScreen({ route }: Props) {
           setBottomNavState('empty');
         }}
         onPickMatch={(idx) => {
-          // Jump to match selection for this item, preserve match job id if we have it
+          // Jump to match selection for this item, use specific match job id for that item
+          const selectedItem = items.find(item => item.index === idx);
+          const itemMatchJobId = selectedItem?.matchJobId || matchJobId; // Fallback to global if not found
           setCurrentProductIndex(idx);
           setJobsModalVisible(false);
           (route as any).navigation?.navigate?.('MatchSelectionScreen', { 
-            jobId: matchJobId, 
+            jobId: itemMatchJobId, 
             focusIndex: idx, 
             items, 
             jobMap: itemGenerateJobs 
@@ -1212,6 +1345,8 @@ function GenerateDetailsScreen({ route }: Props) {
         onSecondary={doSaveDraft}
       />
     </View>
+
+
     {!!lastFillCount && ENABLE_AI_REFILL_FEATURES && (
       <View style={{ position: 'absolute', bottom: 96, left: 16, right: 16, backgroundColor: 'rgba(17,17,17,0.92)', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, alignItems: 'center' }}>
         <Text style={{ color: '#fff', fontWeight: '600' }}>Filled {lastFillCount} field{lastFillCount === 1 ? '' : 's'}</Text>
@@ -1297,66 +1432,112 @@ function GenerateDetailsScreen({ route }: Props) {
                   const isCurrentVersion = v.jobId === jobId;
                   const flattenedPlatforms = flattenPlatformData(v.platforms || {});
                   const platformCount = Object.keys(flattenedPlatforms).length;
+                  const hasMultipleVersions = (v.versionCount || 1) > 1;
                   
                   return (
-                    <TouchableOpacity 
-                      key={v.id} 
-                      onPress={() => {
-                        const flattened = flattenPlatformData(v.platforms || {});
-                        setDisplayedPlatforms(flattened);
-                        setVersionsSheetOpen(false);
-                      }} 
-                      style={[
-                        { 
-                          borderWidth: 1, 
-                          borderColor: isCurrentVersion ? '#93C822' : '#E5E5E5', 
-                          backgroundColor: isCurrentVersion ? 'rgba(147,200,34,0.05)' : '#fff',
-                          borderRadius: 10, 
-                          padding: 12, 
-                          marginBottom: 8 
-                        }
-                      ]}
-                    >
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-                        <Text style={{ color: '#000', fontWeight: '600', flex: 1 }}>
-                          Version {versions.length - index}
-                          {isCurrentVersion && <Text style={{ color: '#93C822' }}> (Current)</Text>}
+                    <View key={v.id} style={{ marginBottom: 8 }}>
+                      {/* Main version card */}
+                      <TouchableOpacity 
+                        onPress={() => {
+                          const flattened = flattenPlatformData(v.platforms || {});
+                          setDisplayedPlatforms(flattened);
+                          setVersionsSheetOpen(false);
+                        }} 
+                        style={[
+                          { 
+                            borderWidth: 1, 
+                            borderColor: isCurrentVersion ? '#93C822' : '#E5E5E5', 
+                            backgroundColor: isCurrentVersion ? 'rgba(147,200,34,0.05)' : '#fff',
+                            borderRadius: 10, 
+                            padding: 12, 
+                          }
+                        ]}
+                      >
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+                          <Text style={{ color: '#000', fontWeight: '600', flex: 1 }}>
+                            Match from {new Date(v.createdAt).toLocaleDateString()}
+                            {isCurrentVersion && <Text style={{ color: '#93C822' }}> (Current)</Text>}
+                            {hasMultipleVersions && (
+                              <Text style={{ color: '#666', fontWeight: '400' }}> • {v.versionCount} versions</Text>
+                            )}
+                          </Text>
+                          <Text style={{ color: '#666', fontSize: 12 }}>
+                            {new Date(v.createdAt).toLocaleDateString()}
+                          </Text>
+                        </View>
+                        
+                        <Text style={{ color: '#666', fontSize: 12, marginBottom: 4 }}>
+                          Latest: {new Date(v.createdAt).toLocaleTimeString()}
                         </Text>
-                        <Text style={{ color: '#666', fontSize: 12 }}>
-                          {new Date(v.createdAt).toLocaleDateString()}
-                        </Text>
-                      </View>
+                        
+                        {platformCount > 0 ? (
+                          <Text style={{ color: '#000', fontSize: 13 }}>
+                            {platformCount} platform{platformCount !== 1 ? 's' : ''}: {Object.keys(flattenedPlatforms).map(k => PLATFORM_META[k]?.label || k).join(', ')}
+                          </Text>
+                        ) : (
+                          <Text style={{ color: '#999', fontSize: 13, fontStyle: 'italic' }}>No platform data</Text>
+                        )}
+                        
+                        {v.matchJobId && (
+                          <Text style={{ color: '#666', fontSize: 11, marginTop: 4 }}>
+                            Match ID: {v.matchJobId.slice(0, 8)}...
+                          </Text>
+                        )}
+                      </TouchableOpacity>
                       
-                      <Text style={{ color: '#666', fontSize: 12, marginBottom: 4 }}>
-                        {new Date(v.createdAt).toLocaleTimeString()}
-                      </Text>
-                      
-                      {platformCount > 0 ? (
-                        <Text style={{ color: '#000', fontSize: 13 }}>
-                          {platformCount} platform{platformCount !== 1 ? 's' : ''}: {Object.keys(flattenedPlatforms).map(k => PLATFORM_META[k]?.label || k).join(', ')}
-                        </Text>
-                      ) : (
-                        <Text style={{ color: '#999', fontSize: 13, fontStyle: 'italic' }}>No platform data</Text>
+                      {/* Show all versions if multiple exist */}
+                      {hasMultipleVersions && Array.isArray(v.allVersions) && (
+                        <View style={{ marginTop: 8, marginLeft: 16 }}>
+                          <Text style={{ color: '#666', fontSize: 12, marginBottom: 6 }}>All versions for this match:</Text>
+                          {v.allVersions.map((version: any, versionIndex: number) => {
+                            const isCurrentSubVersion = version.jobId === jobId;
+                            const versionPlatforms = flattenPlatformData(version.platforms || {});
+                            const versionPlatformCount = Object.keys(versionPlatforms).length;
+                            
+                            return (
+                              <TouchableOpacity
+                                key={version.id}
+                                onPress={() => {
+                                  const flattened = flattenPlatformData(version.platforms || {});
+                                  setDisplayedPlatforms(flattened);
+                                  setVersionsSheetOpen(false);
+                                }}
+                                style={{
+                                  borderWidth: 1,
+                                  borderColor: isCurrentSubVersion ? '#93C822' : '#E5E5E5',
+                                  backgroundColor: isCurrentSubVersion ? 'rgba(147,200,34,0.05)' : '#F8F9FA',
+                                  borderRadius: 8,
+                                  padding: 8,
+                                  marginBottom: 4
+                                }}
+                              >
+                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <Text style={{ color: '#000', fontSize: 13, fontWeight: '600' }}>
+                                    Version {(v.allVersions?.length || 0) - versionIndex}
+                                    {isCurrentSubVersion && <Text style={{ color: '#93C822' }}> (Current)</Text>}
+                                  </Text>
+                                  <Text style={{ color: '#666', fontSize: 11 }}>
+                                    {new Date(version.createdAt).toLocaleTimeString()}
+                                  </Text>
+                                </View>
+                                
+                                {versionPlatformCount > 0 && (
+                                  <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>
+                                    {versionPlatformCount} platforms: {Object.keys(versionPlatforms).map(k => PLATFORM_META[k]?.label || k).join(', ')}
+                                  </Text>
+                                )}
+                                
+                                {version.source && (
+                                  <Text style={{ color: '#666', fontSize: 10, marginTop: 2 }}>
+                                    Source: {version.source}
+                                  </Text>
+                                )}
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
                       )}
-                      
-                      {v.matchJobId && (
-                        <Text style={{ color: '#666', fontSize: 11, marginTop: 4 }}>
-                          Match ID: {v.matchJobId.slice(0, 8)}...
-                        </Text>
-                      )}
-                      
-                      {v.source && (
-                        <Text style={{ color: '#666', fontSize: 11 }}>
-                          Source: {v.source}
-                        </Text>
-                      )}
-                      
-                      {Array.isArray(v.sources) && v.sources.length > 0 ? (
-                        <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>
-                          Sources: {v.sources.slice(0, 2).map((s:any)=>s.url || s).join(', ')}{v.sources.length > 2 ? '...' : ''}
-                        </Text>
-                      ) : null}
-                    </TouchableOpacity>
+                    </View>
                   );
                 })
               ) : (
@@ -1521,4 +1702,32 @@ const styles = StyleSheet.create({
   missingFieldOption: { borderColor: '#fecaca', backgroundColor: '#fef2f2' },
   missingBadge: { backgroundColor: '#fecaca', borderRadius: 999, paddingHorizontal: 6, paddingVertical: 2 },
   modalCancelButton: { marginTop: 16, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
+  // Platform picker modal styles
+  platformPickerModal: { position: 'absolute', top: '15%', left: 16, right: 16, backgroundColor: '#fff', borderRadius: 16, padding: 20, maxHeight: '70%', zIndex: 6001 },
+  platformPill: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, backgroundColor: '#fff' },
+  generatePlatformPill: { borderColor: '#93C822', backgroundColor: 'rgba(147,200,34,0.05)' },
+  addMissingFieldButton: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'center',
+    paddingVertical: 12, 
+    paddingHorizontal: 16, 
+    borderRadius: 12, 
+    borderWidth: 1, 
+    borderStyle: 'dashed', 
+    borderColor: '#71717A', 
+    marginTop: 16,
+    gap: 8
+  },
+  addMissingFieldText: { 
+    color: '#71717A', 
+    fontSize: 14, 
+    fontWeight: '600' 
+  },
+  addTagBtn: { alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center' },
+  tagChip: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
+  fieldLabel: { color: '#71717A', fontWeight: '600', marginBottom: 6, fontSize: 12, textTransform: 'uppercase' },
+  input: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, color: '#000' },
+  sectionTitle: { color: '#000', fontWeight: '700' },
+  subtle: { color: '#71717A', marginTop: 4 },
 });

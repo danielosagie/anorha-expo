@@ -153,10 +153,18 @@ interface JobResponse {
 }
 
 interface MatchResponse {
-  systemAction: 'show_single_match' | 'show_multiple_matches' | 'fallback_to_manual';
+  systemAction: 'show_single_match' | 'show_multiple_matches' | 'show_multiple_candidates' | 'fallback_to_manual';
   confidence: 'high' | 'medium' | 'low';
   rankedCandidates: MatchCandidate[];
   totalMatches: number;
+  reranker?: {
+    type: 'llama4-groq' | 'jina-modal' | 'fast-text' | 'none';
+    rankingMethod?: 'exact_match' | 'semantic_similarity' | 'fuzzy_match' | 'vector_fallback';
+    confidence?: number;
+    reasoning?: string;
+    processingTimeMs?: number;
+    alternatives?: any[];
+  };
 }
 
 type AddProductScreenProps = StackScreenProps<AppStackParamList, 'AddProduct'>;
@@ -221,6 +229,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Camera ref
   const cameraRef = useRef<CameraView>(null);
   const isFocused = useIsFocused();
+
+  // Stable item ID generator to prevent key collisions
+  const itemIdCounterRef = useRef(0);
+  const generateItemId = useCallback(() => {
+    itemIdCounterRef.current += 1;
+    return `item-${Date.now()}-${itemIdCounterRef.current}`;
+  }, []);
   
   // Debug useEffects to track state changes
   useEffect(() => {
@@ -821,7 +836,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               }
             }],
             targetSites: ['general'],
-            useReranker: true
+            useReranker: true,
+            reranker: "llama4-groq" //"reranker": "llama4-groq"  // or "jina-modal" or "fast-text" or "none" 
           })
         });
         
@@ -836,28 +852,57 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         console.log('[QUICK SCAN] Overall confidence:', quickScanResult.overallConfidence);
         console.log('[QUICK SCAN] Recommended action:', quickScanResult.recommendedAction);
         
-        // Extract matches from the results array (proper API response format)
+        // Extract matches and reranker metadata
         const allMatches = quickScanResult.results?.flatMap((result: any) => result.matches) || [];
+        const rerankerMeta = (() => {
+          const first = quickScanResult.results?.[0];
+          const ra = first?.rerankerAnalysis;
+          if (!ra) return undefined;
+          return {
+            type: ra.type as 'llama4-groq' | 'jina-modal' | 'fast-text' | 'none',
+            rankingMethod: ra.rankingMethod as 'exact_match' | 'semantic_similarity' | 'fuzzy_match' | 'vector_fallback' | undefined,
+            confidence: typeof ra.confidence === 'number' ? ra.confidence : undefined,
+            reasoning: typeof ra.reasoning === 'string' ? ra.reasoning : undefined,
+            processingTimeMs: typeof ra.processingTimeMs === 'number' ? ra.processingTimeMs : undefined,
+            alternatives: Array.isArray(ra.alternatives) ? ra.alternatives : undefined,
+          };
+        })();
         
         setTimeout(async () => {
-          if (quickScanResult.recommendedAction === 'show_single_match' || 
-              (quickScanResult.overallConfidence === 'high' && allMatches.length > 0)) {
-            console.log('[QUICK SCAN] High confidence match found, showing match sheet');
+          // Show matches for any of these scenarios:
+          // 1. Backend explicitly recommends showing matches (high or medium confidence)
+          // 2. We have matches even with low confidence (let user decide)
+          const shouldShowMatches = 
+            quickScanResult.recommendedAction === 'show_single_match' ||
+            quickScanResult.recommendedAction === 'show_multiple_candidates' ||
+            (allMatches.length > 0 && quickScanResult.overallConfidence !== 'low') ||
+            (allMatches.length > 0 && quickScanResult.recommendedAction === 'fallback_to_manual'); // Show even low confidence matches
+          
+          if (shouldShowMatches) {
+            const confidenceMessage = quickScanResult.overallConfidence === 'high' ? 'High confidence matches found!' :
+                                     quickScanResult.overallConfidence === 'medium' ? 'Good matches found!' :
+                                     'Possible matches found (low confidence)';
+            console.log(`[QUICK SCAN] ${confidenceMessage} - showing match sheet`);
+            console.log(`[QUICK SCAN] Recommended action: ${quickScanResult.recommendedAction}, confidence: ${quickScanResult.overallConfidence}, matches: ${allMatches.length}`);
+            
             setQuickScanResults(allMatches);
             const nextMatchData: MatchResponse = {
-              systemAction: 'show_single_match',
+              systemAction: quickScanResult.recommendedAction as any || 'show_multiple_matches',
               confidence: quickScanResult.overallConfidence,
               totalMatches: allMatches.length,
               rankedCandidates: allMatches.map((match: any) => ({
-                id: match.variantId || match.productId || `match-${Date.now()}`,
+                id: match.ProductVariantId || match.productId || `match-${Date.now()}`,
                 title: match.title || 'Unknown Product',
                 description: match.description || '',
                 price: match.price || 0,
                 imageUrl: match.imageUrl || '',
                 matchPercentage: Math.round((match.combinedScore || 0) * 100),
-                sourceUrl: match.link || '',
+                sourceUrl: match.productUrl || match.link || '',
               }))
             };
+            if (rerankerMeta) {
+              nextMatchData.reranker = rerankerMeta;
+            }
             setMatchData(nextMatchData);
             // Persist per-item for reopening and for MatchSelection overrides
             console.log('[QUICK SCAN] Storing results for itemId:', itemId);
@@ -876,7 +921,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             setShowMatchSheet(true);
             matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2); // Taller sheet (80% height visible)
           } else {
-            console.log('[QUICK SCAN] Low confidence or no matches, creating item automatically');
+            console.log('[QUICK SCAN] No matches found, creating item automatically');
             // NO FALLBACK TO ANALYZE - just create item and show deep search
             setCurrentInstruction('no_matches');
             stopProgressAnimation();
@@ -1038,7 +1083,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Add new bulk item
   const addNewBulkItem = useCallback(() => {
-    const newItemId = `item-${Date.now()}`;
+    const newItemId = generateItemId();
     console.log('[ADD NEW ITEM] Starting to add new item:', newItemId);
     console.log('[ADD NEW ITEM] Current bulk mode:', isBulkMode);
     console.log('[ADD NEW ITEM] Current items count:', bulkItems.length);
@@ -1049,7 +1094,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       setIsBulkMode(true);
       if (capturedPhotos.length > 0) {
         // Create first item with existing photos
-        const firstItemId = `item-${Date.now()}`;
+        const firstItemId = generateItemId();
         const newItems = [
           {
             id: firstItemId,
@@ -1067,6 +1112,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         console.log('[ADD NEW ITEM] Creating items with existing photos:', newItems);
         setBulkItems(newItems);
         setActiveItemId(newItemId);
+
+        // Migrate quick scan store from single-item session to firstItemId if present
+        setQuickScanStore(prev => {
+          const keys = Object.keys(prev);
+          if (keys.length === 1 && !prev[firstItemId]) {
+            const oldKey = keys[0];
+            const entry = prev[oldKey];
+            const { [oldKey]: _removed, ...rest } = prev;
+            return { ...rest, [firstItemId]: entry };
+          }
+          return prev;
+        });
       } else {
         const newItems = [{
           id: newItemId,
@@ -1109,10 +1166,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     console.log('[SELECT ITEM] Setting active item to:', itemId);
     console.log('[SELECT ITEM] quickScanStore keys:', Object.keys(quickScanStore));
     console.log('[SELECT ITEM] quickScanStore for itemId:', quickScanStore[itemId] ? 'EXISTS' : 'MISSING');
-    setBulkItems(prev => prev.map(item => ({
-      ...item,
-      isActive: item.id === itemId
-    })));
+    setBulkItems(prev => {
+      // Normalize isActive flags to exactly one active item
+      const next = prev.map(item => ({ ...item, isActive: item.id === itemId }));
+      return next;
+    });
     setActiveItemId(itemId);
     
     // Show notification of which item is now active
@@ -1122,38 +1180,49 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Delete bulk item
   const deleteBulkItem = useCallback((itemId: string) => {
-    setBulkItems(prev => prev.filter(item => item.id !== itemId));
+    setBulkItems(prev => {
+      const next = prev.filter(item => item.id !== itemId);
+      // If we deleted the active item, move focus to the nearest item (previous, else first, else null)
+      if (activeItemId === itemId) {
+        const deletedIndex = prev.findIndex(i => i.id === itemId);
+        const fallback = next[Math.max(0, deletedIndex - 1)] || next[0] || null;
+        setActiveItemId(fallback ? fallback.id : null);
+        if (fallback) {
+          // Ensure only fallback is active
+          return next.map(i => ({ ...i, isActive: i.id === fallback.id }));
+        }
+      }
+      return next;
+    });
     // Clean up quickScanStore for deleted item
     setQuickScanStore(prev => {
       const { [itemId]: removed, ...rest } = prev;
       console.log('[DELETE ITEM] Cleaned up quickScanStore for item:', itemId);
       return rest;
     });
-  }, []);
+  }, [activeItemId]);
 
   // Move photo between items
   const movePhoto = useCallback((fromItemId: string, toItemId: string, photoId: string) => {
     setBulkItems(prev => {
-      const fromItem = prev.find(item => item.id === fromItemId);
-      const photoToMove = fromItem?.photos.find(photo => photo.id === photoId);
-      
-      if (!photoToMove) return prev;
-      
-      return prev.map(item => {
-        if (item.id === fromItemId) {
-          return {
-            ...item,
-            photos: item.photos.filter(photo => photo.id !== photoId)
-          };
-        }
-        if (item.id === toItemId && item.photos.length < 12) {
-          return {
-            ...item,
-            photos: [...item.photos, photoToMove]
-          };
-        }
-        return item;
-      });
+      const next = prev.map(i => ({ ...i, photos: [...i.photos] }));
+      const from = next.find(i => i.id === fromItemId);
+      const to = next.find(i => i.id === toItemId);
+      if (!from || !to) return prev;
+      const idx = from.photos.findIndex(p => p.id === photoId);
+      if (idx === -1) return prev;
+      const [moved] = from.photos.splice(idx, 1);
+      if (!moved) return prev;
+      if (to.photos.length >= 12) return prev;
+      to.photos.push(moved);
+      // Ensure cover photo invariant: each item should have a cover if it has photos
+      if (from.photos.length > 0 && !from.photos.some(p => p.isCover)) {
+        from.photos[0].isCover = true;
+      }
+      if (to.photos.length === 1) {
+        to.photos[0].isCover = true;
+      }
+      return next;
     });
   }, []);
 
@@ -1177,10 +1246,22 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const removeBulkItemPhoto = useCallback((itemId: string, photoId: string) => {
     setBulkItems(prev => prev.map(item => {
       if (item.id === itemId) {
-        const remainingPhotos = item.photos.filter(p => p.id !== photoId);
-        // If we removed the cover photo, make the first remaining photo the cover
-        if (remainingPhotos.length > 0 && !remainingPhotos.some(p => p.isCover)) {
-          remainingPhotos[0].isCover = true;
+        const remainingPhotos = item.photos.filter(p => p.id !== photoId).map(p => ({ ...p }));
+        // Maintain a single cover photo per item if any photos remain
+        if (remainingPhotos.length > 0) {
+          if (!remainingPhotos.some(p => p.isCover)) {
+            remainingPhotos[0].isCover = true;
+          } else {
+            let coverFound = false;
+            for (const p of remainingPhotos) {
+              if (!coverFound && p.isCover) {
+                coverFound = true;
+              } else {
+                p.isCover = false;
+              }
+            }
+            if (!coverFound) remainingPhotos[0].isCover = true;
+          }
         }
         return {
           ...item,
@@ -1968,7 +2049,7 @@ const BulkItemsSheet: React.FC<{
                 });
                 return (
             <TouchableOpacity 
-              key={item.id} 
+              key={`bulk-item-${item.id}`} 
               style={[
                 styles.bulkItemContainer,
                 item.isActive && styles.activeItemContainer,
@@ -2001,10 +2082,10 @@ const BulkItemsSheet: React.FC<{
                 {(isBulkMode && bulkItems.length > 0) && (
                   <TouchableOpacity 
                     style={styles.deleteItemButton}
-                    onPress={() => onDeleteItem(item.id)}
+                    onPress={(e) => { e.stopPropagation?.(); onDeleteItem(item.id); }}
                   >
                     <Icon name="delete-outline" size={18} color="#ff6b6b" />
-              </TouchableOpacity>
+                  </TouchableOpacity>
                 )}
             </View>
             
@@ -2028,7 +2109,7 @@ const BulkItemsSheet: React.FC<{
               <View style={styles.photoSlotsContainer}>
                 {item.photos.map((photo: CapturedPhoto, photoIndex: number) => (
                   <TapGestureHandler
-                    key={photo.id}
+                    key={`photo-${item.id}-${photo.id}`}
                     numberOfTaps={2}
                     onHandlerStateChange={(event) => {
                       if (event.nativeEvent.state === State.ACTIVE) {
@@ -2054,10 +2135,7 @@ const BulkItemsSheet: React.FC<{
                             `Photo ${photoIndex + 1}${photo.isCover ? ' (Cover)' : ''}`,
                             [
                               { text: 'Set as Cover', onPress: () => onSetCoverPhoto(item.id, photo.id) },
-                              { text: 'Remove from Item', onPress: () => {
-                                // TODO: Implement remove from bulk item
-                                console.log('Remove photo from item');
-                              }},
+                              { text: 'Remove from Item', onPress: () => onRemovePhoto(item.id, photo.id) },
                               { text: 'Cancel', style: 'cancel' },
                             ]
                           );

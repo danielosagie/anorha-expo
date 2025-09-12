@@ -64,7 +64,11 @@ const PyramidGrid = ( { items, style }: { items: GridItem[], style?: StyleProp<V
 
             // Calculate item width for responsiveness based on screenWidth and numItemsInRow
             // Using maxItemsInAnyRow for a more consistent item size across rows
-            const itemWidth = (availableWidth / (maxItemsInAnyRow + 1)) * 0.9; // Adjust multiplier and +1 for spacing
+            // Ensure minimum size for visibility
+            const calculatedWidth = (availableWidth / (maxItemsInAnyRow + 1)) * 0.9;
+            const itemWidth = Math.max(calculatedWidth, 80); // Minimum 80px width
+            
+            console.log(`[PYRAMID] Row ${rowIndex}, Item ${colIndex}: width=${itemWidth}, availableWidth=${availableWidth}, maxItems=${maxItemsInAnyRow}`);
 
             return (
               <View
@@ -73,7 +77,18 @@ const PyramidGrid = ( { items, style }: { items: GridItem[], style?: StyleProp<V
               >
                 {/* The error was here. You cannot render an entire {item} object inside a <Text> tag.
                     Instead, we render an <Image> component and use the item's `uri` property. */}
-                {item && <Image source={{ uri: item.uri }} style={styles.itemImage} />}
+                {item && item.uri ? (
+                  <Image 
+                    source={{ uri: item.uri }} 
+                    style={styles.itemImage}
+                    onError={() => console.log(`[PYRAMID] Failed to load image: ${item.uri}`)}
+                    onLoad={() => console.log(`[PYRAMID] Successfully loaded image: ${item.uri?.substring(0, 50)}`)}
+                  />
+                ) : (
+                  <View style={[styles.itemImage, { backgroundColor: '#f0f0f0', justifyContent: 'center', alignItems: 'center' }]}>
+                    <Text style={{ fontSize: 12, color: '#999' }}>No Image</Text>
+                  </View>
+                )}
               </View>
             );
           })}

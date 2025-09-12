@@ -17,6 +17,13 @@ import { tokenCache as clerkTokenCache } from '@clerk/clerk-expo/token-cache';
 import * as SecureStore from 'expo-secure-store';
 import { SessionProvider } from './src/context/SessionProvider';
 import { SessionContext } from './src/context/SessionContext';
+import ProcessResumptionModal from './src/components/ProcessResumptionModal';
+import { useProcessResumption } from './src/hooks/useProcessState';
+import { ProcessState, ProcessType } from './src/utils/ProcessPersistence';
+import SafeErrorBoundary from './src/utils/SafeErrorBoundary';
+
+// Feature flag to disable new functionality during debugging
+const ENABLE_PROCESS_FEATURES = false;
 
 
 const App: React.FC = () => {
@@ -37,8 +44,12 @@ const App: React.FC = () => {
   // Authed app content (without NavigationContainer)
   const AuthedAppContent: React.FC<{ navigationRef: React.RefObject<NavigationContainerRef<any> | null> }> = ({ navigationRef }) => {
     const [legendStateModules, setLegendStateModules] = useState<LegendStateObservables | null>(null);
+    const [showProcessModal, setShowProcessModal] = useState(false);
     const { isLoaded: clerkLoaded, isSignedIn } = useAuth();
     const session = useContext(SessionContext);
+    
+    // Use process resumption hook properly
+    const processResumption = ENABLE_PROCESS_FEATURES ? useProcessResumption() : null;
 
     // Deep Link Handling scoped to AuthedApp
     useEffect(() => {
@@ -101,6 +112,21 @@ const App: React.FC = () => {
           const initialized = await initializeLegendState(supabase, user.id);
           setLegendStateModules(initialized);
           console.log('[App] Legend State ready');
+          
+          // Check for resumable processes after everything is ready
+          if (ENABLE_PROCESS_FEATURES) {
+            setTimeout(() => {
+              try {
+                const resumableProcesses = processResumption?.getResumableProcesses() || [];
+                if (resumableProcesses.length > 0) {
+                  console.log(`[App] Found ${resumableProcesses.length} resumable processes`);
+                  setShowProcessModal(true);
+                }
+              } catch (error) {
+                console.error('[App] Error checking resumable processes:', error);
+              }
+            }, 1000); // Small delay to ensure everything is initialized
+          }
         } catch (e) {
           console.error('[App] Legend State init failed:', e);
           setLegendStateModules(null);
@@ -121,6 +147,32 @@ const App: React.FC = () => {
           }
       } else {
           console.warn('[App] Could not reset Legend State: No active session.');
+      }
+  };
+
+    const handleResumeProcess = (process: ProcessState) => {
+      try {
+        console.log('[App] Resuming process:', process.type, process.id);
+        
+        // Navigate to appropriate screen based on process type
+        switch (process.type) {
+          case ProcessType.AI_GENERATION:
+            navigationRef.current?.navigate('AppStack', {
+              screen: 'GenerateDetailsScreen',
+              params: { resumeProcessId: process.id },
+            });
+            break;
+          case ProcessType.LISTING_CREATION:
+            navigationRef.current?.navigate('AppStack', {
+              screen: 'AddListingScreen',
+              params: { resumeProcessId: process.id },
+            });
+            break;
+          default:
+            console.warn('[App] Unknown process type for resumption:', process.type);
+        }
+      } catch (error) {
+        console.error('[App] Error resuming process:', error);
       }
     };
 
@@ -144,6 +196,17 @@ const App: React.FC = () => {
               <AppNavigator />
             )}
             <FlashMessage position="top" />
+            
+            {/* Only show process modal if everything is ready and features enabled */}
+            {ENABLE_PROCESS_FEATURES && session?.ready && (
+              <SafeErrorBoundary>
+                <ProcessResumptionModal
+                  visible={showProcessModal}
+                  onClose={() => setShowProcessModal(false)}
+                  onResumeProcess={handleResumeProcess}
+                />
+              </SafeErrorBoundary>
+            )}
           </ThemeProvider>
         </LegendStateContext.Provider>
       </LegendStateControlContext.Provider>

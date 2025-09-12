@@ -37,6 +37,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
   const [currentStageIndex, setCurrentStageIndex] = useState(0);
   const [jobStatus, setJobStatus] = useState('queued');
   const [jobsModalVisible, setJobsModalVisible] = useState(false);
+  const [lastStage, setLastStage] = useState<string | null>(null); // Track last stage to prevent animation replay
 
   // Define the stages for different processes
   const stages = {
@@ -113,8 +114,12 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
           // Map backend stages to frontend stage index
           const mappedStage = stageNameMap[status.currentStage] || status.currentStage;
           const stageIndex = activeStages.indexOf(mappedStage);
-          if (stageIndex >= 0) {
+          if (stageIndex >= 0 && mappedStage !== lastStage) {
+            console.log('[ANIMATION] Stage changed from', lastStage, 'to', mappedStage, '- triggering animation');
+            setLastStage(mappedStage);
             setCurrentStageIndex(stageIndex);
+          } else if (mappedStage === lastStage) {
+            console.log('[ANIMATION] Stage unchanged:', mappedStage, '- skipping animation');
           }
           
           // If completed, navigate to next screen
@@ -155,8 +160,12 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
           
           // Map backend stages to frontend stage index
           const stageIndex = activeStages.indexOf(status.currentStage);
-          if (stageIndex >= 0) {
+          if (stageIndex >= 0 && status.currentStage !== lastStage) {
+            console.log('[ANIMATION] Stage changed from', lastStage, 'to', status.currentStage, '- triggering animation');
+            setLastStage(status.currentStage);
             setCurrentStageIndex(stageIndex);
+          } else if (status.currentStage === lastStage) {
+            console.log('[ANIMATION] Stage unchanged:', status.currentStage, '- skipping animation');
           }
           
           // Early navigate: as soon as we have initial results, go to selection screen (non-blocking rerank/embeddings continue server-side)
@@ -232,11 +241,25 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
         <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Current Jobs</Text>
       </TouchableOpacity>
       <View style={styles.container}>
-        <PyramidGrid items={(firstPhotos || []).map((u, i) => ({ id: `img-${i}-${u}`, uri: String(u) }))} style={{ justifyContent: 'center', alignItems: 'center', maxHeight: '50%'}} />
+        <PyramidGrid 
+          items={(firstPhotos || []).map((photo, i) => {
+            // Handle different photo formats - could be URI string or photo object
+            const uri = typeof photo === 'string' ? photo : photo?.uri || photo?.url || String(photo);
+            console.log(`[PYRAMID] Photo ${i}:`, typeof photo, uri?.substring(0, 50));
+            return { id: `img-${i}-${Date.now()}`, uri };
+          })} 
+          style={{ 
+            justifyContent: 'center', 
+            alignItems: 'center', 
+            minHeight: '40%',
+            maxHeight: '55%',
+            width: '90%' // Give it more width
+          }} 
+        />
         <StepLoader 
           stages={activeStages} 
           currentStageIndex={currentStageIndex}
-          style={{ paddingTop: 60, marginBottom: 10, maxHeight: '25%', minHeight: '10%' }}
+          style={{ paddingTop: 40, marginBottom: 10, maxHeight: '25%', minHeight: '15%' }}
         />
       </View>
 
@@ -281,7 +304,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     minWidth: '100%',
     maxWidth: '100%',
-    maxHeight: '60%',
+    maxHeight: '80%', // Give more space for images
+    paddingHorizontal: 20, // Add some padding
   },
   SoftBlur: {
     color: 'black',
