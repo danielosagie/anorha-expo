@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIn
 import { useTheme } from '../context/ThemeContext';
 import Button from '../components/Button';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import ListingEditorForm from '../components/ListingEditorForm';
 import ExpoBarcodeScanner from '../components/ExpoBarcodeScanner';
 import Card from '../components/Card';
 import PlaceholderImage from '../components/PlaceholderImage';
@@ -814,6 +815,23 @@ const ProductDetailScreen = observer(
       );
     }
 
+    // Build an adapter object for ListingEditorForm in edit mode
+    const platformsData: Record<string, any> = React.useMemo(() => {
+      // Minimal canonical from existing product
+      const canonical: any = {
+        title: detailedItem?.Title,
+        description: detailedItem?.Description,
+        price: detailedItem?.Price,
+        sku: detailedItem?.Sku,
+        barcode: detailedItem?.Barcode,
+        weight: detailedItem?.Weight,
+        weightUnit: detailedItem?.WeightUnit,
+        images: detailedItem?.ImageUrls || [],
+      };
+      // Start with canonical only; platform-specific can be added later as we fetch
+      return { shopify: canonical };
+    }, [detailedItem]);
+
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
         <ScrollView contentContainerStyle={styles.scrollContent}>
@@ -927,59 +945,16 @@ const ProductDetailScreen = observer(
             </ScrollView>
           </Card>
 
-          {/* Basic Information - Always Editable */}
+          {/* Listing editor (edit mode) */}
           <Card style={styles.basicSection}>
-            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Basic Information</Text>
-            
-            <View style={styles.formGroup}>
-              <Text style={[styles.formLabel, { color: theme.colors.text }]}>Title</Text>
-              <TextInput
-                style={[styles.formInput, { borderColor: theme.colors.textSecondary, color: theme.colors.text }]}
-                value={formData.Title}
-                onChangeText={(text) => handleFormChange('Title', text)}
-                placeholder="Product title"
-                placeholderTextColor={theme.colors.textSecondary}
-              />
-            </View>
-
-            <View style={styles.formGroup}>
-              <Text style={[styles.formLabel, { color: theme.colors.text }]}>Description</Text>
-              <TextInput
-                style={[styles.formInput, styles.textArea, { borderColor: theme.colors.textSecondary, color: theme.colors.text }]}
-                value={formData.Description}
-                onChangeText={(text) => handleFormChange('Description', text)}
-                placeholder="Product description"
-                placeholderTextColor={theme.colors.textSecondary}
-                multiline
-                numberOfLines={4}
-              />
-            </View>
-
-            <View style={styles.formRow}>
-              <View style={[styles.formGroup, { flex: 1 }]}>
-                <Text style={[styles.formLabel, { color: theme.colors.text }]}>Price</Text>
-                <TextInput
-                  style={[styles.formInput, { borderColor: theme.colors.textSecondary, color: theme.colors.text }]}
-                  value={formData.Price.toString()}
-                  onChangeText={(text) => handleFormChange('Price', parseFloat(text) || 0)}
-                  placeholder="0.00"
-                  placeholderTextColor={theme.colors.textSecondary}
-                  keyboardType="decimal-pad"
-                />
-              </View>
-
-              <View style={[styles.formGroup, { flex: 1, marginLeft: 10 }]}>
-                <Text style={[styles.formLabel, { color: theme.colors.text }]}>Compare At Price</Text>
-                <TextInput
-                  style={[styles.formInput, { borderColor: theme.colors.textSecondary, color: theme.colors.text }]}
-                  value={formData.CompareAtPrice?.toString() || ''}
-                  onChangeText={(text) => handleFormChange('CompareAtPrice', parseFloat(text) || 0)}
-                  placeholder="0.00"
-                  placeholderTextColor={theme.colors.textSecondary}
-                  keyboardType="decimal-pad"
-                />
-              </View>
-            </View>
+            <ListingEditorForm
+              platforms={platformsData}
+              images={detailedItem?.ImageUrls || []}
+              onChangePlatforms={() => {}}
+              onOpenFieldPanel={undefined}
+              onOpenBarcodeScanner={(onResult) => { /* reuse barcode modal */ setIsBarcodeScannerVisible(true); /* simplistic pass-through */ }}
+              onOpenImageCapture={() => pickImagesFromLibrary()}
+            />
           </Card>
 
           {/* Product Identity */}

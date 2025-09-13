@@ -45,6 +45,7 @@ import MatchSelectionScreen, { JobResponse } from '../screens/MatchSelectionScre
 import GenerateDetailsScreen from '../screens/GenerateDetailsScreen';
 import VerifyCodeScreen from '../screens/VerifyCodeScreen';
 import MarketplaceChatScreen from '../screens/MarketplaceChatScreen';
+import PublishConfirmationScreen from '../screens/PublishConfirmationScreen';
 import { isFeatureEnabled } from '../config/features';
 import { SessionContext } from '../context/SessionContext';
 
@@ -208,6 +209,16 @@ export type AppStackParamList = {
   PhotoUpload: {
     onDone: (uris: string[]) => void;
   }
+  PublishConfirmation: {
+    productId?: string;
+    variantId?: string;
+    title?: string;
+    description?: string;
+    price?: number;
+    imageUrl?: string;
+    platforms?: string[];
+    quantityByPlatform?: Record<string, number>;
+  };
 };
 
 type RootStackParamList = {
@@ -333,6 +344,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="LoadingScreen" component={LoadingScreen} />
     <AppStackNav.Screen name="MatchSelectionScreen" component={MatchSelectionScreen} />
     <AppStackNav.Screen name="GenerateDetailsScreen" component={GenerateDetailsScreen} />
+    <AppStackNav.Screen name="PublishConfirmation" component={PublishConfirmationScreen} />
   </AppStackNav.Navigator>
 );
 

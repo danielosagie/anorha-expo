@@ -434,7 +434,7 @@ const flattenPlatformData = (platformData: any): any => {
   return flattened;
 };
 
-function GenerateDetailsScreen({ route }: Props) {
+function GenerateDetailsScreen({ route, navigation }: Props) {
   // Support both direct props and nested { response: {...} }
   const params: any = (route.params || {}) as any;
   const jobId = params.jobId ?? params.response?.jobId;
@@ -574,6 +574,40 @@ function GenerateDetailsScreen({ route }: Props) {
   const [bottomNavState, setBottomNavState] = useState<'empty' | 'selection' | 'template' | 'platform'>('empty');
   const [itemGenerateJobs, setItemGenerateJobs] = useState<Record<number, { jobId: string; status?: string }>>(jobMap || {});
 
+  // Decide which platforms to publish and compute inventory per platform for confirmation
+  const platformsToPublish = useMemo<string[]>(() => {
+    if (selectedPlatforms.length) return selectedPlatforms;
+    const ready = Object.entries(checklist || {}).filter(([, v]) => v?.ready).map(([k]) => k);
+    if (ready.length) return ready;
+    return Object.keys(displayedPlatforms || {});
+  }, [selectedPlatforms, checklist, displayedPlatforms]);
+
+  const quantityByPlatformComputed = useMemo<Record<string, number>>(() => {
+    const out: Record<string, number> = {};
+    for (const key of platformsToPublish) {
+      const p: any = (displayedPlatforms as any)?.[key] || {};
+      let total = 0;
+      if (Array.isArray(p.variants) && p.variants.length) {
+        for (const v of p.variants) {
+          const inv = v?.inventoryByLocation;
+          if (inv && typeof inv === 'object') {
+            Object.values(inv).forEach((loc: any) => {
+              const q = Number(loc?.quantity ?? 0);
+              if (!Number.isNaN(q)) total += q;
+            });
+          }
+        }
+      }
+      if (total === 0) {
+        const candidates = [p.quantity, p.inventoryQuantity, p?.listingDetails?.quantity, p?.locationQuantities?.default];
+        for (const c of candidates) {
+          if (typeof c === 'number' && !Number.isNaN(c)) { total = c; break; }
+        }
+      }
+      out[key] = total || 0;
+    }
+    return out;
+  }, [platformsToPublish, displayedPlatforms]);
   // Keep displayed platforms in sync with first result changes and merge new fields
   useEffect(() => {
     // Merge new backend fields with existing displayed platforms
@@ -1067,6 +1101,7 @@ function GenerateDetailsScreen({ route }: Props) {
   };
 
   const doSaveDraft = async () => {
+    console.log('doSaveDraft');
     try {
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
       const { data: sessionData } = await supabase.auth.getSession();
@@ -1092,6 +1127,7 @@ function GenerateDetailsScreen({ route }: Props) {
   };
 
   const doPublish = async () => {
+    console.log('doPublish');
     try {
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
       const { data: sessionData } = await supabase.auth.getSession();
@@ -1100,6 +1136,25 @@ function GenerateDetailsScreen({ route }: Props) {
       const variantId = (route.params as any)?.variantId || first?.variantId;
       if (!baseUrl || !productId || !variantId) return;
       const payload = buildPlatformPayload();
+
+      const canonical = payload.platformDetails?.canonical || {};
+      const imageUrl = (() => {
+        const idx = typeof payload.media?.coverImageIndex === 'number' ? payload.media.coverImageIndex : 0;
+        const arr = Array.isArray(payload.media?.imageUris) ? payload.media.imageUris : [];
+        return arr[idx] || first?.sourceImageUrl || '';
+      })();
+      navigation.navigate('PublishConfirmation', {
+        productId,
+        variantId,
+        title: canonical.title,
+        description: canonical.description,
+        price: Number(canonical.price || 0),
+        imageUrl,
+        platforms: platformsToPublish,
+        quantityByPlatform: quantityByPlatformComputed,
+      });
+
+      {/*
       const res = await fetch(`${baseUrl}/api/products/save-or-publish`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -1112,6 +1167,35 @@ function GenerateDetailsScreen({ route }: Props) {
           selectedPlatformsToPublish: payload.selectedPlatformsToPublish,
         })
       });
+      if (res.ok) {
+        const canonical = payload.platformDetails?.canonical || {};
+        const imageUrl = (() => {
+          const idx = typeof payload.media?.coverImageIndex === 'number' ? payload.media.coverImageIndex : 0;
+          const arr = Array.isArray(payload.media?.imageUris) ? payload.media.imageUris : [];
+          return arr[idx] || first?.sourceImageUrl || '';
+        })();
+        const platformsList = Object.keys(displayedPlatforms || {});
+        const quantityByPlatform = (() => {
+          const out: Record<string, number> = {};
+          for (const key of platformsList) {
+            const p: any = (displayedPlatforms as any)[key] || {};
+            const q = p.quantity ?? p.inventoryQuantity ?? p.listingDetails?.quantity;
+            if (typeof q === 'number') out[key] = q;
+          }
+          return out;
+        })();
+        navigation.navigate('PublishConfirmation', {
+          productId,
+          variantId,
+          title: canonical.title,
+          description: canonical.description,
+          price: Number(canonical.price || 0),
+          imageUrl,
+          platforms: platformsList,
+          quantityByPlatform,
+        });
+      } 
+        */}
     } catch {}
   };
 
@@ -1336,10 +1420,10 @@ function GenerateDetailsScreen({ route }: Props) {
       />
   
     </ScrollView>
-    <View style={{backgroundColor: 'white'}}>
+    <View style={{backgroundColor: 'white', paddingBottom: 24}}>
       <BottomActionBar
         primaryLabel={canPublish ? 'Publish listing' : 'Publish listing'}
-        primaryDisabled={!canPublish}
+        primaryDisabled={canPublish}
         onPrimary={doPublish}
         secondaryLabel={'Save draft'}
         onSecondary={doSaveDraft}
