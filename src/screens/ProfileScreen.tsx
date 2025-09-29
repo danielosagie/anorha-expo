@@ -9,7 +9,8 @@ import PlaceholderImage from '../components/Placeholder';
 import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
-import { supabase } from '../lib/supabase';
+import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import { useAuth } from '@clerk/clerk-expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CommonActions } from '@react-navigation/native';
 import * as WebBrowser from 'expo-web-browser';
@@ -20,9 +21,10 @@ import * as Crypto from 'expo-crypto'; // For generating random string
 import { showMessage } from 'react-native-flash-message';
 import { logError, logInfo } from '../utils/logger';
 import { fetchUserEntitlements } from '../utils/entitlements';
-
 import { AuthContext } from '../context/AuthContext';
 import { useLegendStateControl } from '../context/LegendStateControlContext';
+import BottomNav from '../components/BottomNav';
+import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 
 
 const SSSYNC_API_BASE_URL = "https://api.sssync.app"; // Keep if used for constructing backend URLs
@@ -150,13 +152,15 @@ const CONNECTION_STATUS = {
   ACTIVE: 'active',
   INACTIVE: 'inactive',
   PENDING: 'pending',
-  NEEDS_REVIEW: 'needs_review',
+  REVIEW: 'review', // new name replacing needs_review
+  READY_TO_SYNC: 'ready_to_sync',
+  NEEDS_REVIEW: 'needs_review', // legacy alias
   SCANNING: 'scanning',
   ERROR: 'error',
   SYNCING: 'syncing',
-  RECONCILING: 'reconciling', // Added for manual resync
-  NEW: 'new',           // Added for newly created connections
-  RECONNECT: 'reconnect' // Added for reconnecting existing accounts
+  RECONCILING: 'reconciling',
+  NEW: 'new',
+  RECONNECT: 'reconnect'
 };
 
 const getStatusDisplay = (status: string, isNewConnection: boolean = false): { label: string, color: string, icon: string } => {
@@ -172,8 +176,11 @@ const getStatusDisplay = (status: string, isNewConnection: boolean = false): { l
       return { label: 'Inactive', color: '#8E8E93', icon: 'pause-circle' };
     case CONNECTION_STATUS.PENDING:
       return { label: 'Setup Needed', color: '#FF9500', icon: 'progress-clock' };
+    case CONNECTION_STATUS.REVIEW:
     case CONNECTION_STATUS.NEEDS_REVIEW:
-      return { label: 'Products Need Review', color: '#FF3B30', icon: 'sync-alert' };
+      return { label: 'Review Products', color: '#FF3B30', icon: 'sync-alert' };
+    case CONNECTION_STATUS.READY_TO_SYNC:
+      return { label: 'Ready to Sync', color: '#93C822', icon: 'check-circle' };
     case CONNECTION_STATUS.SCANNING:
       return { label: 'Scanning...', color: '#5856D6', icon: 'loading' };
     case CONNECTION_STATUS.SYNCING:
@@ -213,6 +220,7 @@ const showStatusNotification = (title: string, message: string, type: 'success' 
 const ProfileScreen = () => {
   const theme = useTheme();
   const navigation = useNavigation<ProfileScreenNavigationProp>();
+  const { getToken } = useAuth();
   const authContext = useContext(AuthContext);
   const route = useRoute<RouteProp<ProfileScreenRouteParams, 'Profile'>>();
   const { resetLegendState } = useLegendStateControl();
@@ -246,11 +254,12 @@ const ProfileScreen = () => {
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [showDevOptions, setShowDevOptions] = useState(false);
   const [devMode, setDevMode] = useState(false);
-  // --- NEW: State for Add Connection Modal ---
   const [isAddConnectionModalVisible, setIsAddConnectionModalVisible] = useState(false);
-  // --- END State ---
+  const [bottomNavState, setBottomNavState] = useState<'open' | 'closed'>('closed');
+  const [platformActiveCounts, setPlatformActiveCounts] = useState<Record<string, number>>({});
 
-  // --- REVISED State for Guided Shopify Flow ---
+
+  
   type ShopifyFlowStep = 'idle' | 'enterInfo'; // Simplified states
   const [pastedShopifyUrl, setPastedShopifyUrl] = useState('');
   const [manualShopName, setManualShopName] = useState('');
@@ -419,8 +428,58 @@ const ProfileScreen = () => {
   // --- DEBUG: Add useEffect to log connections state changes ---
   useEffect(() => {
     console.log('[ProfileScreen STATE DEBUG] Connections state updated:', JSON.stringify(platformConnections, null, 2));
+    // Derive active counts by platform for BottomNav
+    const counts: Record<string, number> = {};
+    platformConnections.forEach((c) => {
+      if (c.Status?.toLowerCase() === 'active') {
+        counts[c.PlatformType] = (counts[c.PlatformType] || 0) + 1;
+      }
+    });
+    setPlatformActiveCounts(counts);
   }, [platformConnections]);
   // --- END DEBUG ---
+
+  // --- GLOBAL OVERLAY: wire platform start connect ---
+  const overlay = usePlatformPickerOverlay();
+  const handleStartConnectPlatform = useCallback((platform: string) => {
+    if (platform === 'shopify') {
+      setShopifyFlowStep('enterInfo');
+      setPastedShopifyUrl('');
+      setManualShopName('');
+    } else if (platform === 'clover') {
+      handleCloverConnect();
+    } else if (platform === 'square') {
+      handleSquareConnect();
+    } else if (platform === 'facebook') {
+      handleFacebookConnect();
+    } else if (platform === 'ebay') {
+      (async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+        const finalRedirectUri = 'sssyncapp://auth-callback?platform=ebay';
+        const url = `${SSSYNC_API_BASE_URL}/api/auth/ebay/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
+        await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
+      })();
+    } else {
+      Alert.alert('Connect', `Connect logic for ${platform} not implemented yet.`);
+    }
+  }, [setShopifyFlowStep, setPastedShopifyUrl, setManualShopName]);
+
+  useEffect(() => {
+    console.log('[ProfileScreen] Setting up overlay for screen');
+    overlay.enableForScreen(handleStartConnectPlatform);
+    return () => {
+      console.log('[ProfileScreen] Cleaning up overlay for screen');
+      overlay.disableForScreen();
+    };
+  }, [overlay]); // Remove handleStartConnectPlatform dependency to prevent re-runs
+  // --- END GLOBAL OVERLAY wiring ---
+
+  // --- Unified API token helper (Supabase session only via bridge) ---
+  const getApiToken = useCallback(async (): Promise<string | null> => {
+    const token = await ensureSupabaseJwt();
+    return token;
+  }, []);
 
   // --- NEW: Delete Connection Logic ---
   const handleDisconnectPlatform = async (connectionId: string, platformName: string) => {
@@ -436,8 +495,7 @@ const ProfileScreen = () => {
             console.log(`[ProfileScreen] Attempting to disconnect connection ID: ${connectionId}`);
             try {
               // 1. Get Auth Token
-              const session = await supabase.auth.getSession();
-              const token = session?.data.session?.access_token;
+              const token = await getApiToken();
               if (!token) {
                 throw new Error("Authentication token not found.");
               }
@@ -481,8 +539,7 @@ const ProfileScreen = () => {
   // --- NEW: Fix & Resume for error/disabled connections ---
   const fixAndResumeConnection = async (connectionId: string, platformName: string) => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
+      const token = await getApiToken();
       if (!token) throw new Error('Not authenticated');
 
       const res = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections/${connectionId}/enable`, {
@@ -648,11 +705,8 @@ const ProfileScreen = () => {
   const startPlatformScan = async (connectionId: string, platformName: string, isReconnect: boolean = false) => {
     console.log(`[ProfileScreen] Attempting to start scan for connection ID: ${connectionId} (${platformName})`);
     try {
-      const session = await supabase.auth.getSession();
-      const token = session?.data.session?.access_token;
-      if (!token) {
-        throw new Error("Authentication token not found for starting scan.");
-      }
+      const token = await getApiToken();
+      if (!token) throw new Error('Authentication token not found for starting scan.');
 
       // If this is a reconciliation, first update the status to 'reconciling'
       if (isReconnect) {
@@ -734,7 +788,7 @@ const ProfileScreen = () => {
       const finalRedirectUri = "sssyncapp://auth/callback?platform=clover"; // App-specific deep link
 
       // 3. Construct Backend Authorization URL
-      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/auth/clover/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
+      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/clover/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
       console.log("[ProfileScreen] Clover Connect: Backend Auth URL:", backendAuthUrl);
 
       // 4. Open WebBrowser for OAuth flow, listening for finalRedirectUri
@@ -799,7 +853,7 @@ const ProfileScreen = () => {
       const finalRedirectUri = "sssyncapp://auth/callback?platform=square"; // App-specific deep link
 
       // 3. Construct Backend Authorization URL
-      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/auth/square/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
+      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/square/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
       console.log("[ProfileScreen] Square Connect: Backend Auth URL:", backendAuthUrl);
 
       // 4. Open WebBrowser for OAuth flow, listening for finalRedirectUri
@@ -847,12 +901,66 @@ const ProfileScreen = () => {
   };
   // --- END Square Connection Logic ---
 
+  // --- NEW: Facebook Connection Logic ---
+  const handleFacebookConnect = async () => {
+    console.log("[ProfileScreen] Initiating Facebook connection (New OAuth Flow)...");
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) {
+        Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
+        console.error("[ProfileScreen] Facebook Connect: Error getting user:", userError);
+        return;
+      }
+      const sssyncUserId = user.id;
+
+      const finalRedirectUri = "sssyncapp://auth/callback?platform=facebook";
+      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/facebook/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
+      console.log("[ProfileScreen] Facebook Connect: Backend Auth URL:", backendAuthUrl);
+
+      const result = await WebBrowser.openAuthSessionAsync(backendAuthUrl, finalRedirectUri);
+      console.log("[ProfileScreen] Facebook Connect: WebBrowser result:", result);
+
+      if (result.type === 'success' && result.url) {
+        const urlParams = new URLSearchParams(result.url.split('?')[1]);
+        const status = urlParams.get('status');
+        const message = urlParams.get('message');
+        const connectionId = urlParams.get('connectionId');
+
+        console.log("[ProfileScreen] Facebook Connect: Callback params:", { status, message, connectionId });
+
+        if (status === 'success') {
+          Alert.alert("Success", message || "Facebook account connected successfully!");
+          if (connectionId) {
+            console.log(`[ProfileScreen] Facebook Connect: Connection ID ${connectionId}. Proceed to start scan.`);
+            await startPlatformScan(connectionId, 'Facebook');
+          }
+          fetchConnections();
+        } else {
+          Alert.alert("Connection Failed", message || "Failed to connect Facebook account.");
+          console.error("[ProfileScreen] Facebook Connect: Connection failed via backend callback:", { status, message });
+        }
+      } else if (result.type === 'cancel' || result.type === 'dismiss') {
+        Alert.alert("Cancelled", "Facebook connection process was cancelled.");
+        console.log("[ProfileScreen] Facebook Connect: User cancelled or dismissed flow.");
+      } else {
+        let errorMessage = "An unexpected error occurred during Facebook authentication.";
+        if (result.type === 'locked') {
+          errorMessage = "The authentication session is locked. Please try again or use another method.";
+        }
+        Alert.alert("Connection Error", errorMessage);
+        console.warn("[ProfileScreen] Facebook Connect: Unexpected WebBrowser result type:", result.type, result);
+      }
+    } catch (error: unknown) {
+      console.error("[ProfileScreen] Facebook Connect: General error:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      Alert.alert("Error", `Failed to connect Facebook: ${message}`);
+    }
+  };
+  // --- END Facebook Connection Logic ---
+
   // --- NEW: Handler for Review & Sync ---
   const handleReviewAndSync = (connectionId: string, platformName: string) => {
     console.log(`[ProfileScreen] Initiating Review & Sync for Connection ID: ${connectionId}, Platform: ${platformName}`);
-    
-    // Show a notification that we're opening the review screen
-    showStatusNotification('Opening Review', `Preparing product review for ${platformName}...`, 'info');
     
     // Navigate to the MappingReview screen
     navigation.navigate('MappingReview', { connectionId, platformName });
@@ -862,8 +970,7 @@ const ProfileScreen = () => {
   // --- Simple audit log viewer: open recent ActivityLogs for this connection ---
   const openAuditLogs = async (connectionId: string) => {
     try {
-      const { data: session } = await supabase.auth.getSession();
-      const token = session?.session?.access_token;
+      const token = await getApiToken();
       if (!token) throw new Error('Auth required');
       const base = SSSYNC_API_BASE_URL;
       const res = await fetch(`${base}/api/products/activities?platformConnectionId=${encodeURIComponent(connectionId)}&limit=50`, {
@@ -891,20 +998,11 @@ const ProfileScreen = () => {
 
   const logCurrentUserToken = async () => {
     try {
-      const { data: { session }, error } = await supabase.auth.getSession();
-
-      if (error) {
-        console.error("Error getting session:", error.message);
-        return;
-      }
-
-      if (session) {
-        const accessToken = session.access_token;
-        console.log("Current User Access Token:", accessToken);
-        // Now you can copy this logged token and paste it into Postman's
-        // "Bearer Token" field under the Authorization tab.
+      const token = await getApiToken();
+      if (token) {
+        console.log('Current API token:', token);
       } else {
-        console.log("No active user session found.");
+        console.log('No active API token found.');
       }
     } catch (catchError: any) {
       console.error("Caught unexpected error getting session:", catchError.message);
@@ -964,8 +1062,7 @@ const ProfileScreen = () => {
       title: 'Manage Billing',
       onPress: async () => {
         try {
-          const { data: { session } } = await supabase.auth.getSession();
-          const token = session?.access_token;
+          const token = await getApiToken();
           if (!token) throw new Error('Not authenticated');
           const res = await fetch(`${SSSYNC_API_BASE_URL}/billing/portal`, {
             method: 'POST',
@@ -1040,6 +1137,21 @@ const ProfileScreen = () => {
   
   // Add a state for the realtime channel
   const [realtimeChannel, setRealtimeChannel] = useState<RealtimeChannel | null>(null);
+
+  // Hide tab bar when platform picker overlay is visible
+  useEffect(() => {
+    const parentNav: any = (navigation as any)?.getParent?.();
+    try {
+      parentNav?.setOptions?.({ tabBarStyle: { display: overlay.visible ? 'none' : 'flex' } });
+    } catch (e) {
+      // no-op if parent isn't a tab navigator
+    }
+    return () => {
+      try {
+        parentNav?.setOptions?.({ tabBarStyle: { display: 'flex' } });
+      } catch {}
+    };
+  }, [overlay.visible]);
 
   // Add this function to set up the real-time subscription
   const setupRealtimeSubscription = async () => {
@@ -1317,7 +1429,7 @@ const ProfileScreen = () => {
                                 )}
 
                                 {/* For connections that need review (not new), show the Review & Sync button */}
-                                {!isRecentlyCreated(connection) && (connection.Status === CONNECTION_STATUS.NEEDS_REVIEW) && (
+                                {!isRecentlyCreated(connection) && (connection.Status === CONNECTION_STATUS.REVIEW || connection.Status === CONNECTION_STATUS.NEEDS_REVIEW) && (
                               <TouchableOpacity 
                                     style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
                                     onPress={() => handleReviewAndSync(connection.Id, platformConfig.name)}
@@ -1327,15 +1439,14 @@ const ProfileScreen = () => {
                               </TouchableOpacity>
                                 )}
                                 
-                                {/* For connections in pending state (not new), show "Complete Setup" button */}
-                                {!isRecentlyCreated(connection) && connection.Status === CONNECTION_STATUS.PENDING && (
-                              <TouchableOpacity 
-                                    style={[styles.actionButton, { backgroundColor: theme.colors.secondary + '15' }]}
-                                    onPress={() => startPlatformScan(connection.Id, platformConfig.name, false /* Set to false to trigger a scan, not a reconcile */)}
-                              >
-                                    <Icon name="cog" size={18} color={theme.colors.secondary} />
-                                    <Text style={[styles.actionButtonText, { color: theme.colors.secondary }]}>Complete Setup</Text>
-                              </TouchableOpacity>
+                                {connection.Status === CONNECTION_STATUS.READY_TO_SYNC && (
+                                  <TouchableOpacity 
+                                    style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
+                                    onPress={() => navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name })}
+                                  >
+                                    <Icon name="check-circle" size={18} color={theme.colors.success} />
+                                    <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Ready to Sync</Text>
+                                  </TouchableOpacity>
                                 )}
                                 
                                 {(connection.Status === CONNECTION_STATUS.INACTIVE) && (
@@ -1396,7 +1507,12 @@ const ProfileScreen = () => {
               {/* Always render Add Connection Button (unless error/loading) */} 
               <Button 
                 title="Add Connection" 
-                onPress={() => setIsAddConnectionModalVisible(true)}
+                onPress={() => {
+                  console.log('[ProfileScreen] Add Connection button pressed');
+                  console.log('[ProfileScreen] Before show - overlay.visible:', overlay.visible);
+                  overlay.show();
+                  console.log('[ProfileScreen] After show - overlay.visible:', overlay.visible);
+                }}
                 style={styles.addConnectionButton} 
               />
               {/* --- END Add Connection Button --- */}
@@ -1458,113 +1574,57 @@ const ProfileScreen = () => {
       </Animated.View>
       
       {/* --- NEW: Add Connection Modal --- */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={isAddConnectionModalVisible}
-        onRequestClose={() => setIsAddConnectionModalVisible(false)}
-      >
-        <Pressable style={styles.modalOverlay} onPress={() => setIsAddConnectionModalVisible(false)}>
-          <Pressable style={styles.modalContent} onPress={() => {}}> 
-            <Text style={styles.modalTitle}>Add New Platform Connection</Text>
-        
-            
-            <View style={{justifyContent: 'space-around', alignItems: 'center', flex: 1, flexDirection: 'column', width: '100%', height: '100%'}}> 
-              <ScrollView style={{ alignSelf: 'stretch', maxHeight: '70%', minHeight: '70%' }} contentContainerStyle={styles.modalPlatformColumns} showsVerticalScrollIndicator={false}>
-                {(() => {
-                  const mid = Math.ceil(AVAILABLE_PLATFORMS.length / 2);
-                  const left = AVAILABLE_PLATFORMS.slice(0, mid);
-                  const right = AVAILABLE_PLATFORMS.slice(mid);
-                  const renderCard = (platform: typeof AVAILABLE_PLATFORMS[number]) => {
-                  // Check if this platform is already connected and active
-                  const isAlreadyConnected = platformConnections.some(
-                    (conn) => conn.PlatformType === platform.key && conn.Status === 'active'
-                  );
-                    const isGloballyDisabled = false; // can wire to toggles if desired here
-
-                    return (
-                    <TouchableOpacity
-                      key={platform.key}
-                      style={[
-                        styles.modalPlatformCard,
-                        (isAlreadyConnected || isGloballyDisabled) && styles.modalPlatformCardDisabled
-                      ]}
-                      disabled={isAlreadyConnected || isGloballyDisabled}
-                      onPress={() => {
-                        setIsAddConnectionModalVisible(false); // Close modal
-                        if (platform.key === 'shopify') {
-                          // Set state to show the combined input modal
-                          setShopifyFlowStep('enterInfo');
-                          // Clear previous inputs when starting fresh
-                          setPastedShopifyUrl('');
-                          setManualShopName('');
-                        } else {
-                          // --- NEW: Call Clover Connect Logic ---
-                          if (platform.key === 'clover') {
-                            handleCloverConnect();
-                          } else if (platform.key === 'square') { // --- NEW: Call Square Connect Logic ---
-                            handleSquareConnect();
-                            } else if (platform.key === 'facebook') {
-                              (async () => {
-                                const { data: { user } } = await supabase.auth.getUser();
-                                if (!user) return;
-                                const finalRedirectUri = 'sssyncapp://auth-callback?platform=facebook';
-                                const url = `${SSSYNC_API_BASE_URL}/auth/facebook/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
-                                await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
-                              })();
-                            } else if (platform.key === 'ebay') {
-                              (async () => {
-                                const { data: { user } } = await supabase.auth.getUser();
-                                if (!user) return;
-                                const finalRedirectUri = 'sssyncapp://auth-callback?platform=ebay';
-                                const url = `${SSSYNC_API_BASE_URL}/auth/ebay/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
-                                await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
-                              })();
-                          } else {
-                            Alert.alert('Connect', `Connect logic for ${platform.name} not implemented yet.`);
-                          }
-                          // --- END NEW ---                       
-                        }
-                      }}
-                      activeOpacity={isAlreadyConnected ? 1 : 0.7} // Reduce opacity feedback if disabled
-                    >
-                      <PlaceholderImage 
-                        size={40} // Smaller icon for modal grid
-                        borderRadius={4} 
-                        color={getPlatformColor(platform.key)}
-                        type="icon"
-                        icon={getIconForPlatform(platform.key)}
-                      />
-                      <Text style={styles.modalPlatformName}>{platform.name}</Text>
-                      {(isAlreadyConnected || isGloballyDisabled) && (
-                          <Icon name="check-circle" size={16} color={theme.colors.success} style={styles.modalConnectedIcon} />
-                      )}
-                    </TouchableOpacity>
-                    );
-                  };
-                  return (
-                    <View style={styles.modalPlatformColumnsRow}>
-                      <View style={styles.modalColumn}>{left.map(renderCard)}</View>
-                      <View style={styles.modalColumn}>{right.map(renderCard)}</View>
-                    </View>
-                  );
-                })()}
-
-              </ScrollView>
-              
-            </View>
-
-            <Button
-              title="Close"
-              outlined
-              onPress={() => setIsAddConnectionModalVisible(false)}
-              style={{ marginTop: 15, alignSelf: 'stretch' }} // Stretch close button
+      {/* --- Platform Picker Bottom Bar Overlay (no modal) --- */}
+      {isAddConnectionModalVisible && (
+        <View style={styles.overlayContainer}>
+          <Pressable style={styles.overlayBackdrop} onPress={() => setIsAddConnectionModalVisible(false)} />
+          <View style={styles.overlayBottomSheet}>
+            <BottomNav
+              state={'platformPicker'}
+              selectedCount={0}
+              selectedTemplate={null}
+              selectedPlatforms={[]}
+              isConnected={(p) => platformConnections.some((c) => c.PlatformType === p && c.Status === 'active')}
+              platformActiveCounts={platformActiveCounts}
+              onShowSelection={() => {}}
+              onShowTemplates={() => {}}
+              onBackToEmpty={() => {}}
+              onBackToSelection={() => {}}
+              onOpenTemplateModal={() => {}}
+              onTemplateSelect={() => {}}
+              onPlatformToggle={() => {}}
+              onGeneratePress={() => {}}
+              onStartConnect={(platform) => {
+                setIsAddConnectionModalVisible(false);
+                if (platform === 'shopify') {
+                  setShopifyFlowStep('enterInfo');
+                  setPastedShopifyUrl('');
+                  setManualShopName('');
+                } else if (platform === 'clover') {
+                  handleCloverConnect();
+                } else if (platform === 'square') {
+                  handleSquareConnect();
+                } else if (platform === 'facebook') {
+                  handleFacebookConnect();
+                } else if (platform === 'ebay') {
+                  (async () => {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    if (!user) return;
+                    const finalRedirectUri = 'sssyncapp://auth-callback?platform=ebay';
+                    const url = `${SSSYNC_API_BASE_URL}/api/auth/ebay/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
+                    await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
+                  })();
+                } else {
+                  Alert.alert('Connect', `Connect logic for ${platform} not implemented yet.`);
+                }
+              }}
             />
-          </Pressable>
-        </Pressable>
-      </Modal>
-      {/* --- END Add Connection Modal --- */}
-
+            
+          </View>
+        </View>
+      )}
+      {/* --- END Platform Picker Bottom Bar Overlay --- */}
+      
       {/* --- REVISED: Guided Shopify Flow UI (Single Modal) --- */}
       <Modal
           transparent={true}
@@ -1932,9 +1992,75 @@ const styles = StyleSheet.create({
       flexWrap: 'wrap',
       justifyContent: 'space-between',
       gap: 10,
-
-
   },
+  expandedBottomNav: {
+    alignItems: 'center', 
+    gap: 12, 
+    paddingLeft: 30,
+    paddingRight: 30,
+    justifyContent: 'space-between',
+    marginTop: 10,
+    minHeight: 550,
+    maxHeight: 600,
+    backgroundColor: 'rgb(255, 255, 255)'
+  },
+  bottomNavStepContainer: { 
+    alignItems: 'center', 
+    gap: 12, 
+    paddingLeft: 30,
+    paddingRight: 30,
+    marginTop: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0)',
+    minHeight: 100,
+    paddingBottom: 12,
+  },
+  emptyBottomNavStepContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+    gap: 12,
+    maxHeight: 100,
+  },
+  platformListContainer: {
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  platformListItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  platformListItemDisabled: {
+    opacity: 0.5,
+  },
+  platformListLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  platformListName: {
+    fontSize: 16,
+    marginLeft: 12,
+    color: '#333',
+  },
+  platformListRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  modalBottomBar: {
+    width: '100%',
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+  },
+  modalBottomBarButton: {
+    alignSelf: 'stretch',
+    marginTop: 5,
+  },
+  // --- END revised Add Connection list styles ---
   modalPlatformColumns: {
 
 
@@ -2216,4 +2342,32 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 4,
   },
+  // --- NEW: Overlay styles ---
+  overlayContainer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'flex-end',
+    zIndex: 9999,
+    elevation: 5,
+  },
+  overlayBackdrop: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+  },
+  overlayBottomSheet: {
+    backgroundColor: 'rgb(251, 15, 15)',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingTop: 12,
+    paddingBottom: 0,
+    maxHeight: '20%',
+  },
+  // --- END Overlay styles ---
 });

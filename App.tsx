@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useContext } from 'react';
 import { NavigationContainer, NavigationContainerRef, CommonActions } from '@react-navigation/native';
-import { StatusBar, Linking, Alert, ActivityIndicator, View } from 'react-native';
+import { StatusBar, Linking, Alert, ActivityIndicator, View, Pressable } from 'react-native';
 import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { LogBox } from 'react-native';
@@ -11,7 +11,10 @@ import { LegendStateControlContext } from './src/context/LegendStateControlConte
 import { initializeLegendState, LegendStateObservables } from './src/utils/SupaLegend';
 import { Session, AuthChangeEvent } from '@supabase/supabase-js';
 import FlashMessage from 'react-native-flash-message';
-import { PlatformConnectionsProvider } from './src/context/PlatformConnectionsContext';
+import { PlatformConnectionsProvider, usePlatformConnections } from './src/context/PlatformConnectionsContext';
+import { PlatformPickerOverlayProvider, usePlatformPickerOverlay } from './src/context/PlatformPickerOverlayContext';
+import BottomNav from './src/components/BottomNav';
+import { Text } from 'react-native';
 import { ClerkProvider, useAuth, SignedIn, SignedOut } from '@clerk/clerk-expo';
 import { tokenCache as clerkTokenCache } from '@clerk/clerk-expo/token-cache';
 import * as SecureStore from 'expo-secure-store';
@@ -176,6 +179,63 @@ const App: React.FC = () => {
       }
     };
 
+  const GlobalPlatformPickerOverlay: React.FC = () => {
+    const overlay = usePlatformPickerOverlay();
+    const { connections } = usePlatformConnections();
+    
+    // DEBUG: Log overlay state
+    console.log('[GlobalPlatformPickerOverlay] Rendering with overlay.visible:', overlay.visible);
+    console.log('[GlobalPlatformPickerOverlay] Overlay onStartConnect exists:', !!overlay.onStartConnect);
+    
+    const counts: Record<string, number> = {};
+    (connections || []).forEach((c: any) => {
+      if ((c.Status || '').toLowerCase() === 'active') {
+        counts[c.PlatformType] = (counts[c.PlatformType] || 0) + 1;
+      }
+    });
+    
+    if (!overlay.visible) {
+      console.log('[GlobalPlatformPickerOverlay] Not visible, returning null');
+      return null;
+    }
+    
+    console.log('[GlobalPlatformPickerOverlay] Rendering overlay!');
+      return (
+        <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, justifyContent: 'flex-end', zIndex: 9999 }} pointerEvents="box-none">
+          <Pressable 
+            style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)' }} 
+            onPress={() => {
+              console.log('[GlobalPlatformPickerOverlay] Backdrop pressed, hiding overlay');
+              overlay.hide();
+            }}
+          />
+          <View style={{ backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 12, paddingBottom: 24, height: '40%' }}>
+            <BottomNav
+              state={'platformPicker'}
+              selectedCount={0}
+              selectedTemplate={null}
+              selectedPlatforms={[]}
+              isConnected={(p) => (connections || []).some((c: any) => c.PlatformType === p && (c.Status || '').toLowerCase() === 'active')}
+              platformActiveCounts={counts}
+              onShowSelection={() => {}}
+              onShowTemplates={() => {}}
+              onBackToEmpty={() => { overlay.hide(); }}
+              onBackToSelection={() => {}}
+              onOpenTemplateModal={() => {}}
+              onTemplateSelect={() => {}}
+              onPlatformToggle={() => {}}
+              onGeneratePress={() => {}}
+               onStartConnect={(platform) => {
+                 console.log('[GlobalPlatformPickerOverlay] onStartConnect called with platform:', platform);
+                 overlay.hide();
+                 overlay.onStartConnect?.(platform);
+               }}
+            />
+          </View>
+        </View>
+      );
+    };
+
     return (
       <LegendStateControlContext.Provider value={{ resetLegendState }}>
         <LegendStateContext.Provider value={legendStateModules}>
@@ -196,6 +256,7 @@ const App: React.FC = () => {
               <AppNavigator />
             )}
             <FlashMessage position="top" />
+            <GlobalPlatformPickerOverlay />
             
             {/* Only show process modal if everything is ready and features enabled */}
             {ENABLE_PROCESS_FEATURES && session?.ready && (
@@ -262,6 +323,7 @@ const App: React.FC = () => {
     
     return (
       <PlatformConnectionsProvider>
+        <PlatformPickerOverlayProvider>
         <NavigationContainer 
           key={navKey}
           ref={navigationRef}
@@ -282,6 +344,7 @@ const App: React.FC = () => {
             </ThemeProvider>
           )}
         </NavigationContainer>
+        </PlatformPickerOverlayProvider>
       </PlatformConnectionsProvider>
     );
   };

@@ -1,0 +1,411 @@
+import React, { useMemo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Image, AccessibilityRole } from 'react-native';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import Animated, { FadeInUp, Layout } from 'react-native-reanimated';
+import { tokens } from '../../design/tokens';
+import Badge from '../ui/Badge';
+import PlaceholderImage from '../PlaceholderImage';
+import { Image as RNImage } from 'react-native';
+// Local brand image fallback
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const brandImage = require('../../assets/rounded_anorha.png');
+
+export type MappingVariant = 'new' | 'matched' | 'review' | 'ignored';
+
+export type MappingCardProps = {
+  variant: MappingVariant;
+  titleLeft: string;
+  skuLeft?: string;
+  priceLeft?: number;
+  imageLeft?: string | null;
+
+  titleRight?: string;
+  skuRight?: string;
+  imageRight?: string | null;
+
+  onSelect?: () => void;
+  onIgnore?: () => void;
+  onRestore?: () => void;
+  onCreate?: () => void;
+  onLink?: () => void;
+  onSearch?: () => void;
+  selected?: boolean;
+  onApproveMatch?: () => void;
+  isResolvedNew?: boolean;
+  onEditNew?: () => void;
+};
+
+const MappingCard: React.FC<MappingCardProps> = ({
+  variant,
+  titleLeft,
+  skuLeft,
+  priceLeft,
+  imageLeft,
+  titleRight,
+  skuRight,
+  imageRight,
+  onSelect,
+  onIgnore,
+  onRestore,
+  onCreate,
+  onLink,
+  onSearch,
+  selected,
+  onApproveMatch,
+  isResolvedNew = false,
+  onEditNew,
+}) => {
+  const actionBadge = useMemo(() => {
+    if (variant === 'new') return <Badge variant="success">New</Badge>;
+    if (variant === 'matched') return <Badge variant="success">Match</Badge>;
+    return <Badge variant="warning">Review</Badge>;
+  }, [variant]);
+
+  return (
+    <Animated.View entering={FadeInUp.duration(tokens.durations.fast)} layout={Layout.springify()}>
+      <View style={[styles.card, selected ? styles.cardSelected : null]} accessibilityRole={"button" as AccessibilityRole}>
+
+        {/* Content */}
+        <View style={styles.row}>
+          <View style={[styles.miniCard, styles.leftMini]}>
+            {imageLeft ? (
+              <Image source={{ uri: imageLeft }} style={styles.image} />
+            ) : (
+              <View style={styles.imagePlaceholder}>
+                <Icon name="cube-outline" size={22} color="#9CA3AF" />
+              </View>
+            )}
+            <View style={styles.details}>
+              <Text style={styles.title} numberOfLines={2}>{titleLeft}</Text>
+              {!!skuLeft && <Text style={styles.subtle}>SKU: {skuLeft}</Text>}
+              {priceLeft != null && <Text style={styles.price}>${priceLeft.toFixed(2)}</Text>}
+            </View>
+          </View>
+
+          <View style={styles.arrowWrap}>
+            <Icon name="arrow-right-thin" size={24} color="#9CA3AF" />
+          </View>
+
+          <View style={[styles.miniCard, styles.rightMini, variant === 'matched' ? styles.rightLinked : variant === 'review' ? styles.rightNeedsReview : variant === 'ignored' ? styles.rightIgnored : styles.rightCreate]}>
+            {(variant === 'matched' || (variant === 'review' && titleRight)) ? (
+              <TouchableOpacity style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }} onPress={onSearch} accessibilityLabel="Change match">
+                <View style={styles.rightIconCircleImg}> 
+                  {imageRight ? (
+                    <RNImage source={{ uri: imageRight as string }} style={{ width: 40, height: 40, borderRadius: 6 }} />
+                  ) : (
+                    <RNImage source={brandImage} style={{ width: 40, height: 40, borderRadius: 6 }} />
+                  )}
+                </View>
+                <View style={styles.details}>
+                  <Text style={styles.title} numberOfLines={2}>{titleRight}</Text>
+                  {!!skuRight && <Text style={styles.subtle}>SKU: {skuRight}</Text>}
+                </View>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity onPress={onSearch} style={styles.emptyRight} accessibilityLabel="Link product">
+                <Icon name={variant === 'review' ? 'help-circle-outline' : 'plus-circle-outline'} size={24} color={variant === 'review' ? '#D97706' : '#6B7280'} />
+                <Text style={[styles.emptyText, variant === 'review' ? styles.warningText : null]}>
+                  {variant === 'review' ? 'Needs Review' : 'Link Product'}
+                </Text>
+              </TouchableOpacity>
+            )}
+            {variant === 'new' && isResolvedNew && (
+              <View style={styles.newPill}>
+                <Text style={styles.newPillText}>Adding As New Item</Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* Actions */}
+        <View style={styles.actions}>
+          {variant === 'ignored' ? (
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.create, { flexDirection: 'row', alignItems: 'center' }]}
+              onPress={onRestore}
+              accessibilityLabel="Restore item"
+            >
+              <Icon name="restore" size={18} color="#93C822" style={{ marginRight: 6 }} />
+              <Text style={styles.primaryText}>Restore Item</Text>
+            </TouchableOpacity>
+          ) : isResolvedNew ? (
+            <>
+              <View style={styles.actionsRow}>
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.create, styles.actionWide, { flexDirection: 'row', alignItems: 'center'}]}
+                  onPress={onEditNew}
+                  accessibilityLabel="Edit new item"
+                >
+                  <Icon name="pencil" size={18} color={"#111"} style={{ marginRight: 6 }} />
+                  <Text style={{ textAlign: 'center', color: '#111', fontWeight: '600' }}>Edit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.ignore, styles.actionWide, { flexDirection: 'row', alignItems: 'center'}]}
+                  onPress={onIgnore}
+                  accessibilityLabel="Ignore item"
+                >
+                  <Icon name="close-box" size={18} color="#EF4444" style={{ marginRight: 6}} />
+                  <Text style={styles.dangerText}>Ignore Item</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.actionsRow}>
+                {variant !== 'matched' && !isResolvedNew && (
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.create, styles.actionWide, { flexDirection: 'row', alignItems: 'center'}]}
+                    onPress={onCreate}
+                    accessibilityLabel="Create as new"
+                  >
+                    <Icon name="plus-box" size={18} color="#93C822" style={{ borderRadius: 6, marginRight: 6 }} />
+                    <Text style={styles.primaryText}>Add as New Item</Text>
+                  </TouchableOpacity>
+                )}
+                {variant === 'matched' || (variant === 'new' && isResolvedNew) ? (
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.ignore, styles.actionWide, { flexDirection: 'row', alignItems: 'center'}]}
+                    onPress={onIgnore}
+                    accessibilityLabel="Remove mapping"
+                  >
+                    <Icon name="link-off" size={18} color="#EF4444" style={{ borderRadius: 6, marginRight: 6 }} />
+                    <Text style={styles.dangerText}>Remove Mapping</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.ignore, styles.actionWide, { flexDirection: 'row', alignItems: 'center'}]}
+                    onPress={onIgnore}
+                    accessibilityLabel="Ignore item"
+                  >
+                    <Icon name="close-box" size={18} color="#EF4444" style={{ marginRight: 6}} />
+                    <Text style={styles.dangerText}>Ignore Item</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+              {variant === 'new' && isResolvedNew && (
+                <View style={styles.actionsRow}>
+                  <View style={styles.bannerNew}>
+                    <Text style={styles.bannerNewText}>Adding As New Item</Text>
+                  </View>
+                </View>
+              )}
+              {variant === 'review' && !!titleRight && !isResolvedNew && (
+                <View style={styles.actionsRow}>
+                  <TouchableOpacity
+                    style={[styles.actionPrimaryBtn, styles.create, styles.actionWide, { flexDirection: 'row', alignItems: 'center'}]}
+                    onPress={onApproveMatch}
+                    accessibilityLabel="Approve match"
+                  >
+                    <Icon name="check-circle-outline" size={18} color="rgb(94, 41, 11)" style={{ marginRight: 6 }} />
+                    <Text style={[styles.primaryText, { color: 'rgb(94, 41, 11)' }]}>Approve Match</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </>
+          )}
+        </View>
+
+        {/*
+        <TouchableOpacity style={[styles.actionBtn, styles.confirm]} onPress={onLink} accessibilityLabel="Confirm link"><Icon name="check" size={18} color="#fff" /></TouchableOpacity>
+        */}
+
+      </View>
+    </Animated.View>
+  );
+};
+
+export default React.memo(MappingCard);
+
+const styles = StyleSheet.create({
+  card: {
+    backgroundColor: 'white',
+    borderRadius: tokens.radii.lg,
+    padding: tokens.spacing.md,
+    marginBottom: tokens.spacing.lg,
+    ...tokens.elevation(2),
+    minHeight: 50,
+  },
+  cardSelected: {
+    borderWidth: 1,
+    borderColor: '#D9D9D9',
+  },
+  topRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: tokens.spacing.sm,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  miniCard: {
+    flex: 1,
+    flexDirection: 'row',
+    borderRadius: tokens.radii.md,
+    padding: tokens.spacing.sm,
+    backgroundColor: '#F9FAFB',
+    alignItems: 'center',
+    minHeight: 74,
+  },
+  leftMini: {},
+  rightMini: {
+    justifyContent: 'center',
+  },
+  rightLinked: {
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#BBF7D0',
+  },
+  rightNeedsReview: {
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+    backgroundColor: '#FFFBEB',
+  },
+  rightCreate: {
+    borderWidth: 1,
+    borderColor: '#D9D9D9',
+    backgroundColor: '#F3F4F6',
+  },
+  rightIgnored: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#FAFAFA',
+  },
+  image: {
+    width: 42,
+    height: 42,
+    borderRadius: tokens.radii.sm,
+  },
+  imagePlaceholder: {
+    width: 42,
+    height: 42,
+    borderRadius: tokens.radii.sm,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  details: {
+    flex: 1,
+    marginLeft: tokens.spacing.sm,
+  },
+  title: {
+    fontWeight: '600',
+    fontSize: tokens.fontSizes.md,
+    color: '#111827',
+  },
+  subtle: {
+    fontSize: tokens.fontSizes.sm,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  price: {
+    fontSize: tokens.fontSizes.sm,
+    color: '#5C9B00',
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  arrowWrap: {
+    paddingHorizontal: tokens.spacing.sm,
+    justifyContent: 'center',
+  },
+  rightIconCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#22C55E',
+    marginRight: tokens.spacing.sm,
+  },
+  rightIconCircleImg: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: tokens.spacing.sm,
+  },
+  newPill: {
+    position: 'absolute',
+    bottom: 6,
+    left: 6,
+    right: 6,
+    backgroundColor: '#93C822',
+    borderRadius: 10,
+    paddingVertical: 6,
+    alignItems: 'center',
+  },
+  newPillText: { color: '#fff', fontWeight: '800' },
+  emptyRight: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: tokens.spacing.md,
+    borderRadius: tokens.radii.md,
+    borderWidth: 2,
+    borderColor: '#D9D9D9',
+    borderStyle: 'dashed',
+    backgroundColor: '#F9FAFB',
+  },
+  emptyText: {
+    marginTop: 4,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  warningText: {
+    color: '#D97706',
+  },
+  actions: {
+    flexDirection: 'column',
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+    marginTop: tokens.spacing.md,
+    paddingTop: tokens.spacing.sm,
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 10,
+  },
+  actionBtn: {
+    flex:1,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 3,
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E4E4E7',
+    alignContent: 'center',
+    justifyContent: 'center',
+    fontWeight: '500',
+  },
+  actionPrimaryBtn: {
+    flex:1,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 2,
+    gap: 3,
+    backgroundColor: 'rgba(255, 188, 19, 0.4)',
+    borderColor: 'rgba(135, 142, 62, 0.6)',
+    borderStyle: 'dashed',
+    alignContent: 'center',
+    justifyContent: 'center',
+    fontWeight: '500',
+  },
+  create: {},
+  ignore: {},
+  actionWide: { flex: 1 },
+  search: { backgroundColor: '#5C9B00' },
+  primaryText: { textAlign: 'center', color: '#93C822', fontWeight: '600' },
+  dangerText: { textAlign: 'center', color: '#EF4444', fontWeight: '600' },
+  bannerNew: {
+    backgroundColor: '#93C822',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
+  },
+  bannerNewText: { color: '#FFF', fontWeight: '800' },
+});
+
+

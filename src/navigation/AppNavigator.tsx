@@ -20,6 +20,7 @@ import {
   PlusJakartaSans_700Bold,
 } from '@expo-google-fonts/plus-jakarta-sans';
 // import { CirclePlus } from 'lucide-react-native';
+import OnboardConnectionScreen from '../screens/OnboardConnectionScreen';
 
 // Import the context from its new location
 import { AuthContext, AuthContextType } from '../context/AuthContext';
@@ -31,7 +32,6 @@ import AuthScreen from '../screens/AuthScreen';
 import DashboardScreen from '../screens/DashboardScreen';
 import InventoryOrdersScreen from '../screens/InventoryOrdersScreen';
 import MarketplaceScreen from '../screens/MarketplaceScreen';
-import AddListingScreen from '../screens/AddListingScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import ProductDetailScreen from '../screens/ProductDetail';
 import PhoneAuthScreen from '../screens/PhoneAuthScreen';
@@ -56,6 +56,7 @@ type AuthStackParamList = {
   Auth: undefined;
   VerifyCode: { contactLabel?: string; mode?: 'signup' | 'signin' } | undefined;
   // PhoneAuthScreen: { phoneNumber: string } | undefined; // Commented out
+  OnboardConnectionScreen: undefined;
 };
 
 // Export the type
@@ -336,7 +337,6 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />
     <AppStackNav.Screen name="ProductDetail" component={ProductDetailScreen} />
     <AppStackNav.Screen name="PastScans" component={PastScansScreen} />
-    <AppStackNav.Screen name="AddListing" component={AddListingScreen as React.FC} />
     <AppStackNav.Screen name="MappingReview" component={MappingReviewScreen} />
     <AppStackNav.Screen name="SyncRules" component={SyncRulesScreen} />
     <AppStackNav.Screen name="Profile" component={ProfileScreen} />
@@ -345,6 +345,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="MatchSelectionScreen" component={MatchSelectionScreen} />
     <AppStackNav.Screen name="GenerateDetailsScreen" component={GenerateDetailsScreen} />
     <AppStackNav.Screen name="PublishConfirmation" component={PublishConfirmationScreen} />
+    <AppStackNav.Screen name="OnboardConnectionScreen" component={OnboardConnectionScreen} />
   </AppStackNav.Navigator>
 );
 

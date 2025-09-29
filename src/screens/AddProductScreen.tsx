@@ -42,7 +42,7 @@ import PhotoStack, { CapturedPhoto } from '../components/camera/PhotoStack';
 import CameraControls from '../components/camera/CameraControls';
 import BusinessTemplateModal, { BusinessTemplate } from '../components/camera/BusinessTemplateModal';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
-import * as FileSystem from 'expo-file-system';
+import { File, Directory, Paths } from 'expo-file-system';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -738,21 +738,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         throw new Error('User not authenticated');
       }
 
-      // Read the file as base64
-      const base64 = await FileSystem.readAsStringAsync(localUri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      // Read bytes using the new File API (Expo SDK 54+)
+      const parsedPath = Paths.parse(localUri);
+      const srcFile = new File(new Directory(parsedPath.dir), parsedPath.base);
+      const bytes = await srcFile.bytes();
 
       // Create file name
       const fileName = `${user.id}/${photoId}-${Date.now()}.jpg`;
       
       // Convert base64 to proper blob for upload
-      const byteCharacters = atob(base64);
-      const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i);
-      }
-      const byteArray = new Uint8Array(byteNumbers);
+      // Use bytes directly
+      const byteArray = bytes;
       
       const { data, error } = await supabase.storage
         .from('product-images')
@@ -836,8 +832,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               }
             }],
             targetSites: ['general'],
-            useReranker: true,
-            reranker: "llama4-groq" //"reranker": "llama4-groq"  // or "jina-modal" or "fast-text" or "none" 
+
+            reranker: "llama4-groq", //"reranker": "llama4-groq"  // or "jina-modal" or "fast-text" or "none" 
+            mode: "ocr-vlm-search"
           })
         });
         
@@ -1633,8 +1630,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
 // Progress Bar Overlay Component
 const ProgressBarOverlay: React.FC<{
-  progressWidth: Animated.SharedValue<number>;
-  spinRotation: Animated.SharedValue<number>;
+  progressWidth: any;
+  spinRotation: any;
 }> = ({ progressWidth, spinRotation }) => {
   const progressBarStyle = useAnimatedStyle(() => ({
     width: `${progressWidth.value}%`,
@@ -1659,8 +1656,8 @@ const ProgressBarOverlay: React.FC<{
 // Notification Bar Component  
 const NotificationBar: React.FC<{
   message: string;
-  opacity: Animated.SharedValue<number>;
-  translateY: Animated.SharedValue<number>;
+  opacity: any;
+  translateY: any;
 }> = ({ message, opacity, translateY }) => {
   const notificationStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
@@ -1717,7 +1714,7 @@ const CenterOverlay: React.FC<{
 const BottomControls: React.FC<{
   onCapture: () => void;
   isCapturing: boolean;
-  captureButtonScale: Animated.SharedValue<number>;
+  captureButtonScale: any;
   photosCount: number;
   cameraMode: CameraMode;
   onToggleCameraMode: () => void;
@@ -1860,7 +1857,7 @@ const BulkItemsSheet: React.FC<{
   onSetCoverPhoto: (itemId: string, photoId: string) => void;
   onRemovePhoto: (itemId: string, photoId: string) => void;
   performAnalyze: (firstPhotos: CapturedPhoto[]) => Promise<any>;
-  sheetTranslateY: Animated.SharedValue<number>;
+  sheetTranslateY: any;
   jobResponse: JobResponse | null;
   navigation: any;
   quickScanStore?: Record<string, { matchData: MatchResponse; serpApiData: any[] }>;

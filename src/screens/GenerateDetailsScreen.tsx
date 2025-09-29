@@ -7,13 +7,13 @@ import { AppStackParamList } from '../navigation/AppNavigator';
 import ItemJobsModal from '../components/ItemJobsModal';
 import PyramidGrid from '../components/PyramidGrid';
 import { getPlatformRequirements } from '../utils/platformRequirements';
-import { Boxes, X, Sparkles } from 'lucide-react-native';
+import { Boxes, X, Sparkles, Pencil, ArrowLeft } from 'lucide-react-native';
 import BottomActionBar from '../components/BottomActionBar';
 import ListingEditorForm from '../components/ListingEditorForm';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 // Feature flag to hide AI refill functionality
-const ENABLE_AI_REFILL_FEATURES = false;
+const ENABLE_AI_REFILL_FEATURES = true;
 
 // Platform metadata for UI display
 const PLATFORM_META: Record<string, { label: string; icon: string }> = {
@@ -532,6 +532,26 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     'Shipping Details': false,
     'Return Policy': false
   });
+  // Regenerate modal state
+  const [regenModalOpen, setRegenModalOpen] = useState(false);
+  const [regenPlatformKey, setRegenPlatformKey] = useState<string | null>(null);
+  const [regenFieldKey, setRegenFieldKey] = useState<string | null>(null);
+  const [regenText, setRegenText] = useState<string>('');
+  const [regenVersions, setRegenVersions] = useState<Array<{ label: string; text: string }>>([]);
+  const [regenActiveVersion, setRegenActiveVersion] = useState(0);
+  const [regenSubmitting, setRegenSubmitting] = useState(false);
+  const [regenAutoRun, setRegenAutoRun] = useState(false);
+
+  useEffect(() => {
+    if (regenModalOpen && regenAutoRun && !regenSubmitting) {
+      // small delay to allow modal layout before firing
+      const t = setTimeout(() => {
+        submitRegenerateField();
+        setRegenAutoRun(false);
+      }, 150);
+      return () => clearTimeout(t);
+    }
+  }, [regenModalOpen, regenAutoRun, regenSubmitting]);
   
   // Try to pull items list from params if provided; fallback to single
   const items = useMemo(() => {
@@ -979,11 +999,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     try {
       setIsFilling(true);
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData?.session?.access_token;
+      const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || first?.productId;
       const variantId = (route.params as any)?.variantId || first?.variantId;
-      if (!baseUrl || !productId || !variantId) return;
+      if (!baseUrl || !productId || !variantId || !token) return;
 
       const payload = buildPlatformPayload();
       const selectedPlatforms = Object.keys(displayedPlatforms || {});
@@ -1053,62 +1072,93 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const regenerateField = async (platformKey: string, fieldKey: string) => {
     if (!ENABLE_AI_REFILL_FEATURES) return;
+    setRegenPlatformKey(platformKey);
+    setRegenFieldKey(fieldKey);
+    // Seed versions with current text as Version 1
+    const currentVal = ((displayedPlatforms as any)?.[platformKey] || {})[fieldKey];
+    const baseText = Array.isArray(currentVal) ? currentVal.join(', ') : (currentVal ?? '');
+    setRegenVersions([{ label: 'Version 1', text: String(baseText) }]);
+    setRegenActiveVersion(0);
+    setRegenText('');
+    setRegenModalOpen(true);
+    // If field is empty, auto-run regenerate when modal opens
+    const isEmpty = baseText === '' || baseText == null;
+    setRegenAutoRun(isEmpty);
+  };
+
+  const submitRegenerateField = async () => {
     try {
+      setRegenSubmitting(true);
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData?.session?.access_token;
+      const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || first?.productId;
       const variantId = (route.params as any)?.variantId || first?.variantId;
-      if (!baseUrl || !productId || !variantId) return;
+      if (!baseUrl || !productId || !variantId || !regenPlatformKey || !regenFieldKey || !token) return;
       const payload = buildPlatformPayload();
-      const res = await fetch(`${baseUrl}/api/products/generate-details`, {
+
+      const submit = await fetch(`${baseUrl}/api/products/regenerate/submit`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          productId,
-          variantId,
-          imageUris: payload.media.imageUris,
-          coverImageIndex: payload.media.coverImageIndex,
-          selectedPlatforms: [platformKey],
-          fields: [fieldKey],
-          selectedMatch: null,
-          enhancedWebData: null,
+          generateJobId: jobId,
+          products: [{
+            productIndex: currentProductIndex,
+            productId,
+            variantId,
+            regenerateType: 'specific_fields',
+            targetPlatform: regenPlatformKey,
+            targetFields: [regenFieldKey],
+            userQuery: regenText,
+            customPrompt: regenText,
+            imageUrls: payload.media.imageUris,
+          }],
+          options: { useExistingScrapedData: true }
         })
       });
-      if (!res.ok) return;
-      const data = await res.json();
-      const gen = (data?.generatedDetails || data || {}) as any;
-      const incomingPlatform = (gen.platforms || {})[platformKey] || {};
-      if (incomingPlatform && Object.prototype.hasOwnProperty.call(incomingPlatform, fieldKey)) {
+      if (!submit.ok) throw new Error('regenerate submit failed');
+      const submitJson = await submit.json();
+      const regenJobId = submitJson?.jobId;
+
+      const resultPayload = await pollRegenerateUntilDone(regenJobId, token || undefined);
+      const resultArray = Array.isArray(resultPayload?.results) ? resultPayload.results : [];
+      const matched = resultArray.find((r: any) => r.productIndex === currentProductIndex) || resultArray[0];
+      const incomingPlatform = (matched?.platforms || {})[regenPlatformKey] || {};
+      if (incomingPlatform && Object.prototype.hasOwnProperty.call(incomingPlatform, regenFieldKey)) {
+        const newText = Array.isArray(incomingPlatform[regenFieldKey!]) ? (incomingPlatform[regenFieldKey!] as any[]).join(', ') : String(incomingPlatform[regenFieldKey!]);
+        setRegenVersions(prev => [...prev, { label: `Version ${prev.length + 1}`, text: newText }]);
+        setRegenActiveVersion(prev => prev + 1);
         setDisplayedPlatforms(prev => ({
           ...prev,
-          [platformKey]: (() => {
-            const curr = prev?.[platformKey] || {} as any;
-            const __refilled = Array.from(new Set([...(curr.__refilled || []), fieldKey]));
+          [regenPlatformKey]: (() => {
+            const curr = prev?.[regenPlatformKey] || {} as any;
+            const __refilled = Array.from(new Set([...(curr.__refilled || []), regenFieldKey!]));
             return {
               ...curr,
-              [fieldKey]: Array.isArray(incomingPlatform[fieldKey]) ? [...incomingPlatform[fieldKey]] : incomingPlatform[fieldKey],
+              [regenFieldKey!]: Array.isArray(incomingPlatform[regenFieldKey!]) ? [...incomingPlatform[regenFieldKey!]] : incomingPlatform[regenFieldKey!],
               __refilled,
             };
           })()
         }));
         setRefilledFieldsByPlatform(prev => ({
           ...prev,
-          [platformKey]: Array.from(new Set([ ...(prev[platformKey]||[]), fieldKey ]))
+          [regenPlatformKey]: Array.from(new Set([ ...(prev[regenPlatformKey]||[]), regenFieldKey! ]))
         }));
       }
-    } catch {}
+    } catch (e) {
+      console.error('Regenerate field failed:', e);
+    } finally {
+      setRegenSubmitting(false);
+    }
   };
 
   const doSaveDraft = async () => {
     console.log('doSaveDraft');
     try {
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData?.session?.access_token;
+      const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || first?.productId;
       const variantId = (route.params as any)?.variantId || first?.variantId;
-      if (!baseUrl || !productId || !variantId) return;
+      if (!baseUrl || !productId || !variantId || !token) return;
       const payload = buildPlatformPayload();
       const res = await fetch(`${baseUrl}/api/products/save-or-publish`, {
         method: 'POST',
@@ -1130,11 +1180,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     console.log('doPublish');
     try {
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData?.session?.access_token;
+      const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || first?.productId;
       const variantId = (route.params as any)?.variantId || first?.variantId;
-      if (!baseUrl || !productId || !variantId) return;
+      if (!baseUrl || !productId || !variantId || !token) return;
       const payload = buildPlatformPayload();
 
       const canonical = payload.platformDetails?.canonical || {};
@@ -1199,40 +1248,62 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     } catch {}
   };
 
+  const pollRegenerateUntilDone = async (regenJobId: string, token?: string) => {
+    const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+    if (!baseUrl) return null;
+    for (let i = 0; i < 40; i++) {
+      try {
+        const auth = token || await ensureSupabaseJwt();
+        const r = await fetch(`${baseUrl}/api/products/regenerate/status/${regenJobId}`, { headers: auth ? { Authorization: `Bearer ${auth}` } : undefined });
+        const s = await r.json();
+        if (s?.status === 'completed') {
+          const rr = await fetch(`${baseUrl}/api/products/regenerate/results/${regenJobId}`, { headers: auth ? { Authorization: `Bearer ${auth}` } : undefined });
+          if (rr.ok) return await rr.json();
+          return null;
+        }
+        if (s?.status === 'failed' || s?.status === 'cancelled') return null;
+      } catch {}
+      await new Promise(res => setTimeout(res, 1200));
+    }
+    return null;
+  };
+
   const generatePlatform = async (platformKey: string) => {
     try {
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData?.session?.access_token;
+      const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || first?.productId;
       const variantId = (route.params as any)?.variantId || first?.variantId;
-      if (!baseUrl || !productId || !variantId) return;
+      if (!baseUrl || !productId || !variantId || !token) return;
 
+
+      
       const payload = buildPlatformPayload();
-      const res = await fetch(`${baseUrl}/api/products/generate-details`, {
+      const submit = await fetch(`${baseUrl}/api/products/regenerate/submit`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          productId,
-          variantId,
-          imageUris: payload.media.imageUris,
-          coverImageIndex: payload.media.coverImageIndex,
-          selectedPlatforms: [platformKey],
-          selectedMatch: null,
-          enhancedWebData: null,
-          matchJobId: matchJobId, // Include match job ID for persistence
+          generateJobId: jobId,
+          products: [{
+            productIndex: (first?.productIndex as number) ?? 0,
+            productId,
+            variantId,
+            regenerateType: 'entire_platform',
+            targetPlatform: platformKey,
+            imageUrls: payload.media.imageUris,
+          }],
+          options: { useExistingScrapedData: true }
         })
       });
-      
-      if (!res.ok) {
-        throw new Error(`Platform generation failed: ${res.status}`);
-      }
-      
-      const data = await res.json();
-      const generatedDetails = (data?.generatedDetails || data || {}) as any;
-      const generatedPlatforms = (generatedDetails.platforms || {}) as Record<string, any>;
-      
-      if (generatedPlatforms[platformKey]) {
+      if (!submit.ok) throw new Error(`Platform generation failed: ${submit.status}`);
+      const submitJson = await submit.json();
+      const regenJobId = submitJson?.jobId;
+      const resultPayload = await pollRegenerateUntilDone(regenJobId, token || undefined);
+      const resultArray = Array.isArray(resultPayload?.results) ? resultPayload.results : [];
+      const matched = resultArray.find((r: any) => (typeof r.productIndex === 'number' ? r.productIndex : 0) === ((first?.productIndex as number) ?? 0)) || resultArray[0];
+      const generatedPlatforms = (matched?.platforms || {}) as Record<string, any>;
+
+      if (generatedPlatforms && generatedPlatforms[platformKey]) {
         // Update displayed platforms with the new generated data
         setDisplayedPlatforms(prev => ({
           ...prev,
@@ -1241,24 +1312,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             ...flattenPlatformData(generatedPlatforms[platformKey])
           }
         }));
-
-        // Save the updated data to persist it
-        const updatedPayload = buildPlatformPayload();
-        await fetch(`${baseUrl}/api/products/save-or-publish`, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            productId,
-            variantId,
-            publishIntent: 'SAVE_SSSYNC_DRAFT',
-            platformDetails: {
-              ...updatedPayload.platformDetails,
-              [platformKey]: generatedPlatforms[platformKey]
-            },
-            media: updatedPayload.media,
-            selectedPlatformsToPublish: [...(updatedPayload.selectedPlatformsToPublish || []), platformKey],
-          })
-        });
       }
     } catch (error) {
       console.error('Platform generation failed:', error);
@@ -1266,6 +1319,104 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }
   };
 
+  const suggestVariants = async (platformKey: string) => {
+    try {
+      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const token = await ensureSupabaseJwt();
+      const productId = (route.params as any)?.productId || first?.productId;
+      const variantId = (route.params as any)?.variantId || first?.variantId;
+      if (!baseUrl || !productId || !variantId || !token) return;
+      const payload = buildPlatformPayload();
+      const submit = await fetch(`${baseUrl}/api/products/regenerate/submit`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          generateJobId: jobId,
+          products: [{
+            productIndex: currentProductIndex,
+            productId,
+            variantId,
+            regenerateType: 'specific_fields',
+            targetPlatform: platformKey,
+            targetFields: ['variants'],
+            userQuery: 'Suggest variants from images and description. Return optionsSuggestions as {name, values} and variantExamples.',
+            customPrompt: 'Suggest variants from images and description. Return optionsSuggestions as {name, values} and variantExamples.',
+            imageUrls: payload.media.imageUris,
+          }],
+          options: { useExistingScrapedData: true }
+        })
+      });
+      if (!submit.ok) throw new Error('variant suggest submit failed');
+      const submitJson = await submit.json();
+      const regenJobId = submitJson?.jobId;
+      const resultPayload = await pollRegenerateUntilDone(regenJobId, token || undefined);
+      const resultArray = Array.isArray(resultPayload?.results) ? resultPayload.results : [];
+      const matched = resultArray.find((r: any) => r.productIndex === currentProductIndex) || resultArray[0];
+      const canonical = (matched?.platforms || {}).canonical;
+      if (canonical?.optionsSuggestions) {
+        setDisplayedPlatforms(prev => ({
+          ...prev,
+          [platformKey]: {
+            ...(prev as any)[platformKey],
+            __variantSuggestions: canonical.optionsSuggestions
+          }
+        }));
+      }
+    } catch (e) {
+      console.error('Suggest variants failed:', e);
+    }
+  };
+
+  const boostListing = async (platformKey: string, kind: 'boost' | 'advanced') => {
+    try {
+      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const token = await ensureSupabaseJwt();
+      const productId = (route.params as any)?.productId || first?.productId;
+      const variantId = (route.params as any)?.variantId || first?.variantId;
+      if (!baseUrl || !productId || !variantId || !token) return;
+      const payload = buildPlatformPayload();
+      const fieldGroups: Record<string, string[]> = {
+        boost: ['tags','categorySuggestion','brand','seoTitle','seoDescription'],
+        advanced: ['googleShopping','itemSpecifics','returnPolicy','shippingDetails']
+      };
+      const targetFields = fieldGroups[kind] || [];
+      const userQuery = kind === 'boost'
+        ? 'Boost listing for conversion and SEO. Add persuasive tags, category suggestions, brand if known, and SEO title/description.'
+        : 'Fill advanced/other listing fields accurately from context. Keep optional fields helpful and consistent.';
+      const submit = await fetch(`${baseUrl}/api/products/regenerate/submit`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          generateJobId: jobId,
+          products: [{
+            productIndex: currentProductIndex,
+            productId,
+            variantId,
+            regenerateType: 'specific_fields',
+            targetPlatform: platformKey,
+            targetFields,
+            userQuery,
+            customPrompt: userQuery,
+            imageUrls: payload.media.imageUris,
+          }],
+          options: { useExistingScrapedData: true }
+        })
+      });
+      if (!submit.ok) throw new Error('boost submit failed');
+      const submitJson = await submit.json();
+      const regenJobId = submitJson?.jobId;
+      const resultPayload = await pollRegenerateUntilDone(regenJobId, token || undefined);
+      const resultArray = Array.isArray(resultPayload?.results) ? resultPayload.results : [];
+      const matched = resultArray.find((r: any) => r.productIndex === currentProductIndex) || resultArray[0];
+      const incomingPlatform = (matched?.platforms || {})[platformKey] || {};
+      setDisplayedPlatforms(prev => ({
+        ...prev,
+        [platformKey]: { ...(prev as any)[platformKey], ...flattenPlatformData(incomingPlatform) }
+      }));
+    } catch (e) {
+      console.error('Boost listing failed:', e);
+    }
+  };
   return (
     <View style={{ flex: 1 }}>
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -1273,12 +1424,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         <TouchableOpacity onPress={() => setVersionsSheetOpen(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5' }}>
           <Text style={{ color: '#000', fontWeight: '600' }}>•••</Text>
         </TouchableOpacity>
-        {ENABLE_AI_REFILL_FEATURES && (
-          <TouchableOpacity onPress={() => setFillOverlayOpen(true)} disabled={isFilling} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: isFilling ? 'rgba(147,200,34,0.15)' : 'rgba(147,200,34,0.1)', borderRadius: 8, borderWidth: 1, borderColor: '#93C822', flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Sparkles size={14} color={'#111'} />
-            <Text style={{ color: '#000', fontWeight: '600' }}>{isFilling ? 'Filling…' : 'Fill remaining'}</Text>
-          </TouchableOpacity>
-        )}
       </View>
       {/* Back button and Current Jobs buttons */}
       <View style={{ position: 'absolute', top: -32, left: 16, zIndex: 4000, flexDirection: 'row', gap: 8 }}>
@@ -1329,6 +1474,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               getMissingFieldsCount={(platformKey: string) => getMissingFields(platformKey).length}
               onGeneratePlatform={generatePlatform}
               enableAIRefill={ENABLE_AI_REFILL_FEATURES}
+              onSuggestVariants={suggestVariants}
+              onBoostListing={boostListing}
             />
           </>
         ) : (
@@ -1451,7 +1598,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               );
             })}
           </View>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, marginBottom: 4, alignItems: "center" }}>
             <TouchableOpacity onPress={() => setFillOverlayOpen(false)} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12 }}>
               <Text style={{ color: '#000' }}>Cancel</Text>
             </TouchableOpacity>
@@ -1752,6 +1899,105 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         </View>
       </>
     )}
+    {/* Regenerate modal */}
+    {regenModalOpen && (
+      <>
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setRegenModalOpen(false)}
+          style={styles.modalBackdrop}
+        />
+        <View style={[styles.missingFieldsModal, { left: 0, right: 0, borderRadius: 16, backgroundColor: "#FFF" }] }>
+
+          {/* Modal Header */}
+          <View style={{ flex: 1, flexDirection: 'row', alignContent: "center", alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+       
+            <View style={{flexDirection: "row", alignItems: "center", gap: 3}}>
+              <Pencil size={16} color={'#000'} />
+              <Text style={{ fontSize: 18, fontWeight: '700', color: '#000', alignItems: 'center', gap: 3}}>
+                Editing This Field
+              </Text>
+
+            </View>
+            
+
+            <TouchableOpacity style={[styles.btnSecondary, {flexDirection: "row", backgroundColor: "#FFF",}]} onPress={() => setRegenModalOpen(false)}>
+              <Icon name="arrow-left" size={18} color={'#000'} />
+              <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Back</Text>
+            </TouchableOpacity>
+
+        
+
+          </View>
+
+
+          {/* Current Field Card */}
+          <View style={{flexDirection: "column", borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: "#FFF", borderRadius: 10, marginBottom: 20, gap: 8, boxShadow: "offsetX: 3, color: black, " }}>
+
+            <View style={{flex: 1, flexDirection: "row", justifyContent: "space-around", alignItems: "center", paddingHorizontal: 10, paddingVertical: 5}}>
+              
+              <Text style={{ flex: 1, justifyContent: "flex-start", color: '#71717A' }}>
+               <Text style={{ color: '#000', fontWeight: '600', textTransform: "capitalize"}}>{regenFieldKey} • {regenPlatformKey}</Text>
+              </Text>
+
+
+              {/* Version switcher with arrows */}
+              <View style={{ flex: 1, justifyContent: "flex-end", flexDirection: 'row', alignItems: 'center', gap: 8, }}>
+                <TouchableOpacity onPress={() => setRegenActiveVersion(v => Math.max(0, v - 1))} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, padding: 6 }}>
+                  <Icon name="chevron-left" size={18} color="#000" />
+                </TouchableOpacity>
+                <Text style={{ color: '#000', fontWeight: '600' }}>{regenVersions[regenActiveVersion]?.label || 'Version'}</Text>
+                <TouchableOpacity onPress={() => setRegenActiveVersion(v => Math.min(regenVersions.length - 1, v + 1))} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, backgroundColor: "#71717A", padding: 6 }}>
+                  <Icon name="chevron-right" size={18} color="#FFF" />
+                </TouchableOpacity>
+              </View>
+
+            </View>
+            
+
+            {/* Original/current text area (read-only) */}
+            <View style={{ flex: 1, marginHorizontal: 8, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, padding: 10, marginBottom: 10, backgroundColor: '#FAFAFA' }}>
+              <Text style={{ color: '#000' }}>
+                {regenVersions[regenActiveVersion]?.text || ''}
+              </Text>
+            </View>
+
+
+          </View>
+
+          {/* Prompt presets - horizontal scroll at same width as input below */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }} contentContainerStyle={{ paddingRight: 6 }}>
+            {['Fill missing','More casual','More corporate','More direct','Translate'].map(p => (
+              <TouchableOpacity key={p} onPress={() => setRegenText(t => (t ? `${t} ${p}` : p))} style={{ marginRight: 8, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: "#FFF",}}>
+                <Text style={{ color: '#000' }}>{p}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
+          <View style={{borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, backgroundColor: "#FFF", }}>
+            {/* Instruction input */}
+            <TextInput
+              style={[styles.input, { borderColor: "transparent", minHeight: 120, textAlignVertical: 'top' }]}
+              value={regenText}
+              onChangeText={setRegenText}
+              placeholder="How do you want to edit this?"
+              multiline
+            />
+
+            {/* Actions */}
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 }}>
+              <TouchableOpacity style={[styles.blackBtnPrimary, regenSubmitting && { opacity: 0.7, backgroundColor: "#000" }]} disabled={regenSubmitting} onPress={submitRegenerateField}>
+                <Text style={{ color: '#fff' }}>{regenSubmitting ? 'Generating…' : <Icon name="arrow-right" size={18} color={'#FFF'} />}</Text>
+              </TouchableOpacity>
+            </View>
+
+
+
+          </View>
+          
+        </View>
+      </>
+    )}
     </View>
   );
 }
@@ -1780,12 +2026,33 @@ const styles = StyleSheet.create({
   scannerCloseFull: { position: 'absolute', top: 100, right: 12, backgroundColor: 'rgba(0,0,0,0.5)', width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   // Missing fields modal
   modalBackdrop: { position: 'absolute', top: 0, left: 0, bottom: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 6000 },
-  missingFieldsModal: { position: 'absolute', top: '10%', left: 16, right: 16, backgroundColor: '#fff', borderRadius: 16, padding: 20, maxHeight: '80%', zIndex: 6001 },
-  searchInput: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 16 },
+  missingFieldsModal: { 
+    position: 'absolute', 
+    top: '18%', 
+    left: 16, 
+    right: 16, 
+    backgroundColor: '#fff', 
+    borderRadius: 32, 
+    padding: 20, 
+    maxHeight: '80%', 
+    zIndex: 6001 
+  }, 
+  searchInput: { 
+    borderWidth: 1, 
+    borderColor: '#E5E5E5', 
+    borderRadius: 10, 
+    paddingHorizontal: 12, 
+    paddingVertical: 10, 
+    fontSize: 16 
+  },
   fieldOption: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, marginBottom: 8, backgroundColor: '#fff' },
   missingFieldOption: { borderColor: '#fecaca', backgroundColor: '#fef2f2' },
   missingBadge: { backgroundColor: '#fecaca', borderRadius: 999, paddingHorizontal: 6, paddingVertical: 2 },
   modalCancelButton: { marginTop: 16, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
+  btnSecondary: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
+  btnPrimary: { backgroundColor: '#93C822', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
+  blackBtnPrimary: {backgroundColor: '#000', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center'},
+  
   // Platform picker modal styles
   platformPickerModal: { position: 'absolute', top: '15%', left: 16, right: 16, backgroundColor: '#fff', borderRadius: 16, padding: 20, maxHeight: '70%', zIndex: 6001 },
   platformPill: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, backgroundColor: '#fff' },

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import ShopifySvg from '../assets/shopify.svg';
@@ -9,6 +9,7 @@ import CloverSvg from '../assets/clover.svg';
 import SquareSvg from '../assets/square.svg';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes, X, Sparkles } from 'lucide-react-native';
+import { black, grey400 } from 'react-native-paper/lib/typescript/styles/themes/v2/colors';
 
 export type PlatformsData = Record<string, any>;
 
@@ -25,7 +26,11 @@ type Props = {
   getMissingFieldsCount?: (platformKey: string) => number;
   onGeneratePlatform?: (platformKey: string) => Promise<void>;
   enableAIRefill?: boolean;
+  onSuggestVariants?: (platformKey: string) => void;
+  onBoostListing?: (platformKey: string, kind: 'boost' | 'advanced') => void;
 };
+
+export type ListingEditorFormRef = { openPlatformPicker: () => void };
 
 type Variant = {
   id: string;
@@ -80,7 +85,7 @@ const DEFAULT_INVENTORY_TYPE_BY_PLATFORM: Record<string, InventoryType> = {
   depop: 'BASIC',
 };
 
-export default function ListingEditorForm({ platforms, images, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill }: Props) {
+function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing }: Props, ref: React.Ref<ListingEditorFormRef>) {
   const platformKeys = useMemo(() => Object.keys(platforms || {}), [platforms]);
   const [activeTab, setActiveTab] = useState<string>(platformKeys[0] || 'all');
   const [showAdditionalFields, setShowAdditionalFields] = useState<boolean>(true);
@@ -89,8 +94,13 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
   const [newOptionName, setNewOptionName] = useState<string>('');
   const [newOptionValues, setNewOptionValues] = useState<string[]>(['']);
   const [openImagePickerFor, setOpenImagePickerFor] = useState<string | null>(null);
+  const [variantImagePicker, setVariantImagePicker] = useState<{ variantId: string; open: boolean } | null>(null);
   const [showPlatformPicker, setShowPlatformPicker] = useState<boolean>(false);
   const [generatingPlatforms, setGeneratingPlatforms] = useState<Set<string>>(new Set());
+
+  useImperativeHandle(ref, () => ({
+    openPlatformPicker: () => setShowPlatformPicker(true),
+  }), []);
 
   const canonicalKey = useMemo(() => (platformKeys.includes('shopify') ? 'shopify' : (platformKeys[0] || '')), [platformKeys]);
   const activePlatformKey = activeTab === 'all' ? canonicalKey : activeTab;
@@ -98,6 +108,8 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
   const selectedInventoryType: InventoryType = (activeData.inventoryType || DEFAULT_INVENTORY_TYPE_BY_PLATFORM[activePlatformKey] || 'BASIC');
   const isAdvanced = selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS';
   const supportsVariants = selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' || selectedInventoryType === 'VARIANT_WITH_OPTIONS';
+
+  const variantSuggestions: Array<{ name: string; values: string[] }> = ((platforms as any)[activePlatformKey]?.__variantSuggestions) || [];
 
   const patchField = (key: string, value: any) => {
     const keyToEdit = activePlatformKey;
@@ -298,7 +310,7 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
 
   const pills = ['all', ...platformKeys];
   // Add a couple of extra platforms for quick swap-in
-  const allKnownPlatforms = Array.from(new Set([...Object.keys(PLATFORM_META), 'whatnot', 'depop']));
+  const allKnownPlatforms = Array.from(new Set([...Object.keys(PLATFORM_META), 'Whatnot', 'Depop']));
   const addPlatform = async (platformKey: string, shouldGenerate: boolean = false) => {
     if (!platformKey || platformKeys.includes(platformKey)) return;
     
@@ -412,24 +424,25 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
             </TouchableOpacity>
           ) : (
             <TouchableOpacity 
-              key={key} 
-              onPress={() => !generatingPlatforms.has(key) && setActiveTab(key)} 
-              style={[
-                styles.pill, 
-                activeTab === key && styles.pillActive, 
-                generatingPlatforms.has(key) && styles.pillGenerating,
-                { flexDirection: 'row', alignItems: 'center', gap: 6 }
-              ]}
+              key={key}
+              onPress={async () => {
+                if (generatingPlatforms.has(key)) return;
+                setActiveTab(key);
+                // Trigger generation if this platform has no data yet
+                if (onGeneratePlatform && Object.keys((platforms as any)?.[key] || {}).length === 0) {
+                  setGeneratingPlatforms(prev => new Set([...prev, key]));
+                  try {
+                    await onGeneratePlatform(key);
+                  } catch (e) {
+                    console.error('Generate platform on tap failed:', e);
+                  } finally {
+                    setGeneratingPlatforms(prev => { const s = new Set(prev); s.delete(key); return s; });
+                  }
+                }
+              }}
+              style={[styles.pill, activeTab === key && styles.pillActive, generatingPlatforms.has(key) && styles.pillGenerating, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}
               disabled={generatingPlatforms.has(key)}
             >
-              {/* X inside pill */}
-              {!generatingPlatforms.has(key) && (
-                <TouchableOpacity onPress={() => removePlatform(key)} style={styles.pillClose}>
-                  <Icon name="close" size={12} color="#6B7280" />
-                </TouchableOpacity>
-              )}
-              
-              {/* Small SVG logo or loading spinner */}
               {generatingPlatforms.has(key) ? (
                 <View style={{ width: 12, height: 12, justifyContent: 'center', alignItems: 'center' }}>
                   <Icon name="loading" size={12} color="#6B7280" />
@@ -441,21 +454,10 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
                   return SVG ? <SVG width={12} height={12} /> : null;
                 })()
               )}
-              
-              <Text style={[
-                styles.pillText, 
-                activeTab === key && styles.pillTextActive,
-                generatingPlatforms.has(key) && styles.pillTextGenerating
-              ]}>
+              <Text style={[styles.pillText, activeTab === key && styles.pillTextActive, generatingPlatforms.has(key) && styles.pillTextGenerating]}>
                 {PLATFORM_META[key]?.label || key}
                 {generatingPlatforms.has(key) && ' (Generating...)'}
               </Text>
-              
-              {Array.isArray((platforms as any)[key]?.__refilled) && (platforms as any)[key].__refilled.length > 0 && !generatingPlatforms.has(key) && (
-                <View style={{ marginLeft: 6, backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-                  <Text style={{ color: '#3f6212', fontSize: 10 }}>{(platforms as any)[key].__refilled.length} refilled</Text>
-                </View>
-              )}
             </TouchableOpacity>
           )
         ))}
@@ -466,26 +468,25 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
       {showPlatformPicker && (
         <View style={styles.platformPickerDock}>
           <View style={styles.platformPickerCapsule}>
-            <Text style={{ color: '#000', fontWeight: '700', marginBottom: 10, textAlign: 'center' }}>Add Platform</Text>
+            <View style={{flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 8}}>
+              <TouchableOpacity style={[{ alignSelf: 'center', marginTop: 10, paddingHorizontal: 34, paddingVertical: 10, }]}>
+  
+              </TouchableOpacity>
+              <Text style={{ color: '#000', fontWeight: '700', marginBottom: 10, textAlign: 'center' }}>Add Platform</Text>
+              <TouchableOpacity style={[styles.btnSecondary, { alignSelf: 'center', marginTop: 10, backgroundColor: "#FFF" }]} onPress={() => setShowPlatformPicker(false)}>
+                <Text style={{ color: '#000' }}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          
             <View style={styles.platformGrid}>
               {allKnownPlatforms.filter(k => !platformKeys.includes(k)).map(k => (
-                <View key={k} style={{ marginBottom: 8 }}>
-                  <TouchableOpacity onPress={() => addPlatform(k, false)} style={styles.platformPill}>
-                    {(() => { const map: Record<string, any> = { shopify: ShopifySvg, amazon: AmazonSvg, facebook: FacebookSvg, ebay: EbaySvg, clover: CloverSvg, square: SquareSvg }; const SVG = map[k]; return SVG ? <SVG width={22} height={22} /> : null; })()}
-                    <Text style={{ color: '#000', marginLeft: 8 }}>{PLATFORM_META[k]?.label || k}</Text>
-                  </TouchableOpacity>
-                  {onGeneratePlatform && (
-                    <TouchableOpacity onPress={() => addPlatform(k, true)} style={[styles.platformPill, styles.generatePlatformPill]}>
-                      <Sparkles size={18} color="#93C822" />
-                      <Text style={{ color: '#93C822', marginLeft: 8, fontWeight: '600' }}>Generate {PLATFORM_META[k]?.label || k}</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
+                <TouchableOpacity key={k} onPress={() => addPlatform(k, true)} style={styles.platformSquare}>
+                  {(() => { const map: Record<string, any> = { shopify: ShopifySvg, amazon: AmazonSvg, facebook: FacebookSvg, ebay: EbaySvg, clover: CloverSvg, square: SquareSvg }; const SVG = map[k]; return SVG ? <SVG width={40} height={40} /> : null; })()}
+                  <Text style={{ color: '#000', fontWeight: 500}}>{PLATFORM_META[k]?.label || k}</Text>
+                </TouchableOpacity>
               ))}
             </View>
-            <TouchableOpacity style={[styles.btnSecondary, { alignSelf: 'center', marginTop: 10 }]} onPress={() => setShowPlatformPicker(false)}>
-              <Text style={{ color: '#000' }}>Close</Text>
-            </TouchableOpacity>
+            
           </View>
         </View>
       )}
@@ -551,11 +552,11 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
           onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'sku') : undefined}
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('sku')}
         />
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8}}>
           <View style={{ flex: 1 }}>
             <Field label="Barcode" value={activeData.barcode} onChangeText={(t) => patchField('barcode', t)} onInfo={() => onOpenFieldPanel?.('barcode')} />
           </View>
-          <TouchableOpacity style={styles.scanBtn} onPress={() => { (onOpenBarcodeScanner || (()=>{}))((code: string)=>patchField('barcode', code)); }}>
+          <TouchableOpacity style={[styles.scanBtn, {}]} onPress={() => { (onOpenBarcodeScanner || (()=>{}))((code: string)=>patchField('barcode', code)); }}>
             <Icon name="qrcode-scan" size={20} color="#fff" />
           </TouchableOpacity>
         </View>
@@ -567,7 +568,54 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
       {/* Variants: only for platforms that support variants */}
       {supportsVariants && (
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Variants</Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Text style={styles.sectionTitle}>Variants</Text>
+            {!!onSuggestVariants && (
+              <TouchableOpacity style={styles.btnSecondary} onPress={() => onSuggestVariants(activePlatformKey)}>
+                <Text style={{ color: '#000' }}>Suggest variants</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {Array.isArray(variantSuggestions) && variantSuggestions.length > 0 && (
+            <View style={styles.suggestionBox}>
+              <Text style={{ color: '#000', fontWeight: '600', marginBottom: 6 }}>We detected these possible options:</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {variantSuggestions.map((opt, idx) => (
+                  <View key={`${opt.name}-${idx}`} style={styles.suggestionChip}>
+                    <Text style={{ color: '#000' }}>{opt.name}: {opt.values.join(', ')}</Text>
+                  </View>
+                ))}
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                <TouchableOpacity style={styles.btnPrimary} onPress={() => {
+                  // Merge suggestions into options without duplication
+                  patchPlatform(prev => {
+                    const options = Array.isArray(prev.options) ? prev.options.slice() : [];
+                    const nextOptions = options.slice();
+                    for (const s of variantSuggestions) {
+                      const existingIndex = nextOptions.findIndex(o => (o.name || '').toLowerCase() === s.name.toLowerCase());
+                      const values = Array.from(new Set([...(nextOptions[existingIndex]?.values || []), ...s.values]));
+                      if (existingIndex >= 0) {
+                        nextOptions[existingIndex] = { name: s.name, values };
+                      } else {
+                        nextOptions.push({ name: s.name, values });
+                      }
+                    }
+                    return { ...prev, options: nextOptions, __variantSuggestions: [] } as PlatformState as any;
+                  });
+                  setTimeout(recomputeVariants, 0);
+                }}>
+                  <Text style={{ color: '#fff' }}>Add suggested options</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.btnSecondary} onPress={() => {
+                  patchPlatform(prev => ({ ...(prev as any), __variantSuggestions: [] } as any));
+                }}>
+                  <Text style={{ color: '#000' }}>Dismiss</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
           {/* Inline options wizard / summary */}
           {optionEditorOpen ? (
             <View style={{ marginTop: 10 }}>
@@ -577,6 +625,7 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
                 value={newOptionName}
                 onChangeText={setNewOptionName}
                 placeholder="eg: Size"
+                placeholderTextColor={"#999999"}
               />
               <Text style={[styles.fieldLabel, { marginTop: 10 }]}>Option Values</Text>
               {newOptionValues.map((v, idx) => (
@@ -586,6 +635,7 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
                   value={v}
                   onChangeText={(t)=>handleChangeOptionValue(idx, t)}
                   placeholder={idx === 0 ? 'eg: Small' : 'eg: Medium'}
+                  placeholderTextColor={"#999999"}
                 />
               ))}
               <TouchableOpacity style={styles.addInline} onPress={handleAddOptionValueRow}>
@@ -669,6 +719,8 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
                   <View style={{flexDirection: 'row', justifyContent:'flex-end', gap: 9, alignItems: 'center', alignSelf: 'flex-end'}}>
                     <Text style={{ color: '#000' }}>Price:</Text>
                     <TextInput
+                      defaultValue='30'
+                      placeholder='$30'
                       style={styles.qtyInput}
                       keyboardType="decimal-pad"
                       value={String(inv.price ?? activeData.price ?? 0)}
@@ -678,9 +730,7 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
                 </View>
 
                 <TouchableOpacity style={styles.variantImgSlot} onPress={() => {
-                  // For now, assign first product image as the variant image; integrate picker later
-                  const candidate = (images || [])[0];
-                  if (candidate) setVariantAtLocation(variant.id, selectedLocationId, 'image', candidate);
+                  setVariantImagePicker({ variantId: variant.id, open: true });
                 }}>
                   <Icon name="plus" size={20} color="#888" />
                 </TouchableOpacity>
@@ -705,6 +755,18 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
         <TouchableOpacity style={styles.toggleRow} onPress={() => setShowAdditionalFields(v=>!v)}>
           <Icon name={showAdditionalFields ? 'chevron-down' : 'chevron-right'} size={18} color="#000" />
           <Text style={styles.sectionTitle}>Additional Fields</Text>
+          <View style={{ flexDirection: 'row', gap: 8, marginLeft: 'auto' }}>
+            {!!onBoostListing && (
+              <TouchableOpacity style={styles.btnSecondary} onPress={() => onBoostListing(activePlatformKey, 'boost')}>
+                <Text style={{ color: '#000' }}>Boost</Text>
+              </TouchableOpacity>
+            )}
+            {!!onBoostListing && (
+              <TouchableOpacity style={styles.btnSecondary} onPress={() => onBoostListing(activePlatformKey, 'advanced')}>
+                <Text style={{ color: '#000' }}>Fill Advanced</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </TouchableOpacity>
         {showAdditionalFields && (
           <>
@@ -793,12 +855,7 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
               onPress={() => onAddMissingField(activePlatformKey)}
             >
               <Icon name="plus" size={18} color="#71717A" />
-              <Text style={styles.addMissingFieldText}>
-                Add Missing Field
-                {getMissingFieldsCount && getMissingFieldsCount(activePlatformKey) > 0 && (
-                  <Text style={{ color: '#ef4444' }}> ({getMissingFieldsCount(activePlatformKey)} missing)</Text>
-                )}
-              </Text>
+              <Text style={styles.addMissingFieldText}>Add fields & boost</Text>
             </TouchableOpacity>
           )}
           </>
@@ -810,11 +867,13 @@ export default function ListingEditorForm({ platforms, images, onChangePlatforms
   );
 }
 
+export default forwardRef<ListingEditorFormRef, Props>(ListingEditorFormInner);
+
 function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, required, onRegenerate, refilled }: { label: string; value?: string; onChangeText?: (t:string)=>void; multiline?: boolean; keyboardType?: any; onInfo?: ()=>void; required?: boolean; onRegenerate?: ()=>void; refilled?: boolean }) {
   return (
     <View style={{ marginBottom: 12 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 10 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10}}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 0 }}>
           <Text style={styles.fieldLabel}>{label}{required ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
           {refilled ? (
             <View style={{ backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
@@ -835,7 +894,8 @@ function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, re
         style={[styles.input, multiline && { minHeight: 100, textAlignVertical: 'top' }]}
         value={value ?? ''}
         onChangeText={onChangeText}
-        placeholder={label}
+        placeholder=''
+        placeholderTextColor={"#999999"}
         multiline={multiline}
         keyboardType={keyboardType}
       />
@@ -848,8 +908,8 @@ function ChipsField({ label, valueArray, onChangeArray, onInfo, onRegenerate, re
   const arr = Array.isArray(valueArray) ? valueArray : [];
   return (
     <View style={{ marginBottom: 12 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8,}}>
           <Text style={styles.fieldLabel}>{label}</Text>
           {refilled ? (
             <View style={{ backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
@@ -870,8 +930,8 @@ function ChipsField({ label, valueArray, onChangeArray, onInfo, onRegenerate, re
         )}
       </View>
       
-      <View style={{flexDirection: 'row', gap: 10}}>
-        <TextInput style={{borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, color: '#000', minWidth: 315 }} value={text} onChangeText={setText} placeholder="Add tag and press + Add" />
+      <View style={{flexDirection: 'row', gap: 10,}}>
+        <TextInput style={{flex: 1, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, color: '#000' }} value={text} onChangeText={setText} placeholder="Add tag and press + Add" placeholderTextColor={"#999999"} />
         <TouchableOpacity style={styles.addTagBtn} onPress={() => { if (text.trim().length) { onChangeArray([...arr, text.trim()]); setText(''); } }}>
           <Icon name="plus" size={16} color="#000" /><Text style={{ color: '#000', marginLeft: 6 }}>Add</Text>
         </TouchableOpacity>
@@ -929,7 +989,7 @@ const styles = StyleSheet.create({
   pillDashed: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: '#E5E5E5' },
   card: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 12 },
   darkerCard: { borderWidth: 1, backgroundColor: '#F8F9FB', borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 12 },
-  fieldLabel: { color: '#71717A', fontWeight: '600', marginBottom: 6, fontSize: 12, textTransform: 'uppercase' },
+  fieldLabel: { color: '#71717A', fontWeight: '600', fontSize: 12, textTransform: 'uppercase' },
   input: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, color: '#000' },
   addTagBtn: { alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center' },
   tagChip: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
@@ -937,7 +997,7 @@ const styles = StyleSheet.create({
   dropdown: { backgroundColor: 'white', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   dropdownMenu: { backgroundColor: 'white', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, marginTop: 6 },
   dropdownItem: { padding: 10 },
-  scanBtn: { backgroundColor: '#93C822', width: 38, height: 38, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: -9 },
+  scanBtn: { backgroundColor: '#93C822', width: 38, height: 38, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: -18 },
   sectionTitle: { color: '#000', fontWeight: '700' },
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14 },
   subtle: { color: '#71717A', marginTop: 4 },
@@ -958,8 +1018,24 @@ const styles = StyleSheet.create({
   pillClose: { width: 16, height: 16, borderRadius: 8, backgroundColor: '#EFEFEF', alignItems: 'center', justifyContent: 'center' },
   // Docked platform picker similar to scanner capsule
   platformPickerDock: { position: 'absolute', top: 6, left: 24, right: 24, zIndex: 5000 },
-  platformPickerCapsule: { backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: '#E5E5E5', padding: 12 },
+  platformPickerCapsule: { backgroundColor: 'rgba(248, 249, 251, 1)', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(153, 153, 153, 0.3)', padding: 12 },
   platformPill: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 8, paddingHorizontal: 12, margin: 6, flexDirection: 'row', alignItems: 'center' },
+  platformSquare: { 
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#FFF',
+    margin: 4,
+    width: 125,
+    height: 125,
+    borderWidth: 2,
+    borderColor: 'rgba(153, 153, 153, 0.3)', 
+    flexDirection: 'column',
+    gap: 6,
+  },
+
   // Add Missing Field Button
   addMissingFieldButton: { 
     flexDirection: 'row', 
@@ -992,6 +1068,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(147,200,34,0.05)',
     marginTop: 4,
   },
+  suggestionBox: { borderWidth: 1, borderColor: '#E5E5E5', borderStyle: 'dashed', borderRadius: 10, padding: 12, marginTop: 10, backgroundColor: '#FAFAFA' },
+  suggestionChip: { borderWidth: 1, borderColor: '#E5E5E5', borderStyle: 'dashed', borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
+  modalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)' },
 });
 
 

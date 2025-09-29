@@ -1,22 +1,33 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Alert, TouchableOpacity, Modal, Pressable, FlatList, TextInput } from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator'; // Assuming this is your stack param list
 import { useTheme } from '../context/ThemeContext';
-import { supabase } from '../../lib/supabase';
+import { supabase, configureClerkSupabaseBridge, ensureSupabaseJwt } from '../../lib/supabase';
 import Button from '../components/Button';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { Sparkles, Link, Unlink, Hammer, DollarSign, Store, Boxes } from 'lucide-react-native';
+
 import Card from '../components/Card'; // Import Card component
 import { useLegendState } from '../context/LegendStateContext';
 import { LegendStateObservables, PlatformConnection } from '../utils/SupaLegend';
 import Animated, { FadeInUp, Layout } from 'react-native-reanimated';
 import * as Progress from 'react-native-progress';
 import PlaceholderImage from '../components/PlaceholderImage';
+import PillTabs from '../components/ui/PillTabs';
+import SearchBar from '../components/ui/SearchBar';
+import MappingCard from '../components/mapping/MappingCard';
+import BottomActionBar from '../components/BottomActionBar';
+import { tokens } from '../design/tokens';
+import ShopifySvg from '../assets/shopify.svg';
+import SquareSvg from '../assets/square.svg';
+import CloverSvg from '../assets/clover.svg';
+import EbaySvg from '../assets/ebay.svg';
+import FacebookSvg from '../assets/facebook.svg';
+import AmazonSvg from '../assets/amazon.svg';
 
-// --- REVISED: Data Structures Aligned with Backend Guide ---
 
-// What the backend GIVES you for review
 interface MappingSuggestion {
   action: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE';
   platformProduct: {
@@ -30,11 +41,19 @@ interface MappingSuggestion {
     id: string | null;  // will be null for CREATE_NEW
     sku: string;
     title: string;
+    imageUrl?: string | null;
   } | null;
   // This is the key part for your UI:
   // Default this to `true` for 'CREATE_NEW' and 'LINK_EXISTING'
   // Your UI should have a checkbox bound to this property.
   isSelected: boolean; 
+  // NEW metadata for classification
+  matchType?: 'BARCODE' | 'SKU' | 'TITLE' | 'NONE';
+  confidence?: number;
+  // INTERNAL: resolution and restoration helpers (not sent to API)
+  resolved?: boolean;
+  prevTab?: 'matched' | 'review' | 'ignore';
+  prevAction?: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE';
 }
 
 // NEW: Interface for existing mappings from Supabase
@@ -101,7 +120,40 @@ type MappingReviewScreenNavigationProp = StackNavigationProp<AppStackParamList, 
 // Base URL for your SSSync API
 const SSSYNC_API_BASE_URL = 'https://api.sssync.app'; // Or your actual Railway URL
 
-type ActiveTab = 'review' | 'matched' | 'new';
+// --- Helper: Wait for Supabase access token (bridge may need a moment) ---
+const waitForSupabaseToken = async (maxWaitMs: number = 8000, stepMs: number = 200): Promise<string | null> => {
+  const started = Date.now();
+  while (Date.now() - started < maxWaitMs) {
+    try {
+      const sessionResp = await supabase.auth.getSession();
+      const token = sessionResp?.data?.session?.access_token || null;
+      if (token) return token;
+    } catch {}
+    await new Promise(r => setTimeout(r, stepMs));
+  }
+  return null;
+};
+
+// Optional: ensure bridge is configured if needed
+const ensureBridge = async (getClerkToken: () => Promise<string | null>) => {
+  try {
+    await configureClerkSupabaseBridge({ getClerkToken, autoRefreshMinutes: 9 });
+  } catch {}
+};
+
+type ActiveTab = 'matched' | 'review' | 'ignore';
+
+// Helper function to get platform colors
+const getPlatformColor = (platformType: string): string => {
+  const type = platformType.toLowerCase();
+  if (type.includes('shopify')) return '#96C93F';
+  if (type.includes('square')) return '#3E4348';
+  if (type.includes('clover')) return '#28A745';
+  if (type.includes('amazon')) return '#FF9900';
+  if (type.includes('ebay')) return '#0064D2';
+  if (type.includes('facebook')) return '#1877F2';
+  return '#6B7280';
+};
 
 const MappingReviewScreen = () => {
   const theme = useTheme();
@@ -122,7 +174,7 @@ const MappingReviewScreen = () => {
   const [selectedConnectionIds, setSelectedConnectionIds] = useState<string[]>([]);
   const [isReconcileMode, setIsReconcileMode] = useState(false);
   const [previewingItem, setPreviewingItem] = useState<MappingSuggestion | null>(null);
-  const [activeTab, setActiveTab] = useState<ActiveTab>('new');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('matched');
   // --- NEW: State for progress polling ---
   const [jobProgress, setJobProgress] = useState<JobProgress | null>(null);
   const [isPolling, setIsPolling] = useState(!!jobId); // Start polling if jobId is passed
@@ -151,7 +203,21 @@ const MappingReviewScreen = () => {
   const [syncPricing, setSyncPricing] = useState(true);
   const [showSyncRules, setShowSyncRules] = useState(false);
   const [showAdvancedRules, setShowAdvancedRules] = useState(false);
+  const [isAddConnectionModalVisible, setIsAddConnectionModalVisible] = useState(false)
   // --- END NEW ---
+
+  // --- NEW: UI state for filter/sort in list (separate from link search modal) ---
+  const [listQuery, setListQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'title' | 'sku'>('title');
+  // NEW: Scan summary
+  const [scanSummary, setScanSummary] = useState<{ countProducts?: number; countVariants?: number; countLocations?: number } | null>(null);
+  // Inline bottom-sheet wizard state
+  const [wizardVisible, setWizardVisible] = useState(false);
+  const [wizardStep, setWizardStep] = useState(0); // 0 platforms, 1 sync mode, 2 delist, 3 buffer, 4 review
+  const [selectedPlatformsState, setSelectedPlatformsState] = useState<string[]>([]);
+  const [syncMode, setSyncMode] = useState<'auto' | 'manual'>('auto');
+  const [delistMode, setDelistMode] = useState<'auto' | 'manual'>('auto');
+  const [priceBuffer, setPriceBuffer] = useState<Record<string, number>>({});
 
   // Effect to load platform connections
   useEffect(() => {
@@ -199,12 +265,9 @@ const MappingReviewScreen = () => {
     setSummaryData(null); // Clear previous summary
 
     try {
-      const session = await supabase.auth.getSession();
-      const token = session?.data.session?.access_token;
-
-      if (!token) {
-        throw new Error("Authentication token not found. Please log in again.");
-      }
+      // Ensure the bridge has created/attached a Supabase JWT
+      const token = await ensureSupabaseJwt();
+      if (!token) throw new Error("Authentication token not found. Please log in again.");
 
       const response = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${currentConnectionId}/mapping-suggestions`, {
         method: 'GET',
@@ -243,9 +306,9 @@ const MappingReviewScreen = () => {
             action = 'LINK_EXISTING';
             isSelected = true;
           } else if (item.confidence > 0 && item.confidence < 0.8) {
-            // Low confidence match - needs review
-            action = 'IGNORE';
-            isSelected = false;
+            // Low confidence match - needs review, default to create for now
+            action = 'CREATE_NEW';
+            isSelected = true;
           } else {
             // Default to create new for anything else
             action = 'CREATE_NEW';
@@ -267,6 +330,8 @@ const MappingReviewScreen = () => {
               title: item.suggestedCanonicalVariant.Title,
             } : null,
             isSelected,
+            matchType: item.matchType,
+            confidence: typeof item.confidence === 'number' ? item.confidence : undefined,
           };
         });
         console.log(`[MappingReviewScreen] Processed ${suggestionsArray.length} suggestions from array response`);
@@ -290,6 +355,14 @@ const MappingReviewScreen = () => {
 
       // Set the processed suggestions
       setSuggestions(suggestionsArray);
+      // Fetch scan summary for header counts
+      try {
+        const token2 = await ensureSupabaseJwt();
+        if (token2) {
+          const sumResp = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${currentConnectionId}/scan-summary`, { headers: { 'Authorization': `Bearer ${token2}` } });
+          if (sumResp.ok) setScanSummary(await sumResp.json());
+        }
+      } catch {}
       
       // Add detailed logging for debugging empty suggestions
       console.log(`[MappingReviewScreen] Final suggestions count: ${suggestionsArray.length}`);
@@ -335,8 +408,7 @@ const MappingReviewScreen = () => {
     (async () => {
       if (!connectionId || hasLoadedDraft) return;
       try {
-        const session = await supabase.auth.getSession();
-        const token = session?.data.session?.access_token;
+        const token = await ensureSupabaseJwt();
         if (!token) return;
         const resp = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/draft-mappings`, {
           headers: { 'Authorization': `Bearer ${token}` }
@@ -377,8 +449,7 @@ const MappingReviewScreen = () => {
           sssyncVariantId: s.action === 'LINK_EXISTING' ? s.suggestedCanonicalProduct?.id : null,
           action: s.action === 'LINK_EXISTING' ? 'link' : (s.action === 'CREATE_NEW' ? 'create' : 'ignore'),
         }));
-        const session = await supabase.auth.getSession();
-        const token = session?.data.session?.access_token;
+        const token = await ensureSupabaseJwt();
         if (!token) return;
         await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/draft-mappings`, {
           method: 'PUT',
@@ -503,8 +574,7 @@ const MappingReviewScreen = () => {
         pollCount++;
         console.log(`[MappingReviewScreen] Poll attempt ${pollCount}/${maxPollAttempts} for job ${currentJobId}`);
 
-        const session = await supabase.auth.getSession();
-        const token = session?.data.session?.access_token;
+        const token = await ensureSupabaseJwt();
         if (!token) throw new Error("Authentication token not found.");
 
         const response = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/jobs/${currentJobId}/progress`, {
@@ -671,8 +741,7 @@ const MappingReviewScreen = () => {
     setError(null);
 
     try {
-      const session = await supabase.auth.getSession();
-      const token = session?.data.session?.access_token;
+      const token = await ensureSupabaseJwt();
       if (!token) throw new Error("Authentication token not found.");
 
       const response = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/sync`, {
@@ -717,12 +786,8 @@ const MappingReviewScreen = () => {
       setLoading(true);
       setError(null);
       
-      const session = await supabase.auth.getSession();
-      const token = session?.data.session?.access_token;
-      
-      if (!token) {
-        throw new Error("Authentication token not found. Please log in again.");
-      }
+      const token = await ensureSupabaseJwt();
+      if (!token) throw new Error("Authentication token not found. Please log in again.");
 
       // Prepare payload - extract the necessary fields from perfectMatches
       const mappingsPayload = suggestions.filter(s => s.action === 'LINK_EXISTING').map(match => ({
@@ -739,7 +804,7 @@ const MappingReviewScreen = () => {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ mappings: mappingsPayload }),
+        body: JSON.stringify({ confirmedMatches: mappingsPayload }),
       });
 
       if (!response.ok) {
@@ -806,7 +871,7 @@ const MappingReviewScreen = () => {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ mappings: mappingsPayload }),
+        body: JSON.stringify({ confirmedMatches: mappingsPayload }),
       });
 
       if (!response.ok) {
@@ -848,8 +913,7 @@ const MappingReviewScreen = () => {
     setLoading(true);
     setError(null);
     try {
-      const session = await supabase.auth.getSession();
-      const token = session?.data.session?.access_token;
+      const token = await ensureSupabaseJwt();
       if (!token) throw new Error("Authentication token not found.");
 
       const response = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/confirm-mappings`, {
@@ -993,12 +1057,94 @@ const MappingReviewScreen = () => {
     });
   };
 
+  // --- ALWAYS-CALLED HOOKS: keep BEFORE any conditional returns to obey Rules of Hooks ---
+  // Get counts for tabs
+  const counts = useMemo(() => {
+    const list = suggestions || [];
+    const matched = list.filter(s => s.action === 'LINK_EXISTING' || s.resolved === true).length;
+    const ignore = list.filter(s => s.action === 'IGNORE').length;
+    const review = Math.max(0, list.length - matched - ignore);
+    return { matched, review, ignore } as any;
+  }, [suggestions]);
+
+  // Current list by active tab + query + sort
+  const currentList = useMemo(() => {
+    const base = (suggestions || []).filter(s => {
+      if (activeTab === 'matched') return s.action === 'LINK_EXISTING' || s.resolved === true;
+      if (activeTab === 'review') return s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved;
+      return s.action === 'IGNORE';
+    });
+    const filtered = listQuery
+      ? base.filter(item =>
+          (item.platformProduct.title || '').toLowerCase().includes(listQuery.toLowerCase()) ||
+          (item.platformProduct.sku || '').toLowerCase().includes(listQuery.toLowerCase()) ||
+          (item.suggestedCanonicalProduct?.title || '').toLowerCase().includes(listQuery.toLowerCase())
+        )
+      : base;
+    const sorted = [...filtered].sort((a, b) => {
+      if (sortBy === 'title') {
+        return (a.platformProduct.title || '').localeCompare(b.platformProduct.title || '');
+      }
+      return (a.platformProduct.sku || '').localeCompare(b.platformProduct.sku || '');
+    });
+    return sorted;
+  }, [suggestions, activeTab, listQuery, sortBy]);
+
+  // Item renderer (memoized)
+  const renderMappingItem = useCallback(({ item }: { item: MappingSuggestion }) => {
+    const isReview = (item.confidence != null && item.confidence > 0 && item.confidence < 0.8) || item.matchType === 'TITLE';
+    const variant = item.action === 'IGNORE' ? 'ignored' : (item.action === 'LINK_EXISTING' ? 'matched' : (isReview ? 'review' : 'new'));
+    return (
+      <MappingCard
+        variant={variant as any}
+        titleLeft={item.platformProduct.title}
+        skuLeft={item.platformProduct.sku}
+        priceLeft={item.platformProduct.price}
+        imageLeft={item.platformProduct.imageUrl}
+        titleRight={item.suggestedCanonicalProduct?.title || undefined}
+        skuRight={item.suggestedCanonicalProduct?.sku || undefined}
+        imageRight={item.suggestedCanonicalProduct?.imageUrl || undefined}
+        selected={item.isSelected}
+        onSelect={() => setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, isSelected: !s.isSelected, action: (!s.isSelected && s.action === 'IGNORE') ? 'CREATE_NEW' : s.action } : s))}
+        onIgnore={() => {
+          // From matched -> send to review and clear resolved flag; otherwise -> move to ignored
+          setSuggestions(prev => (prev || []).map(s => {
+            if (s.platformProduct.id !== item.platformProduct.id) return s;
+            if (activeTab === 'matched') {
+              return { ...s, action: 'CREATE_NEW', matchType: 'TITLE', isSelected: true, resolved: false };
+            }
+            return { ...s, prevTab: activeTab, prevAction: s.action, action: 'IGNORE', isSelected: false, resolved: false };
+          }));
+        }}
+        onRestore={() => {
+          setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, action: s.prevAction || 'CREATE_NEW', isSelected: true } : s));
+        }}
+        onCreate={() => {
+          setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, action: 'CREATE_NEW', resolved: true, isSelected: true } : s));
+        }}
+        onApproveMatch={() => {
+          setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, action: 'LINK_EXISTING', resolved: true, isSelected: true } : s));
+        }}
+        onLink={() => setShowSearchResults(true)}
+        onSearch={() => {
+          setShowSearchResults(true); // keep open; do not clear immediately
+          setSearchQuery('');
+          (global as any).currentPlatformProduct = item.platformProduct;
+        }}
+      />
+    );
+  }, [updateSuggestionAction]);
+  // --- END ALWAYS-CALLED HOOKS ---
+
   const renderTabButton = (tab: ActiveTab, title: string, count: number) => (
     <TouchableOpacity
       style={[styles.tabButton, activeTab === tab && styles.tabButtonActive]}
       onPress={() => {
         setActiveTab(tab);
       }}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: activeTab === tab }}
+      accessibilityLabel={`${title} ${count}`}
     >
       <Text style={[styles.tabButtonText, activeTab === tab && styles.tabButtonTextActive]}>
         {title} ({count})
@@ -1025,9 +1171,10 @@ const MappingReviewScreen = () => {
           {item.action === 'IGNORE' && <Icon name="cancel" size={24} color={theme.colors.error} />}
         </View>
 
-        {/* SSSync Product Side */}
+    
+        {/* Anorha Product Side */}
         <View style={styles.reviewItemSection}>
-          <PlaceholderImage size={40} borderRadius={6} type="icon" icon="cloud-outline" />
+          <PlaceholderImage uri={'/src/assets/rounded_anorha.png'} size={40} borderRadius={6} />
           <View style={styles.reviewItemDetails}>
             {item.action === 'LINK_EXISTING' && item.suggestedCanonicalProduct ? (
               <>
@@ -1035,7 +1182,7 @@ const MappingReviewScreen = () => {
                 <Text style={styles.reviewItemSku}>SKU: {item.suggestedCanonicalProduct.sku || 'N/A'}</Text>
               </>
             ) : item.action === 'CREATE_NEW' ? (
-              <Text style={styles.reviewItemActionText}>Will be created in SSSync</Text>
+              <Text style={styles.reviewItemActionText}>Will be created in Anorha</Text>
             ) : (
               <Text style={styles.reviewItemActionText}>Will be ignored</Text>
             )}
@@ -1046,23 +1193,11 @@ const MappingReviewScreen = () => {
         <View style={styles.reviewItemUserActions}>
           <TouchableOpacity style={[styles.userActionButton, styles.userActionIgnore]} onPress={() => updateSuggestionAction(item.platformProduct.id, 'IGNORE')}>
             <Icon name="cancel" size={20} color="#fff" />
+            <Text>Ignore Item</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.userActionButton, styles.userActionChange]} onPress={() => updateSuggestionAction(item.platformProduct.id, 'CREATE_NEW')}>
             <Icon name="new-box" size={20} color="#fff" />
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.userActionButton, styles.userActionConfirm]} onPress={() => updateSuggestionAction(item.platformProduct.id, 'LINK_EXISTING')}>
-            <Icon name="check" size={20} color="#fff" />
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.userActionButton, styles.userActionSearch]} 
-            onPress={() => {
-              setShowSearchResults(true);
-              setSearchQuery('');
-              // Store current platform product for linking
-              (global as any).currentPlatformProduct = item.platformProduct;
-            }}
-          >
-            <Icon name="magnify" size={20} color="#fff" />
+            <Text>Create New Item</Text>
           </TouchableOpacity>
         </View>
       </Card>
@@ -1102,7 +1237,7 @@ const MappingReviewScreen = () => {
 
         <Icon name="arrow-right-thin" size={24} color={theme.colors.textSecondary} style={{ marginHorizontal: 8 }}/>
 
-        {/* SSSync Product (Right) */}
+        {/* Anorha Product (Right) */}
         {item.action === 'LINK_EXISTING' && item.suggestedCanonicalProduct ? (
           <TouchableOpacity 
             style={[styles.miniCard, styles.sssyncMiniCard, styles.linkedMiniCard]}
@@ -1115,8 +1250,8 @@ const MappingReviewScreen = () => {
             <PlaceholderImage 
               size={40} 
               borderRadius={6} 
-              type="icon" 
-              icon="cloud-check-outline"
+              type="image" 
+              uri={'/src/assets/rounded_anorha.png'}
               color={theme.colors.success}
             />
             <View style={styles.miniCardDetails}>
@@ -1274,8 +1409,9 @@ const MappingReviewScreen = () => {
   // --- NEW: Search functionality ---
   const searchProducts = async (query: string) => {
     if (!query.trim() || query.length < 2) {
+      // Keep modal open; just clear results until enough characters
+      setShowSearchResults(true);
       setSearchResults([]);
-      setShowSearchResults(false);
       return;
     }
 
@@ -1291,16 +1427,9 @@ const MappingReviewScreen = () => {
       // Search in ProductVariants table
       const { data, error } = await supabase
         .from('ProductVariants')
-        .select(`
-          *,
-          Products!inner (
-            Id,
-            Title,
-            Description
-          )
-        `)
+        .select('Id, Sku, Title, Price, Barcode')
         .eq('UserId', user.id)
-        .or(`Sku.ilike.%${query}%, Title.ilike.%${query}%, Barcode.ilike.%${query}%`)
+        .or(`Sku.ilike.%${query}%,Title.ilike.%${query}%,Barcode.ilike.%${query}%`)
         .limit(20);
 
       if (error) {
@@ -1319,12 +1448,12 @@ const MappingReviewScreen = () => {
   };
 
   const handleSearchChange = (text: string) => {
+    setShowSearchResults(true); // ensure it stays visible
     setSearchQuery(text);
-    // Debounce the search
-    const timeoutId = setTimeout(() => {
+    clearTimeout((handleSearchChange as any)._t);
+    (handleSearchChange as any)._t = setTimeout(() => {
       searchProducts(text);
-    }, 300);
-    return () => clearTimeout(timeoutId);
+    }, 350);
   };
 
   const handleLinkProduct = (searchResult: any, platformProduct: any) => {
@@ -1437,12 +1566,8 @@ const MappingReviewScreen = () => {
     setError(null);
     
     try {
-      const session = await supabase.auth.getSession();
-      const token = session?.data.session?.access_token;
-      
-      if (!token) {
-        throw new Error("Authentication token not found. Please log in again.");
-      }
+      const token = await waitForSupabaseToken();
+      if (!token) throw new Error("Authentication token not found. Please log in again.");
 
       // First, try to update the connection status to 'active' to reset any stuck state
       console.log(`[MappingReviewScreen] Resetting connection status to 'active'`);
@@ -2387,7 +2512,11 @@ const MappingReviewScreen = () => {
       marginVertical: 15,
       alignItems: 'center',
     },
-    reviewItemActionText: {
+    reviewItemLongButton: {
+      flex: 1,
+      marginVertical: 15,
+      alignItems: 'center',
+    }, reviewItemActionText: {
       fontSize: 14,
       fontStyle: 'italic',
       color: theme.colors.textSecondary,
@@ -2401,8 +2530,7 @@ const MappingReviewScreen = () => {
       paddingTop: 10,
     },
     userActionButton: {
-      width: 50,
-      height: 50,
+      flex: 1,
       borderRadius: 25,
       justifyContent: 'center',
       alignItems: 'center',
@@ -3022,18 +3150,7 @@ const MappingReviewScreen = () => {
     );
   }
 
-  // Get counts for each tab from the suggestions
-  const counts = {
-    new: suggestions ? suggestions.filter(s => s.action === 'CREATE_NEW').length : 0,
-    matched: suggestions ? suggestions.filter(s => s.action === 'LINK_EXISTING').length : 0,
-    review: suggestions ? suggestions.filter(s => s.action === 'IGNORE').length : 0,
-  };
-  const currentList = suggestions ? suggestions.filter(s => {
-    if (activeTab === 'new') return s.action === 'CREATE_NEW';
-    if (activeTab === 'matched') return s.action === 'LINK_EXISTING';
-    if (activeTab === 'review') return s.action === 'IGNORE';
-    return false;
-  }) : [];
+  
 
   return (
     <View style={styles.container}>
@@ -3050,21 +3167,6 @@ const MappingReviewScreen = () => {
       {/* Sync Rules Modal */}
       {renderSyncRulesModal()}
       
-      {/* Custom Success Notification */}
-      {showSuccessNotification && (
-        <Animated.View 
-          entering={FadeInUp.duration(300)}
-          style={styles.successNotification}
-        >
-          <View style={styles.notificationCard}>
-            <Icon name="check-circle" size={32} color={theme.colors.success} />
-            <View style={styles.notificationContent}>
-              <Text style={styles.notificationTitle}>Sync Activated!</Text>
-              <Text style={styles.notificationMessage}>{notificationMessage}</Text>
-            </View>
-          </View>
-        </Animated.View>
-      )}
       
       <Modal
         transparent={true}
@@ -3095,149 +3197,345 @@ const MappingReviewScreen = () => {
         </Pressable>
       </Modal>
 
-      <ScrollView 
-        style={styles.container} 
-        contentContainerStyle={{ paddingBottom: 80 }}
-      >
+      {/* Content */}
+      {!loading && !error && suggestions && (
+        <>
+       
+          <PillTabs
+            tabs={[
+              { key: 'matched', label: 'Matches', count: counts.matched, tone: 'success' },
+              { key: 'review', label: 'Review', count: counts.review, tone: 'warning' },
+              { key: 'ignore', label: 'Ignore', count: counts.ignore, tone: 'danger' },
+            ]}
+            value={activeTab}
+            onChange={(k) => setActiveTab(k as ActiveTab)}
+          />
 
-        {/* Show tabs view directly */}
-        {!loading && !error && suggestions && (
-          <>
-            {/* Header Section */}
-            <View style={styles.headerSection}>
-              <Text style={styles.pageTitle}>Review {platformName} Products</Text>
-              <Text style={styles.pageSubtitle}>
-                Review and organize your products before syncing with SSSync
+          <SearchBar value={listQuery} onChangeText={setListQuery} placeholder={`Search this ${platformName} account's products`} />
+
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 12, marginTop: 4, }}>
+            {activeTab === 'matched' && (
+               <Text style={{fontWeight: "600", color: theme.colors.textSecondary}}>
+                Review Instant Matches
               </Text>
-            </View>
+            )}
+            {activeTab === 'review' && (
+              <Text style={{fontWeight: "600", color: theme.colors.textSecondary}}>
+                Verify & Review
+              </Text>
+            )}
+            {activeTab === 'ignore' && (
+              <Text style={{fontWeight: "600", color: theme.colors.textSecondary}}>
+                Ignoring These Products
+              </Text>
+            )}
 
-            {/* Tab Bar */}
-            <View style={styles.modernTabContainer}>
-              {renderTabButton('new', 'New Products', counts.new)}
-              {renderTabButton('matched', 'Found Matches', counts.matched)}
-              {renderTabButton('review', 'Needs Review', counts.review)}
-            </View>
-
-            {/* Search Section */}
-            <View style={styles.searchSection}>
-              <View style={styles.modernSearchBar}>
-                <Icon name="magnify" size={20} color={theme.colors.textSecondary} style={styles.searchIcon} />
-                <TextInput
-                  style={styles.modernSearchInput}
-                  placeholder={`Search ${activeTab === 'new' ? 'new products' : activeTab === 'matched' ? 'matched products' : 'products needing review'}...`}
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  placeholderTextColor={theme.colors.textSecondary}
-                />
-                {searchQuery.length > 0 && (
-                  <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.clearSearchButton}>
-                    <Icon name="close-circle" size={20} color={theme.colors.textSecondary} />
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-
-            {/* Sync Rules Section */}
-            <View style={styles.syncRulesSection}>
-              <TouchableOpacity 
-                style={styles.syncRulesButton}
-                onPress={() => setShowSyncRules(true)}
-              >
-                <View style={styles.syncRulesButtonContent}>
-                  <Icon name="cog" size={20} color={theme.colors.primary} />
-                  <View style={styles.syncRulesButtonText}>
-                    <Text style={styles.syncRulesButtonTitle}>Sync Settings</Text>
-                    <Text style={styles.syncRulesButtonSubtitle}>
-                      {syncDirection === 'two-way' ? 'Two-way sync' : 
-                       syncDirection === 'push-only' ? 'Push to platform' : 'Pull from platform'} • {sourceOfTruth === 'sssync' ? 'SSSync wins conflicts' : `${platformName} wins conflicts`}
-                    </Text>
-                  </View>
-                  <Icon name="chevron-right" size={20} color={theme.colors.textSecondary} />
-                </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8}}>
+              {activeTab === 'review' && (
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', backgroundColor:"rgb(94, 41, 11, .8)", alignItems: 'center', paddingVertical: 6, paddingHorizontal: 12, borderWidth: 1, borderColor: 'rgb(94, 41, 11)', borderRadius: 8 }}
+                  onPress={() => {
+                    setSuggestions(prev => (prev || []).map(s => {
+                      const isReview = s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved;
+                      if (isReview && s.suggestedCanonicalProduct?.id) {
+                        return { ...s, action: 'LINK_EXISTING', resolved: true, isSelected: true };
+                      }
+                      return s;
+                    }));
+                  }}
+                >
+                  <Icon name="check-all" size={18} color="#FFF" />
+                  <Text style={{ marginLeft: 6, color: '#FFF', fontWeight: '700' }}>Approve All</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8 }} onPress={() => setSortBy(sortBy === 'title' ? 'sku' : 'title')} accessibilityLabel="Sort by">
+              <Icon name="sort" size={18} color={theme.colors.textSecondary} />
+              <Text style={{ marginLeft: 6, color: theme.colors.textSecondary, fontWeight: '600' }}>Sort By: {sortBy === 'title' ? 'Title' : 'SKU'}</Text>
               </TouchableOpacity>
             </View>
+          </View>
 
-            {/* Content Section */}
-            <Animated.View layout={Layout.springify()} style={styles.contentSection}>
-              {(() => {
-                const filteredList = currentList.filter(item => 
-                  !searchQuery || 
-                  item.platformProduct.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                  item.platformProduct.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                  (item.suggestedCanonicalProduct?.title || '').toLowerCase().includes(searchQuery.toLowerCase())
-                );
-
-                if (filteredList.length > 0) {
-                  return (
-                    <View style={styles.productList}>
-                      {filteredList.map((item, index) => (
-                        <Animated.View 
-                          key={item.platformProduct.id} 
-                          entering={FadeInUp.delay(index * 50).duration(300)}
-                          layout={Layout.springify()}
-                        >
-                          {renderModernSuggestionItem({ item })}
-                        </Animated.View>
-                      ))}
-                      {searchQuery && (
-                        <View style={styles.searchResultsFooter}>
-                          <Text style={styles.searchResultsText}>
-                            Showing {filteredList.length} of {currentList.length} items
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-                  );
-                } else {
-                  return (
-                    <View style={styles.modernEmptyState}>
-                      <View style={styles.emptyStateIcon}>
-                        <Icon 
-                          name={searchQuery ? "magnify" : "package-variant-closed"} 
-                          size={48} 
-                          color={theme.colors.textSecondary} 
-                        />
-                      </View>
-                      <Text style={styles.emptyStateTitle}>
-                        {searchQuery ? 'No matching products' : 'No items in this category'}
-                      </Text>
-                      <Text style={styles.emptyStateDescription}>
-                        {searchQuery 
-                          ? 'Try adjusting your search terms or browse other categories'
-                          : 'Products will appear here once they\'re processed'
-                        }
-                      </Text>
-                      {searchQuery && (
-                        <TouchableOpacity 
-                          onPress={() => setSearchQuery('')}
-                          style={styles.clearSearchAction}
-                        >
-                          <Text style={styles.clearSearchActionText}>Clear search</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  );
-                }
-              })()}
-            </Animated.View>
-          </>
-        )}
-      </ScrollView>
-
-      {/* Fixed Activate Sync Button at bottom */}
-      {!loading && !error && suggestions && (
-        <View style={styles.syncButtonContainer}>
-          <Button 
-            title={`Activate Sync (${suggestions ? suggestions.filter(s => s.isSelected).length : 0} selected)`}
-            onPress={handleActivateSync}
-            icon="rocket-launch-outline"
-            disabled={syncing || !suggestions || suggestions.filter(s => s.isSelected).length === 0}
-            loading={syncing}
+          <FlatList
+            data={currentList}
+            keyExtractor={(it) => it.platformProduct.id}
+            renderItem={({ item }) => (
+              <MappingCard
+                variant={(item.action === 'IGNORE' ? 'ignored' : (item.action === 'LINK_EXISTING' ? 'matched' : ((item.confidence != null && item.confidence > 0 && item.confidence < 0.8) || item.matchType === 'TITLE') ? 'review' : 'new')) as any}
+                titleLeft={item.platformProduct.title}
+                skuLeft={item.platformProduct.sku}
+                priceLeft={item.platformProduct.price}
+                imageLeft={item.platformProduct.imageUrl}
+                titleRight={item.suggestedCanonicalProduct?.title || undefined}
+                skuRight={item.suggestedCanonicalProduct?.sku || undefined}
+                imageRight={item.suggestedCanonicalProduct?.imageUrl || undefined}
+                selected={item.isSelected}
+                isResolvedNew={item.action === 'CREATE_NEW' && !!item.resolved}
+                onEditNew={() => setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, resolved: false } : s))}
+                onSelect={() => setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, isSelected: !s.isSelected, action: (!s.isSelected && s.action === 'IGNORE') ? 'CREATE_NEW' : s.action } : s))}
+                onIgnore={() => {
+                  setSuggestions(prev => (prev || []).map(s => {
+                    if (s.platformProduct.id !== item.platformProduct.id) return s;
+                    if (activeTab === 'matched' || (s.action === 'CREATE_NEW' && s.resolved)) {
+                      return { ...s, action: 'CREATE_NEW', matchType: 'TITLE', isSelected: true, resolved: false };
+                    }
+                    return { ...s, prevTab: activeTab, prevAction: s.action, action: 'IGNORE', isSelected: false, resolved: false };
+                  }));
+                }}
+                onRestore={() => setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, action: s.prevAction || 'CREATE_NEW', isSelected: true } : s))}
+                onCreate={() => setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, action: 'CREATE_NEW', isSelected: true, resolved: true } : s))}
+                onApproveMatch={() => setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, action: 'LINK_EXISTING', resolved: true, isSelected: true } : s))}
+                onSearch={() => { setShowSearchResults(true); setSearchQuery(''); (global as any).currentPlatformProduct = item.platformProduct; }}
+              />
+            )}
+            contentContainerStyle={{ paddingHorizontal: 15, paddingBottom: 120 }}
+            initialNumToRender={10}
+            windowSize={10}
+            maxToRenderPerBatch={12}
+            removeClippedSubviews
+            pagingEnabled={false}
+            ListEmptyComponent={(
+              <View style={styles.modernEmptyState}>
+                <View style={styles.emptyStateIcon}>
+                  <Icon name={listQuery ? 'magnify' : 'package-variant-closed'} size={48} color={theme.colors.textSecondary} />
+                </View>
+                <Text style={styles.emptyStateTitle}>{listQuery ? 'No matching products' : 'No items in this category'}</Text>
+                <Text style={styles.emptyStateDescription}>{listQuery ? 'Try adjusting your search terms' : 'Items will appear after processing'}</Text>
+              </View>
+            )}
+            onEndReachedThreshold={0.6}
+            onEndReached={() => {
+              // Simple client-side pagination: load more from suggestions if we later support server paging
+            }}
           />
-        </View>
+
+          <BottomActionBar
+            primaryLabel={`Confirm Mapping (${(suggestions || []).filter(s => s.isSelected).length})`}
+            onPrimary={() => setWizardVisible(true)}
+            primaryDisabled={(suggestions || []).filter(s => s.isSelected).length === 0}
+            secondaryLabel="Cancel import"
+            secondaryDisabled={false}
+            onSecondary={() => navigation.goBack()}
+          />
+
+          {/* Inline Bottom-Sheet Wizard */}
+          <Modal visible={wizardVisible} transparent animationType="fade" onRequestClose={() => setWizardVisible(false)}>
+            <View style={{ flex: 1, justifyContent: 'flex-end',  backgroundColor: 'rgba(0, 0, 0, 0.7)' }}>
+              <Pressable style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0)' }} onPress={() => setWizardVisible(false)} />
+              <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 20, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 3, paddingBottom: 32, }}>
+                {/* Stepper header aligning to mock */}
+                <View style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#E5E5E5', alignItems: 'center' }}>
+                  <Text style={{ fontWeight: '700', color: theme.colors.text, fontSize: 18 }}>{wizardStep===0?'Import To Which Platforms?':wizardStep===1?'Set Sync Settings':wizardStep===2?'Set Sync Settings':wizardStep===3?'Set Sync Settings':'Is This Right?'}</Text>
+                </View>
+
+                {/* Steps */}
+                {wizardStep === 0 && (
+                  <View style={{ paddingHorizontal:0, paddingTop: 20 }}>
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        flexWrap: 'wrap',
+                        justifyContent: 'space-between',
+                        marginBottom: 24,
+                        marginHorizontal: 30,
+                        rowGap: 16,
+                        columnGap: 8,
+                      }}
+                    >
+                      {[
+                        {k:'shopify',Svg:ShopifySvg},{k:'square',Svg:SquareSvg},{k:'clover',Svg:CloverSvg},
+                        {k:'ebay',Svg:EbaySvg},{k:'facebook',Svg:FacebookSvg},{k:'amazon',Svg:AmazonSvg},
+                      ].map(({k,Svg}) => (
+                        <TouchableOpacity
+                          key={k}
+                          style={{ minWidth: '25%', borderWidth: 2, borderColor: selectedPlatformsState.includes(k)? '#93C822':'#E5E5E5', borderRadius: 12, paddingVertical: 18, alignItems: 'center', backgroundColor: '#fff' }}
+                          onPress={() => setSelectedPlatformsState(prev => prev.includes(k)? prev.filter(x=>x!==k):[...prev,k])}
+                        >
+                          <Svg width={32} height={32} />
+                          <Text style={{ marginTop: 8, fontWeight: '600', color: theme.colors.text }}>{k==='ebay'?'Ebay':k.charAt(0).toUpperCase()+k.slice(1)}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    <View style={{ marginTop: 20 }}>
+                      <Button title="Confirm Platforms" onPress={() => setWizardStep(1)} />
+                    </View>
+                  </View>
+                )}
+
+                {wizardStep === 1 && (
+                  <View style={{ paddingTop: 20 }}>
+                    <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Sync updates automatically or only on approval</Text>
+                    <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
+                      <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: syncMode === 'auto' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setSyncMode('auto')}>
+                        
+                        <View style={{marginBottom: 12}}>
+                          <Sparkles width={32} height={32}></Sparkles>
+                        </View>
+                        <Text style={{ fontWeight: '600', color: theme.colors.text }}>Auto</Text>
+                        <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>(timestamp-based)</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={{ flex: 1,flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: syncMode === 'manual' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setSyncMode('manual')}>
+                        <View style={{marginBottom: 12}}>
+                          <Hammer width={32} height={32}></Hammer>
+                        </View>
+                    
+                        <Text style={{ fontWeight: '600', color: theme.colors.text }}>Manual</Text>
+                        <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>(Manual Approval)</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+
+                {wizardStep === 2 && (
+                  <View style={{ paddingTop: 20 }}>
+                    <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Choose how auction listings behave (FB & Ebay) </Text>
+                    <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
+                      <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: delistMode === 'auto' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setDelistMode('auto')}>
+                        <View style={{marginBottom: 12}}>
+                          <Unlink width={32} height={32}></Unlink>  
+                        </View>
+                        <Text style={{ fontWeight: '600', color: theme.colors.text }}>Auto Delist</Text>
+                        <Text style={{ textAlign: 'center', color: theme.colors.textSecondary, marginTop: 4 }}>Sold listings are automatically removed</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: delistMode === 'manual' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setDelistMode('manual')}>
+                        <View style={{marginBottom: 12}}>
+                          <Link width={32} height={32}></Link>  
+                        </View>
+                        <Text style={{ fontWeight: '600', color: theme.colors.text }}>Manual Delist</Text>
+                        <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>Sold listings stay up</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+
+                {wizardStep === 3 && (
+                  <View style={{ paddingTop: 20 }}>
+                    <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Adjust prices by % per platform (Optional)</Text>
+                    <View style={{ marginBottom: 24 }}>
+                      {platformConnections.map((connection) => (
+                        <View key={connection.Id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 12 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                            <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: getPlatformColor(connection.PlatformType), marginRight: 12 }} />
+                            <View>
+                              <Text style={{ fontWeight: '600', color: theme.colors.text }}>{connection.DisplayName}</Text>
+                              <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>{connection.PlatformType}</Text>
+                            </View>
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <TouchableOpacity style={{ padding: 8 }} onPress={() => setPriceBuffer(prev => ({ ...prev, [connection.Id]: (prev[connection.Id] || 0) - 1 }))}>
+                              <Icon name="minus" size={18} />
+                            </TouchableOpacity>
+                            <TextInput
+                              style={{ width: 60, textAlign: 'center', fontWeight: '700', color: theme.colors.text, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 6, paddingVertical: 4 }}
+                              value={`${(priceBuffer[connection.Id] || 0).toFixed(1)}%`}
+                              onChangeText={(text) => {
+                                const numericValue = parseFloat(text.replace('%', '')) || 0;
+                                setPriceBuffer(prev => ({ ...prev, [connection.Id]: numericValue }));
+                              }}
+                              keyboardType="numeric"
+                            />
+                            <TouchableOpacity style={{ padding: 8 }} onPress={() => setPriceBuffer(prev => ({ ...prev, [connection.Id]: (prev[connection.Id] || 0) + 1 }))}>
+                              <Icon name="plus" size={18} />
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                )}
+
+                {wizardStep === 4 && (
+                  <View style={{ paddingTop: 20 }}>
+                    <View style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 24 }}>
+                      <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Matched/New/Ignored</Text>
+                      <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>{counts.matched} matched • {counts.review} review → new • {counts.ignore} ignored</Text>
+                      
+                      <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Selected Platforms</Text>
+                      <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>{selectedPlatformsState.join(', ') || 'None'}</Text>
+                      
+                      <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Sync Settings</Text>
+                      <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>Mode: {syncMode === 'auto' ? 'Auto' : 'Manual'} • Delist: {delistMode === 'auto' ? 'Auto' : 'Manual'}</Text>
+                      
+                      {Object.keys(priceBuffer).length > 0 && (
+                        <>
+                          <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Price Adjustments</Text>
+                          <Text style={{ color: theme.colors.textSecondary }}>
+                            {platformConnections
+                              .filter(conn => priceBuffer[conn.Id] !== 0)
+                              .map(conn => `${conn.DisplayName}: ${priceBuffer[conn.Id] > 0 ? '+' : ''}${priceBuffer[conn.Id]}%`)
+                              .join(', ') || 'No adjustments'}
+                          </Text>
+                        </>
+                      )}
+                    </View>
+                    <View style={{ marginTop: 20 }}>
+                      <Button title="Complete Import" onPress={() => {
+                        setWizardVisible(false);
+                        navigation.navigate('PublishConfirmation', {
+                          platforms: selectedPlatformsState,
+                          priceBuffer,
+                          syncMode,
+                          delistMode,
+                        } as any);
+                      }} />
+                    </View>
+                  </View>
+                )}
+
+                {/* Nav controls - only show for steps 1-4 */}
+                {wizardStep > 0 && (
+                  <>
+                    <Text style={{ color: theme.colors.textSecondary, textAlign: 'center', marginTop: 20, marginBottom: 8 }}>
+                      {wizardStep === 1 && 'Auto/Manual'}
+                      {wizardStep === 2 && 'Auto Delist'}
+                      {wizardStep === 3 && 'Price Buffer'}
+                      {wizardStep === 4 && 'Review'}
+                    </Text>
+                    <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 20 }}>
+                      <TouchableOpacity
+                        onPress={() => {
+                          if (wizardStep === 1) {
+                            // If going back from step 1, allow reselecting platforms
+                            setWizardStep(0);
+                          } else {
+                            setWizardStep((s) => Math.max(1, s - 1));
+                          }
+                        }}
+                        style={{ padding: 10, opacity: 1 }}
+                      >
+                        <Icon name="chevron-left" size={22} />
+                      </TouchableOpacity>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        {[1, 2, 3, 4].map(i => (
+                          <View
+                            key={`dot-${i}`}
+                            style={{
+                              width: 8,
+                              height: 8,
+                              borderRadius: 4,
+                              backgroundColor: i === wizardStep ? theme.colors.primary : '#E5E7EB'
+                            }}
+                          />
+                        ))}
+                      </View>
+                      <TouchableOpacity
+                        disabled={wizardStep === 4}
+                        onPress={() => setWizardStep((s) => Math.min(4, s + 1))}
+                        style={{ padding: 10, opacity: wizardStep === 4 ? 0.5 : 1 }}
+                      >
+                        <Icon name="chevron-right" size={22} />
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
+
+              </View>
+            </View>
+          </Modal>
+        </>
       )}
     </View>
   );
 };
 
 export default MappingReviewScreen;
+
