@@ -3,7 +3,7 @@
 
 export const FEATURES = {
   MARKETPLACE_ENABLED: false,
-  MARKETPLACE_CHAT_ENABLED: true,
+  MARKETPLACE_CHAT_ENABLED: false,
   ORDERS_ENABLED: false,
 };
 

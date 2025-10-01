@@ -6,6 +6,12 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import PlaceholderImage from '../components/Placeholder';
+import ShopifySvg from '../assets/shopify.svg';
+import AmazonSvg from '../assets/amazon.svg';
+import FacebookSvg from '../assets/facebook.svg';
+import EbaySvg from '../assets/ebay.svg';
+import CloverSvg from '../assets/clover.svg';
+import SquareSvg from '../assets/square.svg';
 import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -97,88 +103,41 @@ const SQUARE_SCOPES = [
 //   return Array.from(byteArray, (byte: number) => byte.toString(16).padStart(2, '0')).join('');
 // };
 
-const getPlatformColor = (platformId: PlatformId): string => {
-  switch (platformId) {
-    case 'shopify':
-      return '#0E8F7F';
-    case 'amazon':
-      return '#F17F5F';
-    case 'clover':
-      return '#3CAD46';
-    case 'square':
-      return '#6C757D';
-    case 'ebay':
-      return '#0064D2';
-    case 'facebook':
-      return '#1877F2';
-    case 'depop':
-      return '#FF2C2C';
-    case 'whatnot':
-      return '#000000';
-    case 'etsy':
-      return '#F56400';
-    default:
-      return '#555555';
-  }
+const getPlatformIcon = (platformId: PlatformId): React.ComponentType<any> | null => {
+  const iconMap: { [key: string]: React.ComponentType<any> } = {
+    shopify: ShopifySvg,
+    amazon: AmazonSvg,
+    facebook: FacebookSvg,
+    ebay: EbaySvg,
+    clover: CloverSvg,
+    square: SquareSvg,
+  };
+  return iconMap[platformId] || null;
 };
 
-const getIconForPlatform = (platform: PlatformId): string => {
-  switch (platform) {
-    case 'shopify':
-      return 'shopping';
-    case 'amazon':
-      return 'package';
-    case 'clover':
-      return 'leaf';
-    case 'square':
-      return 'square-outline';
-    case 'ebay':
-      return 'shopping';
-    case 'facebook':
-      return 'facebook';
-    case 'depop':
-      return 'alpha-d';
-    case 'whatnot':
-      return 'chat-processing';
-    case 'etsy':
-      return 'alpha-e';
-    default:
-      return 'store';
-  }
-};
-
-// Add new connection status types and helper functions
+// Connection status types
 const CONNECTION_STATUS = {
   ACTIVE: 'active',
   INACTIVE: 'inactive',
   PENDING: 'pending',
-  REVIEW: 'review', // new name replacing needs_review
+  REVIEW: 'review',
   READY_TO_SYNC: 'ready_to_sync',
-  NEEDS_REVIEW: 'needs_review', // legacy alias
   SCANNING: 'scanning',
   ERROR: 'error',
   SYNCING: 'syncing',
   RECONCILING: 'reconciling',
-  NEW: 'new',
-  RECONNECT: 'reconnect'
 };
 
-const getStatusDisplay = (status: string, isNewConnection: boolean = false): { label: string, color: string, icon: string } => {
-  // For new connections, show a special "New" status regardless of backend status
-  if (isNewConnection) {
-    return { label: 'New Connection', color: '#30B4FF', icon: 'new-box' };
-  }
-  
+const getStatusDisplay = (status: string): { label: string, color: string, icon: string } => {
   switch (status?.toLowerCase()) {
     case CONNECTION_STATUS.ACTIVE:
       return { label: 'Connected', color: '#34C759', icon: 'check-circle' };
     case CONNECTION_STATUS.INACTIVE:
       return { label: 'Inactive', color: '#8E8E93', icon: 'pause-circle' };
     case CONNECTION_STATUS.PENDING:
-      return { label: 'Setup Needed', color: '#FF9500', icon: 'progress-clock' };
+      return { label: 'Ready to Scan', color: '#FF9500', icon: 'progress-clock' };
     case CONNECTION_STATUS.REVIEW:
-    case CONNECTION_STATUS.NEEDS_REVIEW:
-      return { label: 'Review Products', color: '#FF3B30', icon: 'sync-alert' };
+      return { label: 'Review Products', color: '#FF9500', icon: 'sync-alert' };
     case CONNECTION_STATUS.READY_TO_SYNC:
       return { label: 'Ready to Sync', color: '#93C822', icon: 'check-circle' };
     case CONNECTION_STATUS.SCANNING:
@@ -188,13 +147,7 @@ const getStatusDisplay = (status: string, isNewConnection: boolean = false): { l
     case CONNECTION_STATUS.RECONCILING:
       return { label: 'Reconciling...', color: '#5856D6', icon: 'loading' };
     case CONNECTION_STATUS.ERROR:
-      return { label: 'Connection Error', color: '#FF3B30', icon: 'alert-circle' };
-    case 'reconcile': // Match the string value used in code
-      return { label: 'Data Reconciliation Needed', color: '#FF9500', icon: 'sync-alert' };
-    case CONNECTION_STATUS.NEW:
-      return { label: 'New Connection', color: '#30B4FF', icon: 'new-box' };
-    case CONNECTION_STATUS.RECONNECT:
-      return { label: 'Reconnecting', color: '#5856D6', icon: 'connection' };
+      return { label: 'Error', color: '#FF3B30', icon: 'alert-circle' };
     default:
       return { label: status || 'Unknown', color: '#8E8E93', icon: 'help-circle' };
   }
@@ -245,8 +198,6 @@ const ProfileScreen = () => {
   const [isLoadingConnections, setIsLoadingConnections] = useState(true);
   const [isEditMode, setIsEditMode] = useState(false);
   const [entitlements, setEntitlements] = useState<{ planName: string | null; maxConnections: number; aiScanLimit: number | null; isPaid: boolean } | null>(null);
-  // New state for tracking which connections are using fallback data
-  const [fallbackConnectionIds, setFallbackConnectionIds] = useState<string[]>([]);
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [shopifyShopName, setShopifyShopName] = useState('');
@@ -334,7 +285,6 @@ const ProfileScreen = () => {
   // Define loadConnections function that will be used by fetchConnections
   const loadConnections = async () => {
     setIsLoadingConnections(true);
-    setFallbackConnectionIds([]); // Reset fallback connections list
     
     try {
       console.log('[ProfileScreen] Attempting to fetch user connections');
@@ -388,17 +338,7 @@ const ProfileScreen = () => {
         throw new Error(`Database error: ${error.message}`);
       } else {
         console.log('[ProfileScreen] Successfully fetched connections from DB:', data?.length);
-        
-        if (data && data.length > 0) {
-          // Mark all connections as using fallback data
-          const fallbackIds = data.map(conn => conn.Id);
-          setFallbackConnectionIds(fallbackIds);
-          
-          // Use connections from DB
-          setPlatformConnections(data);
-        } else {
-          setPlatformConnections([]);
-        }
+        setPlatformConnections(data || []);
       }
     } catch (err: any) {
       console.error('[ProfileScreen] Critical error loading connections:', err);
@@ -1222,13 +1162,6 @@ const ProfileScreen = () => {
     };
   }, []);  // Empty dependency array means this runs once on mount and cleanup on unmount
 
-  // Add detection for new connections (created within the last hour)
-  const isRecentlyCreated = (connection: PlatformConnection): boolean => {
-    const createdAt = new Date(connection.CreatedAt);
-    const now = new Date();
-    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-    return createdAt > oneHourAgo;
-  };
 
   return (
     <ScrollView 
@@ -1238,16 +1171,6 @@ const ProfileScreen = () => {
     >
       <Animated.View entering={FadeInUp.delay(100).duration(500)}>
         <Text style={[styles.title, { color: theme.colors.text }]}>Profile</Text>
-        {/* Stale data banner when using saved fallback */}
-        {fallbackConnectionIds.length > 0 && (
-          <View style={{ padding: 10, backgroundColor: '#FFF4CC', borderRadius: 8, marginBottom: 12, flexDirection: 'row', alignItems: 'center' }}>
-            <Icon name="cloud-off-outline" size={18} color="#A15C00" style={{ marginRight: 8 }} />
-            <Text style={{ color: '#A15C00', flex: 1 }}>Some connection statuses are from saved data. They'll update automatically when webhooks arrive.</Text>
-            <TouchableOpacity onPress={loadConnections}>
-              <Text style={{ color: theme.colors.primary, fontWeight: '600' }}>Refresh</Text>
-            </TouchableOpacity>
-          </View>
-        )}
         
         {/* Account Card */}
         <Card style={styles.card}>
@@ -1355,28 +1278,30 @@ const ProfileScreen = () => {
                       }
                       // --- END Parsing ---
 
-                      // --- Restore Original Code & Add Edit Mode Logic ---
-                      return (
-                        <View key={connection.Id} style={styles.integrationItem}>
-                          {/* --- Conditional Delete Button (Edit Mode) --- */}
-                          {isEditMode && (
-                            <TouchableOpacity 
-                              style={styles.deleteButton} // Add this style
-                              onPress={() => handleDisconnectPlatform(connection.Id, platformConfig.name)} 
-                            >
-                              <Icon name="minus-circle-outline" size={24} color={theme.colors.error} />
-                            </TouchableOpacity>
-                          )}
-                          {/* --- Platform Icon (using Placeholder for now) --- */}
-                           <PlaceholderImage 
-                            size={32} 
-                            borderRadius={4} 
-                            color={getPlatformColor(platformConfig.key)}
-                            type="icon"
-                            icon={getIconForPlatform(platformConfig.key)} // Keep using this function
-                          />
-                          {/* --- Display Name (Parsed) --- */}
-                          <Text style={styles.integrationName}>{displayShopName}</Text> 
+                     // Render connection item
+                     const PlatformIconComponent = getPlatformIcon(platformConfig.key);
+                     
+                     return (
+                       <View key={connection.Id} style={styles.integrationItem}>
+                         {/* Delete Button (Edit Mode) */}
+                         {isEditMode && (
+                           <TouchableOpacity 
+                             style={styles.deleteButton}
+                             onPress={() => handleDisconnectPlatform(connection.Id, platformConfig.name)} 
+                           >
+                             <Icon name="minus-circle-outline" size={24} color={theme.colors.error} />
+                           </TouchableOpacity>
+                         )}
+                         {/* Platform Icon (SVG) */}
+                         <View style={styles.platformIconContainer}>
+                           {PlatformIconComponent ? (
+                             <PlatformIconComponent width={32} height={32} />
+                           ) : (
+                             <Icon name="store" size={32} color="#555" />
+                           )}
+                         </View>
+                         {/* Display Name */}
+                         <Text style={styles.integrationName}>{displayShopName}</Text>
                           
                           {/* --- Conditional Right-Side Elements (Not Edit Mode) --- */}
                           {!isEditMode && connection && (
@@ -1384,8 +1309,7 @@ const ProfileScreen = () => {
                               {/* Status display section */}
                               <View style={styles.statusContainer}>
                                 {(() => {
-                                  // Pass isRecentlyCreated to getStatusDisplay to show a special "New Connection" status
-                                  const statusInfo = getStatusDisplay(connection.Status, isRecentlyCreated(connection));
+                                  const statusInfo = getStatusDisplay(connection.Status);
                                   return (
                                     <View style={styles.statusRow}>
                       {/* Spinner for in-progress states */}
@@ -1395,14 +1319,6 @@ const ProfileScreen = () => {
                         <Icon name={statusInfo.icon} size={18} color={statusInfo.color} style={styles.statusIcon} />
                       )}
                                       <Text style={[styles.statusText, { color: statusInfo.color }]}>{statusInfo.label}</Text>
-                                      
-                                      {/* Display fallback data indicator */}
-                                      {fallbackConnectionIds.includes(connection.Id) && (
-                                        <View style={styles.fallbackIndicator}>
-                                          <Icon name="cloud-off-outline" size={14} color={theme.colors.warning} />
-                                          <Text style={styles.fallbackText}>Using saved data</Text>
-                                        </View>
-                                      )}
                                     </View>
                                   );
                                 })()}
@@ -1417,25 +1333,25 @@ const ProfileScreen = () => {
                               
                               {/* Action buttons based on status */}
                               <View style={styles.connectionActions}>
-                                {/* For new connections, show a prominent "Start Sync" button */}
-                                {isRecentlyCreated(connection) && connection.Status === CONNECTION_STATUS.PENDING && (
+                                {/* Pending: Start Scan */}
+                                {connection.Status === CONNECTION_STATUS.PENDING && (
                                   <TouchableOpacity 
-                                    style={[styles.actionButton, { backgroundColor: theme.colors.primary + '25' }]}
+                                    style={[styles.actionButton, { backgroundColor: theme.colors.primary + '20' }]}
                                     onPress={() => startPlatformScan(connection.Id, platformConfig.name)}
                                   >
-                                    <Icon name="rocket-launch" size={18} color={theme.colors.primary} />
-                                    <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Start Initial Sync</Text>
+                                    <Icon name="play-circle" size={18} color={theme.colors.primary} />
+                                    <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Start Scan</Text>
                               </TouchableOpacity>
                                 )}
 
-                                {/* For connections that need review (not new), show the Review & Sync button */}
-                                {!isRecentlyCreated(connection) && (connection.Status === CONNECTION_STATUS.REVIEW || connection.Status === CONNECTION_STATUS.NEEDS_REVIEW) && (
+                                {/* Review: Review products */}
+                                {connection.Status === CONNECTION_STATUS.REVIEW && (
                               <TouchableOpacity 
-                                    style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
+                                    style={[styles.actionButton, { backgroundColor: '#FF9500' + '20' }]}
                                     onPress={() => handleReviewAndSync(connection.Id, platformConfig.name)}
                               >
-                                    <Icon name="sync-alert" size={18} color={theme.colors.primary} />
-                                        <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Review & Sync</Text>
+                                    <Icon name="eye" size={18} color="#FF9500" />
+                                        <Text style={[styles.actionButtonText, { color: '#FF9500' }]}>Review Products</Text>
                               </TouchableOpacity>
                                 )}
                                 
@@ -1837,15 +1753,18 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
   },
-  integrationIcon: {
-    width: 32,
-    height: 32,
+  platformIconContainer: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
     marginRight: 12,
   },
   integrationName: {
     fontSize: 16,
     flex: 1,
-    marginLeft: 12,
   },
   connectedBadge: {
     paddingHorizontal: 8,
@@ -2285,22 +2204,6 @@ const styles = StyleSheet.create({
   manageText: {
     fontSize: 12,
     fontWeight: '600',
-  },
-  fallbackIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center', 
-    backgroundColor: '#FFA500' + '25', // Brighter background for pill
-    paddingHorizontal: 10, // More horizontal padding for pill shape
-    paddingVertical: 5,    // Vertical padding for pill shape
-    borderRadius: 15,      // Fully rounded corners for pill
-    marginLeft: 8,
-    marginTop: 2, // Add a small top margin if needed to separate from status text
-  },
-  fallbackText: {
-    fontSize: 11, // Slightly larger for better readability in a pill
-    color: '#FFA500', // Keep warning color for text
-    fontWeight: '500', // Make text a bit bolder
-    marginLeft: 4, // Adjust spacing from icon if needed
   },
   connectionInfoContainer: {
     flex: 1,

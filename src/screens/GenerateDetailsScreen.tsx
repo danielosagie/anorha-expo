@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 'react-native';
 import { CameraView } from 'expo-camera';
@@ -11,6 +11,7 @@ import { Boxes, X, Sparkles, Pencil, ArrowLeft } from 'lucide-react-native';
 import BottomActionBar from '../components/BottomActionBar';
 import ListingEditorForm from '../components/ListingEditorForm';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { hydratePlatformsFromBackend, normalizeForListingEditor, isEmpty } from '../utils/platformDataHydration';
 
 // Feature flag to hide AI refill functionality
 const ENABLE_AI_REFILL_FEATURES = true;
@@ -340,99 +341,7 @@ const groupVersionsByMatchId = (versions: Array<{ id: string; jobId: string; cre
   return result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 };
 
-// Helper function to flatten the new AI response format with full backwards compatibility
-const flattenPlatformData = (platformData: any): any => {
-  if (!platformData || typeof platformData !== 'object') {
-    return platformData;
-  }
-
-  console.log(platformData)
-
-  const flattened: any = {};
-  
-  for (const [platformKey, platformValue] of Object.entries(platformData)) {
-    if (!platformValue || typeof platformValue !== 'object') {
-      // Simple key-value pair (old format)
-      flattened[platformKey] = platformValue;
-      continue;
-    }
-
-    const platformObj = platformValue as any;
-    
-    // Check if this looks like the new detailed format
-    const hasNewStructure = platformObj.variants || platformObj.seo || platformObj.googleShopping || 
-                           platformObj.listingDetails || platformObj.shippingDetails || platformObj.object;
-    
-    if (hasNewStructure) {
-      // New format: flatten nested structures while preserving important data
-      const flatPlatform: any = {};
-      
-      // Extract top-level fields
-      Object.entries(platformObj).forEach(([key, value]) => {
-        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-          flatPlatform[key] = value;
-        } else {
-          // Handle nested objects - extract useful fields to top level
-          const nestedObj = value as any;
-          
-          if (key === 'seo') {
-            flatPlatform.seoTitle = nestedObj.seoTitle;
-            flatPlatform.seoDescription = nestedObj.seoDescription;
-          } else if (key === 'object' && nestedObj.itemData) {
-            // Square format
-            Object.assign(flatPlatform, nestedObj.itemData);
-            if (nestedObj.itemData.variations && nestedObj.itemData.variations[0]) {
-              const firstVariation = nestedObj.itemData.variations[0];
-              if (firstVariation.itemVariationData) {
-                Object.assign(flatPlatform, firstVariation.itemVariationData);
-                if (firstVariation.itemVariationData.priceMoney) {
-                  flatPlatform.price = firstVariation.itemVariationData.priceMoney.amount / 100; // Convert cents to dollars
-                }
-              }
-            }
-          } else if (key === 'listingDetails') {
-            // eBay listing details
-            Object.entries(nestedObj).forEach(([subKey, subValue]) => {
-              flatPlatform[`listing_${subKey}`] = subValue;
-            });
-            // Also preserve price from buyItNowPrice
-            if (nestedObj.buyItNowPrice) {
-              flatPlatform.price = nestedObj.buyItNowPrice;
-            }
-          } else if (key === 'media' && nestedObj.picURL) {
-            // eBay media
-            flatPlatform.imageUrl = nestedObj.picURL;
-          } else {
-            // For other nested objects, preserve the structure AND flatten key fields
-            flatPlatform[key] = value;
-            
-            // Extract common fields to top level for easier access
-            if (nestedObj.name && !flatPlatform.name) flatPlatform.name = nestedObj.name;
-            if (nestedObj.title && !flatPlatform.title) flatPlatform.title = nestedObj.title;
-            if (nestedObj.description && !flatPlatform.description) flatPlatform.description = nestedObj.description;
-            if (nestedObj.price && !flatPlatform.price) flatPlatform.price = nestedObj.price;
-            
-            // Also flatten all nested properties with prefixed keys to make them accessible
-            Object.entries(nestedObj).forEach(([nestedKey, nestedValue]) => {
-              const flatKey = `${key}_${nestedKey}`;
-              if (!flatPlatform[nestedKey] && !flatPlatform[flatKey]) {
-                flatPlatform[flatKey] = nestedValue;
-              }
-            });
-          }
-        }
-      });
-      
-      flattened[platformKey] = flatPlatform;
-    } else {
-      // Either old simple format, new fields from backend, or nested object - preserve everything
-      flattened[platformKey] = typeof platformObj === 'object' ? 
-        flattenPlatformData(platformObj) : platformObj;
-    }
-  }
-  
-  return flattened;
-};
+// REMOVED - Now using unified hydration utilities from platformDataHydration.ts
 
 function GenerateDetailsScreen({ route, navigation }: Props) {
   // Support both direct props and nested { response: {...} }
@@ -488,23 +397,75 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const first: GeneratedResult | null = useMemo(() => (Array.isArray(results) && results.length > 0 ? results[0] : null), [results]);
   
-  // Flatten the new AI response format to maintain compatibility
-  const platforms: GeneratedPlatformDetails = useMemo(
-    () => {
-      if (!first || !first.platforms) return {};
-      
-      // Handle the new detailed AI response format
-      const rawPlatforms = first.platforms;
-      const flattened = flattenPlatformData(rawPlatforms);
-      
-      console.log('[GEN-DETAILS] Flattened platforms:', Object.keys(flattened));
-      return flattened;
-    },
-    [first]
-  );
+  const [displayedPlatforms, setDisplayedPlatforms] = useState<GeneratedPlatformDetails>({});
+  const lastHydratedJobRef = useRef<string | null>(null);
   
-  const [displayedPlatforms, setDisplayedPlatforms] = useState<GeneratedPlatformDetails>(platforms);
-  const platformKeys: string[] = useMemo(() => Object.keys(platforms as Record<string, any>), [platforms]);
+  // SINGLE hydration point - directly from first.platforms to displayedPlatforms
+  // Use jobId as stable dependency to prevent re-hydration on every render
+  useEffect(() => {
+    if (!first || !first.platforms) return;
+    
+    // Only hydrate if this is new data (different jobId)
+    const currentJobId = jobId || JSON.stringify(first.platforms).slice(0, 50);
+    if (lastHydratedJobRef.current === currentJobId) {
+      console.log('[GEN-DETAILS] Skipping re-hydration - same job');
+      return;
+    }
+    
+    const rawPlatforms = first.platforms;
+    console.log('[GEN-DETAILS] Hydrating new data. JobId:', currentJobId);
+    console.log('[GEN-DETAILS] Raw platforms from backend:', rawPlatforms);
+    
+    // Normalize each platform for ListingEditorForm compatibility
+    const normalized: Record<string, any> = {};
+    for (const [key, value] of Object.entries(rawPlatforms)) {
+      normalized[key] = normalizeForListingEditor(value);
+    }
+    
+    console.log('[GEN-DETAILS] Normalized platforms:', Object.keys(normalized));
+    
+    // CRITICAL: If backend didn't send shopify, create it from first available platform
+    // This ensures canonicalKey (which prefers shopify) has data to display
+    if (!normalized.shopify && Object.keys(normalized).length > 0) {
+      const firstPlatformKey = Object.keys(normalized)[0];
+      const firstPlatformData = normalized[firstPlatformKey];
+      console.log('[GEN-DETAILS] Backend missing shopify - creating canonical from:', firstPlatformKey);
+      
+      // Create shopify with core fields from first platform
+      // Handle various image field names across platforms
+      const imageUrls = firstPlatformData.images || 
+                       firstPlatformData.imageUrls || 
+                       firstPlatformData.imageUrl || 
+                       firstPlatformData.image_link ||
+                       firstPlatformData.picURL ||
+                       (first.sourceImageUrl ? [first.sourceImageUrl] : []);
+      
+      normalized.shopify = {
+        title: firstPlatformData.title || firstPlatformData.name || '',
+        description: firstPlatformData.description || '',
+        price: typeof firstPlatformData.price === 'string' 
+          ? parseFloat(firstPlatformData.price.replace(/[^0-9.]/g, '')) || 0
+          : (firstPlatformData.price || 0),
+        sku: firstPlatformData.sku || '',
+        barcode: firstPlatformData.barcode || '',
+        weight: firstPlatformData.weight || 0,
+        weightUnit: firstPlatformData.weightUnit || 'kg',
+        tags: firstPlatformData.tags || [],
+        images: Array.isArray(imageUrls) ? imageUrls : (imageUrls ? [imageUrls] : []),
+      };
+    }
+    
+    // Hydrate into displayedPlatforms (preserves user edits)
+    setDisplayedPlatforms(prev => {
+      const hydrated = hydratePlatformsFromBackend(normalized, prev);
+      console.log('[GEN-DETAILS] Hydrated platforms:', Object.keys(hydrated));
+      return hydrated;
+    });
+    
+    lastHydratedJobRef.current = currentJobId;
+  }, [first, jobId]);
+  
+  const platformKeys: string[] = useMemo(() => Object.keys(displayedPlatforms as Record<string, any>), [displayedPlatforms]);
   const [jobsModalVisible, setJobsModalVisible] = useState(false);
   const [userGenerateJobs, setUserGenerateJobs] = useState<Array<{ jobId: string; status: string; createdAt: string; completedAt?: string }>>([]);
   const [checklist, setChecklist] = useState<Record<string, { missing: string[]; ready: boolean }>>({});
@@ -590,6 +551,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [currentProductIndex, setCurrentProductIndex] = useState((first?.productIndex as number) ?? (items[0]?.index || 0));
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
+  const [ignoredPlatforms, setIgnoredPlatforms] = useState<string[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const [bottomNavState, setBottomNavState] = useState<'empty' | 'selection' | 'template' | 'platform'>('empty');
   const [itemGenerateJobs, setItemGenerateJobs] = useState<Record<number, { jobId: string; status?: string }>>(jobMap || {});
@@ -601,6 +563,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     if (ready.length) return ready;
     return Object.keys(displayedPlatforms || {});
   }, [selectedPlatforms, checklist, displayedPlatforms]);
+
+  const effectivePlatformsToPublish = useMemo<string[]>(() => {
+    return platformsToPublish.filter(p => !ignoredPlatforms.includes(p));
+  }, [platformsToPublish, ignoredPlatforms]);
 
   const quantityByPlatformComputed = useMemo<Record<string, number>>(() => {
     const out: Record<string, number> = {};
@@ -628,58 +594,26 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }
     return out;
   }, [platformsToPublish, displayedPlatforms]);
-  // Keep displayed platforms in sync with first result changes and merge new fields
+  // Update checklist when displayed platforms change
   useEffect(() => {
-    // Merge new backend fields with existing displayed platforms
-    setDisplayedPlatforms(prev => {
-      const merged: any = { ...prev };
-      
-      // For each platform in the new response
-      Object.entries(platforms).forEach(([platformKey, newPlatformData]) => {
-        const existing = merged[platformKey] || {};
-        const newData = newPlatformData || {};
-        
-        // Smart merge: keep user edits but add new fields from backend
-        const mergedPlatformData: any = { ...existing };
-        
-        // Add any new fields from backend that don't exist in current data
-        Object.entries(newData).forEach(([fieldKey, fieldValue]) => {
-          // Only add if field doesn't exist or is empty in current data
-          const currentValue = existing[fieldKey];
-          const isEmpty = currentValue === undefined || 
-                         currentValue === null || 
-                         (typeof currentValue === 'string' && currentValue.trim() === '') ||
-                         (Array.isArray(currentValue) && currentValue.length === 0);
-          
-          if (isEmpty && fieldValue !== undefined && fieldValue !== null) {
-            mergedPlatformData[fieldKey] = fieldValue;
-          }
-        });
-        
-        merged[platformKey] = mergedPlatformData;
-      });
-      
-      return merged;
-    });
-    
-    // Update checklist
     const requiredByPlatform = getPlatformRequirements();
     const next: Record<string, { missing: string[]; ready: boolean }> = {};
-    for (const key of Object.keys(platforms)) {
-      const data = platforms[key] || {};
+    
+    for (const key of Object.keys(displayedPlatforms)) {
+      const data = displayedPlatforms[key] || {};
       const req = requiredByPlatform[key] || [];
       const missing = req.filter(f => {
         if (f === 'images') {
           const imgs = data.images || data.imageUris || data.files || [];
           return !Array.isArray(imgs) || imgs.length < 1;
         }
-        const v = data[f];
-        return v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+        return isEmpty(data[f]);
       });
       next[key] = { missing, ready: missing.length === 0 };
     }
+    
     setChecklist(next);
-  }, [platforms]);
+  }, [displayedPlatforms]);
 
   // Fetch versions when sheet opens
   useEffect(() => {
@@ -1186,6 +1120,73 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (!baseUrl || !productId || !variantId || !token) return;
       const payload = buildPlatformPayload();
 
+      // Validate readiness: friendly alert with missing fields per platform
+      try {
+        const canonical = payload.platformDetails?.canonical || {};
+        const selected = effectivePlatformsToPublish || [];
+        const missingByPlatform: Record<string, string[]> = {};
+        const required: Record<string, string[]> = {
+          shopify: ['title','sku','price'],
+          square: ['title','sku','price'],
+          clover: ['title','sku','price'],
+          amazon: ['title','sku','price'],
+          ebay: ['title','sku','price'],
+          facebook: ['title','sku','price'],
+        };
+        const hasVal = (k: string) => {
+          const v = (canonical as any)[k];
+          if (k === 'price') return typeof Number(v) === 'number' && !Number.isNaN(Number(v)) && Number(v) > 0;
+          return v != null && String(v).trim().length > 0;
+        };
+        for (const p of selected) {
+          const key = String(p).toLowerCase();
+          const reqs = required[key] || ['title','sku','price'];
+          const miss = reqs.filter(f => !hasVal(f));
+          if (miss.length) missingByPlatform[key] = miss;
+        }
+        if (Object.keys(missingByPlatform).length) {
+          const lines = Object.entries(missingByPlatform).map(([plat, fields]) => `- ${plat}: ${fields.join(', ')}`);
+          // eslint-disable-next-line no-alert
+          alert(`Missing details to publish:\n\n${lines.join('\n')}`);
+          return;
+        }
+      } catch {}
+
+      // Resolve connections and create products on each selected platform
+      try {
+        const connRes = await fetch(`${baseUrl}/api/platform-connections`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const allConnections = connRes.ok ? await connRes.json() : [];
+        const selected = effectivePlatformsToPublish || [];
+
+        for (const platform of selected) {
+          const connection = (allConnections || []).find((c: any) => (c.PlatformType || '').toLowerCase() === platform.toLowerCase());
+          if (!connection) continue;
+
+          const canonical = payload.platformDetails?.canonical || {};
+          const product = {
+            Title: canonical.title || '',
+            Description: canonical.description || '',
+            IsArchived: false,
+          };
+          const variants = [
+            {
+              Sku: canonical.sku || '',
+              Barcode: canonical.barcode || undefined,
+              Title: canonical.title || '',
+              Price: Number(canonical.price || 0),
+            },
+          ];
+
+          await fetch(`${baseUrl}/api/catalog/${platform}/connections/${connection.Id}/products`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ product, variants }),
+          }).catch(() => {});
+        }
+      } catch {}
+
       const canonical = payload.platformDetails?.canonical || {};
       const imageUrl = (() => {
         const idx = typeof payload.media?.coverImageIndex === 'number' ? payload.media.coverImageIndex : 0;
@@ -1199,52 +1200,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         description: canonical.description,
         price: Number(canonical.price || 0),
         imageUrl,
-        platforms: platformsToPublish,
+        platforms: effectivePlatformsToPublish,
         quantityByPlatform: quantityByPlatformComputed,
-      });
+      } as any);
 
-      {/*
-      const res = await fetch(`${baseUrl}/api/products/save-or-publish`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          productId,
-          variantId,
-          publishIntent: 'PUBLISH_PLATFORM_DRAFT',
-          platformDetails: payload.platformDetails,
-          media: payload.media,
-          selectedPlatformsToPublish: payload.selectedPlatformsToPublish,
-        })
-      });
-      if (res.ok) {
-        const canonical = payload.platformDetails?.canonical || {};
-        const imageUrl = (() => {
-          const idx = typeof payload.media?.coverImageIndex === 'number' ? payload.media.coverImageIndex : 0;
-          const arr = Array.isArray(payload.media?.imageUris) ? payload.media.imageUris : [];
-          return arr[idx] || first?.sourceImageUrl || '';
-        })();
-        const platformsList = Object.keys(displayedPlatforms || {});
-        const quantityByPlatform = (() => {
-          const out: Record<string, number> = {};
-          for (const key of platformsList) {
-            const p: any = (displayedPlatforms as any)[key] || {};
-            const q = p.quantity ?? p.inventoryQuantity ?? p.listingDetails?.quantity;
-            if (typeof q === 'number') out[key] = q;
-          }
-          return out;
-        })();
-        navigation.navigate('PublishConfirmation', {
-          productId,
-          variantId,
-          title: canonical.title,
-          description: canonical.description,
-          price: Number(canonical.price || 0),
-          imageUrl,
-          platforms: platformsList,
-          quantityByPlatform,
-        });
-      } 
-        */}
+      // ... existing code ...
     } catch {}
   };
 
@@ -1305,13 +1265,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
       if (generatedPlatforms && generatedPlatforms[platformKey]) {
         // Update displayed platforms with the new generated data
-        setDisplayedPlatforms(prev => ({
-          ...prev,
-          [platformKey]: {
-            ...prev[platformKey],
-            ...flattenPlatformData(generatedPlatforms[platformKey])
-          }
-        }));
+        const normalized = normalizeForListingEditor(generatedPlatforms[platformKey]);
+        setDisplayedPlatforms(prev => 
+          hydratePlatformsFromBackend({ [platformKey]: normalized }, prev)
+        );
       }
     } catch (error) {
       console.error('Platform generation failed:', error);
@@ -1409,10 +1366,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const resultArray = Array.isArray(resultPayload?.results) ? resultPayload.results : [];
       const matched = resultArray.find((r: any) => r.productIndex === currentProductIndex) || resultArray[0];
       const incomingPlatform = (matched?.platforms || {})[platformKey] || {};
-      setDisplayedPlatforms(prev => ({
-        ...prev,
-        [platformKey]: { ...(prev as any)[platformKey], ...flattenPlatformData(incomingPlatform) }
-      }));
+      const normalized = normalizeForListingEditor(incomingPlatform);
+      setDisplayedPlatforms(prev => 
+        hydratePlatformsFromBackend({ [platformKey]: normalized }, prev)
+      );
     } catch (e) {
       console.error('Boost listing failed:', e);
     }
@@ -1454,7 +1411,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             <ListingEditorForm
               platforms={displayedPlatforms}
               images={[first.sourceImageUrl || ''].filter(Boolean)}
-              onChangePlatforms={setDisplayedPlatforms}
+              onChangePlatforms={(next) => {
+                console.log('[GEN-DETAILS] onChangePlatforms received keys:', Object.keys(next || {}));
+                setDisplayedPlatforms(prev => {
+                  const merged = hydratePlatformsFromBackend(next || {}, prev || {});
+                  console.log('[GEN-DETAILS] onChangePlatforms merged keys:', Object.keys(merged || {}));
+                  return merged;
+                });
+              }}
               onOpenFieldPanel={handleOpenFieldPanel}
               onRegenerateField={ENABLE_AI_REFILL_FEATURES ? regenerateField : undefined}
               onOpenBarcodeScanner={(onResult)=>{
@@ -1661,8 +1625,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                   <Text style={{ color: '#666' }}>No versions recorded yet.</Text>
                 ) : versions.map((v, index) => {
                   const isCurrentVersion = v.jobId === jobId;
-                  const flattenedPlatforms = flattenPlatformData(v.platforms || {});
-                  const platformCount = Object.keys(flattenedPlatforms).length;
+                  const platformCount = Object.keys(v.platforms || {}).length;
                   const hasMultipleVersions = (v.versionCount || 1) > 1;
                   
                   return (
@@ -1670,8 +1633,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                       {/* Main version card */}
                       <TouchableOpacity 
                         onPress={() => {
-                          const flattened = flattenPlatformData(v.platforms || {});
-                          setDisplayedPlatforms(flattened);
+                          // Normalize and hydrate the version data
+                          const normalized: Record<string, any> = {};
+                          for (const [key, value] of Object.entries(v.platforms || {})) {
+                            normalized[key] = normalizeForListingEditor(value);
+                          }
+                          setDisplayedPlatforms(prev => hydratePlatformsFromBackend(normalized, prev));
                           setVersionsSheetOpen(false);
                         }} 
                         style={[
@@ -1703,7 +1670,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                         
                         {platformCount > 0 ? (
                           <Text style={{ color: '#000', fontSize: 13 }}>
-                            {platformCount} platform{platformCount !== 1 ? 's' : ''}: {Object.keys(flattenedPlatforms).map(k => PLATFORM_META[k]?.label || k).join(', ')}
+                            {platformCount} platform{platformCount !== 1 ? 's' : ''}: {Object.keys(v.platforms || {}).map(k => PLATFORM_META[k]?.label || k).join(', ')}
                           </Text>
                         ) : (
                           <Text style={{ color: '#999', fontSize: 13, fontStyle: 'italic' }}>No platform data</Text>
@@ -1722,15 +1689,18 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                           <Text style={{ color: '#666', fontSize: 12, marginBottom: 6 }}>All versions for this match:</Text>
                           {v.allVersions.map((version: any, versionIndex: number) => {
                             const isCurrentSubVersion = version.jobId === jobId;
-                            const versionPlatforms = flattenPlatformData(version.platforms || {});
-                            const versionPlatformCount = Object.keys(versionPlatforms).length;
+                            const versionPlatformCount = Object.keys(version.platforms || {}).length;
                             
                             return (
                               <TouchableOpacity
                                 key={version.id}
                                 onPress={() => {
-                                  const flattened = flattenPlatformData(version.platforms || {});
-                                  setDisplayedPlatforms(flattened);
+                                  // Normalize and hydrate the version data
+                                  const normalized: Record<string, any> = {};
+                                  for (const [key, value] of Object.entries(version.platforms || {})) {
+                                    normalized[key] = normalizeForListingEditor(value);
+                                  }
+                                  setDisplayedPlatforms(prev => hydratePlatformsFromBackend(normalized, prev));
                                   setVersionsSheetOpen(false);
                                 }}
                                 style={{
@@ -1754,7 +1724,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                                 
                                 {versionPlatformCount > 0 && (
                                   <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>
-                                    {versionPlatformCount} platforms: {Object.keys(versionPlatforms).map(k => PLATFORM_META[k]?.label || k).join(', ')}
+                                    {versionPlatformCount} platforms: {Object.keys(version.platforms || {}).map(k => PLATFORM_META[k]?.label || k).join(', ')}
                                   </Text>
                                 )}
                                 

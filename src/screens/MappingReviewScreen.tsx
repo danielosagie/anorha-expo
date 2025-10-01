@@ -2752,6 +2752,8 @@ const MappingReviewScreen = () => {
       gap: 10,
     },
     modernEmptyState: {
+      marginTop: 12,
+      minHeight: "25%",
       flex: 1,
       justifyContent: 'center',
       alignItems: 'center',
@@ -2759,7 +2761,7 @@ const MappingReviewScreen = () => {
       backgroundColor: theme.colors.surface,
       borderWidth: 2,
       borderColor: theme.colors.textSecondary,
-      borderRadius: 5,
+      borderRadius: 12,
     },
     emptyStateIcon: {
       marginBottom: 10,

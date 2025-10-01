@@ -3,11 +3,14 @@ import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIn
 import { useTheme } from '../context/ThemeContext';
 import Button from '../components/Button';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import ListingEditorForm from '../components/ListingEditorForm';
+import ListingEditorForm, { ListingEditorFormRef } from '../components/ListingEditorForm';
+import BottomActionBar from '../components/BottomActionBar';
 import ExpoBarcodeScanner from '../components/ExpoBarcodeScanner';
+import { CameraView } from 'expo-camera';
 import Card from '../components/Card';
 import PlaceholderImage from '../components/PlaceholderImage';
-import { supabase } from '../../lib/supabase';
+import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import { createCanonicalBase, hydratePlatformsFromBackend } from '../utils/platformDataHydration';
 import {
   ProductVariant,
   PlatformProductMapping,
@@ -20,6 +23,9 @@ import * as ImagePicker from 'expo-image-picker';
 
 // Base URL for API
 const SSSYNC_API_BASE_URL = 'https://api.sssync.app';
+
+// Toggle to use manual save via BottomActionBar
+const ENABLE_AUTOSAVE = false;
 
 // Enhanced interfaces
 interface ProductDetailNavigationProps {
@@ -101,9 +107,11 @@ const ProductDetailScreen = observer(
     const [isSaving, setIsSaving] = useState(false);
     const [lastSaveTime, setLastSaveTime] = useState<number>(0);
     const [isUploadingImages, setIsUploadingImages] = useState(false);
+    const listingEditorRef = useRef<ListingEditorFormRef | null>(null);
+    const [editPlatforms, setEditPlatforms] = useState<Record<string, any>>({});
     
     // Debounce timer for auto-save
-    const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const SAVE_DEBOUNCE_MS = 1000; // Wait 1 second after last change before saving
 
     // Current form data (now live)
@@ -285,8 +293,7 @@ const ProductDetailScreen = observer(
 
       setIsSaving(true);
       try {
-        const session = await supabase.auth.getSession();
-        const token = session?.data.session?.access_token;
+        const token = await ensureSupabaseJwt();
 
         if (!token) {
           console.error('No authentication token available');
@@ -310,7 +317,7 @@ const ProductDetailScreen = observer(
 
         console.log('Auto-saving product:', detailedItem.Id, updateData);
 
-        // Call the backend API using the correct endpoint from products controller
+        // Update in our API
         const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
           method: 'PUT',
           headers: {
@@ -324,6 +331,31 @@ const ProductDetailScreen = observer(
           const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
           throw new Error(errorData.message || `Failed to update product. Status: ${response.status}`);
         }
+
+        // Push updates to mapped platforms using catalog update (best-effort, do not block UI)
+        try {
+          const token2 = token;
+          const baseUrl = SSSYNC_API_BASE_URL;
+          // Get connections for this user to find platforms for this product
+          const connRes = await fetch(`${baseUrl}/api/platform-connections`, { headers: { Authorization: `Bearer ${token2}` } });
+          const userConnections = connRes.ok ? await connRes.json() : [];
+          // Find mappings for this variant to know which connections to target
+          const mapRes = await fetch(`${baseUrl}/api/platform-product-mappings?productVariantId=${encodeURIComponent(detailedItem.Id)}`, { headers: { Authorization: `Bearer ${token2}` } });
+          const maps = mapRes.ok ? await mapRes.json() : [];
+          for (const m of maps) {
+            const conn = (userConnections || []).find((c:any)=> c.Id === m.PlatformConnectionId);
+            if (!conn) continue;
+            const platform = (conn.PlatformType || '').toLowerCase();
+            // Minimal canonical to update price/title
+            const product = { Title: updateData.Title, Description: updateData.Description };
+            const variants = [{ Id: m.ProductVariantId, Sku: updateData.Sku, Price: updateData.Price, Barcode: updateData.Barcode, Title: updateData.Title }];
+            await fetch(`${baseUrl}/api/catalog/${platform}/connections/${conn.Id}/products/${m.PlatformProductId}`, {
+              method: 'PUT',
+              headers: { Authorization: `Bearer ${token2}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ product, variants })
+            }).catch(()=>{});
+          }
+        } catch {}
 
         // Also update Supabase directly for immediate UI updates
         const { error: supabaseError } = await supabase
@@ -369,7 +401,7 @@ const ProductDetailScreen = observer(
         [field]: value
       }));
       setHasUnsavedChanges(true);
-      scheduleAutoSave();
+      if (ENABLE_AUTOSAVE) scheduleAutoSave();
     }, [scheduleAutoSave]);
 
     // Update inventory quantity with auto-save using the correct API endpoint
@@ -379,8 +411,7 @@ const ProductDetailScreen = observer(
       quantity: number
     ) => {
       try {
-        const session = await supabase.auth.getSession();
-        const token = session?.data.session?.access_token;
+        const token = await ensureSupabaseJwt();
 
         if (!token || !detailedItem) return;
 
@@ -501,8 +532,7 @@ const ProductDetailScreen = observer(
         const updateData = { ImageUrls: updatedImages };
 
         // Update via API
-        const session = await supabase.auth.getSession();
-        const token = session?.data.session?.access_token;
+        const token = await ensureSupabaseJwt();
 
         if (token) {
           const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
@@ -565,6 +595,30 @@ const ProductDetailScreen = observer(
       }
     };
 
+    const reorderImages = async (nextImageUrls: string[]) => {
+      if (!detailedItem) return;
+      try {
+        const session = await supabase.auth.getSession();
+        const token = session?.data.session?.access_token;
+        const updateData = { ImageUrls: nextImageUrls };
+        if (token) {
+          const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
+            method: 'PUT',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(updateData),
+          });
+          if (!response.ok) throw new Error('Failed to reorder images');
+        }
+        setDetailedItem(prev => prev ? { ...prev, ImageUrls: nextImageUrls } : prev);
+        setHasUnsavedChanges(false);
+      } catch (error) {
+        console.error('Error reordering images:', error);
+      }
+    };
+
     const deleteProduct = async () => {
       if (!detailedItem) return;
 
@@ -578,8 +632,7 @@ const ProductDetailScreen = observer(
             style: 'destructive',
             onPress: async () => {
               try {
-                const session = await supabase.auth.getSession();
-                const token = session?.data.session?.access_token;
+                const token = await ensureSupabaseJwt();
 
                 if (token) {
                   const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
@@ -797,6 +850,50 @@ const ProductDetailScreen = observer(
       return imageUrl;
     };
 
+    // Normalize platform type to ListingEditorForm key
+    const normalizePlatformKey = (platformType?: string) => {
+      const type = (platformType || '').toLowerCase();
+      if (type.includes('shopify')) return 'shopify';
+      if (type.includes('square')) return 'square';
+      if (type.includes('clover')) return 'clover';
+      if (type.includes('amazon')) return 'amazon';
+      if (type.includes('ebay')) return 'ebay';
+      if (type.includes('facebook')) return 'facebook';
+      return type || 'unknown';
+    };
+
+    // Hydrate ListingEditorForm with canonical data for all mapped platforms
+    useEffect(() => {
+      if (!detailedItem) return;
+      
+      console.log('[ProductDetail] Hydrating platforms. DetailedItem:', detailedItem);
+      
+      // Create canonical base from product variant
+      const base = createCanonicalBase(detailedItem);
+
+      setEditPlatforms(prev => {
+        // Start with canonical shopify platform
+        const backendPlatforms: Record<string, any> = {
+          shopify: base
+        };
+        
+        // Add platforms for each mapping
+        (mappings || []).forEach(m => {
+          const conn = connections.find(c => c.Id === m.PlatformConnectionId);
+          const key = normalizePlatformKey(conn?.PlatformType);
+          if (key && key !== 'shopify') {
+            backendPlatforms[key] = base;
+          }
+        });
+        
+        // Use unified hydration - preserves user edits
+        const hydrated = hydratePlatformsFromBackend(backendPlatforms, prev);
+        
+        console.log('[ProductDetail] editPlatforms updated:', Object.keys(hydrated), 'shopify.title:', hydrated.shopify?.title);
+        return hydrated;
+      });
+    }, [detailedItem, mappings, connections]);
+
     if (isLoading) {
       return (
         <View style={[styles.container, styles.centered, { backgroundColor: theme.colors.background }]}>
@@ -814,23 +911,6 @@ const ProductDetailScreen = observer(
         </View>
       );
     }
-
-    // Build an adapter object for ListingEditorForm in edit mode
-    const platformsData: Record<string, any> = React.useMemo(() => {
-      // Minimal canonical from existing product
-      const canonical: any = {
-        title: detailedItem?.Title,
-        description: detailedItem?.Description,
-        price: detailedItem?.Price,
-        sku: detailedItem?.Sku,
-        barcode: detailedItem?.Barcode,
-        weight: detailedItem?.Weight,
-        weightUnit: detailedItem?.WeightUnit,
-        images: detailedItem?.ImageUrls || [],
-      };
-      // Start with canonical only; platform-specific can be added later as we fetch
-      return { shopify: canonical };
-    }, [detailedItem]);
 
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -861,404 +941,193 @@ const ProductDetailScreen = observer(
             </View>
           </View>
 
-          {/* Product Images - Enhanced with add/remove functionality */}
-          <Card style={styles.imageSection}>
-            <View style={styles.imageSectionHeader}>
-              <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Images</Text>
-              <TouchableOpacity 
-                onPress={pickImagesFromLibrary}
-                style={[styles.addImageButton, { backgroundColor: theme.colors.primary }]}
-                disabled={isUploadingImages}
-              >
-                {isUploadingImages ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Icon name="plus" size={20} color="#fff" />
-                )}
-              </TouchableOpacity>
-            </View>
-            
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imageScroll}>
-              {detailedItem.ImageUrls && detailedItem.ImageUrls.length > 0 ? (
-                detailedItem.ImageUrls.map((imageUrl, index) => {
-                  const fullImageUrl = getImageUrl(imageUrl);
-                  return (
-                    <View key={index} style={styles.imageContainer}>
-                      <Image
-                        source={{ uri: fullImageUrl }}
-                        style={styles.productImage}
-                        resizeMode="cover"
-                        onError={(error) => {
-                          console.error('Image load error:', error, 'URL:', fullImageUrl);
-                        }}
-                        onLoad={() => {
-                          console.log('Image loaded successfully:', fullImageUrl);
-                        }}
-                      />
-                      {index === 0 && (
-                        <View style={[styles.primaryBadge, { backgroundColor: theme.colors.primary }]}>
-                          <Text style={styles.primaryBadgeText}>Primary</Text>
-                        </View>
-                      )}
-                      <TouchableOpacity
-                        style={[styles.removeImageButton, { backgroundColor: theme.colors.error }]}
-                        onPress={() => {
-                          Alert.alert(
-                            'Remove Image',
-                            'Are you sure you want to remove this image?',
-                            [
-                              { text: 'Cancel', style: 'cancel' },
-                              { text: 'Remove', style: 'destructive', onPress: () => removeImage(index) }
-                            ]
-                          );
-                        }}
-                      >
-                        <Icon name="close" size={12} color="#fff" />
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })
-              ) : (
-                <TouchableOpacity 
-                  style={[styles.placeholderImageContainer, { backgroundColor: theme.colors.surface }]}
-                  onPress={pickImagesFromLibrary}
-                  disabled={isUploadingImages}
-                >
-                  {isUploadingImages ? (
-                    <ActivityIndicator size="large" color={theme.colors.primary} />
-                  ) : (
-                    <>
-                      <PlaceholderImage 
-                        size={120} 
-                        borderRadius={8} 
-                        type="icon" 
-                        icon="image-plus"
-                        color={theme.colors.textSecondary}
-                      />
-                      <Text style={[styles.placeholderText, { color: theme.colors.textSecondary }]}>
-                        Tap to add images
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              )}
-            </ScrollView>
-          </Card>
+          
 
           {/* Listing editor (edit mode) */}
           <Card style={styles.basicSection}>
             <ListingEditorForm
-              platforms={platformsData}
+              ref={listingEditorRef}
+              platforms={editPlatforms}
               images={detailedItem?.ImageUrls || []}
-              onChangePlatforms={() => {}}
+              onChangePlatforms={(next) => { setEditPlatforms(next); setHasUnsavedChanges(true); }}
+              onChangeImages={(next) => { reorderImages(next); }}
               onOpenFieldPanel={undefined}
-              onOpenBarcodeScanner={(onResult) => { /* reuse barcode modal */ setIsBarcodeScannerVisible(true); /* simplistic pass-through */ }}
+              onOpenBarcodeScanner={(onResult)=>{
+                setIsBarcodeScannerVisible(true);
+                // handler stored on closure
+                (ProductDetailScreen as any)._scannerResultHandler = onResult;
+              }}
               onOpenImageCapture={() => pickImagesFromLibrary()}
             />
           </Card>
 
-          {/* Product Identity */}
-          <Card style={styles.identitySection}>
-            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Product Identity</Text>
-            
-            <View style={styles.formGroup}>
-              <Text style={[styles.formLabel, { color: theme.colors.text }]}>SKU</Text>
-              <TextInput
-                style={[styles.formInput, { borderColor: theme.colors.textSecondary, color: theme.colors.text }]}
-                value={formData.Sku}
-                onChangeText={(text) => handleFormChange('Sku', text)}
-                placeholder="Product SKU"
-                placeholderTextColor={theme.colors.textSecondary}
-              />
-            </View>
-
-            <View style={styles.formGroup}>
-              <View style={styles.barcodeRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.formLabel, { color: theme.colors.text }]}>Barcode</Text>
-                  <TextInput
-                    style={[styles.formInput, { borderColor: theme.colors.textSecondary, color: theme.colors.text }]}
-                    value={formData.Barcode || ''}
-                    onChangeText={(text) => handleFormChange('Barcode', text)}
-                    placeholder="Product barcode"
-                    placeholderTextColor={theme.colors.textSecondary}
-                  />
-                </View>
-                <TouchableOpacity 
-                  onPress={() => setIsBarcodeScannerVisible(true)} 
-                  style={[styles.scanButton, { backgroundColor: theme.colors.primary }]}
-                >
-                  <Icon name="barcode-scan" size={20} color="#fff" />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            <View style={styles.formRow}>
-              <View style={[styles.formGroup, { flex: 1 }]}>
-                <Text style={[styles.formLabel, { color: theme.colors.text }]}>Weight</Text>
-                <TextInput
-                  style={[styles.formInput, { borderColor: theme.colors.textSecondary, color: theme.colors.text }]}
-                  value={formData.Weight?.toString() || ''}
-                  onChangeText={(text) => handleFormChange('Weight', parseFloat(text) || 0)}
-                  placeholder="0.0"
-                  placeholderTextColor={theme.colors.textSecondary}
-                  keyboardType="decimal-pad"
-                />
-              </View>
-
-              <View style={[styles.formGroup, { flex: 1, marginLeft: 10 }]}>
-                <Text style={[styles.formLabel, { color: theme.colors.text }]}>Weight Unit</Text>
-                <TextInput
-                  style={[styles.formInput, { borderColor: theme.colors.textSecondary, color: theme.colors.text }]}
-                  value={formData.WeightUnit || ''}
-                  onChangeText={(text) => handleFormChange('WeightUnit', text)}
-                  placeholder="kg"
-                  placeholderTextColor={theme.colors.textSecondary}
-                />
-              </View>
-            </View>
-          </Card>
-
-          {/* Shipping & Tax */}
-          <Card style={styles.shippingSection}>
-            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Shipping & Tax</Text>
-            
-            <View style={styles.switchRow}>
-              <Text style={[styles.switchLabel, { color: theme.colors.text }]}>Requires Shipping</Text>
-              <Switch
-                value={formData.RequiresShipping}
-                onValueChange={(value) => handleFormChange('RequiresShipping', value)}
-                trackColor={{ false: theme.colors.textSecondary, true: theme.colors.primary }}
-              />
-            </View>
-
-            <View style={styles.switchRow}>
-              <Text style={[styles.switchLabel, { color: theme.colors.text }]}>Taxable</Text>
-              <Switch
-                value={formData.IsTaxable}
-                onValueChange={(value) => handleFormChange('IsTaxable', value)}
-                trackColor={{ false: theme.colors.textSecondary, true: theme.colors.primary }}
-              />
-            </View>
-
-            {formData.IsTaxable && (
-              <View style={styles.formGroup}>
-                <Text style={[styles.formLabel, { color: theme.colors.text }]}>Tax Code</Text>
-                <TextInput
-                  style={[styles.formInput, { borderColor: theme.colors.textSecondary, color: theme.colors.text }]}
-                  value={formData.TaxCode || ''}
-                  onChangeText={(text) => handleFormChange('TaxCode', text)}
-                  placeholder="Tax code"
-                  placeholderTextColor={theme.colors.textSecondary}
-                />
-              </View>
-            )}
-          </Card>
-
-          {/* Grouped Inventory Section - Fixed with proper platform names */}
-          <Card style={styles.inventorySection}>
-            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Inventory by Platform</Text>
-            
-            {Object.keys(groupedInventory).length > 0 ? (
-              Object.entries(groupedInventory).map(([platformKey, platformData]) => (
-                <View key={platformKey} style={styles.platformGroup}>
-                  <View style={styles.platformHeader}>
-                    <Icon 
-                      name={getPlatformIcon(platformData.platformType)} 
-                      size={20} 
-                      color={theme.colors.primary} 
-                    />
-                    <Text style={[styles.platformGroupTitle, { color: theme.colors.text }]}>
-                      {platformData.displayName}
-                    </Text>
-                    <Text style={[styles.platformSubtitle, { color: theme.colors.textSecondary }]}>
-                      {platformData.platformType}
-                    </Text>
-                  </View>
-                  
-                  {platformData.locations.map((location) => (
-                    <View key={location.id} style={styles.inventoryRow}>
-                      <View style={styles.inventoryLocation}>
-                        <Icon name="map-marker" size={16} color={theme.colors.textSecondary} />
-                        <Text style={[styles.locationName, { color: theme.colors.text }]}>
-                          {location.locationName}
-                        </Text>
-                      </View>
-                      <TextInput
-                        style={[styles.inventoryInput, { borderColor: theme.colors.textSecondary, color: theme.colors.text }]}
-                        value={location.quantity.toString()}
-                        onChangeText={(text) => {
-                          const newQuantity = parseInt(text) || 0;
-                          updateInventoryQuantity(location.platformConnectionId, location.locationId, newQuantity);
-                        }}
-                        keyboardType="numeric"
-                        placeholder="0"
-                        placeholderTextColor={theme.colors.textSecondary}
-                      />
-                    </View>
-                  ))}
-                </View>
-              ))
-            ) : (
-              <Text style={[styles.noInventoryText, { color: theme.colors.textSecondary }]}>
-                No inventory locations found. Connect to platforms to manage inventory.
-              </Text>
-            )}
-          </Card>
-
-          {/* Platform Connections - Fixed to show actual platform names */}
+          {/* Active Listings */}
           <Card style={styles.platformsSection}>
-            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Platform Connections</Text>
-            
+            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Active Listings</Text>
+
             {mappings.length > 0 ? (
-              mappings.map((mapping) => {
-                const connection = connections.find(c => c.Id === mapping.PlatformConnectionId);
-                const platformName = connection?.DisplayName || `${connection?.PlatformType || 'Unknown'} Account`;
-                const platformType = connection?.PlatformType || 'unknown';
-                
-                return (
-                  <View key={mapping.Id} style={styles.platformRow}>
-                    <View style={styles.platformInfo}>
-                      <Icon 
-                        name={getPlatformIcon(platformType)} 
-                        size={20} 
-                        color={theme.colors.primary} 
-                      />
-                      <View style={styles.platformDetails}>
-                        <Text style={[styles.platformName, { color: theme.colors.text }]}>
-                          {platformName}
-                        </Text>
-                        <Text style={[styles.platformSku, { color: theme.colors.textSecondary }]}>
-                          SKU: {mapping.PlatformSku || detailedItem.Sku || 'N/A'}
-                        </Text>
-                        <Text style={[styles.platformStatus, { 
-                          color: mapping.SyncStatus === 'Success' ? theme.colors.success : 
-                                 mapping.SyncStatus === 'Failed' ? theme.colors.error : 
-                                 theme.colors.warning 
-                        }]}>
-                          Status: {mapping.SyncStatus || 'Connected'}
-                        </Text>
-                        {mapping.LastSyncedAt && (
-                          <Text style={[styles.platformLastSync, { color: theme.colors.textSecondary }]}>
-                            Last synced: {new Date(mapping.LastSyncedAt).toLocaleString()}
-                          </Text>
-                        )}
+              <>
+                {mappings.map((mapping) => {
+                  const connection = connections.find(c => c.Id === mapping.PlatformConnectionId);
+                  const platformName = connection?.DisplayName || `${connection?.PlatformType || 'Unknown'} Account`;
+                  const platformType = connection?.PlatformType || 'unknown';
+                  return (
+                    <View key={mapping.Id} style={styles.platformRow}>
+                      <View style={styles.platformInfo}>
+                        <Icon name={getPlatformIcon(platformType)} size={20} color={theme.colors.primary} />
+                        <View style={styles.platformDetails}>
+                          <Text style={[styles.platformName, { color: theme.colors.text }]}>{platformName}</Text>
+                          <Text style={[styles.platformSku, { color: theme.colors.textSecondary }]}>SKU: {mapping.PlatformSku || detailedItem.Sku || 'N/A'}</Text>
+                          <Text style={[styles.platformStatus, { 
+                            color: mapping.SyncStatus === 'Success' ? theme.colors.success : 
+                                   mapping.SyncStatus === 'Failed' ? theme.colors.error : 
+                                   theme.colors.warning 
+                          }]}>Status: {mapping.SyncStatus || 'Connected'}</Text>
+                        </View>
                       </View>
-                    </View>
-                    <View style={styles.platformActions}>
                       <TouchableOpacity 
-                        style={[styles.syncButton, { backgroundColor: theme.colors.secondary }]}
+                        style={[styles.syncButton, { backgroundColor: theme.colors.error }]}
                         onPress={() => {
-                          // Trigger a sync for this specific platform
-                          Alert.alert('Sync', `Sync with ${platformName}?`, [
+                          Alert.alert('Delist', `Remove listing from ${platformName}?`, [
                             { text: 'Cancel', style: 'cancel' },
-                            { text: 'Sync', onPress: () => console.log('Sync triggered for', platformName) }
+                            { text: 'Delist', style: 'destructive', onPress: () => console.log('Delist from', platformName) }
                           ]);
                         }}
                       >
-                        <Icon name="sync" size={16} color="#fff" />
+                        <Icon name="minus-circle" size={16} color="#fff" />
                       </TouchableOpacity>
                     </View>
-                  </View>
-                );
-              })
+                  );
+                })}
+                <TouchableOpacity
+                  style={[styles.platformRow, { justifyContent: 'center' }]}
+                  onPress={() => listingEditorRef.current?.openPlatformPicker?.()}
+                >
+                  <Text style={[styles.platformName, { color: theme.colors.primary }]}>+ Add Platform</Text>
+                </TouchableOpacity>
+              </>
             ) : (
               <View style={styles.noPlatformsContainer}>
-                <Text style={[styles.noPlatformsText, { color: theme.colors.textSecondary }]}>
-                  Not connected to any platforms
-                </Text>
-                <Button 
-                  title="Connect to Platform"
-                  icon="plus"
-                  onPress={() => navigation.navigate('PlatformConnections', { productId: detailedItem.Id })}
-                />
+                <Text style={[styles.noPlatformsText, { color: theme.colors.textSecondary }]}>No active listings</Text>
+                <TouchableOpacity onPress={() => listingEditorRef.current?.openPlatformPicker?.()} style={[styles.syncButton, { backgroundColor: theme.colors.primary, marginTop: 8 }]}> 
+                  <Text style={{ color: '#fff', fontWeight: '600' }}>+ Add Platform</Text>
+                </TouchableOpacity>
               </View>
             )}
           </Card>
 
           {/* Danger Zone */}
-          <Card style={[styles.dangerZoneSection, { borderColor: theme.colors.error }]}>
-            <TouchableOpacity 
-              style={styles.dangerZoneHeader}
-              onPress={() => setIsDangerZoneVisible(!isDangerZoneVisible)}
-            >
-              <View style={styles.dangerZoneHeaderContent}>
-                <Icon name="alert-circle" size={20} color={theme.colors.error} />
-                <Text style={[styles.dangerZoneTitle, { color: theme.colors.error }]}>Danger Zone</Text>
-              </View>
-              <Icon 
-                name={isDangerZoneVisible ? 'chevron-up' : 'chevron-down'} 
-                size={20} 
-                color={theme.colors.error} 
-              />
-            </TouchableOpacity>
-            
-            {isDangerZoneVisible && (
-              <View style={styles.dangerZoneContent}>
-                <Text style={[styles.dangerZoneDescription, { color: theme.colors.textSecondary }]}>
-                  These actions are permanent and cannot be undone. Please proceed with caution.
+          <Card style={[
+            styles.dangerZoneSection,
+            {
+              borderColor: theme.colors.error,
+              backgroundColor: '#FAFBFC',
+              borderWidth: 1.5,
+              borderRadius: 10,
+              marginTop: 24,
+              marginBottom: 24,
+              padding: 0,
+              overflow: 'hidden'
+            }
+          ]}>
+            <View style={{
+              padding: 16,
+              borderBottomWidth: 0,
+              backgroundColor: 'transparent'
+            }}>
+              <Text style={[
+                styles.dangerZoneTitle,
+                { color: theme.colors.text, fontWeight: '600', fontSize: 20, marginBottom: 0 }
+              ]}>
+                Danger Zone
+              </Text>
+            </View>
+            <View style={{ paddingHorizontal: 8, paddingBottom: 16 }}>
+              {/* Archive Product */}
+              <TouchableOpacity
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  borderWidth: 1.5,
+                  borderColor: theme.colors.warning,
+                  borderRadius: 8,
+                  paddingVertical: 12,
+                  paddingHorizontal: 12,
+                  marginBottom: 12,
+                  backgroundColor: '#fff',
+                  justifyContent: 'center'
+                }}
+                onPress={() => {
+                  Alert.alert(
+                    'Archive Product',
+                    'Are you sure you want to archive this product? You can restore it later.',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      { text: 'Archive', style: 'default', onPress: () => console.log('Archive product') }
+                    ]
+                  );
+                }}
+              >
+                <Icon name="archive" size={20} color={theme.colors.warning} style={{ marginRight: 8 }} />
+                <Text style={{ color: theme.colors.warning, fontWeight: '500', fontSize: 16 }}>
+                  Archive Product
                 </Text>
-                
-                <View style={styles.dangerAction}>
-                  <View style={styles.dangerActionInfo}>
-                    <Text style={[styles.dangerActionTitle, { color: theme.colors.text }]}>
-                      Delete Product
-                    </Text>
-                    <Text style={[styles.dangerActionDescription, { color: theme.colors.textSecondary }]}>
-                      Permanently delete this product from SSSync and all connected platforms
-                    </Text>
-                  </View>
-                  <TouchableOpacity 
-                    style={[styles.dangerButton, { backgroundColor: theme.colors.error }]}
-                    onPress={deleteProduct}
-                  >
-                    <Icon name="delete" size={16} color="#fff" />
-                    <Text style={styles.dangerButtonText}>Delete</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.dangerAction}>
-                  <View style={styles.dangerActionInfo}>
-                    <Text style={[styles.dangerActionTitle, { color: theme.colors.text }]}>
-                      Disconnect All Platforms
-                    </Text>
-                    <Text style={[styles.dangerActionDescription, { color: theme.colors.textSecondary }]}>
-                      Remove this product from all connected platforms but keep it in SSSync
-                    </Text>
-                  </View>
-                  <TouchableOpacity 
-                    style={[styles.dangerButton, { backgroundColor: theme.colors.warning }]}
-                    onPress={() => {
-                      Alert.alert(
-                        'Disconnect All Platforms',
-                        'This will remove the product from all connected platforms but keep it in SSSync. Continue?',
-                        [
-                          { text: 'Cancel', style: 'cancel' },
-                          { text: 'Disconnect', style: 'destructive', onPress: () => console.log('Disconnect all platforms') }
-                        ]
-                      );
-                    }}
-                  >
-                    <Icon name="unlink" size={16} color="#fff" />
-                    <Text style={styles.dangerButtonText}>Disconnect</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
+              </TouchableOpacity>
+              {/* Delete Product */}
+              <TouchableOpacity
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  borderWidth: 1.5,
+                  borderColor: theme.colors.error,
+                  borderRadius: 8,
+                  paddingVertical: 12,
+                  paddingHorizontal: 12,
+                  backgroundColor: '#fff',
+                  justifyContent: 'center'
+                }}
+                onPress={deleteProduct}
+              >
+                <Icon name="delete" size={20} color={theme.colors.error} style={{ marginRight: 8 }} />
+                <Text style={{ color: theme.colors.error, fontWeight: '500', fontSize: 16 }}>
+                  Delete Product
+                </Text>
+              </TouchableOpacity>
+            </View>
           </Card>
         </ScrollView>
+        
 
-        {/* Barcode Scanner Modal */}
-        <Modal
-          visible={isBarcodeScannerVisible}
-          animationType="slide"
-          presentationStyle="fullScreen"
-        >
-          <ExpoBarcodeScanner 
-            onClose={() => setIsBarcodeScannerVisible(false)}
-            onCodeScanned={handleBarcodeScanned} 
+        {hasUnsavedChanges && (
+          <BottomActionBar
+            primaryLabel={isSaving ? 'Saving…' : 'Save changes'}
+            primaryDisabled={isSaving}
+            onPrimary={() => performAutoSave()}
           />
-        </Modal>
+        )}
+        {/* Barcode Scanner Modal */}
+        {isBarcodeScannerVisible && (
+          <View style={styles.scannerDockFull} pointerEvents="box-none">
+            <View style={styles.scannerFullBleed}>
+              <CameraView
+                style={{ width: '100%', height: 240 }}
+                facing={'back'}
+                onBarcodeScanned={(result:any) => {
+                  const code = result?.data || result?.rawValue;
+                  if (code && (ProductDetailScreen as any)._scannerResultHandler) {
+                    (ProductDetailScreen as any)._scannerResultHandler(code);
+                    setIsBarcodeScannerVisible(false);
+                    (ProductDetailScreen as any)._scannerResultHandler = null;
+                  }
+                }}
+                barcodeScannerSettings={{ barcodeTypes: ['qr','ean13','upc_a','upc_e','code128'] }}
+              />
+              <TouchableOpacity onPress={() => { setIsBarcodeScannerVisible(false); (ProductDetailScreen as any)._scannerResultHandler = null; }} style={styles.scannerCloseFull}>
+                <Text style={{ color: '#fff', fontSize: 28 }}>×</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
       </View>
     );
   }
@@ -1268,6 +1137,12 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  scannerDock: { position: 'absolute', top: 6, left: 56, right: 56, zIndex: 5000 },
+  scannerCard: { backgroundColor: '#000', borderRadius: 18, borderWidth: 2, borderColor: '#111', overflow: 'hidden' },
+  scannerClose: { position: 'absolute', top: 14, right: 6, backgroundColor: 'rgba(0,0,0,0.6)', width: 48, height: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  scannerDockFull: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 5000 },
+  scannerFullBleed: { backgroundColor: '#000', borderBottomLeftRadius: 16, borderBottomRightRadius: 16, overflow: 'hidden' },
+  scannerCloseFull: { position: 'absolute', top: 100, right: 12, backgroundColor: 'rgba(0,0,0,0.5)', width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   centered: {
     justifyContent: 'center',
     alignItems: 'center',

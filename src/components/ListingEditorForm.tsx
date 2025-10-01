@@ -10,6 +10,7 @@ import SquareSvg from '../assets/square.svg';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes, X, Sparkles } from 'lucide-react-native';
 import { black, grey400 } from 'react-native-paper/lib/typescript/styles/themes/v2/colors';
+import { overlay } from 'react-native-paper';
 
 export type PlatformsData = Record<string, any>;
 
@@ -28,6 +29,9 @@ type Props = {
   enableAIRefill?: boolean;
   onSuggestVariants?: (platformKey: string) => void;
   onBoostListing?: (platformKey: string, kind: 'boost' | 'advanced') => void;
+  // Optional publish-ignore controls
+  onToggleIgnorePlatform?: (platformKey: string, ignored: boolean) => void;
+  isPlatformIgnored?: (platformKey: string) => boolean;
 };
 
 export type ListingEditorFormRef = { openPlatformPicker: () => void };
@@ -85,9 +89,20 @@ const DEFAULT_INVENTORY_TYPE_BY_PLATFORM: Record<string, InventoryType> = {
   depop: 'BASIC',
 };
 
-function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing }: Props, ref: React.Ref<ListingEditorFormRef>) {
-  const platformKeys = useMemo(() => Object.keys(platforms || {}), [platforms]);
-  const [activeTab, setActiveTab] = useState<string>(platformKeys[0] || 'all');
+function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored }: Props, ref: React.Ref<ListingEditorFormRef>) {
+  const platformKeys = useMemo(() => {
+    const keys = Object.keys(platforms || {}).filter((k) => typeof k === 'string' && k.trim().length > 0);
+    console.log('[ListingEditorForm] platformKeys:', keys);
+    return keys;
+  }, [platforms]);
+  
+  const canonicalKey = useMemo(() => {
+    const key = platformKeys.includes('shopify') ? 'shopify' : (platformKeys[0] || 'shopify');
+    console.log('[ListingEditorForm] canonicalKey:', key, 'from platformKeys:', platformKeys);
+    return key;
+  }, [platformKeys]);
+  
+  const [activeTab, setActiveTab] = useState<string>(canonicalKey);
   const [showAdditionalFields, setShowAdditionalFields] = useState<boolean>(true);
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [optionEditorOpen, setOptionEditorOpen] = useState<boolean>(false);
@@ -102,7 +117,16 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
     openPlatformPicker: () => setShowPlatformPicker(true),
   }), []);
 
-  const canonicalKey = useMemo(() => (platformKeys.includes('shopify') ? 'shopify' : (platformKeys[0] || '')), [platformKeys]);
+  // Update activeTab only if current tab becomes invalid. Avoid redundant resets to canonical.
+  useEffect(() => {
+    console.log('[ListingEditorForm] activeTab effect', { canonicalKey, activeTab, platformKeys });
+    if (!canonicalKey || activeTab === 'all') return;
+    const activeExists = platformKeys.includes(activeTab);
+    if (!activeExists && activeTab !== canonicalKey) {
+      console.log('[ListingEditorForm] activeTab invalid → switching to canonical:', canonicalKey);
+      setActiveTab(canonicalKey);
+    }
+  }, [canonicalKey, platformKeys, activeTab]);
   const activePlatformKey = activeTab === 'all' ? canonicalKey : activeTab;
   const activeData = useMemo<PlatformState>(() => (platforms[activePlatformKey] || {}) as PlatformState, [activePlatformKey, platforms]);
   const selectedInventoryType: InventoryType = (activeData.inventoryType || DEFAULT_INVENTORY_TYPE_BY_PLATFORM[activePlatformKey] || 'BASIC');
@@ -110,6 +134,18 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
   const supportsVariants = selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' || selectedInventoryType === 'VARIANT_WITH_OPTIONS';
 
   const variantSuggestions: Array<{ name: string; values: string[] }> = ((platforms as any)[activePlatformKey]?.__variantSuggestions) || [];
+
+  // Compute minimal required fields per platform for highlighting
+  const requiredByPlatform: Record<string, string[]> = useMemo(() => ({
+    shopify: ['title','sku','price'],
+    square: ['title','sku','price'],
+    amazon: ['title','sku','price'],
+    ebay: ['title','price'],
+    facebook: ['title','price'],
+    clover: ['name','price'],
+  }), []);
+  const requiredFields = requiredByPlatform[activePlatformKey] || ['title','sku','price'];
+  const ignoredForPublish = isPlatformIgnored?.(activePlatformKey) ?? false;
 
   const patchField = (key: string, value: any) => {
     const keyToEdit = activePlatformKey;
@@ -310,9 +346,11 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
 
   const pills = ['all', ...platformKeys];
   // Add a couple of extra platforms for quick swap-in
-  const allKnownPlatforms = Array.from(new Set([...Object.keys(PLATFORM_META), 'Whatnot', 'Depop']));
+  const allKnownPlatforms = Array.from(new Set([...Object.keys(PLATFORM_META), 'whatnot', 'depop']));
   const addPlatform = async (platformKey: string, shouldGenerate: boolean = false) => {
-    if (!platformKey || platformKeys.includes(platformKey)) return;
+    if (!platformKey) return;
+    platformKey = platformKey.toLowerCase().trim();
+    if (platformKeys.includes(platformKey)) return;
     
     if (shouldGenerate && onGeneratePlatform) {
       // Start generation process
@@ -465,6 +503,16 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
           <Text style={styles.pillText}>+ Add Platform</Text>
         </TouchableOpacity>
       </ScrollView>
+      {activeTab !== 'all' && onToggleIgnorePlatform && (
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 8 }}>
+          <TouchableOpacity
+            style={[styles.btnSecondary, { backgroundColor: ignoredForPublish ? '#FFEFEF' : '#FFF', borderColor: ignoredForPublish ? '#ef4444' : '#E5E5E5' }]}
+            onPress={() => onToggleIgnorePlatform(activePlatformKey, !ignoredForPublish)}
+          >
+            <Text style={{ color: ignoredForPublish ? '#ef4444' : '#000' }}>{ignoredForPublish ? 'Will NOT publish' : 'Publish enabled'}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       {showPlatformPicker && (
         <View style={styles.platformPickerDock}>
           <View style={styles.platformPickerCapsule}>
@@ -502,6 +550,7 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
           onInfo={() => onOpenFieldPanel?.('title')}
           onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'title') : undefined}
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('title')}
+          error={requiredFields?.includes?.('title') && !activeData.title}
         />
 
         <Field
@@ -523,16 +572,31 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('tags')}
         />
         
-        <Field
-          label="Price"
-          required
-          keyboardType="decimal-pad"
-          value={String(activeData.price ?? '')}
-          onChangeText={(t) => patchField('price', t)}
-          onInfo={() => onOpenFieldPanel?.('price')}
-          onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'price') : undefined}
-          refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('price')}
-        />
+        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-end' }}>
+          <View style={{ flex: 1, flexDirection: "row", gap: 8, alignItems: "flex-end"}}>
+            <View style={{flex:1}}>
+              <Field
+                label="Price"
+                required
+                keyboardType="decimal-pad"
+                value={String((activeData as any).price ?? '')}
+                onChangeText={(t) => patchField('price', t)}
+                onInfo={() => onOpenFieldPanel?.('price')}
+                onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'price') : undefined}
+                refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('price')}
+                error={requiredFields?.includes?.('price') && ((activeData as any).price == null || String((activeData as any).price) === '')}
+              />
+            </View>
+            <View style={{ width: "25%", marginBottom: 12 }}>
+              <Dropdown
+                label="USD"
+                options={["USD","CAD","EUR","GBP"]}
+                value={(activeData as any).currency || 'USD'}
+                onChange={(v)=>patchField('currency', v)}
+              />
+            </View>
+          </View>
+        </View>
        
        <View style={{ flexDirection: 'row', gap: 8, justifyContent: 'flex-end', alignItems: 'flex-end',}}>
           <View style={{ flex: 1}}>
@@ -551,6 +615,7 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
           onInfo={() => onOpenFieldPanel?.('sku')}
           onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'sku') : undefined}
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('sku')}
+          error={requiredFields?.includes?.('sku') && !activeData.sku}
         />
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8}}>
           <View style={{ flex: 1 }}>
@@ -869,7 +934,13 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
 
 export default forwardRef<ListingEditorFormRef, Props>(ListingEditorFormInner);
 
-function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, required, onRegenerate, refilled }: { label: string; value?: string; onChangeText?: (t:string)=>void; multiline?: boolean; keyboardType?: any; onInfo?: ()=>void; required?: boolean; onRegenerate?: ()=>void; refilled?: boolean }) {
+function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, required, onRegenerate, refilled, error }: { label: string; value?: string; onChangeText?: (t:string)=>void; multiline?: boolean; keyboardType?: any; onInfo?: ()=>void; required?: boolean; onRegenerate?: ()=>void; refilled?: boolean; error?: boolean }) {
+  const [local, setLocal] = useState<string>(value ?? '');
+  useEffect(() => {
+    // Update local only when external value actually changes, to avoid wiping user typing mid-cycle
+    const next = value ?? '';
+    if (next !== local) setLocal(next);
+  }, [value]);
   return (
     <View style={{ marginBottom: 12 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10}}>
@@ -891,9 +962,13 @@ function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, re
         )}
       </View>
       <TextInput
-        style={[styles.input, multiline && { minHeight: 100, textAlignVertical: 'top' }]}
-        value={value ?? ''}
-        onChangeText={onChangeText}
+        style={[
+          styles.input,
+          multiline && { minHeight: 100, textAlignVertical: 'top' },
+          error ? { borderColor: '#ef4444' } : null,
+        ]}
+        value={local}
+        onChangeText={(t)=>{ setLocal(t); onChangeText?.(t); }}
         placeholder=''
         placeholderTextColor={"#999999"}
         multiline={multiline}

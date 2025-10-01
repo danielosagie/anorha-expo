@@ -219,6 +219,9 @@ export type AppStackParamList = {
     imageUrl?: string;
     platforms?: string[];
     quantityByPlatform?: Record<string, number>;
+  }
+  OnboardConnectionScreen: {
+
   };
 };
 
@@ -276,29 +279,34 @@ const TabNavigator = () => {
           ),
         }}
       />
-      {isFeatureEnabled('MARKETPLACE_ENABLED') ? (
-        <Tab.Screen 
-          name="Marketplace" 
-          component={MarketplaceScreen}
-          options={{
-            tabBarLabel: 'Marketplace',
-            tabBarIcon: ({ color, size }: { color: string; size: number }) => (
-              <Icon name="store-outline" color={color} size={size} />
-            ),
-          }}
-        />
-      ) : isFeatureEnabled('MARKETPLACE_CHAT_ENABLED') ? (
-        <Tab.Screen 
-          name="MarketplaceChat" 
-          component={MarketplaceChatScreen}
-          options={{
-            tabBarLabel: 'Chat',
-            tabBarIcon: ({ color, size }: { color: string; size: number }) => (
-              <Icon name="message-outline" color={color} size={size} />
-            ),
-          }}
-        />
-      ) : null}
+      {/* Always register both routes to keep child tree stable; hide the disabled one 
+      
+      <Tab.Screen 
+        name="Marketplace" 
+        component={MarketplaceScreen}
+        options={{
+          tabBarLabel: 'Marketplace',
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
+            <Icon name="store-outline" color={color} size={size} />
+          ),
+          // Hide button when feature is disabled
+          tabBarButton: isFeatureEnabled('MARKETPLACE_ENABLED') ? undefined : () => null,
+        }}
+      />
+      
+      */}
+    
+      <Tab.Screen 
+        name="MarketplaceChat" 
+        component={MarketplaceChatScreen}
+        options={{
+          tabBarLabel: 'Chat',
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
+            <Icon name="message-outline" color={color} size={size} />
+          ),
+          tabBarButton: isFeatureEnabled('MARKETPLACE_CHAT_ENABLED') ? undefined : () => null,
+        }}
+      />
       <Tab.Screen 
         name="Profile" 
         component={ProfileScreen}
@@ -583,14 +591,10 @@ const AppNavigator = () => {
              {(props: any) => {
                 // Check both navigation params and local state for initial screen
                 const navInitialScreen = props?.route?.params?.initialScreenName;
-                const effectiveInitialScreen = navInitialScreen || initialAppScreen;
+                const effectiveInitialScreen = navInitialScreen || initialAppScreen || 'TabNavigator';
                 console.log('[AppNavigator] AppStack render - navInitialScreen:', navInitialScreen, 'localInitialScreen:', initialAppScreen, 'effective:', effectiveInitialScreen);
                 
-                return effectiveInitialScreen ? (
-                  <AppStack initialScreenName={effectiveInitialScreen} />
-                ) : (
-                  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator /></View>
-                );
+                return <AppStack initialScreenName={effectiveInitialScreen} />;
              }}
             </Stack.Screen>
 

@@ -59,34 +59,30 @@ const App: React.FC = () => {
       const handleInitialUrl = async () => {
         const initialUrl = await Linking.getInitialURL();
         if (!initialUrl) return;
-        if (!initialUrl.startsWith('sssyncapp://auth-callback')) return;
+        if (!initialUrl.startsWith('sssyncapp://auth-callback') && !initialUrl.startsWith('sssyncapp://auth/callback')) return;
         try {
           const urlObject = new URL(initialUrl);
           const status = urlObject.searchParams.get('status');
           const platform = urlObject.searchParams.get('platform');
-          const message = urlObject.searchParams.get('message');
           if (status === 'success') {
             navigationRef.current?.navigate('AppStack', { screen: 'TabNavigator', params: { screen: 'Profile', params: { refresh: Date.now() } } });
-            Alert.alert('Connection Successful', `Successfully connected ${platform || 'platform'}!`);
           } else if (status === 'error') {
-            Alert.alert('Connection Failed', `Failed to connect ${platform || 'platform'}. ${message ? `Reason: ${message}` : 'Please try again.'}`);
+            // keep default error handling (no success notification)
           }
         } catch {}
       };
       handleInitialUrl();
       const subscription = Linking.addEventListener('url', (event: { url: string }) => {
         const url = event.url;
-        if (!url.startsWith('sssyncapp://auth-callback')) return;
+        if (!url.startsWith('sssyncapp://auth-callback') && !url.startsWith('sssyncapp://auth/callback')) return;
         try {
           const urlObject = new URL(url);
           const status = urlObject.searchParams.get('status');
           const platform = urlObject.searchParams.get('platform');
-          const message = urlObject.searchParams.get('message');
           if (status === 'success') {
             navigationRef.current?.navigate('AppStack', { screen: 'TabNavigator', params: { screen: 'Profile', params: { refresh: Date.now() } } });
-            Alert.alert('Connection Successful', `Successfully connected ${platform || 'platform'}!`);
           } else if (status === 'error') {
-            Alert.alert('Connection Failed', `Failed to connect ${platform || 'platform'}. ${message ? `Reason: ${message}` : 'Please try again.'}`);
+            // keep default error handling (no success notification)
           }
         } catch {}
       });

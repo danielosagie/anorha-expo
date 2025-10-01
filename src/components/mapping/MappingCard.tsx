@@ -87,7 +87,12 @@ const MappingCard: React.FC<MappingCardProps> = ({
           </View>
 
           <View style={[styles.miniCard, styles.rightMini, variant === 'matched' ? styles.rightLinked : variant === 'review' ? styles.rightNeedsReview : variant === 'ignored' ? styles.rightIgnored : styles.rightCreate]}>
-            {(variant === 'matched' || (variant === 'review' && titleRight)) ? (
+            {(variant === 'new' || isResolvedNew) ? (
+              <View style={styles.newRightCard} accessibilityLabel="New item">
+                <Icon name="plus-circle" size={24} color="#fff" />
+                <Text style={styles.newRightText}>New Item</Text>
+              </View>
+            ) : ( (variant === 'matched' || (variant === 'review' && titleRight)) ? (
               <TouchableOpacity style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }} onPress={onSearch} accessibilityLabel="Change match">
                 <View style={styles.rightIconCircleImg}> 
                   {imageRight ? (
@@ -108,7 +113,7 @@ const MappingCard: React.FC<MappingCardProps> = ({
                   {variant === 'review' ? 'Needs Review' : 'Link Product'}
                 </Text>
               </TouchableOpacity>
-            )}
+            ))}
             {variant === 'new' && isResolvedNew && (
               <View style={styles.newPill}>
                 <Text style={styles.newPillText}>Adding As New Item</Text>
@@ -406,6 +411,21 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   bannerNewText: { color: '#FFF', fontWeight: '800' },
+  newRightCard: {
+    flex: 1,
+    minHeight: 70,
+    borderRadius: 8,
+    backgroundColor: '#93C822',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  newRightText: {
+    color: '#fff',
+    fontWeight: '700',
+    marginLeft: 8,
+  },
 });
 
 

@@ -47,7 +47,7 @@ const BottomNav: React.FC<Props> = ({
   onStartConnect,
 }) => {
   return (
-    <LinearGradient colors={["rgb(255, 255, 255)", "rgba(255, 255, 255, 0)"]} style={{}}>
+    <LinearGradient colors={["rgb(255, 255, 255)", "rgba(255, 255, 255, 0)"]} style={{ width: '100%', height: '100%' }}>
       {state === 'empty' && (
         <View style={styles.emptyButtonSolo}>
           {selectedCount < 1 ? (
