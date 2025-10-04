@@ -22,6 +22,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     price,
     imageUrl,
     platforms = [],
+    accountNames = [],
     quantityByPlatform = {},
     origin = 'generate',
     sourcePlatform,
@@ -36,9 +37,15 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   };
 
   const handleReviewInInventory = () => {
+    console.log('[PublishConfirmation] handleReviewInInventory called');
+    console.log('[PublishConfirmation] productId:', productId);
+    console.log('[PublishConfirmation] variantId:', variantId);
+    
     if (productId) {
+      console.log('[PublishConfirmation] Navigating to ProductDetail with productId:', productId);
       navigation.navigate('ProductDetail', { productId });
     } else {
+      console.log('[PublishConfirmation] No productId, navigating to Inventory tab');
       // Fallback to Inventory tab
       navigation.navigate('TabNavigator' as any, { screen: 'Inventory' } as any);
     }
@@ -51,10 +58,9 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   const renderLogoSquare = () => {
     // Show platform + Anorha in the image square area
     const primaryPlatform = (platforms[0] || sourcePlatform || '').toLowerCase();
-    const PlatformSvg = ({ key }: { key: string }) => (renderPlatformSvg(key, 22) as any);
     return (
       <View style={[styles.image, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6', flexDirection: 'row', gap: 10 }]}> 
-        {primaryPlatform ? <PlatformSvg key={primaryPlatform} /> : null}
+        {primaryPlatform ? renderPlatformSvg(primaryPlatform, 22) : null}
         {/* Anorha mark - reuse a square icon */}
         <Icon name="shape" size={22} color="#111" />
       </View>
@@ -159,6 +165,12 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                       <Text style={styles.label}>PRICE</Text>
                       <Text style={styles.value}>{typeof price === 'number' ? `$${price.toFixed(2)}` : '-'}</Text>
                   </View>
+                  {accountNames.length > 0 && (
+                    <View style={{ marginBottom: 12 }}>
+                      <Text style={styles.label}>PUBLISHED TO</Text>
+                      <Text style={styles.value}>{accountNames.join(', ')}</Text>
+                    </View>
+                  )}
                 </View>
               )}
             </ScrollView>

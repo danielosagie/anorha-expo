@@ -17,6 +17,7 @@ export type PlatformsData = Record<string, any>;
 type Props = {
   platforms: PlatformsData;
   images: string[];
+  platformLocations?: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>>;
   onChangePlatforms: (next: PlatformsData) => void;
   onChangeImages?: (next: string[]) => void;
   onOpenFieldPanel?: (fieldKey: string) => void;
@@ -89,7 +90,7 @@ const DEFAULT_INVENTORY_TYPE_BY_PLATFORM: Record<string, InventoryType> = {
   depop: 'BASIC',
 };
 
-function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored }: Props, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, images, platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored }: Props, ref: React.Ref<ListingEditorFormRef>) {
   const platformKeys = useMemo(() => {
     const keys = Object.keys(platforms || {}).filter((k) => typeof k === 'string' && k.trim().length > 0);
     console.log('[ListingEditorForm] platformKeys:', keys);
@@ -129,6 +130,36 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
   }, [canonicalKey, platformKeys, activeTab]);
   const activePlatformKey = activeTab === 'all' ? canonicalKey : activeTab;
   const activeData = useMemo<PlatformState>(() => (platforms[activePlatformKey] || {}) as PlatformState, [activePlatformKey, platforms]);
+  
+  // When in 'all' tab, aggregate locations and quantities from all platforms
+  const aggregatedLocations = useMemo(() => {
+    if (activeTab !== 'all') return activeData.locations || [];
+    const allLocs: Array<{ id: string; name: string; platformKey: string }> = [];
+    for (const platformKey of platformKeys) {
+      const platformData = platforms[platformKey] as PlatformState;
+      const locs = platformData?.locations || [];
+      for (const loc of locs) {
+        allLocs.push({ ...loc, platformKey });
+      }
+    }
+    return allLocs;
+  }, [activeTab, activeData.locations, platformKeys, platforms]);
+  
+  const aggregatedLocationQuantities = useMemo<Record<string, { platformKey: string; quantity: number }>>(() => {
+    if (activeTab !== 'all') return {};
+    const agg: Record<string, { platformKey: string; quantity: number }> = {};
+    for (const platformKey of platformKeys) {
+      const platformData = platforms[platformKey] as PlatformState;
+      const locs = platformData?.locations || [];
+      const locQty = platformData?.locationQuantities || {};
+      for (const loc of locs) {
+        const key = `${platformKey}:${loc.id}`;
+        agg[key] = { platformKey, quantity: locQty[loc.id] || 0 };
+      }
+    }
+    return agg;
+  }, [activeTab, platformKeys, platforms]);
+  
   const selectedInventoryType: InventoryType = (activeData.inventoryType || DEFAULT_INVENTORY_TYPE_BY_PLATFORM[activePlatformKey] || 'BASIC');
   const isAdvanced = selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS';
   const supportsVariants = selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' || selectedInventoryType === 'VARIANT_WITH_OPTIONS';
@@ -148,9 +179,19 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
   const ignoredForPublish = isPlatformIgnored?.(activePlatformKey) ?? false;
 
   const patchField = (key: string, value: any) => {
-    const keyToEdit = activePlatformKey;
-    const next = { ...platforms, [keyToEdit]: { ...(platforms[keyToEdit] || {}), [key]: value } };
-    onChangePlatforms(next);
+    if (activeTab === 'all') {
+      // When in "all" mode, update all platforms
+      const next = { ...platforms };
+      for (const platformKey of platformKeys) {
+        next[platformKey] = { ...(platforms[platformKey] || {}), [key]: value };
+      }
+      onChangePlatforms(next);
+    } else {
+      // Update only the active platform
+      const keyToEdit = activePlatformKey;
+      const next = { ...platforms, [keyToEdit]: { ...(platforms[keyToEdit] || {}), [key]: value } };
+      onChangePlatforms(next);
+    }
   };
 
   const patchPlatform = (updater: (prev: PlatformState) => PlatformState) => {
@@ -159,12 +200,28 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
     onChangePlatforms({ ...platforms, [activePlatformKey]: nextPlatform });
   };
 
-  // Defaults
-  const defaultLocations = useMemo(() => (
-    [{ id: 'loc-1', name: 'Location 1' }, { id: 'loc-2', name: 'Location 2' }]
-  ), []);
-
-  const locations = useMemo(() => (activeData.locations && activeData.locations.length ? activeData.locations : defaultLocations), [activeData.locations, defaultLocations]);
+  // Get locations for the active platform from prop
+  const locations = useMemo(() => {
+    // If platform has its own locations array, use that
+    if (activeData.locations && activeData.locations.length > 0) {
+      return activeData.locations;
+    }
+    
+    // Otherwise, get from platformLocations prop for this platform type
+    const platformType = activePlatformKey.toLowerCase();
+    const platformLocs = platformLocations?.[platformType] || [];
+    
+    if (platformLocs.length > 0) {
+      // Map to expected format with full display name
+      return platformLocs.map(loc => ({
+        id: loc.id,
+        name: `${loc.name} - ${loc.connectionName}`
+      }));
+    }
+    
+    // Fallback to dummy data if no locations available
+    return [{ id: 'loc-default', name: 'Default Location' }];
+  }, [activeData.locations, activePlatformKey, platformLocations]);
   const [selectedLocationId, setSelectedLocationId] = useState<string>(locations[0]?.id || 'loc-1');
 
 
@@ -530,7 +587,7 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
               {allKnownPlatforms.filter(k => !platformKeys.includes(k)).map(k => (
                 <TouchableOpacity key={k} onPress={() => addPlatform(k, true)} style={styles.platformSquare}>
                   {(() => { const map: Record<string, any> = { shopify: ShopifySvg, amazon: AmazonSvg, facebook: FacebookSvg, ebay: EbaySvg, clover: CloverSvg, square: SquareSvg }; const SVG = map[k]; return SVG ? <SVG width={40} height={40} /> : null; })()}
-                  <Text style={{ color: '#000', fontWeight: 500}}>{PLATFORM_META[k]?.label || k}</Text>
+                  <Text style={{ color: '#000', fontWeight: '500'}}>{PLATFORM_META[k]?.label || k}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -578,13 +635,13 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
               <Field
                 label="Price"
                 required
-                keyboardType="decimal-pad"
                 value={String((activeData as any).price ?? '')}
                 onChangeText={(t) => patchField('price', t)}
                 onInfo={() => onOpenFieldPanel?.('price')}
                 onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'price') : undefined}
                 refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('price')}
                 error={requiredFields?.includes?.('price') && ((activeData as any).price == null || String((activeData as any).price) === '')}
+                keyboardType={"decimal-pad"}
               />
             </View>
             <View style={{ width: "25%", marginBottom: 12 }}>
@@ -600,9 +657,9 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
        
        <View style={{ flexDirection: 'row', gap: 8, justifyContent: 'flex-end', alignItems: 'flex-end',}}>
           <View style={{ flex: 1}}>
-            <Field label="Shipping Weight" keyboardType="decimal-pad" value={String(activeData.weight ?? '')} onChangeText={(t) => patchField('weight', t)} onInfo={() => onOpenFieldPanel?.('weight')} />
+            <Field label="Shipping Weight" value={String(activeData.weight ?? '')} onChangeText={(t) => patchField('weight', t)} onInfo={() => onOpenFieldPanel?.('weight')} />
           </View>
-          <View style={{ width: 120, marginBottom: 12 }}> {/*Make this dropdown overlay ontop not push items up? actually same iwth the others*/}
+          <View style={{ width: 120, marginBottom: 12 }}>
             <Dropdown label="Ounces" options={["Ounces","Pounds","Grams","Kilograms"]} value={activeData.weightUnit || 'Ounces'} onChange={(v)=>patchField('weightUnit', v)} />
           </View>
         </View>
@@ -754,9 +811,9 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
       {/* Inventory summary (auto-decided per platform) */}
       <View style={styles.darkerCard}>
         <View style={{ marginVertical: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
-            <Text style={styles.sectionTitle}>Inventory</Text>
+            <Text style={styles.sectionTitle}>Inventory{activeTab === 'all' ? ' (All Platforms)' : ''}</Text>
             {/* Locations only for LOCATION_VARIANT_WITH_OPTIONS; NEVER show for VARIANT_WITH_OPTIONS or BASIC */}
-            {selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && (
+            {selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all' && (
               <Dropdown label={locations.find(l=>l.id===selectedLocationId)?.name || 'Select Location'} options={locations.map(l=>l.name)} value={locations.find(l=>l.id===selectedLocationId)?.name || locations[0]?.name || ''} onChange={(name)=>{
                 const loc = locations.find(l=>l.name===name);
                 if (loc) setSelectedLocationId(loc.id);
@@ -769,48 +826,50 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
             const invKey = selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' ? selectedLocationId : 'default';
             const inv = (variant.inventoryByLocation || {})[invKey] || { quantity: 0, price: undefined };
             return (
-              <View key={`${variant.id}-${variantIdx}`} style={styles.inventoryRow}>
-                <View style={{ flexDirection: "column", gap: 12, alignSelf: 'flex-start'}}>
-                  <Text style={{backgroundColor: '#F8F9FB',alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12, color: '#000', fontWeight: '600'}}>{variantName}</Text>
-                  <View style={{flexDirection: 'row', justifyContent:'flex-end', gap: 9, alignItems: 'center', alignSelf: 'flex-end'}}>
-                    <Text style={{ color: '#000' }}>Quantity:</Text>
-                    <TextInput
-                      style={styles.qtyInput}
-                      keyboardType="number-pad"
-                      value={String(inv.quantity ?? 0)}
-                      onChangeText={(t)=>setVariantAtLocation(variant.id, invKey, 'quantity', Number(t || '0'))}
-                    />
-                  </View>
-                  <View style={{flexDirection: 'row', justifyContent:'flex-end', gap: 9, alignItems: 'center', alignSelf: 'flex-end'}}>
-                    <Text style={{ color: '#000' }}>Price:</Text>
-                    <TextInput
-                      defaultValue='30'
-                      placeholder='$30'
-                      style={styles.qtyInput}
-                      keyboardType="decimal-pad"
-                      value={String(inv.price ?? activeData.price ?? 0)}
-                      onChangeText={(t)=>setVariantAtLocation(variant.id, invKey, 'price', Number(t || '0'))}
-                    />
-                  </View>
-                </View>
-
-                <TouchableOpacity style={styles.variantImgSlot} onPress={() => {
-                  setVariantImagePicker({ variantId: variant.id, open: true });
-                }}>
-                  <Icon name="plus" size={20} color="#888" />
-                </TouchableOpacity>
-              </View>
+              <VariantInventoryRow
+                key={`${variant.id}-${variantIdx}`}
+                variantName={variantName}
+                variantId={variant.id}
+                invKey={invKey}
+                quantity={inv.quantity ?? 0}
+                price={inv.price ?? activeData.price ?? 0}
+                onChangeQuantity={(qty) => setVariantAtLocation(variant.id, invKey, 'quantity', qty)}
+                onChangePrice={(p) => setVariantAtLocation(variant.id, invKey, 'price', p)}
+                onSelectImage={() => setVariantImagePicker({ variantId: variant.id, open: true })}
+              />
             );
           })) : (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Text style={{ color: '#000' }}>Quantity:</Text>
-              <TextInput
-                style={styles.qtyInput}
-                keyboardType="number-pad"
-                value={String((activeData.locationQuantities || {})['default'] ?? 0)}
-                onChangeText={(t)=>setLocationQuantity('default', Number(t || '0'))}
+            activeTab === 'all' ? (
+              // Show all platform locations in "all" tab
+              <View style={{ gap: 12 }}>
+                {aggregatedLocations.length > 0 ? (
+                  aggregatedLocations.map((loc: any) => {
+                    const key = `${loc.platformKey}:${loc.id}`;
+                    const qty = aggregatedLocationQuantities[key]?.quantity || 0;
+                    return (
+                      <View key={key} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#E5E5E5' }}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: '#000', fontWeight: '600' }}>{loc.name}</Text>
+                          <Text style={{ color: '#999', fontSize: 12 }}>{PLATFORM_META[loc.platformKey]?.label || loc.platformKey}</Text>
+                        </View>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <Text style={{ color: '#000' }}>Qty:</Text>
+                          <Text style={{ color: '#000', fontWeight: '600' }}>{qty}</Text>
+                        </View>
+                      </View>
+                    );
+                  })
+                ) : (
+                  <Text style={{ color: '#999', fontStyle: 'italic' }}>No locations available across platforms</Text>
+                )}
+              </View>
+            ) : (
+              // Show simple quantity for single platform
+              <SimpleQuantityInput
+                quantity={(activeData.locationQuantities || {})['default'] ?? 0}
+                onChangeQuantity={(qty) => setLocationQuantity('default', qty)}
               />
-            </View>
+            )
           )}
         
       </View>
@@ -934,13 +993,143 @@ function ListingEditorFormInner({ platforms, images, onChangePlatforms, onChange
 
 export default forwardRef<ListingEditorFormRef, Props>(ListingEditorFormInner);
 
-function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, required, onRegenerate, refilled, error }: { label: string; value?: string; onChangeText?: (t:string)=>void; multiline?: boolean; keyboardType?: any; onInfo?: ()=>void; required?: boolean; onRegenerate?: ()=>void; refilled?: boolean; error?: boolean }) {
-  const [local, setLocal] = useState<string>(value ?? '');
+function SimpleQuantityInput({ quantity, onChangeQuantity }: { quantity: number; onChangeQuantity: (qty: number) => void }) {
+  const [localQty, setLocalQty] = useState(String(quantity));
+  const timeoutRef = React.useRef<any>(null);
+
   useEffect(() => {
-    // Update local only when external value actually changes, to avoid wiping user typing mid-cycle
-    const next = value ?? '';
-    if (next !== local) setLocal(next);
+    console.log('[SimpleQuantityInput] Quantity prop changed:', quantity, 'localQty:', localQty);
+    if (String(quantity) !== localQty) {
+      setLocalQty(String(quantity));
+    }
+  }, [quantity]);
+
+  const handleChange = (text: string) => {
+    console.log('[SimpleQuantityInput] handleChange:', text);
+    const num = text.replace(/[^0-9]/g, '');
+    setLocalQty(num);
+    
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => {
+      console.log('[SimpleQuantityInput] Calling onChangeQuantity with:', Number(num || '0'));
+      onChangeQuantity(Number(num || '0'));
+    }, 300);
+  };
+
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      <Text style={{ color: '#000' }}>Quantity:</Text>
+      <TextInput
+        style={styles.qtyInput}
+        value={localQty}
+        onChangeText={handleChange}
+        placeholder="0"
+      />
+    </View>
+  );
+}
+
+function VariantInventoryRow({ variantName, variantId, invKey, quantity, price, onChangeQuantity, onChangePrice, onSelectImage }: {
+  variantName: string;
+  variantId: string;
+  invKey: string;
+  quantity: number;
+  price: number;
+  onChangeQuantity: (qty: number) => void;
+  onChangePrice: (price: number) => void;
+  onSelectImage: () => void;
+}) {
+  const [localQty, setLocalQty] = useState(String(quantity));
+  const [localPrice, setLocalPrice] = useState(String(price));
+  const qtyTimeoutRef = React.useRef<any>(null);
+  const priceTimeoutRef = React.useRef<any>(null);
+
+  // Sync from parent when values change externally
+  useEffect(() => {
+    if (String(quantity) !== localQty) {
+      setLocalQty(String(quantity));
+    }
+  }, [quantity]);
+
+  useEffect(() => {
+    if (String(price) !== localPrice) {
+      setLocalPrice(String(price));
+    }
+  }, [price]);
+
+  const handleQtyChange = (text: string) => {
+    const num = text.replace(/[^0-9]/g, ''); // Only allow numbers
+    setLocalQty(num);
+    
+    if (qtyTimeoutRef.current) clearTimeout(qtyTimeoutRef.current);
+    qtyTimeoutRef.current = setTimeout(() => {
+      onChangeQuantity(Number(num || '0'));
+    }, 300);
+  };
+
+  const handlePriceChange = (text: string) => {
+    const num = text.replace(/[^0-9.]/g, ''); // Allow numbers and decimal
+    setLocalPrice(num);
+    
+    if (priceTimeoutRef.current) clearTimeout(priceTimeoutRef.current);
+    priceTimeoutRef.current = setTimeout(() => {
+      onChangePrice(Number(num || '0'));
+    }, 300);
+  };
+
+  return (
+    <View style={styles.inventoryRow}>
+      <View style={{ flexDirection: "column", gap: 12, alignSelf: 'flex-start'}}>
+        <Text style={{backgroundColor: '#F8F9FB',alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12, color: '#000', fontWeight: '600'}}>{variantName}</Text>
+        <View style={{flexDirection: 'row', justifyContent:'flex-end', gap: 9, alignItems: 'center', alignSelf: 'flex-end'}}>
+          <Text style={{ color: '#000' }}>Quantity:</Text>
+          <TextInput
+            style={styles.qtyInput}
+            value={localQty}
+            onChangeText={handleQtyChange}
+          />
+        </View>
+        <View style={{flexDirection: 'row', justifyContent:'flex-end', gap: 9, alignItems: 'center', alignSelf: 'flex-end'}}>
+          <Text style={{ color: '#000' }}>Price:</Text>
+              <TextInput
+                placeholder="$30"
+                style={styles.qtyInput}
+                value={localPrice}
+                onChangeText={handlePriceChange}
+                keyboardType={"decimal-pad"}
+              />
+        </View>
+      </View>
+
+      <TouchableOpacity style={styles.variantImgSlot} onPress={onSelectImage}>
+        <Icon name="plus" size={20} color="#888" />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, required, onRegenerate, refilled, error }: { label: string; value?: string; onChangeText?: (t:string)=>void; multiline?: boolean; keyboardType?: any; onInfo?: ()=>void; required?: boolean; onRegenerate?: ()=>void; refilled?: boolean; error?: boolean }) {
+  // Use local state with uncontrolled input to prevent re-render issues
+  const [localValue, setLocalValue] = useState(value ?? '');
+  const timeoutRef = React.useRef<any>(null);
+  
+  // Sync from parent when value changes externally (but not from our own typing)
+  useEffect(() => {
+    if (value !== localValue && value !== undefined) {
+      setLocalValue(value);
+    }
   }, [value]);
+  
+  const handleChange = (text: string) => {
+    setLocalValue(text);
+    
+    // Debounce the callback to parent
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => {
+      onChangeText?.(text);
+    }, 300);
+  };
+  
   return (
     <View style={{ marginBottom: 12 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10}}>
@@ -967,8 +1156,8 @@ function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, re
           multiline && { minHeight: 100, textAlignVertical: 'top' },
           error ? { borderColor: '#ef4444' } : null,
         ]}
-        value={local}
-        onChangeText={(t)=>{ setLocal(t); onChangeText?.(t); }}
+        value={localValue}
+        onChangeText={handleChange}
         placeholder=''
         placeholderTextColor={"#999999"}
         multiline={multiline}

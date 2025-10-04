@@ -13,6 +13,7 @@ import ItemJobsModal from '../components/ItemJobsModal';
 import BottomNav from '../components/BottomNav';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { PackageCheck } from 'lucide-react';
+import { LinearGradient } from 'expo-linear-gradient';
 
 // --- 1. Define Comprehensive Types (from previous step) ---
 interface Price {
@@ -761,17 +762,17 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
     return (
         <View style={styles.container}>
             
-      {/* Tiny bulk button top-left */}
-      <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ position: 'absolute', top: 64, left: 32, zIndex: 4000, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)',minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center', gap: 6 as any }}>
-        <Boxes size={18} color="#000" />
-        <Text style={{ color: '#000', fontWeight: '600' }}>Current Jobs</Text>
-      </TouchableOpacity>
+            {/* Tiny bulk button top-left */}
+            <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ position: 'absolute', top: 64, left: 32, zIndex: 4000, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)',minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center', gap: 6 as any }}>
+                <Boxes size={18} color="#000" />
+                <Text style={{ color: '#000', fontWeight: '600' }}>Current Jobs</Text>
+            </TouchableOpacity>
 
             <FlashList
                 data={serpApiData}
                 extraData={selectedIndices}
                 numColumns={COLUMNS}
-                contentContainerStyle={{ padding: GRID_PADDING }}
+                contentContainerStyle={{ padding: GRID_PADDING, paddingBottom: 140 }}
                 keyExtractor={(item, index) => `${item.position}-${index}`}
                 renderItem={({ item, index }) => (
                     <ProductGridItem
@@ -784,8 +785,8 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
                 removeClippedSubviews={false}
             />
 
-            {/* Prompt when nothing is selected */}
-            {selectedCount === 0 && (
+            {/* Prompt when nothing is selected - HIDDEN: BottomNav handles this now
+            {false && selectedCount === 0 && (
                 <View style={styles.selectPromptContainer} pointerEvents="box-none">
                     <TouchableOpacity style={styles.selectPromptButton} onPress={handleShowSelection} activeOpacity={0.9}>
                         <Icon name="cursor-default-click" size={18} color="#000" style={{marginRight: 8}}/>
@@ -793,66 +794,86 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
                     </TouchableOpacity>
                 </View>
             )}
+            */}
+
+            {/* Dark Overlay for platform/platformPicker states */}
+            {(bottomNavState === 'platform' || bottomNavState === 'template') && (
+                <TouchableOpacity
+                    activeOpacity={1}
+                    onPress={handleBackToSelection}
+                    style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        backgroundColor: 'rgba(0, 0, 0, 0.4)',
+                        zIndex: 999,
+                    }}
+                />
+            )}
 
             {/* --- Enhanced Bottom Navigation Bar (reusable) --- */}
-            <BottomNav
-              state={bottomNavState}
-              selectedCount={selectedCount}
-              selectedTemplate={selectedTemplate}
-              selectedPlatforms={selectedPlatforms}
-              isConnected={isConnected}
-              onShowSelection={handleShowSelection}
-              onShowTemplates={handleShowTemplates}
-              onBackToEmpty={handleBackToEmpty}
-              onBackToSelection={handleBackToSelection}
-              onOpenTemplateModal={() => setTemplateModalVisible(true)}
-              onTemplateSelect={handleTemplateSelect}
-              onPlatformToggle={handlePlatformSelect}
-              onBack={() => navigation.goBack()}
-              onGeneratePress={async () => {
-                try {
-                  const submitResult: JobResponse = await handleGenerate();
-                  const jobId = submitResult?.jobId;
-                  if (jobId) {
-                    setItemGenerateJobs(prev => ({ ...prev, [currentProductIndex]: { jobId } }));
-                    const itemsForModal = (analysisData?.results || []).map((res, idx) => {
-                      const first = res?.serpApiData?.[0];
-                      return {
-                        index: idx,
-                        title: first?.title || `Item ${idx + 1}`,
-                        thumb: first?.image || first?.thumbnail || '',
-                        matchesCount: res?.serpApiData?.length || 0,
-                      };
-                    });
-                    const jobMap = { ...itemGenerateJobs, [currentProductIndex]: { jobId } };
-                    const selectedMatches = selectedIndices.map(i => serpApiData[i]).filter(Boolean);
-                    const firstPhotos = selectedMatches.map(item => item.image || item.thumbnail || '').filter(Boolean);
-                    navigation.navigate('LoadingScreen' as never, {
-                      processType: 'generate',
-                      payload: {
-                        jobId,
-                        firstPhotos,
-                      },
-                      onCompleteRoute: {
-                        screen: 'GenerateDetailsScreen',
-                        params: {
-                          jobResponse: submitResult,
-                          jobId: jobId,
-                          matchJobId: analysisData?.jobId,
-                          items: itemsForModal,
-                          jobMap,
+            <LinearGradient colors={["rgba(255, 255, 255, 0)", "rgb(255, 255, 255)", "rgb(255, 255, 255)",]} style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 1000, paddingBottom: 35}} pointerEvents="box-none">
+                <BottomNav
+                state={bottomNavState}
+                selectedCount={selectedCount}
+                selectedTemplate={selectedTemplate}
+                selectedPlatforms={selectedPlatforms}
+                isConnected={isConnected}
+                onShowSelection={handleShowSelection}
+                onShowTemplates={handleShowTemplates}
+                onBackToEmpty={handleBackToEmpty}
+                onBackToSelection={handleBackToSelection}
+                onOpenTemplateModal={() => setTemplateModalVisible(true)}
+                onTemplateSelect={handleTemplateSelect}
+                onPlatformToggle={handlePlatformSelect}
+                onBack={() => navigation.goBack()}
+                onGeneratePress={async () => {
+                    try {
+                    const submitResult: JobResponse = await handleGenerate();
+                    const jobId = submitResult?.jobId;
+                    if (jobId) {
+                        setItemGenerateJobs(prev => ({ ...prev, [currentProductIndex]: { jobId } }));
+                        const itemsForModal = (analysisData?.results || []).map((res, idx) => {
+                        const first = res?.serpApiData?.[0];
+                        return {
+                            index: idx,
+                            title: first?.title || `Item ${idx + 1}`,
+                            thumb: first?.image || first?.thumbnail || '',
+                            matchesCount: res?.serpApiData?.length || 0,
+                        };
+                        });
+                        const jobMap = { ...itemGenerateJobs, [currentProductIndex]: { jobId } };
+                        const selectedMatches = selectedIndices.map(i => serpApiData[i]).filter(Boolean);
+                        const firstPhotos = selectedMatches.map(item => item.image || item.thumbnail || '').filter(Boolean);
+                        navigation.navigate('LoadingScreen' as never, {
+                        processType: 'generate',
+                        payload: {
+                            jobId,
+                            firstPhotos,
                         },
-                      },
-                    });
-                  } else {
-                    Alert.alert('Error', 'Failed to get valid jobId, try again later');
-                  }
-                } catch (error) {
-                  console.log('Error starting generation');
-                  Alert.alert('Error starting generation');
-                }
-              }}
-            />
+                        onCompleteRoute: {
+                            screen: 'GenerateDetailsScreen',
+                            params: {
+                            jobResponse: submitResult,
+                            jobId: jobId,
+                            matchJobId: analysisData?.jobId,
+                            items: itemsForModal,
+                            jobMap,
+                            },
+                        },
+                        });
+                    } else {
+                        Alert.alert('Error', 'Failed to get valid jobId, try again later');
+                    }
+                    } catch (error) {
+                    console.log('Error starting generation');
+                    Alert.alert('Error starting generation');
+                    }
+                }}
+                />
+            </LinearGradient>
 
             {/* --- Enhanced Template Selection Modal --- */}
             <Modal
@@ -1466,14 +1487,14 @@ export default MatchSelectionScreen;
 const styles = StyleSheet.create({
     container: { 
         flex: 1, 
-        backgroundColor: 'rgb(255, 255, 255)', 
+        backgroundColor: 'rgba(255, 255, 255, 0)', 
         paddingVertical: 20,
     }, 
     centerContainer: { 
         flex: 1, 
         justifyContent: 'center', 
         alignItems: 'center', 
-        backgroundColor: '#FFFFFF' 
+        backgroundColor: 'rgb(255, 255, 255)' 
     }, 
     errorText: { 
         color: '#ff4d4d', 
@@ -1527,6 +1548,7 @@ const styles = StyleSheet.create({
     itemSource: { fontSize: 12, color: '#000000', marginTop: 4 },
     bottomNavContainer: { 
         padding: 20, 
+        backgroundColor: 'transparent',
         borderTopWidth: 1, 
         borderTopColor: '#E5E5E5', 
         //backgroundColor: 'red',
@@ -1550,7 +1572,7 @@ const styles = StyleSheet.create({
         paddingLeft: 30,
         paddingRight: 30,
         marginTop: 10,
-        backgroundColor: 'rgba(255, 255, 255, 0)',
+        backgroundColor: 'transparent',
         minHeight: 100,
         paddingBottom: 12,
     },
@@ -1592,7 +1614,7 @@ const styles = StyleSheet.create({
         width: '100%' 
     },
     emptyButtonSolo: {
-        backgroundColor: 'green',
+        backgroundColor: 'transparent',
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',

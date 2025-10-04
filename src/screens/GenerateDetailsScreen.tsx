@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal } from 'react-native';
 import { CameraView } from 'expo-camera';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -502,7 +502,52 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [regenActiveVersion, setRegenActiveVersion] = useState(0);
   const [regenSubmitting, setRegenSubmitting] = useState(false);
   const [regenAutoRun, setRegenAutoRun] = useState(false);
+  const [publishModalOpen, setPublishModalOpen] = useState(false);
+  const [allConnections, setAllConnections] = useState<any[]>([]);
+  const [selectedConnectionIds, setSelectedConnectionIds] = useState<Record<string, string>>({});
+  const [platformLocations, setPlatformLocations] = useState<Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>>>({});
 
+  // Fetch connections and locations on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+        const token = await ensureSupabaseJwt();
+        if (!baseUrl || !token) return;
+        
+        const connRes = await fetch(`${baseUrl}/api/platform-connections`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const connections = connRes.ok ? await connRes.json() : [];
+        setAllConnections(connections);
+        
+        // Extract locations from connections
+        const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>> = {};
+        for (const conn of connections) {
+          const platform = conn.PlatformType?.toLowerCase();
+          if (!platform || !conn.IsEnabled) continue;
+          
+          const platformData = conn.PlatformSpecificData || {};
+          const locations = platformData.locations || [];
+          
+          if (!locsByPlatform[platform]) locsByPlatform[platform] = [];
+          
+          for (const loc of locations) {
+            locsByPlatform[platform].push({
+              id: loc.id || loc.gid || '',
+              name: loc.name || 'Unnamed Location',
+              connectionId: conn.Id,
+              connectionName: conn.DisplayName || conn.PlatformType
+            });
+          }
+        }
+        setPlatformLocations(locsByPlatform);
+      } catch (e) {
+        console.error('Failed to fetch connections:', e);
+      }
+    })();
+  }, []);
+  
   useEffect(() => {
     if (regenModalOpen && regenAutoRun && !regenSubmitting) {
       // small delay to allow modal layout before firing
@@ -728,7 +773,30 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   }, []);
 
   // Helper: compute overall readiness
-  const canPublish = useMemo(() => Object.values(checklist || {}).some(x => x.ready), [checklist]);
+  // Compute which platforms are ready to publish
+  const readyPlatforms = useMemo(() => {
+    const canonical = displayedPlatforms?.[platformKeys.includes('shopify') ? 'shopify' : platformKeys[0]] || {};
+    const hasVal = (k: string) => {
+      const v = (canonical as any)[k];
+      if (k === 'price') {
+        const num = Number(v);
+        return !isNaN(num) && num > 0;
+      }
+      return v != null && String(v).trim().length > 0;
+    };
+    
+    const ready: string[] = [];
+    for (const platformKey of platformKeys) {
+      const required = ['title', 'sku', 'price'];
+      const allFilled = required.every(f => hasVal(f));
+      if (allFilled && !ignoredPlatforms.includes(platformKey)) {
+        ready.push(platformKey);
+      }
+    }
+    return ready;
+  }, [displayedPlatforms, platformKeys, ignoredPlatforms]);
+  
+  const canPublish = useMemo(() => readyPlatforms.length > 0, [readyPlatforms]);
 
   // Helper: get missing fields for a platform
   const getMissingFields = (platformKey: string) => {
@@ -891,16 +959,30 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     const keys = Object.keys(displayedPlatforms || {});
     const canonicalKey = keys.includes('shopify') ? 'shopify' : keys[0];
     const canonical = (displayedPlatforms?.[canonicalKey] || {}) as any;
-    return {
+    
+    // Helper to parse numeric fields
+    const parseNumeric = (raw: any): number | undefined => {
+      if (raw === undefined || raw === null || raw === '') return undefined;
+      if (typeof raw === 'number') return raw >= 0 ? raw : undefined;
+      const cleaned = parseFloat(String(raw).replace(/[^0-9.]/g, ''));
+      return Number.isFinite(cleaned) && cleaned >= 0 ? cleaned : undefined;
+    };
+    
+    const payload = {
       platformDetails: {
         canonical: {
           title: canonical.title || '',
-          sku: canonical.sku || `DRAFT-${(first?.productId||'').slice(0,8)}`,
-          price: Number(canonical.price || 0),
+          sku: String(canonical.sku || `DRAFT-${(first?.productId||'').slice(0,8)}`),
+          price: (() => {
+            const raw = (canonical as any).price;
+            if (typeof raw === 'number') return raw;
+            const cleaned = parseFloat(String(raw ?? '').replace(/[^0-9.]/g, ''));
+            return Number.isFinite(cleaned) ? cleaned : 0;
+          })(),
           description: canonical.description || '',
-          compareAtPrice: canonical.compareAtPrice || undefined,
+          compareAtPrice: parseNumeric(canonical.compareAtPrice),
           barcode: canonical.barcode || undefined,
-          weight: canonical.weight || undefined,
+          weight: parseNumeric(canonical.weight),
           weightUnit: canonical.weightUnit || undefined,
           tags: Array.isArray(canonical.tags) ? canonical.tags : undefined,
           vendor: canonical.vendor || undefined,
@@ -910,7 +992,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           condition: canonical.condition || undefined,
           categorySuggestion: canonical.categorySuggestion || undefined,
         },
-        ...displayedPlatforms,
+        // DON'T spread displayedPlatforms - backend only wants canonical
       },
       media: (() => {
         // collect image urls from any platform or use sourceImageUrl
@@ -926,6 +1008,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       })(),
       selectedPlatformsToPublish: Object.keys(displayedPlatforms||{}),
     };
+    
+    return payload;
   };
 
   const fillTheRest = async () => {
@@ -1094,7 +1178,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const variantId = (route.params as any)?.variantId || first?.variantId;
       if (!baseUrl || !productId || !variantId || !token) return;
       const payload = buildPlatformPayload();
-      const res = await fetch(`${baseUrl}/api/products/save-or-publish`, {
+      const res = await fetch(`${baseUrl}/api/products/publish`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1103,96 +1187,204 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           publishIntent: 'SAVE_SSSYNC_DRAFT',
           platformDetails: payload.platformDetails,
           media: payload.media,
-          selectedPlatformsToPublish: payload.selectedPlatformsToPublish,
+          selectedPlatformsToPublish: [],
         })
       });
-      // non-blocking UX - you can add a toast here
-    } catch {}
+      
+      if (res.ok) {
+        // Navigate back after successful save
+        navigation.goBack();
+      } else {
+        const errorText = await res.text();
+        console.error('Draft save failed:', errorText);
+        alert('Failed to save draft');
+      }
+    } catch (err) {
+      console.error('Error saving draft:', err);
+      alert('Failed to save draft');
+    }
   };
 
   const doPublish = async () => {
-    console.log('doPublish');
+    console.log('doPublish - Starting publish flow');
+    console.log('displayedPlatforms:', JSON.stringify(displayedPlatforms, null, 2));
+    console.log('readyPlatforms:', readyPlatforms);
+    console.log('platformKeys:', platformKeys);
+    
     try {
+      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const token = await ensureSupabaseJwt();
+      if (!baseUrl || !token) {
+        console.log('doPublish - Missing baseUrl or token');
+        return;
+      }
+      
+      const payload = buildPlatformPayload();
+      const canonical = payload.platformDetails?.canonical || {};
+      console.log('doPublish - Canonical payload:', canonical);
+
+      // Validate readiness
+      const missingByPlatform: Record<string, string[]> = {};
+      const required: Record<string, string[]> = {
+        shopify: ['title','sku','price'],
+        square: ['title','sku','price'],
+        clover: ['title','sku','price'],
+        amazon: ['title','sku','price'],
+        ebay: ['title','sku','price'],
+        facebook: ['title','sku','price'],
+      };
+      const hasVal = (k: string) => {
+        const v = (canonical as any)[k];
+        if (k === 'price') {
+          const num = Number(v);
+          const valid = !isNaN(num) && num > 0;
+          console.log(`doPublish - Validating price: ${v} -> ${num} -> valid: ${valid}`);
+          return valid;
+        }
+        const valid = v != null && String(v).trim().length > 0;
+        console.log(`doPublish - Validating ${k}: ${v} -> valid: ${valid}`);
+        return valid;
+      };
+      for (const p of readyPlatforms) {
+        const key = String(p).toLowerCase();
+        const reqs = required[key] || ['title','sku','price'];
+        const miss = reqs.filter(f => !hasVal(f));
+        if (miss.length) missingByPlatform[key] = miss;
+      }
+      console.log('doPublish - Missing by platform:', missingByPlatform);
+      
+      if (Object.keys(missingByPlatform).length) {
+        const lines = Object.entries(missingByPlatform).map(([plat, fields]) => 
+          `${PLATFORM_META[plat]?.label || plat}: Missing ${fields.join(', ')}`
+        );
+        alert(`Cannot publish yet!\n\n${lines.join('\n')}\n\nPlease fill in all required fields.`);
+        return;
+      }
+
+      // Fetch connections for ready platforms
+      const connRes = await fetch(`${baseUrl}/api/platform-connections`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const connections = connRes.ok ? await connRes.json() : [];
+      setAllConnections(connections);
+      
+      // Extract locations from connections
+      const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>> = {};
+      for (const conn of connections) {
+        const platform = conn.PlatformType?.toLowerCase();
+        if (!platform || !conn.IsEnabled) continue;
+        
+        const platformData = conn.PlatformSpecificData || {};
+        const locations = platformData.locations || [];
+        
+        if (!locsByPlatform[platform]) locsByPlatform[platform] = [];
+        
+        for (const loc of locations) {
+          locsByPlatform[platform].push({
+            id: loc.id || loc.gid || '',
+            name: loc.name || 'Unnamed Location',
+            connectionId: conn.Id,
+            connectionName: conn.DisplayName || conn.PlatformType
+          });
+        }
+      }
+      setPlatformLocations(locsByPlatform);
+      
+      // Auto-select first connection for each ready platform
+      const autoSelected: Record<string, string> = {};
+      for (const platform of readyPlatforms) {
+        const platformConns = connections.filter((c: any) => 
+          c.PlatformType?.toLowerCase() === platform.toLowerCase() && c.IsEnabled
+        );
+        if (platformConns.length > 0) {
+          autoSelected[platform] = platformConns[0].Id;
+        }
+      }
+      setSelectedConnectionIds(autoSelected);
+      
+      // Show modal
+      setPublishModalOpen(true);
+
+    } catch (err) {
+      console.error('Error in doPublish:', err);
+      alert('Failed to prepare publish. Please try again.');
+    }
+  };
+
+  const confirmAndPublish = async () => {
+    try {
+      console.log('[confirmAndPublish] Starting publish...');
+      setPublishModalOpen(false);
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
       const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || first?.productId;
       const variantId = (route.params as any)?.variantId || first?.variantId;
-      if (!baseUrl || !productId || !variantId || !token) return;
+      console.log('[confirmAndPublish] Got IDs:', { productId, variantId, baseUrl: !!baseUrl, token: !!token });
+      if (!baseUrl || !productId || !variantId || !token) {
+        console.log('[confirmAndPublish] Missing required data, aborting');
+        return;
+      }
+      
       const payload = buildPlatformPayload();
-
-      // Validate readiness: friendly alert with missing fields per platform
-      try {
-        const canonical = payload.platformDetails?.canonical || {};
-        const selected = effectivePlatformsToPublish || [];
-        const missingByPlatform: Record<string, string[]> = {};
-        const required: Record<string, string[]> = {
-          shopify: ['title','sku','price'],
-          square: ['title','sku','price'],
-          clover: ['title','sku','price'],
-          amazon: ['title','sku','price'],
-          ebay: ['title','sku','price'],
-          facebook: ['title','sku','price'],
-        };
-        const hasVal = (k: string) => {
-          const v = (canonical as any)[k];
-          if (k === 'price') return typeof Number(v) === 'number' && !Number.isNaN(Number(v)) && Number(v) > 0;
-          return v != null && String(v).trim().length > 0;
-        };
-        for (const p of selected) {
-          const key = String(p).toLowerCase();
-          const reqs = required[key] || ['title','sku','price'];
-          const miss = reqs.filter(f => !hasVal(f));
-          if (miss.length) missingByPlatform[key] = miss;
-        }
-        if (Object.keys(missingByPlatform).length) {
-          const lines = Object.entries(missingByPlatform).map(([plat, fields]) => `- ${plat}: ${fields.join(', ')}`);
-          // eslint-disable-next-line no-alert
-          alert(`Missing details to publish:\n\n${lines.join('\n')}`);
-          return;
-        }
-      } catch {}
-
-      // Resolve connections and create products on each selected platform
-      try {
-        const connRes = await fetch(`${baseUrl}/api/platform-connections`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const allConnections = connRes.ok ? await connRes.json() : [];
-        const selected = effectivePlatformsToPublish || [];
-
-        for (const platform of selected) {
-          const connection = (allConnections || []).find((c: any) => (c.PlatformType || '').toLowerCase() === platform.toLowerCase());
-          if (!connection) continue;
-
-          const canonical = payload.platformDetails?.canonical || {};
-          const product = {
-            Title: canonical.title || '',
-            Description: canonical.description || '',
-            IsArchived: false,
-          };
-          const variants = [
-            {
-              Sku: canonical.sku || '',
-              Barcode: canonical.barcode || undefined,
-              Title: canonical.title || '',
-              Price: Number(canonical.price || 0),
-            },
-          ];
-
-          await fetch(`${baseUrl}/api/catalog/${platform}/connections/${connection.Id}/products`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ product, variants }),
-          }).catch(() => {});
-        }
-      } catch {}
-
       const canonical = payload.platformDetails?.canonical || {};
+
+      // Expand "ALL" selections to actual connection IDs
+      const actualConnectionIds: Record<string, string[]> = {};
+      const accountNamesList: string[] = [];
+      
+      for (const [platform, selection] of Object.entries(selectedConnectionIds)) {
+        const platformConns = allConnections.filter((c: any) => 
+          c.PlatformType?.toLowerCase() === platform.toLowerCase() && c.IsEnabled
+        );
+        
+        if (selection === 'ALL') {
+          actualConnectionIds[platform] = platformConns.map((c: any) => c.Id);
+          accountNamesList.push(...platformConns.map((c: any) => c.DisplayName));
+        } else {
+          actualConnectionIds[platform] = [selection];
+          const conn = platformConns.find((c: any) => c.Id === selection);
+          if (conn) accountNamesList.push(conn.DisplayName);
+        }
+      }
+
+      const platformsToPublish = Object.keys(actualConnectionIds);
+      
+      const publishPayload = {
+        productId,
+        variantId,
+        publishIntent: 'PUBLISH_PLATFORM_LIVE',
+        platformDetails: payload.platformDetails,
+        media: payload.media,
+        selectedPlatformsToPublish: platformsToPublish,
+        connectionIds: actualConnectionIds,
+      };
+      
+      console.log('[confirmAndPublish] Publishing to:', platformsToPublish);
+      console.log('[confirmAndPublish] Connection IDs:', actualConnectionIds);
+      console.log('[confirmAndPublish] Canonical data being sent:', JSON.stringify(payload.platformDetails.canonical, null, 2));
+      console.log('[confirmAndPublish] Full payload:', JSON.stringify(publishPayload, null, 2));
+
+      const publishRes = await fetch(`${baseUrl}/api/products/publish`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(publishPayload),
+      });
+      
+      console.log('[confirmAndPublish] Response status:', publishRes.status);
+
+      if (!publishRes.ok) {
+        const errorText = await publishRes.text();
+        console.error('Publish failed:', errorText);
+        alert(`Failed to publish: ${errorText}`);
+        return;
+      }
+
       const imageUrl = (() => {
         const idx = typeof payload.media?.coverImageIndex === 'number' ? payload.media.coverImageIndex : 0;
         const arr = Array.isArray(payload.media?.imageUris) ? payload.media.imageUris : [];
         return arr[idx] || first?.sourceImageUrl || '';
       })();
+      
       navigation.navigate('PublishConfirmation', {
         productId,
         variantId,
@@ -1200,12 +1392,17 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         description: canonical.description,
         price: Number(canonical.price || 0),
         imageUrl,
-        platforms: effectivePlatformsToPublish,
+        platforms: platformsToPublish,
+        accountNames: accountNamesList,
         quantityByPlatform: quantityByPlatformComputed,
+        origin: 'generate',
+        sourcePlatform: platformsToPublish[0] || 'shopify',
       } as any);
 
-      // ... existing code ...
-    } catch {}
+    } catch (err) {
+      console.error('Error in confirmAndPublish:', err);
+      alert('Failed to publish. Please try again.');
+    }
   };
 
   const pollRegenerateUntilDone = async (regenJobId: string, token?: string) => {
@@ -1387,7 +1584,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         <TouchableOpacity 
           onPress={() => {
             // Navigate back to past scans page
-            (route as any).navigation?.goBack?.() || (route as any).navigation?.navigate?.('TabNavigator', { screen: 'PastScans' });
+            navigation.goBack();
           }} 
           style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}
         >
@@ -1411,6 +1608,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             <ListingEditorForm
               platforms={displayedPlatforms}
               images={[first.sourceImageUrl || ''].filter(Boolean)}
+              platformLocations={platformLocations}
               onChangePlatforms={(next) => {
                 console.log('[GEN-DETAILS] onChangePlatforms received keys:', Object.keys(next || {}));
                 setDisplayedPlatforms(prev => {
@@ -1533,8 +1731,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     </ScrollView>
     <View style={{backgroundColor: 'white', paddingBottom: 24}}>
       <BottomActionBar
-        primaryLabel={canPublish ? 'Publish listing' : 'Publish listing'}
-        primaryDisabled={canPublish}
+        primaryLabel={
+          canPublish 
+            ? `Publish to ${readyPlatforms.length} platform${readyPlatforms.length === 1 ? '' : 's'}` 
+            : 'Publish listing (not ready)'
+        }
+        primaryDisabled={!canPublish}
         onPrimary={doPublish}
         secondaryLabel={'Save draft'}
         onSecondary={doSaveDraft}
@@ -1967,6 +2169,136 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           
         </View>
       </>
+    )}
+
+    {/* Publish Confirmation Modal */}
+    {publishModalOpen && (
+      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 9999 }}>
+        <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 20, width: '90%', maxHeight: '80%' }}>
+          <Text style={{ fontSize: 20, fontWeight: '700', color: '#000', marginBottom: 16 }}>Review & Publish</Text>
+          
+          <ScrollView style={{ maxHeight: 400 }}>
+            <Text style={{ fontSize: 14, fontWeight: '600', color: '#666', marginBottom: 12 }}>Publishing to {readyPlatforms.length} platform(s)</Text>
+            
+            {/* Summary */}
+            <View style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginBottom: 16 }}>
+              <Text style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Product: {buildPlatformPayload().platformDetails?.canonical?.title || 'Untitled'}</Text>
+              <Text style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>SKU: {buildPlatformPayload().platformDetails?.canonical?.sku || 'N/A'}</Text>
+              <Text style={{ fontSize: 12, color: '#666' }}>Price: ${buildPlatformPayload().platformDetails?.canonical?.price || 0}</Text>
+            </View>
+
+            {/* Platform Account Selection */}
+            <Text style={{ fontSize: 14, fontWeight: '600', color: '#000', marginBottom: 8 }}>Select Accounts</Text>
+            {readyPlatforms.map((platform) => {
+              const platformConns = allConnections.filter((c: any) => 
+                c.PlatformType?.toLowerCase() === platform.toLowerCase() && c.IsEnabled
+              );
+              const selectedConnId = selectedConnectionIds[platform];
+              const allSelected = selectedConnId === 'ALL';
+              
+              return (
+                <View key={platform} style={{ marginBottom: 12 }}>
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#666', marginBottom: 4 }}>
+                    {PLATFORM_META[platform]?.label || platform}
+                  </Text>
+                  {platformConns.length === 0 ? (
+                    <Text style={{ fontSize: 12, color: '#F00', fontStyle: 'italic' }}>No connections available</Text>
+                  ) : (
+                    <View style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8 }}>
+                      {/* Ensure default selection is 'ALL' if not set */}
+                      {(() => {
+                        // If no selection for this platform, default to 'ALL'
+                        if (selectedConnId === undefined) {
+                          setTimeout(() => {
+                            setSelectedConnectionIds(prev => {
+                              // Only set if still undefined (avoid race)
+                              if (prev[platform] === undefined) {
+                                return { ...prev, [platform]: 'ALL' };
+                              }
+                              return prev;
+                            });
+                          }, 0);
+                        }
+                        return null;
+                      })()}
+
+                      {/* All option */}
+                      {platformConns.length > 1 && (
+                        <TouchableOpacity
+                          onPress={() => setSelectedConnectionIds(prev => ({ ...prev, [platform]: 'ALL' }))}
+                          style={{
+                            padding: 12,
+                            backgroundColor: allSelected ? '#F0F9FF' : '#FFF',
+                            borderBottomWidth: 1,
+                            borderBottomColor: '#E5E5E5',
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                          }}
+                        >
+                          <Text style={{ fontSize: 14, color: '#000', fontWeight: '600', flex: 1 }}>All Accounts ({platformConns.length})</Text>
+                          {allSelected && <Icon name="check-circle" size={18} color="#93C822" />}
+                        </TouchableOpacity>
+                      )}
+                      {/* Individual accounts */}
+                      {platformConns.map((conn: any) => (
+                        <TouchableOpacity
+                          key={conn.Id}
+                          onPress={() => setSelectedConnectionIds(prev => ({ ...prev, [platform]: conn.Id }))}
+                          style={{
+                            padding: 12,
+                            backgroundColor: selectedConnId === conn.Id ? '#F0F9FF' : '#FFF',
+                            borderBottomWidth: 1,
+                            borderBottomColor: '#E5E5E5',
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                          }}
+                        >
+                          <Text style={{ fontSize: 14, color: '#000', flex: 1 }}>{conn.DisplayName}</Text>
+                          {selectedConnId === conn.Id && <Icon name="check-circle" size={18} color="#93C822" />}
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </ScrollView>
+
+          {/* Actions */}
+          <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
+            <TouchableOpacity
+              onPress={() => setPublishModalOpen(false)}
+              style={{ flex: 1, paddingVertical: 12, backgroundColor: '#F5F5F5', borderRadius: 8, alignItems: 'center' }}
+            >
+              <Text style={{ fontSize: 14, fontWeight: '600', color: '#666' }}>Cancel</Text>
+            </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={confirmAndPublish}
+                      style={{ flex: 1, paddingVertical: 12, backgroundColor: '#93C822', borderRadius: 8, alignItems: 'center' }}
+                      disabled={Object.keys(selectedConnectionIds).length === 0}
+                    >
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: '#FFF' }}>
+                        Publish to {(() => {
+                          let total = 0;
+                          for (const [platform, selection] of Object.entries(selectedConnectionIds)) {
+                            if (selection === 'ALL') {
+                              const platformConns = allConnections.filter((c: any) => 
+                                c.PlatformType?.toLowerCase() === platform.toLowerCase() && c.IsEnabled
+                              );
+                              total += platformConns.length;
+                            } else {
+                              total += 1;
+                            }
+                          }
+                          return total;
+                        })()} Account(s)
+                      </Text>
+                    </TouchableOpacity>
+          </View>
+        </View>
+      </View>
     )}
     </View>
   );

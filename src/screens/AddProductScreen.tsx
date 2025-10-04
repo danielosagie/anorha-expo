@@ -1781,6 +1781,28 @@ const MatchResultsSheet: React.FC<{
   sheetStyle: any;
   onUseForSelection?: () => void;
 }> = ({ matchData, onClose, sheetStyle, onUseForSelection }) => {
+  const [selectedMatchIds, setSelectedMatchIds] = React.useState<Set<string>>(new Set());
+
+  const toggleMatchSelection = (candidateId: string) => {
+    setSelectedMatchIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(candidateId)) {
+        newSet.delete(candidateId);
+      } else {
+        newSet.add(candidateId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleGenerateWithSelected = () => {
+    if (selectedMatchIds.size > 0) {
+      // TODO: Pass selected matches to the generate flow
+      // For now, use the existing onUseForSelection callback
+      onUseForSelection?.();
+    }
+  };
+
   return (
     <Animated.View style={[styles.matchSheet, sheetStyle]}>
       <ScrollView 
@@ -1804,31 +1826,71 @@ const MatchResultsSheet: React.FC<{
             </TouchableOpacity>
         </View>
         
+        <Text style={styles.selectionHint}>
+          Tap to select matches for generating listings
+        </Text>
+        
         <View style={styles.matchResults}>
-          {matchData.rankedCandidates.map((candidate, index) => (
-            <View key={candidate.id} style={styles.matchCard}>
-              <Image source={{ uri: candidate.imageUrl }} style={styles.matchImage} />
-              <View style={styles.matchInfo}>
-                <Text style={styles.matchTitle}>{candidate.title}</Text>
-                <Text style={styles.matchDescription}>{candidate.description}</Text>
-                <Text style={styles.matchPrice}>${candidate.price}</Text>
-                <Text style={styles.matchPercentage}>{candidate.matchPercentage}% match</Text>
-              </View>
-            </View>
-          ))}
+          {matchData.rankedCandidates.map((candidate, index) => {
+            const isSelected = selectedMatchIds.has(candidate.id);
+            
+            return (
+              <TouchableOpacity 
+                key={candidate.id} 
+                style={[
+                  styles.matchCard,
+                  isSelected && styles.matchCardSelected
+                ]}
+                onPress={() => toggleMatchSelection(candidate.id)}
+                activeOpacity={0.7}
+              >
+                <Image source={{ uri: candidate.imageUrl }} style={styles.matchImage} />
+                <View style={styles.matchInfo}>
+                  <Text style={styles.matchTitle}>{candidate.title}</Text>
+                  <Text style={styles.matchDescription} numberOfLines={2}>
+                    {candidate.description}
+                  </Text>
+                  <Text style={styles.matchPrice}>${candidate.price}</Text>
+                  {candidate.sourceUrl && (
+                    <Text style={styles.matchSource} numberOfLines={1}>
+                      {new URL(candidate.sourceUrl).hostname.replace('www.', '')}
+                    </Text>
+                  )}
+                </View>
+                
+                {/* Selection indicator overlay */}
+                {isSelected && (
+                  <View style={styles.matchSelectionOverlay}>
+                    <View style={styles.matchCheckmark}>
+                      <Icon name="check" size={20} color="#FFFFFF" />
+                    </View>
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
         </View>
         
         <View style={styles.sheetActions}>
-          <TouchableOpacity style={styles.primaryButton}>
-            <Text style={styles.primaryButtonText}>List Product</Text>
+          <TouchableOpacity 
+            style={[
+              styles.primaryButton,
+              selectedMatchIds.size === 0 && styles.primaryButtonDisabled
+            ]}
+            onPress={handleGenerateWithSelected}
+            disabled={selectedMatchIds.size === 0}
+          >
+            <Text style={styles.primaryButtonText}>
+              {selectedMatchIds.size > 0 
+                ? `Generate from ${selectedMatchIds.size} match${selectedMatchIds.size > 1 ? 'es' : ''}`
+                : 'Select matches to continue'
+              }
+            </Text>
           </TouchableOpacity>
           
           <View style={styles.secondaryActions}>
             <TouchableOpacity style={styles.secondaryButton}>
               <Text style={styles.secondaryButtonText}>Show More</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.secondaryButton} onPress={onUseForSelection}>
-              <Text style={styles.secondaryButtonText}>Use in Selection</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.secondaryButton}>
               <Text style={styles.secondaryButtonText}>Not My Product</Text>
@@ -2085,23 +2147,7 @@ const BulkItemsSheet: React.FC<{
                   </TouchableOpacity>
                 )}
             </View>
-            
-              {/* Optional quick matches reopen button if present */}
-              {(() => {
-                const hasQuickMatches = quickScanStore?.[item.id];
-                console.log(`[RENDER QUICK BUTTON] Item ${id + 1} (${item.id}): hasQuickMatches = ${hasQuickMatches ? 'YES' : 'NO'}`);
-                if (hasQuickMatches) {
-                  console.log(`[RENDER QUICK BUTTON] Item ${id + 1} match count:`, quickScanStore[item.id].matchData.totalMatches);
-                }
-                return hasQuickMatches && (
-                  <TouchableOpacity 
-                    style={[styles.secondaryButton, { marginBottom: 10 }]}
-                    onPress={() => onOpenQuickMatches?.(item.id)}
-                  >
-                    <Text style={styles.secondaryButtonText}>View Quick Matches ({quickScanStore[item.id].matchData.totalMatches || 0})</Text>
-                  </TouchableOpacity>
-                );
-              })()}
+    
 
               <View style={styles.photoSlotsContainer}>
                 {item.photos.map((photo: CapturedPhoto, photoIndex: number) => (
@@ -2169,10 +2215,30 @@ const BulkItemsSheet: React.FC<{
                 )}
             </View>
             
+            
               {item.photos.length >= 12 && (
                 <Text style={styles.maxPhotosText}>Maximum 12 photos per item</Text>
               )}
+
+               {/* Optional quick matches reopen button if present */}
+               {(() => {
+                const hasQuickMatches = quickScanStore?.[item.id];
+                console.log(`[RENDER QUICK BUTTON] Item ${id + 1} (${item.id}): hasQuickMatches = ${hasQuickMatches ? 'YES' : 'NO'}`);
+                if (hasQuickMatches) {
+                  console.log(`[RENDER QUICK BUTTON] Item ${id + 1} match count:`, quickScanStore[item.id].matchData.totalMatches);
+                }
+                return hasQuickMatches && (
+                  <TouchableOpacity 
+                    style={[styles.secondaryButton, { marginTop: 10 }]}
+                    onPress={() => onOpenQuickMatches?.(item.id)}
+                  >
+                    <Text style={styles.secondaryButtonText}>View Quick Matches ({quickScanStore[item.id].matchData.totalMatches || 0})</Text>
+                  </TouchableOpacity>
+                );
+              })()}
+
             </TouchableOpacity>
+            
                 );
               });
             })()
@@ -2588,6 +2654,13 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 12,
     marginBottom: 12,
+    borderWidth: 2,
+    borderColor: 'transparent',
+    position: 'relative',
+  },
+  matchCardSelected: {
+    borderColor: '#93C822',
+    backgroundColor: 'rgba(147, 200, 34, 0.08)',
   },
   matchImage: {
     width: 60,
@@ -2615,9 +2688,40 @@ const styles = StyleSheet.create({
     color: '#4CAF50',
     marginBottom: 4,
   },
-  matchPercentage: {
+  matchSource: {
     fontSize: 12,
     color: '#888',
+    fontStyle: 'italic',
+  },
+  matchSelectionOverlay: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    zIndex: 10,
+  },
+  matchCheckmark: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#93C822',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 4,
+  },
+  selectionHint: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 16,
+    paddingHorizontal: 20,
+  },
+  primaryButtonDisabled: {
+    backgroundColor: '#ccc',
+    opacity: 0.6,
   },
   sheetActions: {
     paddingHorizontal: 20,

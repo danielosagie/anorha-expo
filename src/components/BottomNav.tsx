@@ -47,43 +47,25 @@ const BottomNav: React.FC<Props> = ({
   onStartConnect,
 }) => {
   return (
-    <LinearGradient colors={["rgb(255, 255, 255)", "rgba(255, 255, 255, 0)"]} style={{ width: '100%', height: '100%' }}>
+    <LinearGradient colors={["rgba(255, 255, 255, 0)", "rgb(255, 255, 255)", "rgb(255, 255, 255)",]} style={{ marginBottom: 3,}}>
       {state === 'empty' && (
         <View style={styles.emptyButtonSolo}>
-          {selectedCount < 1 ? (
-            <>
-              <TouchableOpacity style={styles.mainEmptyButton} onPress={onShowSelection}>
-                <Icon name="package-variant-closed" size={20} color="#000" style={{ marginRight: 8 }} />
-                <Text style={styles.secondaryButtonText}>Select Product Matches</Text>
-              </TouchableOpacity>
-            </>
-          ) : (
-            <TouchableOpacity style={styles.mainEmptyButton} onPress={onShowSelection}>
-              <Icon name="package-variant-closed" size={20} color="#000" style={{ marginRight: 8 }} />
-              <Text style={styles.secondaryButtonText}>Select Product Matches</Text>
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity style={styles.mainEmptyButton}>
+            <Icon name="cursor-default-click" size={20} color="#000" style={{ marginRight: 8 }} />
+            <Text style={styles.secondaryButtonText}>Select product matches</Text>
+          </TouchableOpacity>
         </View>
       )}
 
-      {state === 'selection' && (
-        <View style={styles.bottomNavStepContainer}>
-          {selectedCount > 0 ? (
-            <>
-              <TouchableOpacity style={styles.mainButton} onPress={onShowTemplates}>
-                <Icon name="check-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
-                <Text style={styles.mainButtonText}>Selected {selectedCount} Match{selectedCount !== 1 ? 'es' : ''}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.backButton} onPress={onBackToEmpty}>
-                <Text style={styles.backButtonText}>Clear Selection</Text>
-              </TouchableOpacity>
-            </>
-          ) : (
-            <TouchableOpacity style={styles.backButton} onPress={onBack}>
-              <Icon name="redo-variant" size={20} color="#888" style={{ marginRight: 8 }} />
-              <Text style={styles.backButtonText}>Back</Text>
-            </TouchableOpacity>
-          )}
+      {state === 'selection' && selectedCount > 0 && (
+        <View style={styles.emptyButtonSolo}>
+          <TouchableOpacity style={styles.mainButton} onPress={onShowTemplates}>
+            <Icon name="check-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
+            <Text style={styles.mainButtonText}>Selected {selectedCount} Match{selectedCount !== 1 ? 'es' : ''}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.backButton} onPress={onBackToEmpty}>
+            <Text style={styles.backButtonText}>Clear Selection</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -206,20 +188,22 @@ export default BottomNav;
 const styles = StyleSheet.create({
   expandedBottomNav: {
     alignItems: 'center',
-    gap: 12,
     paddingLeft: 30,
     paddingRight: 30,
     justifyContent: 'space-between',
     marginTop: 10,
     minHeight: 550,
-    maxHeight: 600,
-    backgroundColor: 'rgb(255, 255, 255)'
+    maxHeight: 650,
+    backgroundColor: 'rgb(255, 255, 255)',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 20,
   },
   platformPickerContainer: {
     alignItems: 'center',
     gap: 12,
-    paddingLeft: 30,
-    paddingRight: 30,
+    paddingLeft: 20,
+    paddingRight: 20,
     justifyContent: 'flex-start',
     marginTop: 10,
     flex: 1,
@@ -228,23 +212,28 @@ const styles = StyleSheet.create({
   bottomNavStepContainer: {
     alignItems: 'center',
     gap: 12,
-    paddingLeft: 30,
-    paddingRight: 30,
+    paddingHorizontal: 30,
+    paddingTop: 20,
     marginTop: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0)',
     minHeight: 100,
+    backgroundColor: 'rgb(255, 255, 255)',
     paddingBottom: 12,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
   },
   emptyButtonSolo: {
-    backgroundColor: 'green',
-    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     gap: 12,
     minHeight: 100,
-    maxHeight: 100,
+    maxHeight: 150,
+    marginHorizontal: 30,
+    backgroundColor: "rgba(255, 255, 255, 0)",
   },
   mainEmptyButton: {
+    width: '100%',
+    justifyContent: "center",
+    borderStyle: 'dashed',
     flexDirection: 'row',
     backgroundColor: 'rgba(255, 210, 97, 0.5)',
     borderWidth: 2,
