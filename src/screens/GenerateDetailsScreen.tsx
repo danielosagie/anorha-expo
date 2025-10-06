@@ -12,6 +12,7 @@ import BottomActionBar from '../components/BottomActionBar';
 import ListingEditorForm from '../components/ListingEditorForm';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { hydratePlatformsFromBackend, normalizeForListingEditor, isEmpty } from '../utils/platformDataHydration';
+import { Paths, Directory, File } from 'expo-file-system/next';
 
 // Feature flag to hide AI refill functionality
 const ENABLE_AI_REFILL_FEATURES = true;
@@ -355,6 +356,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const [fetched, setFetched] = useState(false);
   const [jobData, setJobData] = useState<{ status?: string; results?: GeneratedResult[]; summary?: any; completedAt?: string } | null>(null);
+  const [dbImages, setDbImages] = useState<Record<string, string[]>>({});
 
   // If we only get a jobId, fetch the job payload from Supabase once
   useEffect(() => {
@@ -390,12 +392,90 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const summary = jobData?.summary ?? summaryParam;
   const completedAt = jobData?.completedAt ?? completedAtParam;
 
+  // Fetch user-uploaded images from ProductImages table (like PastScansScreen does)
+  useEffect(() => {
+    if (!results || results.length === 0) return;
+    let canceled = false;
+    (async () => {
+      try {
+        const variantIds = results.map((r: any) => r.variantId).filter(Boolean);
+        if (variantIds.length === 0) return;
+
+        const { data: variants, error } = await supabase
+          .from('ProductVariants')
+          .select(`
+            Id,
+            ProductImages!ProductImages_ProductVariantId_fkey ( ImageUrl, Position )
+          `)
+          .in('Id', variantIds);
+
+        if (error || !variants || canceled) return;
+
+        const imageMap: Record<string, string[]> = {};
+        variants.forEach((variant: any) => {
+          const sortedImages = variant.ProductImages
+            ?.sort((a: any, b: any) => (a.Position || 0) - (b.Position || 0))
+            ?.map((img: any) => img.ImageUrl) || [];
+          if (sortedImages.length > 0) {
+            imageMap[variant.Id] = sortedImages;
+          }
+        });
+        
+        if (!canceled) {
+          console.log('[GEN-DETAILS] Loaded ProductImages from DB:', imageMap);
+          setDbImages(imageMap);
+        }
+      } catch (err) {
+        console.error('[GEN-DETAILS] Failed to load ProductImages:', err);
+      }
+    })();
+    return () => { canceled = true };
+  }, [results]);
+
   // Debug (safe)
   console.log('[GEN-DETAILS] route.params keys:', Object.keys((route.params || {}) as any));
   console.log('[GEN-DETAILS] jobId:', jobId, 'status:', status);
   console.log('[GEN-DETAILS] results raw:', Array.isArray(results) ? `len=${results.length}` : typeof results);
 
   const first: GeneratedResult | null = useMemo(() => (Array.isArray(results) && results.length > 0 ? results[0] : null), [results]);
+  
+  // Prefer user-captured images: 1) from ProductImages DB, 2) from params, 3) fallback to scraped
+  const userImagesByIndex: Record<number, string[]> = useMemo(() => {
+    const map: Record<number, string[]> = {};
+    
+    // Priority 1: ProductImages from database (actual user photos)
+    if (Object.keys(dbImages).length > 0 && Array.isArray(results)) {
+      results.forEach((r, idx) => {
+        if (r.variantId && dbImages[r.variantId]) {
+          map[idx] = dbImages[r.variantId];
+          console.log(`[userImagesByIndex] Using DB images for index ${idx}:`, dbImages[r.variantId]);
+        }
+      });
+    }
+    
+    // Priority 2: Images passed via navigation params
+    const fromParams = (route.params as any)?.userImagesByIndex;
+    if (fromParams && typeof fromParams === 'object') {
+      Object.keys(fromParams).forEach(key => {
+        const idx = parseInt(key, 10);
+        if (!isNaN(idx) && !map[idx]) {
+          map[idx] = fromParams[key];
+        }
+      });
+    }
+    
+    // Priority 3: Fallback to scraped sourceImageUrl ONLY if no user images found
+    (Array.isArray(results) ? results : []).forEach((r, i) => {
+      if (!map[i]) {
+        const url = (r as any)?.sourceImageUrl;
+        if (url && typeof url === 'string' && !url.includes('firecrawl') && !url.includes('serpapi')) {
+          map[i] = [url];
+        }
+      }
+    });
+    
+    return map;
+  }, [results, dbImages, route.params]);
   
   const [displayedPlatforms, setDisplayedPlatforms] = useState<GeneratedPlatformDetails>({});
   const lastHydratedJobRef = useRef<string | null>(null);
@@ -991,19 +1071,70 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           brand: canonical.brand || undefined,
           condition: canonical.condition || undefined,
           categorySuggestion: canonical.categorySuggestion || undefined,
+          // SEO fields
+          seoTitle: canonical.seo?.seoTitle || canonical.seoTitle || undefined,
+          seoDescription: canonical.seo?.seoDescription || canonical.seoDescription || undefined,
+          // Shipping fields
+          requiresShipping: canonical.requiresShipping !== undefined ? canonical.requiresShipping : undefined,
+          // Inventory tracking fields
+          inventoryQuantity: parseNumeric(canonical.inventoryQuantity),
+          tracked: canonical.tracked !== undefined ? canonical.tracked : undefined,
+          inventoryTracker: canonical.inventoryTracker || undefined,
+          // Variant options (if single variant with options)
+          selectedOptions: Array.isArray(canonical.selectedOptions) ? canonical.selectedOptions : undefined,
+          // Variant structure (if variants array exists)
+          variants: Array.isArray(canonical.variants) && canonical.variants.length > 0 
+            ? canonical.variants.map((v: any) => ({
+                option1_name: v.option1_name || undefined,
+                option1_value: v.option1_value || undefined,
+                option2_name: v.option2_name || undefined,
+                option2_value: v.option2_value || undefined,
+                option3_name: v.option3_name || undefined,
+                option3_value: v.option3_value || undefined,
+                sku: v.sku || undefined,
+                barcode: v.barcode || undefined,
+                price: parseNumeric(v.price),
+                compareAtPrice: parseNumeric(v.compareAtPrice),
+                costPerItem: parseNumeric(v.costPerItem),
+                inventoryQuantity: parseNumeric(v.inventoryQuantity),
+                inventoryTracker: v.inventoryTracker || undefined,
+                tracked: v.tracked !== undefined ? v.tracked : undefined,
+                requiresShipping: v.requiresShipping !== undefined ? v.requiresShipping : undefined,
+                weightValueGrams: parseNumeric(v.weightValueGrams),
+                inventoryByLocation: v.inventoryByLocation || undefined,
+              }))
+            : undefined,
         },
         // DON'T spread displayedPlatforms - backend only wants canonical
       },
       media: (() => {
-        // collect image urls from any platform or use sourceImageUrl
+        // CRITICAL: Use userImagesByIndex which prioritizes: 1) DB images, 2) params, 3) scraped fallback
         const imgs = new Set<string>();
+        
+        // First, collect from displayed platforms (preserves user edits in the form)
         for (const k of Object.keys(displayedPlatforms||{})) {
           const p = (displayedPlatforms as any)[k] || {};
           const arr = p.images || p.imageUris || [];
-          if (Array.isArray(arr)) arr.forEach((u:string)=>{ if (typeof u === 'string' && u) imgs.add(u); });
+          if (Array.isArray(arr)) {
+            arr.forEach((u:string)=> {
+              if (typeof u === 'string' && u && !u.includes('firecrawl') && !u.includes('serpapi')) {
+                imgs.add(u);
+              }
+            });
+          }
         }
-        if (imgs.size === 0 && first?.sourceImageUrl) imgs.add(first.sourceImageUrl);
+        
+        // Add user images from computed userImagesByIndex (includes DB images!)
+        const idx = (first?.productIndex as number) ?? 0;
+        const userImages = userImagesByIndex[idx] || [];
+        userImages.forEach((u: string) => {
+          if (typeof u === 'string' && u) {
+            imgs.add(u);
+          }
+        });
+        
         const imageUris = Array.from(imgs);
+        console.log('[buildPlatformPayload] Using user images (DB + params):', imageUris);
         return { imageUris, coverImageIndex: 0 };
       })(),
       selectedPlatformsToPublish: Object.keys(displayedPlatforms||{}),
@@ -1170,14 +1301,20 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   };
 
   const doSaveDraft = async () => {
-    console.log('doSaveDraft');
+    console.log('[doSaveDraft] Starting draft save...');
     try {
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
       const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || first?.productId;
       const variantId = (route.params as any)?.variantId || first?.variantId;
-      if (!baseUrl || !productId || !variantId || !token) return;
+      if (!baseUrl || !productId || !variantId || !token) {
+        console.log('[doSaveDraft] Missing required data');
+        return;
+      }
+      
       const payload = buildPlatformPayload();
+      console.log('[doSaveDraft] Saving payload:', JSON.stringify(payload, null, 2));
+      
       const res = await fetch(`${baseUrl}/api/products/publish`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -1192,16 +1329,49 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       });
       
       if (res.ok) {
-        // Navigate back after successful save
+        console.log('[doSaveDraft] Draft saved successfully');
+        
+        // Fetch the updated variant data from the database to show the saved values
+        const { data: updatedVariant, error: fetchError } = await supabase
+          .from('ProductVariants')
+          .select('*')
+          .eq('Id', variantId)
+          .single();
+        
+        if (!fetchError && updatedVariant) {
+          console.log('[doSaveDraft] Fetched updated variant:', updatedVariant);
+          
+          // Update the displayed platforms with the saved data
+          // This ensures the UI reflects what's actually in the database
+          const canonicalKey = platformKeys.includes('shopify') ? 'shopify' : platformKeys[0];
+          if (canonicalKey && displayedPlatforms[canonicalKey]) {
+            setDisplayedPlatforms(prev => ({
+              ...prev,
+              [canonicalKey]: {
+                ...prev[canonicalKey],
+                title: updatedVariant.Title || prev[canonicalKey]?.title,
+                sku: updatedVariant.Sku || prev[canonicalKey]?.sku,
+                price: updatedVariant.Price ?? prev[canonicalKey]?.price,
+                description: updatedVariant.Description || prev[canonicalKey]?.description,
+                barcode: updatedVariant.Barcode || prev[canonicalKey]?.barcode,
+                weight: updatedVariant.Weight ?? prev[canonicalKey]?.weight,
+                weightUnit: updatedVariant.WeightUnit || prev[canonicalKey]?.weightUnit,
+              }
+            }));
+          }
+        }
+        
+        // Show success message briefly before navigating
+        alert('Draft saved successfully!');
         navigation.goBack();
       } else {
         const errorText = await res.text();
-        console.error('Draft save failed:', errorText);
-        alert('Failed to save draft');
+        console.error('[doSaveDraft] Draft save failed:', errorText);
+        alert(`Failed to save draft: ${errorText}`);
       }
     } catch (err) {
-      console.error('Error saving draft:', err);
-      alert('Failed to save draft');
+      console.error('[doSaveDraft] Error saving draft:', err);
+      alert('Failed to save draft. Please try again.');
     }
   };
 
@@ -1311,6 +1481,57 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }
   };
 
+  // Upload local image URIs to Supabase and return public URLs
+  const uploadLocalImagesToSupabase = async (localUris: string[]): Promise<string[]> => {
+    const publicUrls: string[] = [];
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('User not authenticated');
+      
+      for (const localUri of localUris) {
+        // Skip if already a public URL
+        if (localUri.startsWith('http://') || localUri.startsWith('https://')) {
+          publicUrls.push(localUri);
+          continue;
+        }
+        
+        try {
+          console.log('[UPLOAD] Uploading image:', localUri);
+          const parsedPath = Paths.parse(localUri);
+          const srcFile = new File(new Directory(parsedPath.dir), parsedPath.base);
+          const bytes = await srcFile.bytes();
+          
+          const fileName = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
+          
+          const { data, error } = await supabase.storage
+            .from('product-images')
+            .upload(fileName, bytes, {
+              contentType: 'image/jpeg',
+              cacheControl: '3600',
+            });
+          
+          if (error) {
+            console.error('[UPLOAD] Supabase upload error:', error);
+            continue; // Skip this image but continue with others
+          }
+          
+          const { data: urlData } = supabase.storage
+            .from('product-images')
+            .getPublicUrl(fileName);
+          
+          const publicUrl = urlData.publicUrl;
+          console.log('[UPLOAD] Successfully uploaded to:', publicUrl);
+          publicUrls.push(publicUrl);
+        } catch (err) {
+          console.error('[UPLOAD] Failed to upload image:', localUri, err);
+        }
+      }
+    } catch (err) {
+      console.error('[UPLOAD] Upload batch failed:', err);
+    }
+    return publicUrls;
+  };
+
   const confirmAndPublish = async () => {
     try {
       console.log('[confirmAndPublish] Starting publish...');
@@ -1325,7 +1546,22 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         return;
       }
       
-      const payload = buildPlatformPayload();
+      const rawPayload = buildPlatformPayload();
+      
+      // Upload local images to Supabase before publishing
+      console.log('[confirmAndPublish] Uploading local images...');
+      const uploadedImageUris = await uploadLocalImagesToSupabase(rawPayload.media.imageUris || []);
+      console.log('[confirmAndPublish] Uploaded images:', uploadedImageUris);
+      
+      // Replace local URIs with uploaded public URLs
+      const payload = {
+        ...rawPayload,
+        media: {
+          ...rawPayload.media,
+          imageUris: uploadedImageUris,
+        },
+      };
+      
       const canonical = payload.platformDetails?.canonical || {};
 
       // Expand "ALL" selections to actual connection IDs
@@ -1607,13 +1843,22 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             {/* Editor form that matches the product page design */}
             <ListingEditorForm
               platforms={displayedPlatforms}
-              images={[first.sourceImageUrl || ''].filter(Boolean)}
+              images={(userImagesByIndex[(first?.productIndex as number) ?? 0] || [first?.sourceImageUrl || '']).filter(Boolean)}
               platformLocations={platformLocations}
               onChangePlatforms={(next) => {
-                console.log('[GEN-DETAILS] onChangePlatforms received keys:', Object.keys(next || {}));
+                console.log('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
+                // DEEP merge: preserve all existing fields while updating changed ones
+                // This preserves user edits AND keeps all loaded backend data
                 setDisplayedPlatforms(prev => {
-                  const merged = hydratePlatformsFromBackend(next || {}, prev || {});
-                  console.log('[GEN-DETAILS] onChangePlatforms merged keys:', Object.keys(merged || {}));
+                  const merged = { ...prev };
+                  for (const [platformKey, platformData] of Object.entries(next)) {
+                    // Deep merge each platform to preserve nested structures
+                    merged[platformKey] = {
+                      ...(prev[platformKey] || {}),
+                      ...(platformData || {})
+                    };
+                  }
+                  console.log('[GEN-DETAILS] Deep merged platforms, keys:', Object.keys(merged));
                   return merged;
                 });
               }}

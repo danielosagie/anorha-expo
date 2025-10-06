@@ -223,6 +223,10 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
   const [jobsModalVisible, setJobsModalVisible] = useState(false);
     const [itemGenerateJobs, setItemGenerateJobs] = useState<Record<number, { jobId: string; status?: string }>>(initialJobMap || {});
     const [externalItems, setExternalItems] = useState<Array<{ index: number; title?: string; thumb?: string; matchesCount?: number }>>(initialItems || []);
+    const [userImagesByIndex, setUserImagesByIndex] = useState<Record<number, string[]>>(() => {
+      const fromParams = (route.params as any)?.userImagesByIndex;
+      return (fromParams && typeof fromParams === 'object') ? fromParams : {};
+    });
 
     // Dropdown options with icons
     const PLATFORM_OPTIONS = [
@@ -861,6 +865,7 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
                             matchJobId: analysisData?.jobId,
                             items: itemsForModal,
                             jobMap,
+                            userImagesByIndex,
                             },
                         },
                         });
@@ -1440,10 +1445,20 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
                   const jid = submitResult?.jobId;
                   if (jid) {
                     setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: jid } }));
+                    const itemsForModal = (analysisData?.results || []).map((res, ridx) => {
+                      const first = res?.serpApiData?.[0];
+                      return {
+                        index: ridx,
+                        title: first?.title || `Item ${ridx + 1}`,
+                        thumb: first?.image || first?.thumbnail || '',
+                        matchesCount: res?.serpApiData?.length || 0,
+                      };
+                    });
+                    const jobMap = { ...itemGenerateJobs, [idx]: { jobId: jid } };
                     navigation.navigate('LoadingScreen' as never, {
                       processType: 'generate',
                       payload: { jobId: jid, firstPhotos: [] },
-                      onCompleteRoute: { screen: 'GenerateDetailsScreen', params: { jobId: jid, matchJobId: analysisData?.jobId } }
+                      onCompleteRoute: { screen: 'GenerateDetailsScreen', params: { jobId: jid, matchJobId: analysisData?.jobId, items: itemsForModal, jobMap, userImagesByIndex } }
                     } as never);
                   }
                 } catch (e) {
@@ -1466,10 +1481,15 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
               onPickDetails={(idx) => {
                 const jobId = itemGenerateJobs[idx]?.jobId;
                 if (jobId) {
+                  const itemsForModal = (analysisData?.results || []).map((res, ridx) => {
+                    const first = res?.serpApiData?.[0];
+                    return { index: ridx, title: first?.title || `Item ${ridx + 1}`, thumb: first?.image || first?.thumbnail || '', matchesCount: res?.serpApiData?.length || 0 };
+                  });
+                  const jobMap = { ...itemGenerateJobs };
                   navigation.navigate('LoadingScreen' as never, {
                     processType: 'generate',
                     payload: { jobId, firstPhotos: [] },
-                    onCompleteRoute: { screen: 'GenerateDetailsScreen', params: { jobId } }
+                    onCompleteRoute: { screen: 'GenerateDetailsScreen', params: { jobId, items: itemsForModal, jobMap, matchJobId: analysisData?.jobId, userImagesByIndex } }
                   } as never);
                   setJobsModalVisible(false);
                 }

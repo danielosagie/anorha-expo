@@ -180,11 +180,25 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
                 matchesCount: Array.isArray(res?.serpApiData) ? res.serpApiData.length : 0,
               };
             });
+            // Build userImagesByIndex if bulkItems were provided
+            const prevResponse = ((onCompleteRoute?.params as any)?.response) || {};
+            const sourceBulk = prevResponse?.bulkItems || (payload?.bulkItems);
+            const userImagesByIndex: Record<number, string[]> = {};
+            if (Array.isArray(sourceBulk)) {
+              sourceBulk.forEach((item: any, i: number) => {
+                const photos = Array.isArray(item?.photos) ? item.photos : [];
+                const uris = photos
+                  .map((p: any) => (typeof p === 'string' ? p : (p?.uri || p?.url || '')))
+                  .filter((u: string) => typeof u === 'string' && u.length > 0);
+                if (uris.length) userImagesByIndex[i] = uris;
+              });
+            }
             navigation.replace(onCompleteRoute.screen, {
               ...onCompleteRoute.params,
-              // Prefer passing just jobId so destination polls and hydrates continuously
-              response: { jobId: status.jobId },
+              // Preserve any existing response fields and merge jobId
+              response: { ...(onCompleteRoute?.params as any)?.response, jobId: status.jobId },
               items: itemsForModal,
+              userImagesByIndex: (onCompleteRoute?.params as any)?.userImagesByIndex || (Object.keys(userImagesByIndex).length ? userImagesByIndex : undefined),
             });
             return; // stop further handling in this tick
           }

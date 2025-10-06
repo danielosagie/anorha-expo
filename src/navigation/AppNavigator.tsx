@@ -102,6 +102,10 @@ export type AppStackParamList = {
   }
   MatchSelectionScreen: {
     jobResponse?: JobResponse;
+    jobId?: string;
+    focusIndex?: number;
+    items?: Array<{ index: number; title?: string; thumb?: string; matchesCount?: number; matchJobId?: string }>;
+    jobMap?: Record<number, { jobId: string; status?: string }>;
     response: {
       jobId?: string;
       bulkItems?: any[];
@@ -206,6 +210,9 @@ export type AppStackParamList = {
     summary: any[],
     completedAt: string,
     initialData?: Array<{}>,
+    items?: Array<{ index: number; title?: string; thumb?: string; matchesCount?: number; matchJobId?: string }>,
+    jobMap?: Record<number, { jobId: string; status?: string }>,
+    matchJobId?: string,
   }
   PhotoUpload: {
     onDone: (uris: string[]) => void;

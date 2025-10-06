@@ -103,7 +103,8 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
     return key;
   }, [platformKeys]);
   
-  const [activeTab, setActiveTab] = useState<string>(canonicalKey);
+  // Default to 'all' tab instead of first platform
+  const [activeTab, setActiveTab] = useState<string>('all');
   const [showAdditionalFields, setShowAdditionalFields] = useState<boolean>(true);
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [optionEditorOpen, setOptionEditorOpen] = useState<boolean>(false);
@@ -118,14 +119,16 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
     openPlatformPicker: () => setShowPlatformPicker(true),
   }), []);
 
-  // Update activeTab only if current tab becomes invalid. Avoid redundant resets to canonical.
+  // Update activeTab only if current tab becomes invalid. Avoid redundant resets.
   useEffect(() => {
     console.log('[ListingEditorForm] activeTab effect', { canonicalKey, activeTab, platformKeys });
-    if (!canonicalKey || activeTab === 'all') return;
+    // Always allow 'all' tab
+    if (activeTab === 'all') return;
+    // If current platform tab is valid, keep it
     const activeExists = platformKeys.includes(activeTab);
     if (!activeExists && activeTab !== canonicalKey) {
-      console.log('[ListingEditorForm] activeTab invalid → switching to canonical:', canonicalKey);
-      setActiveTab(canonicalKey);
+      console.log('[ListingEditorForm] activeTab invalid → switching to all');
+      setActiveTab('all');
     }
   }, [canonicalKey, platformKeys, activeTab]);
   const activePlatformKey = activeTab === 'all' ? canonicalKey : activeTab;
@@ -163,6 +166,16 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
   const selectedInventoryType: InventoryType = (activeData.inventoryType || DEFAULT_INVENTORY_TYPE_BY_PLATFORM[activePlatformKey] || 'BASIC');
   const isAdvanced = selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS';
   const supportsVariants = selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' || selectedInventoryType === 'VARIANT_WITH_OPTIONS';
+  
+  // Debug logging for variants
+  console.log('[ListingEditorForm] Inventory state:', {
+    activePlatformKey,
+    selectedInventoryType,
+    supportsVariants,
+    hasOptions: (activeData.options || []).length,
+    hasVariants: (activeData.variants || []).length,
+    activeDataKeys: Object.keys(activeData)
+  });
 
   const variantSuggestions: Array<{ name: string; values: string[] }> = ((platforms as any)[activePlatformKey]?.__variantSuggestions) || [];
 
@@ -234,21 +247,60 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
   };
 
   const recomputeVariants = () => {
+    console.log('[recomputeVariants] Starting variant recomputation for', activePlatformKey);
     const opts = (activeData.options || []).filter(o => Array.isArray(o.values) && o.values.length);
+    console.log('[recomputeVariants] Options:', opts);
+    
     if (!opts.length) {
+      console.log('[recomputeVariants] No options, clearing variants');
       patchPlatform(prev => ({ ...prev, variants: [] }));
       return;
     }
+    
     const names = opts.map(o => o.name);
     const vals = opts.map(o => o.values);
     const combos = cartesian(vals);
+    console.log('[recomputeVariants] Generated', combos.length, 'variant combinations');
+    
     const nextVariants: Variant[] = combos.map((combo, i) => {
       const optionValues: Record<string,string> = {};
       combo.forEach((v, idx) => optionValues[names[idx]] = v);
       const id = `${activePlatformKey}-var-${names.map((n,ix)=>`${n}:${combo[ix]}`).join('|')}`;
       const existing = (activeData.variants || []).find(v => JSON.stringify(v.optionValues) === JSON.stringify(optionValues));
-      return existing || { id, optionValues };
+      
+      // CRITICAL FIX: Initialize inventoryByLocation for new variants
+      // Without this, inventory fields won't render!
+      if (existing) {
+        return existing;
+      } else {
+        // New variant - initialize with default inventory structure
+        const inventoryByLocation: Record<string, { quantity: number; price?: number; image?: string }> = {};
+        
+        // Initialize for default location (used by VARIANT_WITH_OPTIONS)
+        inventoryByLocation['default'] = {
+          quantity: 0,
+          price: activeData.price || 0,
+        };
+        
+        // Also initialize for all known locations (used by LOCATION_VARIANT_WITH_OPTIONS)
+        locations.forEach(loc => {
+          inventoryByLocation[loc.id] = {
+            quantity: 0,
+            price: activeData.price || 0,
+          };
+        });
+        
+        console.log('[recomputeVariants] Created new variant with inventory:', id, inventoryByLocation);
+        return { 
+          id, 
+          optionValues,
+          price: activeData.price,
+          inventoryByLocation 
+        };
+      }
     });
+    
+    console.log('[recomputeVariants] Updating platform with', nextVariants.length, 'variants');
     patchPlatform(prev => ({ ...prev, variants: nextVariants }));
   };
 
@@ -267,12 +319,18 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
   };
 
   useEffect(() => {
+    console.log('[Options useEffect] Running for platform:', activePlatformKey, 'options:', activeData.options);
     const cleaned = normalizeOptions(activeData.options);
+    console.log('[Options useEffect] Normalized options:', cleaned);
+    
     if (JSON.stringify(cleaned) !== JSON.stringify(activeData.options || [])) {
+      console.log('[Options useEffect] Options changed, updating platform');
       patchPlatform(prev => ({ ...prev, options: cleaned }));
     }
+    
     // Variants should reflect any option changes
     // setTimeout to avoid double setState in same render
+    console.log('[Options useEffect] Scheduling recomputeVariants');
     setTimeout(recomputeVariants, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePlatformKey, JSON.stringify(activeData.options || [])]);
@@ -301,7 +359,21 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
       optionValues[opt.name] = opt.values[0];
     }
     const id = `${activePlatformKey}-var-${Date.now()}`;
-    patchPlatform(prev => ({ ...prev, variants: [ ...(prev.variants || []), { id, optionValues } ] }));
+    
+    // Initialize inventoryByLocation for the new variant
+    const inventoryByLocation: Record<string, { quantity: number; price?: number; image?: string }> = {};
+    inventoryByLocation['default'] = { quantity: 0, price: activeData.price || 0 };
+    locations.forEach(loc => {
+      inventoryByLocation[loc.id] = { quantity: 0, price: activeData.price || 0 };
+    });
+    
+    patchPlatform(prev => ({ 
+      ...prev, 
+      variants: [ 
+        ...(prev.variants || []), 
+        { id, optionValues, price: activeData.price, inventoryByLocation } 
+      ] 
+    }));
   };
 
   const handleAddOptionValueRow = () => setNewOptionValues(prev => [...prev, '']);
@@ -820,6 +892,10 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
               }} />
             )}
           </View>
+          {(() => {
+            console.log('[Inventory Render] supportsVariants:', supportsVariants, 'variants count:', (activeData.variants || []).length);
+            return null;
+          })()}
           {supportsVariants ? (
           (activeData.variants || []).map((variant, variantIdx) => {
             const variantName = Object.values(variant.optionValues || {}).join(' / ') || 'Variant';
