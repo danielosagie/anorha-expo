@@ -140,13 +140,15 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
   // const [countryCode, setCountryCode] = useState('US');
   
   const authContext = useContext(AuthContext);
-  const { signIn, isLoaded: isSignInLoaded } = useSignIn();
-  const { signUp, isLoaded: isSignUpLoaded } = useSignUp();
-  const auth = useAuth() as any; // setActive may not be typed in some versions
+  const { signIn, isLoaded: isSignInLoaded, setActive: signInSetActive } = useSignIn();
+  const { signUp, isLoaded: isSignUpLoaded, setActive: signUpSetActive } = useSignUp();
   const { startOAuthFlow: startGoogleOAuth } = useOAuth({ strategy: 'oauth_google' });
   // Comment out phone ref for now
   // const phoneInputRef = useRef<PhoneInput>(null);
   
+  // REMOVED: waitForClerkReady was checking clerk?.client which doesn't exist on React Native
+  // On React Native, setActive from useAuth() hook is always available and ready to use
+
   // Use useCallback for event handlers to prevent unnecessary re-renders
   const handleAuth = useCallback(async () => {
     if (!authContext) {
@@ -163,32 +165,18 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
         const res = await signIn.create({ identifier: email, password });
         console.log('[AuthScreen] signIn.create result:', res.status, res.createdSessionId ? 'has session' : 'no session');
         if (res.status === 'complete' && res.createdSessionId) {
-          try {
-            const clerk = getClerkInstance?.();
-            const setActiveFn = auth?.setActive || clerk?.setActive;
-            console.log('[AuthScreen] setActive available:', !!setActiveFn);
-            await setActiveFn?.({ session: res.createdSessionId });
-            // Force resource reload to propagate state in-process on native
-            try { await (clerk as any)?.__internal_reloadInitialResources?.(); } catch {}
-            console.log('[AuthScreen] ✓ setActive + resources reload; App will switch branches when Clerk updates.');
-            return; // Do not navigate here; App.tsx will react to isSignedIn
-          } catch (e) {
-            console.error('[AuthScreen] setActive failed:', e);
-          }
+          // Use setActive from useSignIn hook
+          console.log('[AuthScreen] Calling setActive with session:', res.createdSessionId);
+          await signInSetActive({ session: res.createdSessionId });
+          console.log('[AuthScreen] ✓ Login successful, session activated');
+          return; // Do not navigate here; App.tsx will react to isSignedIn
         } else if ((res as any)?.status === 'needs_first_factor') {
           const r2 = await signIn.attemptFirstFactor({ strategy: 'password', password });
           if (r2.status === 'complete' && r2.createdSessionId) {
-            try {
-              const clerk = getClerkInstance?.();
-              const setActiveFn = auth?.setActive || clerk?.setActive;
-              console.log('[AuthScreen] setActive available (first factor):', !!setActiveFn);
-              await setActiveFn?.({ session: r2.createdSessionId });
-              try { await (clerk as any)?.__internal_reloadInitialResources?.(); } catch {}
-              console.log('[AuthScreen] ✓ First factor login successful; App will switch branches when Clerk updates.');
-              return;
-            } catch (e) {
-              console.error('[AuthScreen] setActive failed after first factor:', e);
-            }
+            console.log('[AuthScreen] First factor complete, calling setActive');
+            await signInSetActive({ session: r2.createdSessionId });
+            console.log('[AuthScreen] ✓ First factor login successful');
+            return;
           } else {
             Alert.alert('Login', 'Additional authentication required.');
           }
@@ -205,17 +193,10 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
         if (!isSignUpLoaded || !signUp) return;
         const res = await signUp.create({ emailAddress: email, password, firstName, lastName });
         if (res.status === 'complete' && res.createdSessionId) {
-          try {
-            const clerk = getClerkInstance?.();
-            const setActiveFn = auth?.setActive || clerk?.setActive;
-            console.log('[AuthScreen] setActive available (signup):', !!setActiveFn);
-            await setActiveFn?.({ session: res.createdSessionId });
-            try { await (clerk as any)?.__internal_reloadInitialResources?.(); } catch {}
-            console.log('[AuthScreen] ✓ Signup successful; App will switch branches when Clerk updates.');
-            return;
-          } catch (e) {
-            console.error('[AuthScreen] setActive failed during sign-up:', e);
-          }
+          console.log('[AuthScreen] Signup complete, calling setActive');
+          await signUpSetActive({ session: res.createdSessionId });
+          console.log('[AuthScreen] ✓ Signup successful');
+          return;
         } else {
           try {
             await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
@@ -255,7 +236,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
     } finally {
       setLoading(false);
     }
-  }, [authContext, isLogin, email, password, firstName, lastName, isSignInLoaded, isSignUpLoaded, signIn, signUp, auth, navigation]);
+  }, [authContext, isLogin, email, password, firstName, lastName, isSignInLoaded, isSignUpLoaded, signIn, signUp, signInSetActive, signUpSetActive, navigation]);
   
   const handleForgotPassword = useCallback(async () => {
     if (!email) {
@@ -283,15 +264,10 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
     setLoading(true);
     try {
       const result = await startGoogleOAuth();
-      if (result?.createdSessionId) {
-        const clerk = getClerkInstance?.();
-        const setActiveFn = auth?.setActive || clerk?.setActive;
-        await setActiveFn?.({ session: result.createdSessionId });
-        try { await (clerk as any)?.__internal_reloadInitialResources?.(); } catch {}
-        return;
-      }
-      if (result?.setActive) {
-        await result.setActive({ session: result?.createdSessionId });
+      if (result?.createdSessionId && result?.setActive) {
+        console.log('[AuthScreen] Google OAuth complete, calling setActive');
+        await result.setActive({ session: result.createdSessionId });
+        console.log('[AuthScreen] ✓ Google sign-in successful');
         return;
       }
       Alert.alert('Google Sign-In', 'Could not complete Google sign-in.');
@@ -301,7 +277,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
     } finally {
       setLoading(false);
     }
-  }, [startGoogleOAuth, auth]);
+  }, [startGoogleOAuth]);
 
   return (
     <KeyboardAvoidingView 
