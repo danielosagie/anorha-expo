@@ -47,7 +47,13 @@ const BottomNav: React.FC<Props> = ({
   onStartConnect,
 }) => {
   return (
-    <LinearGradient colors={["rgba(255, 255, 255, 0)", "rgb(255, 255, 255)", "rgb(255, 255, 255)",]} style={{ marginBottom: 3,}}>
+    <LinearGradient
+      colors={["rgba(255, 255, 255, 0)", "rgb(255, 255, 255)", "rgb(255, 255, 255)"]}
+      style={{
+        marginBottom: 3,
+        ...(state === 'platformPicker' ? { flex: 1, height: '100%', width: '100%' } : {}),
+      }}
+    >
       {state === 'empty' && (
         <View style={styles.emptyButtonSolo}>
           <TouchableOpacity style={styles.mainEmptyButton}>

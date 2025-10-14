@@ -218,6 +218,7 @@ const MappingReviewScreen = () => {
   const [syncMode, setSyncMode] = useState<'auto' | 'manual'>('auto');
   const [delistMode, setDelistMode] = useState<'auto' | 'manual'>('auto');
   const [priceBuffer, setPriceBuffer] = useState<Record<string, number>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Effect to load platform connections
   useEffect(() => {
@@ -3470,15 +3471,91 @@ const MappingReviewScreen = () => {
                       )}
                     </View>
                     <View style={{ marginTop: 20 }}>
-                      <Button title="Complete Import" onPress={() => {
-                        setWizardVisible(false);
-                        navigation.navigate('PublishConfirmation', {
-                          platforms: selectedPlatformsState,
-                          priceBuffer,
-                          syncMode,
-                          delistMode,
-                        } as any);
-                      }} />
+                      <Button 
+                        title="Complete Import" 
+                        loading={isSubmitting}
+                        onPress={async () => {
+                          setIsSubmitting(true);
+                          try {
+                            // Get the confirmed mappings from the current state
+                            const confirmedMappings = [
+                              ...matchedItems.filter(item => item.isSelected).map(item => ({
+                                action: item.action,
+                                platformProduct: {
+                                  id: item.platformProduct.id
+                                },
+                                sssyncProduct: item.suggestedCanonicalProduct?.id ? {
+                                  id: item.suggestedCanonicalProduct.id
+                                } : undefined
+                              })),
+                              ...reviewItems.filter(item => item.isSelected).map(item => ({
+                                action: item.action,
+                                platformProduct: {
+                                  id: item.platformProduct.id
+                                },
+                                sssyncProduct: item.suggestedCanonicalProduct?.id ? {
+                                  id: item.suggestedCanonicalProduct.id
+                                } : undefined
+                              }))
+                            ];
+
+                            console.log('[MappingReview] Confirming mappings:', confirmedMappings.length);
+                            
+                            // Call the confirm-mappings endpoint
+                            const token = await ensureSupabaseJwt();
+                            const confirmResponse = await fetch(`https://api.sssync.app/sync/connections/${connectionId}/confirm-mappings`, {
+                              method: 'POST',
+                              headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'Content-Type': 'application/json',
+                              },
+                              body: JSON.stringify({
+                                confirmedMatches: confirmedMappings
+                              })
+                            });
+
+                            if (!confirmResponse.ok) {
+                              const error = await confirmResponse.text();
+                              throw new Error(`Failed to confirm mappings: ${error}`);
+                            }
+
+                            console.log('[MappingReview] Mappings confirmed, activating sync...');
+
+                            // Activate the sync
+                            const syncResponse = await fetch(`https://api.sssync.app/sync/connections/${connectionId}/activate-sync`, {
+                              method: 'POST',
+                              headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'Content-Type': 'application/json',
+                              }
+                            });
+
+                            if (!syncResponse.ok) {
+                              const error = await syncResponse.text();
+                              throw new Error(`Failed to activate sync: ${error}`);
+                            }
+
+                            const { jobId } = await syncResponse.json();
+                            console.log('[MappingReview] Sync activated with job ID:', jobId);
+
+                            // Close wizard and navigate to confirmation
+                            setWizardVisible(false);
+                            navigation.navigate('PublishConfirmation', {
+                              platforms: selectedPlatformsState,
+                              priceBuffer,
+                              syncMode,
+                              delistMode,
+                              jobId,
+                              origin: 'import'
+                            } as any);
+                          } catch (error: any) {
+                            console.error('[MappingReview] Error completing import:', error);
+                            Alert.alert('Import Error', error.message || 'Failed to complete import. Please try again.');
+                          } finally {
+                            setIsSubmitting(false);
+                          }
+                        }} 
+                      />
                     </View>
                   </View>
                 )}

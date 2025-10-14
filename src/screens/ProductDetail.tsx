@@ -20,6 +20,7 @@ import {
 } from '../utils/SupaLegend';
 import { observer } from '@legendapp/state/react';
 import * as ImagePicker from 'expo-image-picker';
+import { useCollaboration } from '../hooks/useCollaboration';
 
 // Base URL for API
 const SSSYNC_API_BASE_URL = 'https://api.sssync.app';
@@ -114,6 +115,11 @@ const ProductDetailScreen = observer(
     const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const SAVE_DEBOUNCE_MS = 1000; // Wait 1 second after last change before saving
 
+    // Collaboration state
+    const collaboration = useCollaboration();
+    const [isLockedByOther, setIsLockedByOther] = useState(false);
+    const [lockOwner, setLockOwner] = useState<string | null>(null);
+
     // Current form data (now live)
     const [formData, setFormData] = useState<EditFormData>({
       Title: '',
@@ -190,6 +196,40 @@ const ProductDetailScreen = observer(
 
         const platformConnections = connectionsData as PlatformConnection[];
         console.log('Loaded platform connections:', platformConnections.length);
+        
+        // SYNC LOCATIONS: Fetch fresh location data from platforms via API
+        const token = await ensureSupabaseJwt();
+        if (token) {
+          try {
+            const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || SSSYNC_API_BASE_URL;
+            // Sync locations for each connection
+            for (const conn of platformConnections) {
+              const platform = conn.PlatformType?.toLowerCase();
+              if (!platform) continue;
+              
+              // Call backend to sync locations (will update PlatformSpecificData.locations)
+              const syncRes = await fetch(`${baseUrl}/api/platform-connections/${conn.Id}/sync-locations`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}` }
+              });
+              
+              if (syncRes.ok) {
+                const syncData = await syncRes.json();
+                console.log(`[ProductDetail] Synced ${syncData.locations?.length || 0} locations for ${platform}`);
+                // Update connection with fresh location data
+                if (syncData.locations) {
+                  conn.PlatformSpecificData = {
+                    ...(conn.PlatformSpecificData as any || {}),
+                    locations: syncData.locations
+                  };
+                }
+              }
+            }
+          } catch (syncError) {
+            console.warn('[ProductDetail] Location sync failed (non-blocking):', syncError);
+          }
+        }
+        
         setConnections(platformConnections);
 
         // Load inventory levels for this product
@@ -287,6 +327,32 @@ const ProductDetailScreen = observer(
       }
     }, [detailedItem, getLocationName]);
 
+    // Helper to build platform locations from connections
+    const buildPlatformLocations = useCallback(() => {
+      const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>> = {};
+      
+      connections.forEach(conn => {
+        const platform = conn.PlatformType?.toLowerCase();
+        if (!platform || !conn.IsEnabled) return;
+        
+        const platformData = conn.PlatformSpecificData || {};
+        const locations = (platformData as any).locations || [];
+        
+        if (!locsByPlatform[platform]) locsByPlatform[platform] = [];
+        
+        locations.forEach((loc: any) => {
+          locsByPlatform[platform].push({
+            id: loc.id || loc.gid || '',
+            name: loc.name || 'Unnamed Location',
+            connectionId: conn.Id,
+            connectionName: conn.DisplayName || conn.PlatformType
+          });
+        });
+      });
+      
+      return locsByPlatform;
+    }, [connections]);
+
     // Auto-save function with proper API call
     const performAutoSave = useCallback(async () => {
       if (!detailedItem || !hasUnsavedChanges) return;
@@ -300,22 +366,32 @@ const ProductDetailScreen = observer(
           return;
         }
 
+        // CRITICAL FIX: Use editPlatforms data from ListingEditorForm, not just formData
+        // Extract canonical data from shopify platform (or first available)
+        const canonicalKey = Object.keys(editPlatforms).includes('shopify') ? 'shopify' : Object.keys(editPlatforms)[0];
+        const canonical = editPlatforms[canonicalKey] || {};
+        
         // Prepare update data - using the correct API structure from the backend
         const updateData = {
-          Title: formData.Title,
-          Description: formData.Description,
-          Price: formData.Price,
-          CompareAtPrice: formData.CompareAtPrice,
-          Sku: formData.Sku,
-          Barcode: formData.Barcode,
-          Weight: formData.Weight,
-          WeightUnit: formData.WeightUnit,
-          RequiresShipping: formData.RequiresShipping,
+          Title: canonical.title || formData.Title,
+          Description: canonical.description || formData.Description,
+          Price: canonical.price !== undefined ? Number(canonical.price) : formData.Price,
+          CompareAtPrice: canonical.compareAtPrice !== undefined ? Number(canonical.compareAtPrice) : formData.CompareAtPrice,
+          Sku: canonical.sku || formData.Sku,
+          Barcode: canonical.barcode || formData.Barcode,
+          Weight: canonical.weight !== undefined ? Number(canonical.weight) : formData.Weight,
+          WeightUnit: canonical.weightUnit || formData.WeightUnit,
+          RequiresShipping: canonical.requiresShipping !== undefined ? canonical.requiresShipping : formData.RequiresShipping,
           IsTaxable: formData.IsTaxable,
           TaxCode: formData.TaxCode,
+          // IMPORTANT: Include platform-specific data (variants, options, tags, etc)
+          PlatformSpecificData: editPlatforms,
+          Tags: canonical.tags || [],
+          Vendor: canonical.vendor,
+          ProductType: canonical.productType,
         };
 
-        console.log('Auto-saving product:', detailedItem.Id, updateData);
+        console.log('Auto-saving product with full platform data:', detailedItem.Id, updateData);
 
         // Update in our API
         const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
@@ -800,6 +876,84 @@ const ProductDetailScreen = observer(
       };
     }, [detailedItem, loadPlatformData]);
 
+    // Collaboration: Request edit lock and listen for team updates
+    useEffect(() => {
+      if (!detailedItem?.ProductId || !collaboration.isConnected) return;
+
+      // Request edit lock when opening product
+      collaboration.startEditing(detailedItem.ProductId).then((response) => {
+        if (!response.success && response.lockedBy) {
+          setIsLockedByOther(true);
+          setLockOwner(response.lockedBy);
+          Alert.alert(
+            'Product Locked',
+            `${response.lockedBy} is currently editing this product. You can view but not edit.`,
+            [{ text: 'OK' }]
+          );
+        }
+      });
+
+      // Listen for product updates from other team members
+      const unsubscribeUpdate = collaboration.onProductUpdate((update) => {
+        // Ignore our own updates
+        if (update.userId === detailedItem.UserId) return;
+
+        console.log('[ProductDetail] Received update from teammate:', update);
+        
+        // Refresh product data from Supabase (single source of truth)
+        const observables = getLegendStateObservables();
+        if (observables?.productVariants$) {
+          const refreshed = observables.productVariants$[update.variantId].get();
+          if (refreshed) {
+            setDetailedItem(refreshed);
+            setFormData({
+              Title: refreshed.Title || '',
+              Description: refreshed.Description || '',
+              Price: refreshed.Price || 0,
+              CompareAtPrice: refreshed.CompareAtPrice || 0,
+              Sku: refreshed.Sku || '',
+              Barcode: refreshed.Barcode || '',
+              Weight: refreshed.Weight || 0,
+              WeightUnit: refreshed.WeightUnit || 'kg',
+              RequiresShipping: refreshed.RequiresShipping !== false,
+              IsTaxable: refreshed.IsTaxable !== false,
+              TaxCode: refreshed.TaxCode || '',
+            });
+          }
+        }
+
+        Alert.alert(
+          'Product Updated',
+          'A teammate just updated this product. Your view has been refreshed.',
+          [{ text: 'OK' }]
+        );
+      });
+
+      // Listen for edit started events
+      const unsubscribeEditStart = collaboration.onEditStarted((event) => {
+        if (event.productId === detailedItem.ProductId) {
+          setIsLockedByOther(true);
+          setLockOwner(event.userName);
+        }
+      });
+
+      // Listen for edit ended events
+      const unsubscribeEditEnd = collaboration.onEditEnded((event) => {
+        if (event.productId === detailedItem.ProductId) {
+          setIsLockedByOther(false);
+          setLockOwner(null);
+        }
+      });
+
+      // Cleanup: Release lock when leaving
+      return () => {
+        collaboration.stopEditing(detailedItem.ProductId);
+        unsubscribeUpdate();
+        unsubscribeEditStart();
+        unsubscribeEditEnd();
+      };
+    }, [detailedItem?.ProductId, collaboration.isConnected]);
+
     // Cleanup auto-save timer
     useEffect(() => {
       return () => {
@@ -949,7 +1103,12 @@ const ProductDetailScreen = observer(
               ref={listingEditorRef}
               platforms={editPlatforms}
               images={detailedItem?.ImageUrls || []}
-              onChangePlatforms={(next) => { setEditPlatforms(next); setHasUnsavedChanges(true); }}
+              platformLocations={buildPlatformLocations()} 
+              onChangePlatforms={(next) => { 
+                console.log('[ProductDetail] ListingEditorForm onChange:', Object.keys(next));
+                setEditPlatforms(next); 
+                setHasUnsavedChanges(true); 
+              }}
               onChangeImages={(next) => { reorderImages(next); }}
               onOpenFieldPanel={undefined}
               onOpenBarcodeScanner={(onResult)=>{

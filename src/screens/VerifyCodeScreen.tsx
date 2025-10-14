@@ -32,8 +32,17 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
     const next = [...digits];
     next[index] = v;
     setDigits(next);
+    
+    // Move forward if digit entered
     if (v && index < CELL_COUNT - 1) {
       inputs.current[index + 1]?.focus();
+    }
+  };
+
+  const onKeyPress = (index: number, key: string) => {
+    // Handle backspace: clear current cell and move to previous
+    if (key === 'Backspace' && !digits[index] && index > 0) {
+      inputs.current[index - 1]?.focus();
     }
   };
 
@@ -73,6 +82,7 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
               style={styles.cell}
               value={d}
               onChangeText={(v) => onChangeDigit(i, v)}
+              onKeyPress={({ nativeEvent }) => onKeyPress(i, nativeEvent.key)}
               keyboardType="number-pad"
               maxLength={1}
               autoFocus={i === 0}

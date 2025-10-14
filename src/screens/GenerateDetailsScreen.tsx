@@ -587,46 +587,76 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [selectedConnectionIds, setSelectedConnectionIds] = useState<Record<string, string>>({});
   const [platformLocations, setPlatformLocations] = useState<Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>>>({});
 
-  // Fetch connections and locations on mount
-  useEffect(() => {
-    (async () => {
-      try {
-        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
-        const token = await ensureSupabaseJwt();
-        if (!baseUrl || !token) return;
-        
-        const connRes = await fetch(`${baseUrl}/api/platform-connections`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const connections = connRes.ok ? await connRes.json() : [];
-        setAllConnections(connections);
-        
-        // Extract locations from connections
-        const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>> = {};
-        for (const conn of connections) {
-          const platform = conn.PlatformType?.toLowerCase();
-          if (!platform || !conn.IsEnabled) continue;
+    // Fetch connections and locations on mount
+    useEffect(() => {
+      (async () => {
+        try {
+          const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+          const token = await ensureSupabaseJwt();
+          if (!baseUrl || !token) return;
           
-          const platformData = conn.PlatformSpecificData || {};
-          const locations = platformData.locations || [];
+          const connRes = await fetch(`${baseUrl}/api/platform-connections`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          let connections = connRes.ok ? await connRes.json() : [];
           
-          if (!locsByPlatform[platform]) locsByPlatform[platform] = [];
-          
-          for (const loc of locations) {
-            locsByPlatform[platform].push({
-              id: loc.id || loc.gid || '',
-              name: loc.name || 'Unnamed Location',
-              connectionId: conn.Id,
-              connectionName: conn.DisplayName || conn.PlatformType
-            });
+          // SYNC LOCATIONS: Fetch fresh location data from platforms via API
+          console.log('[GenerateDetails] Syncing locations for all connections...');
+          for (const conn of connections) {
+            const platform = conn.PlatformType?.toLowerCase();
+            if (!platform) continue;
+            
+            try {
+              const syncRes = await fetch(`${baseUrl}/api/platform-connections/${conn.Id}/sync-locations`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}` }
+              });
+              
+              if (syncRes.ok) {
+                const syncData = await syncRes.json();
+                console.log(`[GenerateDetails] Synced ${syncData.locations?.length || 0} locations for ${platform}`);
+                // Update connection with fresh location data
+                if (syncData.locations) {
+                  conn.PlatformSpecificData = {
+                    ...(conn.PlatformSpecificData || {}),
+                    locations: syncData.locations
+                  };
+                }
+              }
+            } catch (syncError) {
+              console.warn(`[GenerateDetails] Location sync failed for ${platform} (non-blocking):`, syncError);
+            }
           }
+          
+          setAllConnections(connections);
+          
+          // Extract locations from synced connections
+          const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>> = {};
+          for (const conn of connections) {
+            const platform = conn.PlatformType?.toLowerCase();
+            if (!platform || !conn.IsEnabled) continue;
+            
+            const platformData = conn.PlatformSpecificData || {};
+            const locations = platformData.locations || [];
+            
+            if (!locsByPlatform[platform]) locsByPlatform[platform] = [];
+            
+            for (const loc of locations) {
+              locsByPlatform[platform].push({
+                id: loc.id || loc.gid || '',
+                name: loc.name || 'Unnamed Location',
+                connectionId: conn.Id,
+                connectionName: conn.DisplayName || conn.PlatformType
+              });
+            }
+          }
+          console.log('[GenerateDetails] Built platform locations:', Object.keys(locsByPlatform).map(p => `${p}: ${locsByPlatform[p].length} locs`));
+          setPlatformLocations(locsByPlatform);
+        } catch (e) {
+          console.error('Failed to fetch connections:', e);
         }
-        setPlatformLocations(locsByPlatform);
-      } catch (e) {
-        console.error('Failed to fetch connections:', e);
-      }
-    })();
-  }, []);
+      })();
+    }, []);
   
   useEffect(() => {
     if (regenModalOpen && regenAutoRun && !regenSubmitting) {
@@ -1084,28 +1114,63 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           selectedOptions: Array.isArray(canonical.selectedOptions) ? canonical.selectedOptions : undefined,
           // Variant structure (if variants array exists)
           variants: Array.isArray(canonical.variants) && canonical.variants.length > 0 
-            ? canonical.variants.map((v: any) => ({
-                option1_name: v.option1_name || undefined,
-                option1_value: v.option1_value || undefined,
-                option2_name: v.option2_name || undefined,
-                option2_value: v.option2_value || undefined,
-                option3_name: v.option3_name || undefined,
-                option3_value: v.option3_value || undefined,
-                sku: v.sku || undefined,
-                barcode: v.barcode || undefined,
-                price: parseNumeric(v.price),
-                compareAtPrice: parseNumeric(v.compareAtPrice),
-                costPerItem: parseNumeric(v.costPerItem),
-                inventoryQuantity: parseNumeric(v.inventoryQuantity),
-                inventoryTracker: v.inventoryTracker || undefined,
-                tracked: v.tracked !== undefined ? v.tracked : undefined,
-                requiresShipping: v.requiresShipping !== undefined ? v.requiresShipping : undefined,
-                weightValueGrams: parseNumeric(v.weightValueGrams),
-                inventoryByLocation: v.inventoryByLocation || undefined,
-              }))
+            ? canonical.variants.map((v: any) => {
+                // Handle both modern format (optionValues: {Size: '2TB'}) and legacy format (option1_name, option1_value)
+                let optionFields: any = {};
+                
+                if (v.optionValues && typeof v.optionValues === 'object') {
+                  // Modern format: { Size: '2TB', Color: 'Black' }
+                  // Convert to legacy format for backend
+                  console.log('[buildPlatformPayload] Converting modern optionValues to legacy format:', v.optionValues);
+                  const entries = Object.entries(v.optionValues);
+                  entries.forEach(([name, value], idx) => {
+                    if (idx === 0) {
+                      optionFields.option1_name = name;
+                      optionFields.option1_value = value;
+                    } else if (idx === 1) {
+                      optionFields.option2_name = name;
+                      optionFields.option2_value = value;
+                    } else if (idx === 2) {
+                      optionFields.option3_name = name;
+                      optionFields.option3_value = value;
+                    }
+                  });
+                } else {
+                  // Legacy format already present
+                  optionFields.option1_name = v.option1_name || undefined;
+                  optionFields.option1_value = v.option1_value || undefined;
+                  optionFields.option2_name = v.option2_name || undefined;
+                  optionFields.option2_value = v.option2_value || undefined;
+                  optionFields.option3_name = v.option3_name || undefined;
+                  optionFields.option3_value = v.option3_value || undefined;
+                }
+                
+                return {
+                  ...optionFields,
+                  sku: v.sku || undefined,
+                  barcode: v.barcode || undefined,
+                  price: parseNumeric(v.price),
+                  compareAtPrice: parseNumeric(v.compareAtPrice),
+                  costPerItem: parseNumeric(v.costPerItem),
+                  inventoryQuantity: parseNumeric(v.inventoryQuantity),
+                  inventoryTracker: v.inventoryTracker || undefined,
+                  tracked: v.tracked !== undefined ? v.tracked : undefined,
+                  requiresShipping: v.requiresShipping !== undefined ? v.requiresShipping : undefined,
+                  weightValueGrams: parseNumeric(v.weightValueGrams),
+                  inventoryByLocation: v.inventoryByLocation || undefined,
+                };
+              })
             : undefined,
         },
-        // DON'T spread displayedPlatforms - backend only wants canonical
+        // ALSO send platform-specific data to preserve original generated fields
+        // Backend will prefer platform-specific over canonical
+        ...Object.keys(displayedPlatforms || {}).reduce((acc, platformKey) => {
+          const platformData = (displayedPlatforms as any)[platformKey];
+          if (platformData && typeof platformData === 'object') {
+            acc[platformKey] = platformData;
+          }
+          return acc;
+        }, {} as Record<string, any>),
       },
       media: (() => {
         // CRITICAL: Use userImagesByIndex which prioritizes: 1) DB images, 2) params, 3) scraped fallback

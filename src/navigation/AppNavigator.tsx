@@ -37,6 +37,7 @@ import ProductDetailScreen from '../screens/ProductDetail';
 import PhoneAuthScreen from '../screens/PhoneAuthScreen';
 import CreateAccountScreen from '../screens/CreateAccountScreen';
 import PastScansScreen from '../screens/PastScansScreen';
+import TeamScreen from '../screens/TeamScreen';
 import MappingReviewScreen from '../screens/MappingReviewScreen';
 import SyncRulesScreen from '../screens/SyncRulesScreen';
 import AddProductScreen from '../screens/AddProductScreen';
@@ -96,6 +97,7 @@ export type AppStackParamList = {
   MappingReview: { connectionId: string; platformName: string; jobId?: string; }; 
   SyncRules: { connectionId: string };
   Profile: { refresh?: number }; // Add Profile screen with optional refresh param
+  Team: undefined;
   AddProduct: {
     firstPhotos: any[];
     bulkItems: any[];
@@ -355,6 +357,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="MappingReview" component={MappingReviewScreen} />
     <AppStackNav.Screen name="SyncRules" component={SyncRulesScreen} />
     <AppStackNav.Screen name="Profile" component={ProfileScreen} />
+    <AppStackNav.Screen name="Team" component={TeamScreen} />
     <AppStackNav.Screen name="AddProduct" component={AddProductScreen} />
     <AppStackNav.Screen name="LoadingScreen" component={LoadingScreen} />
     <AppStackNav.Screen name="MatchSelectionScreen" component={MatchSelectionScreen} />

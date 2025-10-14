@@ -10,7 +10,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 // Import Phone Number Input (Commented out for now)
 // import PhoneInput from 'react-native-phone-number-input';
 // import { useRef } from 'react';
-import { useSignIn, useSignUp, useAuth, getClerkInstance } from '@clerk/clerk-expo';
+import { useSignIn, useSignUp, useAuth, getClerkInstance, useOAuth } from '@clerk/clerk-expo';
 
 // Flag to use static gradient for better performance
 const USE_STATIC_GRADIENT = true;
@@ -143,6 +143,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
   const { signIn, isLoaded: isSignInLoaded } = useSignIn();
   const { signUp, isLoaded: isSignUpLoaded } = useSignUp();
   const auth = useAuth() as any; // setActive may not be typed in some versions
+  const { startOAuthFlow: startGoogleOAuth } = useOAuth({ strategy: 'oauth_google' });
   // Comment out phone ref for now
   // const phoneInputRef = useRef<PhoneInput>(null);
   
@@ -278,65 +279,29 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
   }, [email]);
   
   // Implemented handleGoogleAuth
-  /* // Commenting out Google Auth for now
-  const handleGoogleAuth = async () => {
-    if (!authContext) {
-      console.error("Auth context is not available");
-      Alert.alert('Error', 'Authentication service unavailable.');
-      return;
-    }
-    setLoading(true); // Indicate loading state
+  const handleGoogleAuth = useCallback(async () => {
+    setLoading(true);
     try {
-      // Check if device has Google Play Services installed/updated
-      await GoogleSignin.hasPlayServices();
-
-      // Get the user's ID token from Google
-      const userInfo = await GoogleSignin.signIn();
-
-      // Use type assertion to access idToken due to potential type mismatch
-      const idToken = (userInfo as any)?.idToken;
-
-      if (idToken) {
-        // Sign in with Supabase using the Google ID token
-        const { data, error } = await supabase.auth.signInWithIdToken({
-          provider: 'google',
-          token: idToken,
-        });
-
-        if (error) throw error;
-
-        // If successful, Supabase provides a session, update AuthContext
-        if (data?.session) {
-           console.log('Google Sign-In Success:', data.session.user.email);
-           // The AuthContext listener should handle navigation
-           // Or call authContext.signIn(data.session.access_token); explicitly if needed
-        } else {
-           throw new Error("Google Sign-In successful but no session received.");
-        }
-
-      } else {
-        throw new Error('Google Sign-In failed: No ID token received.');
+      const result = await startGoogleOAuth();
+      if (result?.createdSessionId) {
+        const clerk = getClerkInstance?.();
+        const setActiveFn = auth?.setActive || clerk?.setActive;
+        await setActiveFn?.({ session: result.createdSessionId });
+        try { await (clerk as any)?.__internal_reloadInitialResources?.(); } catch {}
+        return;
       }
-    } catch (error: any) {
-      if (error.code === statusCodes.SIGN_IN_CANCELLED) {
-        // User cancelled the login flow
-        console.log('Google Sign-In Cancelled');
-      } else if (error.code === statusCodes.IN_PROGRESS) {
-        // Operation (e.g. sign in) is in progress already
-        Alert.alert('Wait', 'Sign-in is already in progress.');
-      } else if (error.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
-        // Play services not available or outdated
-        Alert.alert('Error', 'Google Play Services not available or outdated.');
-      } else {
-        // Some other error happened
-        console.error('Google Auth Error:', error);
-        Alert.alert('Error', error.message || 'An error occurred during Google Sign-In.');
+      if (result?.setActive) {
+        await result.setActive({ session: result?.createdSessionId });
+        return;
       }
+      Alert.alert('Google Sign-In', 'Could not complete Google sign-in.');
+    } catch (e: any) {
+      console.error('[AuthScreen] Google OAuth error:', e);
+      Alert.alert('Google Sign-In Error', e?.message || 'An error occurred');
     } finally {
-      setLoading(false); // Stop loading indicator
+      setLoading(false);
     }
-  };
-  */
+  }, [startGoogleOAuth, auth]);
 
   return (
     <KeyboardAvoidingView 
@@ -376,6 +341,15 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
             handleForgotPassword={handleForgotPassword}
             setIsLogin={setIsLogin}
           />
+          <View style={styles.divider}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>or</Text>
+            <View style={styles.dividerLine} />
+          </View>
+          <TouchableOpacity style={styles.socialButton} onPress={handleGoogleAuth} disabled={loading}>
+            <Image source={require('../assets/google.png')} style={{ width: 20, height: 20, marginRight: 8 }} />
+            <Text style={styles.socialButtonText}>Continue with Google</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <Animated.View 
@@ -397,6 +371,15 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
             handleForgotPassword={handleForgotPassword}
             setIsLogin={setIsLogin}
           />
+          <View style={styles.divider}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>or</Text>
+            <View style={styles.dividerLine} />
+          </View>
+          <TouchableOpacity style={styles.socialButton} onPress={handleGoogleAuth} disabled={loading}>
+            <Image source={require('../assets/google.png')} style={{ width: 20, height: 20, marginRight: 8 }} />
+            <Text style={styles.socialButtonText}>Continue with Google</Text>
+          </TouchableOpacity>
         </Animated.View>
       )}
     </KeyboardAvoidingView>

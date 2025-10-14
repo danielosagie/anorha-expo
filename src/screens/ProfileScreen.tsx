@@ -978,6 +978,11 @@ const ProfileScreen = () => {
   // Modify the menuItems array to be dynamic based on dev mode
   const menuItems = [
     { icon: 'credit-card', title: 'Subscription & Billing', badge: entitlements?.planName || 'Free' },
+    { 
+      icon: 'account-group', 
+      title: 'Team', 
+      onPress: () => navigation.navigate('Team' as never),
+    },
     { icon: 'shield-check', title: 'Privacy & Security' },
     { icon: 'bell', title: 'Notifications' },
     { icon: 'help-circle', title: 'Help & Support' },

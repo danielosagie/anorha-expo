@@ -134,22 +134,49 @@ export function createCanonicalBase(productVariant: {
   Title?: string | null;
   Description?: string | null;
   Price?: number | null;
+  CompareAtPrice?: number | null;
   Sku?: string | null;
   Barcode?: string | null;
   Weight?: number | null;
   WeightUnit?: string | null;
+  RequiresShipping?: boolean | null;
   ImageUrls?: string[] | null;
+  Metadata?: any;
   [key: string]: any;
 }): PlatformData {
-  return {
+  const parseNumeric = (raw: any): number | undefined => {
+    if (raw === undefined || raw === null || raw === '') return undefined;
+    if (typeof raw === 'number') return raw >= 0 ? raw : undefined;
+    const cleaned = parseFloat(String(raw).replace(/[^0-9.]/g, ''));
+    return Number.isFinite(cleaned) && cleaned >= 0 ? cleaned : undefined;
+  };
+
+  // Parse saved metadata if it exists
+  const metadata = (productVariant.Metadata as any) || {};
+  const savedPlatformData = metadata.platformSpecificData || {};
+  const savedShopify = savedPlatformData.shopify || {};
+
+  // Build base from variant fields
+  const base = {
     title: productVariant.Title || '',
     description: productVariant.Description || '',
-    price: productVariant.Price || 0,
     sku: productVariant.Sku || '',
     barcode: productVariant.Barcode || '',
-    weight: productVariant.Weight || 0,
+    price: parseNumeric(productVariant.Price),
+    compareAtPrice: parseNumeric(productVariant.CompareAtPrice),
+    weight: parseNumeric(productVariant.Weight),
     weightUnit: productVariant.WeightUnit || 'kg',
+    requiresShipping: productVariant.RequiresShipping !== false,
+    tags: metadata.tags || [],
+    vendor: metadata.vendor || '',
+    productType: metadata.productType || '',
     images: productVariant.ImageUrls || [],
+  };
+
+  // Merge with saved platform-specific fields (variants, options, inventoryType, etc.)
+  return {
+    ...base,
+    ...savedShopify,
   };
 }
 
