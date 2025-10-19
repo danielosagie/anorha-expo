@@ -166,16 +166,6 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
   const selectedInventoryType: InventoryType = (activeData.inventoryType || DEFAULT_INVENTORY_TYPE_BY_PLATFORM[activePlatformKey] || 'BASIC');
   const isAdvanced = selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS';
   const supportsVariants = selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' || selectedInventoryType === 'VARIANT_WITH_OPTIONS';
-  
-  // Debug logging for variants
-  console.log('[ListingEditorForm] Inventory state:', {
-    activePlatformKey,
-    selectedInventoryType,
-    supportsVariants,
-    hasOptions: (activeData.options || []).length,
-    hasVariants: (activeData.variants || []).length,
-    activeDataKeys: Object.keys(activeData)
-  });
 
   const variantSuggestions: Array<{ name: string; values: string[] }> = ((platforms as any)[activePlatformKey]?.__variantSuggestions) || [];
 
@@ -217,12 +207,20 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
   const locations = useMemo(() => {
     // If platform has its own locations array, use that
     if (activeData.locations && activeData.locations.length > 0) {
+      console.log(`[ListingEditorForm] Using locations from activeData for ${activePlatformKey}:`, activeData.locations);
       return activeData.locations;
     }
     
     // Otherwise, get from platformLocations prop for this platform type
     const platformType = activePlatformKey.toLowerCase();
     const platformLocs = platformLocations?.[platformType] || [];
+    
+    console.log(`[ListingEditorForm] Platform ${activePlatformKey} (${platformType}):`, {
+      hasPlatformLocations: !!platformLocations,
+      platformLocsCount: platformLocs.length,
+      platformLocsKeys: Object.keys(platformLocations || {}),
+      platformLocs: platformLocs
+    });
     
     if (platformLocs.length > 0) {
       // Map to expected format with full display name
@@ -237,6 +235,18 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
   }, [activeData.locations, activePlatformKey, platformLocations]);
   const [selectedLocationId, setSelectedLocationId] = useState<string>(locations[0]?.id || 'loc-1');
 
+  // Debug logging for inventory state (after locations are defined)
+  console.log('[ListingEditorForm] Inventory state:', {
+    activePlatformKey,
+    selectedInventoryType,
+    isAdvanced,
+    supportsVariants,
+    hasOptions: (activeData.options || []).length,
+    hasVariants: (activeData.variants || []).length,
+    activeDataKeys: Object.keys(activeData),
+    locationsCount: locations.length,
+    shouldShowLocationDropdown: selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all'
+  });
 
   const cartesian = (arrays: string[][]): string[][] => {
     return arrays.reduce<string[][]>((acc, curr) => {
@@ -882,7 +892,8 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
 
       {/* Inventory summary (auto-decided per platform) */}
       <View style={styles.darkerCard}>
-        <View style={{ marginVertical: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
+        <View style={{ marginVertical: 8, flexDirection: 'column', gap: 8 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
             <Text style={styles.sectionTitle}>Inventory{activeTab === 'all' ? ' (All Platforms)' : ''}</Text>
             {/* Locations only for LOCATION_VARIANT_WITH_OPTIONS; NEVER show for VARIANT_WITH_OPTIONS or BASIC */}
             {selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all' && (
@@ -892,29 +903,183 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
               }} />
             )}
           </View>
+          
+          {/* Copy inventory from another platform */}
+          {activeTab !== 'all' && platformKeys.length > 1 && (
+            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+              <Text style={{ color: '#71717A', fontSize: 12 }}>Copy from:</Text>
+              {platformKeys.filter(k => k !== activePlatformKey).map(platformKey => (
+                <TouchableOpacity
+                  key={platformKey}
+                  onPress={() => {
+                    const sourcePlatform = platforms[platformKey] as PlatformState;
+                    const sourceVariants = sourcePlatform?.variants || [];
+                    
+                    if (sourceVariants.length === 0) {
+                      alert(`No inventory data found on ${platformKey}`);
+                      return;
+                    }
+                    
+                    // Copy inventory from source platform to current platform
+                    patchPlatform(prev => {
+                      const currentVariants = prev.variants || [];
+                      const updatedVariants = currentVariants.map(variant => {
+                        // Find matching variant by name
+                        const variantName = Object.values(variant.optionValues || {}).join(' / ') || 'Variant';
+                        const sourceVariant = sourceVariants.find(sv => 
+                          Object.values(sv.optionValues || {}).join(' / ') === variantName
+                        );
+                        
+                        if (sourceVariant && sourceVariant.inventoryByLocation) {
+                          return {
+                            ...variant,
+                            inventoryByLocation: { ...sourceVariant.inventoryByLocation }
+                          };
+                        }
+                        return variant;
+                      });
+                      
+                      return { ...prev, variants: updatedVariants };
+                    });
+                    
+                    alert(`Copied inventory from ${platformKey} to ${activePlatformKey}`);
+                  }}
+                  style={{ paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: '#F8F9FA' }}
+                >
+                  <Text style={{ fontSize: 11, fontWeight: '600', color: '#000' }}>
+                    {PLATFORM_META[platformKey]?.label || platformKey}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </View>
           {(() => {
             console.log('[Inventory Render] supportsVariants:', supportsVariants, 'variants count:', (activeData.variants || []).length);
             return null;
           })()}
           {supportsVariants ? (
-          (activeData.variants || []).map((variant, variantIdx) => {
-            const variantName = Object.values(variant.optionValues || {}).join(' / ') || 'Variant';
-            const invKey = selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' ? selectedLocationId : 'default';
-            const inv = (variant.inventoryByLocation || {})[invKey] || { quantity: 0, price: undefined };
-            return (
-              <VariantInventoryRow
-                key={`${variant.id}-${variantIdx}`}
-                variantName={variantName}
-                variantId={variant.id}
-                invKey={invKey}
-                quantity={inv.quantity ?? 0}
-                price={inv.price ?? activeData.price ?? 0}
-                onChangeQuantity={(qty) => setVariantAtLocation(variant.id, invKey, 'quantity', qty)}
-                onChangePrice={(p) => setVariantAtLocation(variant.id, invKey, 'price', p)}
-                onSelectImage={() => setVariantImagePicker({ variantId: variant.id, open: true })}
-              />
-            );
-          })) : (
+            activeTab === 'all' ? (
+              // ALL TAB: Show ALL variants with ALL their location inventories across ALL platforms
+              <View style={{ gap: 16 }}>
+                {(() => {
+                  // Aggregate all variants from all platforms
+                  const allVariantsMap = new Map<string, { variant: Variant; platformKey: string; locations: Array<{ id: string; name: string; quantity: number; price?: number; isOverride: boolean }> }>();
+                  
+                  for (const platformKey of platformKeys) {
+                    const platformData = platforms[platformKey] as PlatformState;
+                    const variants = platformData?.variants || [];
+                    
+                    for (const variant of variants) {
+                      const variantName = Object.values(variant.optionValues || {}).join(' / ') || 'Variant';
+                      const mapKey = variantName; // Group by variant name
+                      
+                      if (!allVariantsMap.has(mapKey)) {
+                        allVariantsMap.set(mapKey, { variant, platformKey, locations: [] });
+                      }
+                      
+                      const variantData = allVariantsMap.get(mapKey)!;
+                      
+                      // Extract all location inventories for this variant
+                      const invByLoc = variant.inventoryByLocation || {};
+                      const defaultPrice = variant.price ?? platformData.price ?? 0;
+                      
+                      Object.entries(invByLoc).forEach(([locId, locData]: [string, any]) => {
+                        if (locId === 'loc-default' || locId === 'default') return; // Skip fake locations
+                        
+                        const isOverride = locData.price !== undefined && locData.price !== null && locData.price !== defaultPrice;
+                        
+                        variantData.locations.push({
+                          id: locId,
+                          name: `${platformKey.toUpperCase()} - ${locId.slice(0, 20)}`,
+                          quantity: locData.quantity ?? 0,
+                          price: locData.price ?? defaultPrice,
+                          isOverride,
+                        });
+                      });
+                    }
+                  }
+                  
+                  if (allVariantsMap.size === 0) {
+                    return <Text style={{ color: '#999', fontStyle: 'italic' }}>No variants configured</Text>;
+                  }
+                  
+                  return Array.from(allVariantsMap.entries()).map(([variantName, data]) => (
+                    <View key={variantName} style={{ gap: 8 }}>
+                      <Text style={{ color: '#000', fontWeight: '700', fontSize: 15 }}>{variantName}</Text>
+                      {data.locations.length === 0 ? (
+                        <Text style={{ color: '#999', fontSize: 12, fontStyle: 'italic', marginLeft: 12 }}>No inventory set for any location</Text>
+                      ) : (
+                        data.locations.map((loc, idx) => (
+                          <View 
+                            key={`${loc.id}-${idx}`} 
+                            style={[
+                              { 
+                                flexDirection: 'row', 
+                                alignItems: 'center', 
+                                gap: 8, 
+                                paddingVertical: 10, 
+                                paddingHorizontal: 12,
+                                borderRadius: 10,
+                                borderWidth: loc.isOverride ? 4 : 1,
+                                borderColor: loc.isOverride ? '#FFD700' : '#E5E5E5',
+                                borderTopWidth: loc.isOverride ? 6 : 1,
+                                backgroundColor: loc.isOverride ? '#FFFEF0' : '#FFF',
+                                position: 'relative',
+                              }
+                            ]}
+                          >
+                            {loc.isOverride && (
+                              <View style={{ position: 'absolute', top: -12, left: 12, backgroundColor: '#FFD700', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 }}>
+                                <Text style={{ color: '#FFF', fontSize: 10, fontWeight: '700' }}>OVERRIDE</Text>
+                              </View>
+                            )}
+                            <View style={{ flex: 1, marginTop: loc.isOverride ? 8 : 0 }}>
+                              <Text style={{ color: '#000', fontWeight: '600', fontSize: 13 }}>{loc.name}</Text>
+                            </View>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                              <View style={{ alignItems: 'flex-end' }}>
+                                <Text style={{ color: '#666', fontSize: 11 }}>Qty</Text>
+                                <Text style={{ color: '#000', fontWeight: '600', fontSize: 15 }}>{loc.quantity}</Text>
+                              </View>
+                              <View style={{ alignItems: 'flex-end' }}>
+                                <Text style={{ color: '#666', fontSize: 11 }}>Price</Text>
+                                <Text style={{ color: loc.isOverride ? '#FFD700' : '#000', fontWeight: '700', fontSize: 15 }}>${loc.price}</Text>
+                              </View>
+                            </View>
+                          </View>
+                        ))
+                      )}
+                    </View>
+                  ));
+                })()}
+              </View>
+            ) : (
+              // PLATFORM TAB: Show variants for selected location only
+              (activeData.variants || []).map((variant, variantIdx) => {
+                const variantName = Object.values(variant.optionValues || {}).join(' / ') || 'Variant';
+                const invKey = selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' ? selectedLocationId : 'default';
+                const inv = (variant.inventoryByLocation || {})[invKey] || { quantity: 0, price: undefined };
+                const defaultPrice = variant.price ?? activeData.price ?? 0;
+                const isOverride = inv.price !== undefined && inv.price !== null && inv.price !== defaultPrice;
+                
+                return (
+                  <VariantInventoryRow
+                    key={`${variant.id}-${variantIdx}`}
+                    variantName={variantName}
+                    variantId={variant.id}
+                    invKey={invKey}
+                    quantity={inv.quantity ?? 0}
+                    price={inv.price ?? defaultPrice}
+                    isOverride={isOverride}
+                    onChangeQuantity={(qty) => setVariantAtLocation(variant.id, invKey, 'quantity', qty)}
+                    onChangePrice={(p) => setVariantAtLocation(variant.id, invKey, 'price', p)}
+                    onSelectImage={() => setVariantImagePicker({ variantId: variant.id, open: true })}
+                  />
+                );
+              })
+            )
+          ) : (
             activeTab === 'all' ? (
               // Show all platform locations in "all" tab
               <View style={{ gap: 12 }}>
@@ -955,6 +1120,8 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
         <TouchableOpacity style={styles.toggleRow} onPress={() => setShowAdditionalFields(v=>!v)}>
           <Icon name={showAdditionalFields ? 'chevron-down' : 'chevron-right'} size={18} color="#000" />
           <Text style={styles.sectionTitle}>Additional Fields</Text>
+
+          {/*
           <View style={{ flexDirection: 'row', gap: 8, marginLeft: 'auto' }}>
             {!!onBoostListing && (
               <TouchableOpacity style={styles.btnSecondary} onPress={() => onBoostListing(activePlatformKey, 'boost')}>
@@ -967,6 +1134,7 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
               </TouchableOpacity>
             )}
           </View>
+          */}
         </TouchableOpacity>
         {showAdditionalFields && (
           <>
@@ -1105,12 +1273,13 @@ function SimpleQuantityInput({ quantity, onChangeQuantity }: { quantity: number;
   );
 }
 
-function VariantInventoryRow({ variantName, variantId, invKey, quantity, price, onChangeQuantity, onChangePrice, onSelectImage }: {
+function VariantInventoryRow({ variantName, variantId, invKey, quantity, price, isOverride, onChangeQuantity, onChangePrice, onSelectImage }: {
   variantName: string;
   variantId: string;
   invKey: string;
   quantity: number;
   price: number;
+  isOverride?: boolean;
   onChangeQuantity: (qty: number) => void;
   onChangePrice: (price: number) => void;
   onSelectImage: () => void;
@@ -1154,7 +1323,23 @@ function VariantInventoryRow({ variantName, variantId, invKey, quantity, price, 
   };
 
   return (
-    <View style={styles.inventoryRow}>
+    <View style={[
+      styles.inventoryRow,
+      isOverride && {
+        borderWidth: 4,
+        borderColor: '#FFD700',
+        borderTopWidth: 6,
+        backgroundColor: '#FFFEF0',
+        borderRadius: 10,
+        position: 'relative',
+        marginTop: 12,
+      }
+    ]}>
+      {isOverride && (
+        <View style={{ position: 'absolute', top: -12, left: 12, backgroundColor: '#FFD700', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, zIndex: 10 }}>
+          <Text style={{ color: '#FFF', fontSize: 10, fontWeight: '700' }}>OVERRIDE</Text>
+        </View>
+      )}
       <View style={{ flexDirection: "column", gap: 12, alignSelf: 'flex-start'}}>
         <Text style={{backgroundColor: '#F8F9FB',alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12, color: '#000', fontWeight: '600'}}>{variantName}</Text>
         <View style={{flexDirection: 'row', justifyContent:'flex-end', gap: 9, alignItems: 'center', alignSelf: 'flex-end'}}>
@@ -1166,10 +1351,19 @@ function VariantInventoryRow({ variantName, variantId, invKey, quantity, price, 
           />
         </View>
         <View style={{flexDirection: 'row', justifyContent:'flex-end', gap: 9, alignItems: 'center', alignSelf: 'flex-end'}}>
-          <Text style={{ color: '#000' }}>Price:</Text>
+          <Text style={{ color: isOverride ? '#FFD700' : '#000', fontWeight: isOverride ? '700' : '400' }}>Price:</Text>
               <TextInput
                 placeholder="$30"
-                style={styles.qtyInput}
+                style={[
+                  styles.qtyInput,
+                  isOverride && {
+                    borderColor: '#FFD700',
+                    borderWidth: 2,
+                    backgroundColor: '#FFFEF0',
+                    color: '#FFD700',
+                    fontWeight: '700',
+                  }
+                ]}
                 value={localPrice}
                 onChangeText={handlePriceChange}
                 keyboardType={"decimal-pad"}

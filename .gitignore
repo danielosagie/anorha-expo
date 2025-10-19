@@ -6,3 +6,6 @@ dist/
 /node_modules
 node_modules/
 env.local
+ANTI_PATTERNS_FOUND.md
+LISTING_EDITOR_ARCHITECTURE_REVIEW.md
+PHASE_1_IMPLEMENTATION.md

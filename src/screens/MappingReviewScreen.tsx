@@ -3477,33 +3477,24 @@ const MappingReviewScreen = () => {
                         onPress={async () => {
                           setIsSubmitting(true);
                           try {
-                            // Get the confirmed mappings from the current state
-                            const confirmedMappings = [
-                              ...matchedItems.filter(item => item.isSelected).map(item => ({
-                                action: item.action,
-                                platformProduct: {
-                                  id: item.platformProduct.id
-                                },
-                                sssyncProduct: item.suggestedCanonicalProduct?.id ? {
-                                  id: item.suggestedCanonicalProduct.id
-                                } : undefined
-                              })),
-                              ...reviewItems.filter(item => item.isSelected).map(item => ({
-                                action: item.action,
-                                platformProduct: {
-                                  id: item.platformProduct.id
-                                },
-                                sssyncProduct: item.suggestedCanonicalProduct?.id ? {
-                                  id: item.suggestedCanonicalProduct.id
-                                } : undefined
-                              }))
-                            ];
+                            // Get the confirmed mappings from suggestions (all selected items)
+                            // Transform to match backend DTO: ConfirmMappingsDto
+                            const confirmedMappings = (suggestions || [])
+                              .filter(item => item.isSelected)
+                              .map(item => ({
+                                platformProductId: item.platformProduct.id,
+                                platformVariantId: item.platformProduct.id, // Same as product ID for now
+                                platformProductSku: item.platformProduct.sku,
+                                platformProductTitle: item.platformProduct.title,
+                                sssyncVariantId: item.suggestedCanonicalProduct?.id || null,
+                                action: item.action === 'CREATE_NEW' ? 'create' : item.action === 'LINK_EXISTING' ? 'link' : 'ignore'
+                              }));
 
                             console.log('[MappingReview] Confirming mappings:', confirmedMappings.length);
                             
                             // Call the confirm-mappings endpoint
                             const token = await ensureSupabaseJwt();
-                            const confirmResponse = await fetch(`https://api.sssync.app/sync/connections/${connectionId}/confirm-mappings`, {
+                            const confirmResponse = await fetch(`https://api.sssync.app/api/sync/connections/${connectionId}/confirm-mappings`, {
                               method: 'POST',
                               headers: {
                                 'Authorization': `Bearer ${token}`,
@@ -3522,7 +3513,7 @@ const MappingReviewScreen = () => {
                             console.log('[MappingReview] Mappings confirmed, activating sync...');
 
                             // Activate the sync
-                            const syncResponse = await fetch(`https://api.sssync.app/sync/connections/${connectionId}/activate-sync`, {
+                            const syncResponse = await fetch(`https://api.sssync.app/api/sync/connections/${connectionId}/activate-sync`, {
                               method: 'POST',
                               headers: {
                                 'Authorization': `Bearer ${token}`,
