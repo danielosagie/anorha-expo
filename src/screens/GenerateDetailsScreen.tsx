@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert } from 'react-native';
 import { CameraView } from 'expo-camera';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -13,6 +13,7 @@ import ListingEditorForm from '../components/ListingEditorForm';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { hydratePlatformsFromBackend, normalizeForListingEditor, isEmpty } from '../utils/platformDataHydration';
 import { Paths, Directory, File } from 'expo-file-system/next';
+import * as ImagePicker from 'expo-image-picker';
 
 // Feature flag to hide AI refill functionality
 const ENABLE_AI_REFILL_FEATURES = true;
@@ -430,7 +431,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       }
     })();
     return () => { canceled = true };
-  }, [results]);
+  }, [(route.params as any)?.variantId, results === null ? null : results]);
 
   // Debug (safe)
   console.log('[GEN-DETAILS] route.params keys:', Object.keys((route.params || {}) as any));
@@ -477,11 +478,24 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     return map;
   }, [results, dbImages, route.params]);
   
-  const [displayedPlatforms, setDisplayedPlatforms] = useState<GeneratedPlatformDetails>({});
+  // ========== CRITICAL FIX: useRef for data persistence + auto-save ==========
+  const [updateCounter, setUpdateCounter] = useState(0);
+  const platformsRef = useRef<GeneratedPlatformDetails>({});
+  const [, forceUpdate] = useState({});
+  const debounceTimerRef = useRef<any>(null);
   const lastHydratedJobRef = useRef<string | null>(null);
+  const lastSavedRef = useRef<string>('');
   
-  // SINGLE hydration point - directly from first.platforms to displayedPlatforms
-  // Use jobId as stable dependency to prevent re-hydration on every render
+  const updatePlatforms = (updater: (prev: GeneratedPlatformDetails) => GeneratedPlatformDetails) => {
+    platformsRef.current = updater(platformsRef.current);
+    forceUpdate({}); // Trigger re-render
+    setUpdateCounter(c => c + 1); // Signal content change
+    console.log('[GEN-DETAILS] Updated platforms, triggering auto-save...');
+  };
+
+  // Get displayedPlatforms from ref (for render)
+  // Just use the ref directly - it's stable and mutations won't cause renders
+  const displayedPlatforms = platformsRef.current;
   useEffect(() => {
     if (!first || !first.platforms) return;
     
@@ -535,16 +549,71 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       };
     }
     
-    // Hydrate into displayedPlatforms (preserves user edits)
-    setDisplayedPlatforms(prev => {
-      const hydrated = hydratePlatformsFromBackend(normalized, prev);
-      console.log('[GEN-DETAILS] Hydrated platforms:', Object.keys(hydrated));
-      return hydrated;
-    });
+    // Hydrate into platformsRef (preserves user edits)
+    const hydrated = hydratePlatformsFromBackend(normalized, platformsRef.current);
+    console.log('[GEN-DETAILS] Hydrated platforms:', Object.keys(hydrated));
+    updatePlatforms(() => hydrated);
     
     lastHydratedJobRef.current = currentJobId;
   }, [first, jobId]);
   
+  
+  // ========== AUTO-SAVE DEBOUNCE: Save to /api/products/drafts every 2s idle ==========
+  useEffect(() => {
+    const variantId = (route.params as any)?.variantId || first?.variantId;
+    if (!variantId || !platformsRef.current || Object.keys(platformsRef.current).length === 0) {
+      return;
+    }
+
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    debounceTimerRef.current = setTimeout(async () => {
+      try {
+        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+        const token = await ensureSupabaseJwt();
+        
+        if (!baseUrl || !token) {
+          console.log('[GEN-DETAILS AutoSave] Missing baseUrl or token, skipping');
+          return;
+        }
+
+        const currentData = JSON.stringify(platformsRef.current);
+        if (currentData === lastSavedRef.current) {
+          console.log('[GEN-DETAILS AutoSave] No changes, skipping save');
+          return;
+        }
+
+        const response = await fetch(`${baseUrl}/api/products/drafts/${variantId}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            draftData: platformsRef.current
+          })
+        });
+
+        if (response.ok) {
+          lastSavedRef.current = currentData;
+          console.log('[GEN-DETAILS AutoSave] ✅ Draft auto-saved successfully');
+        } else {
+          const errorText = await response.text();
+          console.error('[GEN-DETAILS AutoSave] ❌ Failed to auto-save draft:', response.status, errorText);
+        }
+      } catch (error) {
+        console.error('[GEN-DETAILS AutoSave] ❌ Error auto-saving draft:', error);
+      }
+    }, 2000);
+
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, [displayedPlatforms, first?.variantId, route.params]);
   const platformKeys: string[] = useMemo(() => Object.keys(displayedPlatforms as Record<string, any>), [displayedPlatforms]);
   const [jobsModalVisible, setJobsModalVisible] = useState(false);
   const [userGenerateJobs, setUserGenerateJobs] = useState<Array<{ jobId: string; status: string; createdAt: string; completedAt?: string }>>([]);
@@ -557,7 +626,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [isFilling, setIsFilling] = useState(false);
   const [recentlyFilledByPlatform, setRecentlyFilledByPlatform] = useState<Record<string, string[]>>({});
   const [fillSelectedFields, setFillSelectedFields] = useState<string[]>([
-    'title','description','tags','price','sku','barcode','seoTitle','seoDescription','options'
+    'title', 'description', 'price', 'barcode'
   ]);
   const [lastFillCount, setLastFillCount] = useState<number>(0);
   const [refilledFieldsByPlatform, setRefilledFieldsByPlatform] = useState<Record<string, string[]>>({});
@@ -586,6 +655,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [allConnections, setAllConnections] = useState<any[]>([]);
   const [selectedConnectionIds, setSelectedConnectionIds] = useState<Record<string, string>>({});
   const [platformLocations, setPlatformLocations] = useState<Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>>>({});
+  const [mediaGallery, setMediaGallery] = useState<string[]>([]);
+  const [mediaModalVisible, setMediaModalVisible] = useState(false);
+  const [selectedVariantForMedia, setSelectedVariantForMedia] = useState<string | null>(null);
 
     // Fetch connections and locations on mount
     useEffect(() => {
@@ -1030,7 +1102,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }
     
     // Set the field value in the platform data
-    setDisplayedPlatforms(prev => {
+    updatePlatforms(prev => {
       const next = { ...prev };
       const platformData = { ...(next[platformKey] || {}) };
       
@@ -1259,7 +1331,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
         next[k] = merged;
       }
-      setDisplayedPlatforms(next);
+      updatePlatforms(next);
       setRecentlyFilledByPlatform(changedMap);
       // Track refilled fields per platform for pill badges
       setRefilledFieldsByPlatform(prev => {
@@ -1271,7 +1343,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         return merged;
       });
       // write into platform state so ListingEditorForm can render badge without screen prop threading
-      setDisplayedPlatforms(prev => {
+      updatePlatforms(prev => {
         const out: any = { ...prev };
         for (const k of Object.keys(changedMap)) {
           out[k] = { ...(out[k]||{}), __refilled: Array.from(new Set([ ...((out[k]?.__refilled)||[]), ...changedMap[k] ])) };
@@ -1341,7 +1413,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         const newText = Array.isArray(incomingPlatform[regenFieldKey!]) ? (incomingPlatform[regenFieldKey!] as any[]).join(', ') : String(incomingPlatform[regenFieldKey!]);
         setRegenVersions(prev => [...prev, { label: `Version ${prev.length + 1}`, text: newText }]);
         setRegenActiveVersion(prev => prev + 1);
-        setDisplayedPlatforms(prev => ({
+        updatePlatforms(prev => ({
           ...prev,
           [regenPlatformKey]: (() => {
             const curr = prev?.[regenPlatformKey] || {} as any;
@@ -1410,7 +1482,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           // This ensures the UI reflects what's actually in the database
           const canonicalKey = platformKeys.includes('shopify') ? 'shopify' : platformKeys[0];
           if (canonicalKey && displayedPlatforms[canonicalKey]) {
-            setDisplayedPlatforms(prev => ({
+            updatePlatforms(prev => ({
               ...prev,
               [canonicalKey]: {
                 ...prev[canonicalKey],
@@ -1764,7 +1836,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (generatedPlatforms && generatedPlatforms[platformKey]) {
         // Update displayed platforms with the new generated data
         const normalized = normalizeForListingEditor(generatedPlatforms[platformKey]);
-        setDisplayedPlatforms(prev => 
+        updatePlatforms(prev => 
           hydratePlatformsFromBackend({ [platformKey]: normalized }, prev)
         );
       }
@@ -1809,7 +1881,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const matched = resultArray.find((r: any) => r.productIndex === currentProductIndex) || resultArray[0];
       const canonical = (matched?.platforms || {}).canonical;
       if (canonical?.optionsSuggestions) {
-        setDisplayedPlatforms(prev => ({
+        updatePlatforms(prev => ({
           ...prev,
           [platformKey]: {
             ...(prev as any)[platformKey],
@@ -1865,13 +1937,163 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const matched = resultArray.find((r: any) => r.productIndex === currentProductIndex) || resultArray[0];
       const incomingPlatform = (matched?.platforms || {})[platformKey] || {};
       const normalized = normalizeForListingEditor(incomingPlatform);
-      setDisplayedPlatforms(prev => 
+      updatePlatforms(prev => 
         hydratePlatformsFromBackend({ [platformKey]: normalized }, prev)
       );
     } catch (e) {
       console.error('Boost listing failed:', e);
     }
   };
+
+  // ========== PHASE 2.6: Media Gallery Handlers ==========
+  const handlePickImage = async () => {
+    try {
+      // Request permissions first (like AddProductScreen)
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'We need access to your photo library to upload images.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        aspect: [4, 3],
+        quality: 0.8, // Match AddProductScreen quality
+      });
+
+      if (!result.canceled && result.assets.length > 0) {
+        const asset = result.assets[0];
+        
+        // Upload to Supabase (like AddProductScreen does)
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) {
+            Alert.alert('User not authenticated');
+            return;
+          }
+
+          // Read bytes using File API (Expo SDK 54+)
+          const parsedPath = Paths.parse(asset.uri);
+          const srcFile = new File(new Directory(parsedPath.dir), parsedPath.base);
+          const bytes = await srcFile.bytes();
+
+          // Create file name in user's folder
+          const fileName = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
+          
+          const { data, error } = await supabase.storage
+            .from('product-images')
+            .upload(fileName, bytes, {
+              contentType: 'image/jpeg',
+              cacheControl: '3600',
+            });
+
+          if (error) {
+            console.error('[Phase2 Media] Upload error:', error);
+            Alert.alert('Failed to upload image to storage');
+            return;
+          }
+
+          // Get public URL
+          const { data: urlData } = supabase.storage
+            .from('product-images')
+            .getPublicUrl(fileName);
+
+          const publicUrl = urlData.publicUrl;
+          console.log('[Phase2 Media] Image uploaded:', publicUrl);
+
+          // Add to media gallery
+          setMediaGallery(prev => [...prev, publicUrl]);
+
+        } catch (uploadError) {
+          console.error('[Phase2 Media] Failed to upload image:', uploadError);
+          Alert.alert('Failed to upload image');
+        }
+      }
+    } catch (error) {
+      console.error('[Phase2 Media] Error picking image:', error);
+      Alert.alert('Failed to pick image');
+    }
+  };
+
+  const handleRemoveMedia = (index: number) => {
+    const removedUrl = mediaGallery[index];
+    setMediaGallery(prev => prev.filter((_, i) => i !== index));
+    console.log('[Phase2 Media] Image removed at index:', index, 'URL:', removedUrl);
+  };
+
+  const handleSetVariantPhoto = (imageUrl: string) => {
+    if (!selectedVariantForMedia) {
+      Alert.alert('No variant selected');
+      return;
+    }
+    
+    console.log('[Phase2 Media] Set variant', selectedVariantForMedia, 'photo to:', imageUrl);
+    setSelectedVariantForMedia(null);
+  };
+
+  // ========== LOAD DRAFT ON MOUNT (when reopening saved item) ==========
+  useEffect(() => {
+    const variantId = (route.params as any)?.variantId;
+    const hasResults = Array.isArray(results) && results.length > 0;
+    
+    // Only load draft if:
+    // 1. We have a variantId
+    // 2. We don't already have results (new session or reopening)
+    // 3. platformsRef is still empty (not already hydrated)
+    if (!variantId || hasResults || Object.keys(platformsRef.current).length > 0) {
+      return;
+    }
+
+    let canceled = false;
+    (async () => {
+      try {
+        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+        const token = await ensureSupabaseJwt();
+        
+        if (!baseUrl || !token) {
+          console.log('[GEN-DETAILS DraftLoad] Missing baseUrl or token, skipping');
+          return;
+        }
+
+        console.log('[GEN-DETAILS DraftLoad] ⏳ Loading draft for variant:', variantId);
+        const response = await fetch(`${baseUrl}/api/products/drafts/${variantId}`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.warn('[GEN-DETAILS DraftLoad] ❌ Failed to load draft:', response.status, errorText);
+          return;
+        }
+
+        const draftResponse = await response.json();
+        const currentDraft = draftResponse?.currentDraft;
+        
+        if (!currentDraft || !currentDraft.draftData) {
+          console.log('[GEN-DETAILS DraftLoad] No draft data found');
+          return;
+        }
+
+        if (!canceled) {
+          console.log('[GEN-DETAILS DraftLoad] ✅ Loaded draft:', currentDraft.draftData);
+          // Restore the draft data into platformsRef
+          platformsRef.current = currentDraft.draftData;
+          lastSavedRef.current = JSON.stringify(currentDraft.draftData);
+          forceUpdate({}); // Trigger re-render with restored data
+        }
+      } catch (error) {
+        console.error('[GEN-DETAILS DraftLoad] ❌ Error loading draft:', error);
+      }
+    })();
+
+    return () => { canceled = true };
+  }, [route.params?.variantId, results]);
+  
+
   return (
     <View style={{ flex: 1 }}>
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -1908,20 +2130,40 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             {/* Editor form that matches the product page design */}
             <ListingEditorForm
               platforms={displayedPlatforms}
+              updateCounter={updateCounter}
               images={(userImagesByIndex[(first?.productIndex as number) ?? 0] || [first?.sourceImageUrl || '']).filter(Boolean)}
               platformLocations={platformLocations}
               onChangePlatforms={(next) => {
                 console.log('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
                 // DEEP merge: preserve all existing fields while updating changed ones
                 // This preserves user edits AND keeps all loaded backend data
-                setDisplayedPlatforms(prev => {
+                updatePlatforms(prev => {
                   const merged = { ...prev };
                   for (const [platformKey, platformData] of Object.entries(next)) {
-                    // Deep merge each platform to preserve nested structures
+                    const prevPlatform = prev[platformKey] || {};
+                    
+                    // Deep merge platform data
                     merged[platformKey] = {
-                      ...(prev[platformKey] || {}),
-                      ...(platformData || {})
+                      ...prevPlatform,
+                      ...platformData
                     };
+
+                    // CRITICAL: Preserve variant inventoryByLocation when merging variants array
+                    if (Array.isArray(platformData?.variants) && Array.isArray(prevPlatform.variants)) {
+                      merged[platformKey].variants = platformData.variants.map((newVariant: any) => {
+                        const prevVariant = prevPlatform.variants?.find((v: any) => v.id === newVariant.id);
+                        if (prevVariant?.inventoryByLocation) {
+                          return {
+                            ...newVariant,
+                            inventoryByLocation: {
+                              ...prevVariant.inventoryByLocation,
+                              ...(newVariant.inventoryByLocation || {})
+                            }
+                          };
+                        }
+                        return newVariant;
+                      });
+                    }
                   }
                   console.log('[GEN-DETAILS] Deep merged platforms, keys:', Object.keys(merged));
                   return merged;
@@ -2150,7 +2392,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                           for (const [key, value] of Object.entries(v.platforms || {})) {
                             normalized[key] = normalizeForListingEditor(value);
                           }
-                          setDisplayedPlatforms(prev => hydratePlatformsFromBackend(normalized, prev));
+                          updatePlatforms(prev => hydratePlatformsFromBackend(normalized, prev));
                           setVersionsSheetOpen(false);
                         }} 
                         style={[
@@ -2212,7 +2454,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                                   for (const [key, value] of Object.entries(version.platforms || {})) {
                                     normalized[key] = normalizeForListingEditor(value);
                                   }
-                                  setDisplayedPlatforms(prev => hydratePlatformsFromBackend(normalized, prev));
+                                  updatePlatforms(prev => hydratePlatformsFromBackend(normalized, prev));
                                   setVersionsSheetOpen(false);
                                 }}
                                 style={{
@@ -2609,6 +2851,69 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           </View>
         </View>
       </View>
+    )}
+    {/* Media Gallery Modal */}
+    {mediaModalVisible && (
+      <>
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setMediaModalVisible(false)}
+          style={styles.modalBackdrop}
+        />
+        <View style={[styles.missingFieldsModal, { left: 0, right: 0, borderRadius: 16, backgroundColor: "#FFF", maxHeight: '80%' }]}>
+          {/* Modal Header */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#E5E5E5' }}>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: '#000' }}>Media Gallery</Text>
+            <TouchableOpacity style={[styles.btnSecondary, { backgroundColor: "#FFF" }]} onPress={() => setMediaModalVisible(false)}>
+              <Icon name="close" size={20} color={'#000'} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Media Gallery Display */}
+          <ScrollView style={{ marginBottom: 16, maxHeight: 300 }}>
+            {mediaGallery.length === 0 ? (
+              <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 32 }}>
+                <Icon name="image-off" size={48} color="#CCC" />
+                <Text style={{ color: '#666', marginTop: 12, fontSize: 14 }}>No images yet. Tap "Add Photos" to get started.</Text>
+              </View>
+            ) : (
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {mediaGallery.map((imageUrl, index) => (
+                  <View key={index} style={{ position: 'relative', width: '30%', aspectRatio: 1 }}>
+                    <Image source={{ uri: imageUrl }} style={{ width: '100%', height: '100%', borderRadius: 8 }} />
+                    <TouchableOpacity
+                      onPress={() => handleRemoveMedia(index)}
+                      style={{ position: 'absolute', top: -8, right: -8, width: 28, height: 28, borderRadius: 14, backgroundColor: '#FF4444', alignItems: 'center', justifyContent: 'center' }}
+                    >
+                      <Icon name="close" size={16} color="#FFF" />
+                    </TouchableOpacity>
+                    <View style={{ position: 'absolute', bottom: 4, left: 4, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                      <Text style={{ color: '#FFF', fontSize: 12 }}>{index + 1}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+          </ScrollView>
+
+          {/* Actions */}
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <TouchableOpacity
+              onPress={handlePickImage}
+              style={{ flex: 1, paddingVertical: 12, backgroundColor: '#93C822', borderRadius: 8, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}
+            >
+              <Icon name="image-plus" size={18} color="#FFF" />
+              <Text style={{ color: '#FFF', fontWeight: '600' }}>Add Photos</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setMediaModalVisible(false)}
+              style={{ flex: 1, paddingVertical: 12, backgroundColor: '#F5F5F5', borderRadius: 8, alignItems: 'center' }}
+            >
+              <Text style={{ color: '#000', fontWeight: '600' }}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </>
     )}
     </View>
   );

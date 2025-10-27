@@ -12,6 +12,7 @@ import { Sparkles, Link, Unlink, Hammer, DollarSign, Store, Boxes } from 'lucide
 import Card from '../components/Card'; // Import Card component
 import { useLegendState } from '../context/LegendStateContext';
 import { LegendStateObservables, PlatformConnection } from '../utils/SupaLegend';
+import { useSyncProgress } from '../hooks/useSyncProgress';
 import Animated, { FadeInUp, Layout } from 'react-native-reanimated';
 import * as Progress from 'react-native-progress';
 import PlaceholderImage from '../components/PlaceholderImage';
@@ -175,10 +176,11 @@ const MappingReviewScreen = () => {
   const [isReconcileMode, setIsReconcileMode] = useState(false);
   const [previewingItem, setPreviewingItem] = useState<MappingSuggestion | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>('matched');
-  // --- NEW: State for progress polling ---
-  const [jobProgress, setJobProgress] = useState<JobProgress | null>(null);
-  const [isPolling, setIsPolling] = useState(!!jobId); // Start polling if jobId is passed
+  // --- NEW: State for WebSocket sync progress ---
+  const { progress: syncProgress } = useSyncProgress(connectionId);
   const [currentJobId, setCurrentJobId] = useState<string | undefined>(jobId);
+  const [isPolling, setIsPolling] = useState(!!jobId); // Keep for compatibility
+  const [jobProgress, setJobProgress] = useState<JobProgress | null>(null); // Keep for compatibility
   // --- END NEW ---
   // --- NEW: Add state for existing mappings ---
   const [existingMappings, setExistingMappings] = useState<ExistingMapping[]>([]);
@@ -203,6 +205,8 @@ const MappingReviewScreen = () => {
   const [syncPricing, setSyncPricing] = useState(true);
   const [showSyncRules, setShowSyncRules] = useState(false);
   const [showAdvancedRules, setShowAdvancedRules] = useState(false);
+  const [inventoryBuffer, setInventoryBuffer] = useState<Record<string, number>>({});
+  const [globalInventoryBuffer, setGlobalInventoryBuffer] = useState(0); // For simple modal view
   const [isAddConnectionModalVisible, setIsAddConnectionModalVisible] = useState(false)
   // --- END NEW ---
 
@@ -215,10 +219,43 @@ const MappingReviewScreen = () => {
   const [wizardVisible, setWizardVisible] = useState(false);
   const [wizardStep, setWizardStep] = useState(0); // 0 platforms, 1 sync mode, 2 delist, 3 buffer, 4 review
   const [selectedPlatformsState, setSelectedPlatformsState] = useState<string[]>([]);
+  // New: inventory merge mode selection
+  const [inventoryMergeMode, setInventoryMergeMode] = useState<'merged' | 'separate' | null>('merged');
   const [syncMode, setSyncMode] = useState<'auto' | 'manual'>('auto');
   const [delistMode, setDelistMode] = useState<'auto' | 'manual'>('auto');
   const [priceBuffer, setPriceBuffer] = useState<Record<string, number>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+
+  const renderProgressCard = () => {
+    // If job completed or no progress, don't show card
+    if (!syncProgress || syncProgress.status === 'completed') return null;
+    
+    const progress = (syncProgress.progress || 0) / 100;
+    return (
+      <Animated.View entering={FadeInUp}>
+        <Card style={{ marginHorizontal: 16, marginVertical: 16 }}>
+          <Text style={{ fontSize: 16, fontWeight: '600', marginBottom: 12 }}>
+            Analyzing {platformName} Products
+          </Text>
+          <Progress.Bar progress={progress} width={null} color={theme.colors.primary} />
+          <Text style={{ marginTop: 8, fontSize: 14 }}>
+            {Math.round((syncProgress.progress || 0))}% - {syncProgress.description}
+          </Text>
+          {syncProgress.elapsedSeconds && (
+            <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 4 }}>
+              Elapsed: {syncProgress.elapsedSeconds.toFixed(1)}s
+            </Text>
+          )}
+          {syncProgress.details?.productsProcessed && (
+            <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 4 }}>
+              Products: {syncProgress.details.productsProcessed} | Variants: {syncProgress.details.variantsProcessed || 0}
+            </Text>
+          )}
+        </Card>
+      </Animated.View>
+    );
+  };
 
   // Effect to load platform connections
   useEffect(() => {
@@ -557,141 +594,23 @@ const MappingReviewScreen = () => {
     }
   }, [connectionId, isPolling]); // Removed fetchMappingSuggestions to prevent circular dependency
 
-  // --- IMPROVED: Smart Job Progress Polling Function ---
+  // --- WebSocket sync progress handling ---
   useEffect(() => {
-    if (!currentJobId || !isPolling) return;
-
-    console.log(`[MappingReviewScreen] Starting smart polling for job ID: ${currentJobId}`);
-    setLoading(true);
-
-    let pollCount = 0;
-    const maxPollAttempts = 24; // 2 minutes at 5-second intervals (reduced from 10 minutes)
-    let consecutiveErrors = 0;
-    const maxConsecutiveErrors = 5; // Reduced from 10
-
-    // Define a standalone polling function that can be reused
-    const pollJobProgress = async () => {
-      try {
-        pollCount++;
-        console.log(`[MappingReviewScreen] Poll attempt ${pollCount}/${maxPollAttempts} for job ${currentJobId}`);
-
-        const token = await ensureSupabaseJwt();
-        if (!token) throw new Error("Authentication token not found.");
-
-        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/jobs/${currentJobId}/progress`, {
-          method: 'GET',
-          headers: { 'Authorization': `Bearer ${token}` },
-        });
-
-        if (!response.ok) {
-          consecutiveErrors++;
-          
-          // For 404, the job might not exist yet - but only wait briefly
-          if (response.status === 404 && pollCount < 3) {
-            console.log(`[MappingReviewScreen] Job not found yet (${response.status}), continuing to poll briefly...`);
-            return; // Continue polling
-          }
-          
-          // If we've had several consecutive errors or 404s, assume job is processed differently
-          if (consecutiveErrors >= maxConsecutiveErrors || response.status === 404) {
-            console.log(`[MappingReviewScreen] Job likely processed by UltraLowQueue or completed, fetching suggestions directly`);
-            setIsPolling(false);
-            setLoading(false);
-            
-            // Try to fetch mapping suggestions directly
-            try {
-              await fetchMappingSuggestions(connectionId);
-            } catch (fallbackError) {
-              console.error('[MappingReviewScreen] Direct fetch failed:', fallbackError);
-              setError('Unable to load mapping suggestions. Please try refreshing the page.');
-            }
-            return;
-          }
-          
-          // For other errors, continue polling briefly
-          console.warn(`[MappingReviewScreen] Error polling job progress: ${response.status}`);
-          return;
-        }
-
-        // Reset consecutive errors on successful response
-        consecutiveErrors = 0;
-
-        const progressData: JobProgress = await response.json();
-        setJobProgress(progressData);
-        console.log('[MappingReviewScreen] Job Progress Update:', progressData);
-
-        // Stop polling if the job is completed or has failed
-        if (progressData.isCompleted || progressData.isFailed) {
-          setIsPolling(false);
-          setLoading(false);
-          
-          if (progressData.isCompleted) {
-            console.log(`[MappingReviewScreen] Job ${currentJobId} completed. Fetching final mapping suggestions.`);
-            
-            // Small delay to ensure backend has processed everything
-            setTimeout(async () => {
-              try {
-                await fetchMappingSuggestions(connectionId);
-              } catch (connErr) {
-                console.error('[MappingReviewScreen] Error fetching suggestions after completion:', connErr);
-                setError('Job completed but failed to load suggestions. Please try refreshing.');
-              }
-            }, 1000); // Reduced delay
-          } else {
-            // Job failed
-            setError(progressData.description || 'The background job failed to complete.');
-          }
-        } else if (pollCount >= maxPollAttempts) {
-          // Timeout after max attempts - try direct fetch
-          setIsPolling(false);
-          setLoading(false);
-          console.log('[MappingReviewScreen] Polling timeout, trying direct fetch');
-          
-          try {
-            await fetchMappingSuggestions(connectionId);
-          } catch (fallbackError) {
-            console.error('[MappingReviewScreen] Timeout fallback fetch failed:', fallbackError);
-            setError('Job polling timed out. Please try refreshing the page.');
-          }
-        }
-      } catch (err: any) {
-        consecutiveErrors++;
-        console.error('[MappingReviewScreen] Error during job progress polling:', err);
-        
-        if (consecutiveErrors >= maxConsecutiveErrors || pollCount >= maxPollAttempts) {
-          setIsPolling(false);
-          setLoading(false);
-          
-          // Try direct fetch as final fallback
-          console.log('[MappingReviewScreen] Trying direct fetch after polling errors');
-          try {
-            await fetchMappingSuggestions(connectionId);
-          } catch (fallbackError) {
-            console.error('[MappingReviewScreen] Final fallback fetch failed:', fallbackError);
-            setError('Unable to load mapping suggestions. Please try refreshing the page.');
-          }
-        }
+    if (syncProgress) {
+      console.log('[MappingReviewScreen] Received sync progress:', syncProgress);
+      
+      if (syncProgress.status === 'active') {
+        console.log('[MappingReviewScreen] Sync completed successfully');
+        setLoading(false);
+        // Navigate to success screen or refresh data
+        fetchMappingSuggestions(connectionId);
+      } else if (syncProgress.status === 'error') {
+        console.log('[MappingReviewScreen] Sync failed');
+        setLoading(false);
+        setError(`Sync failed: ${syncProgress.description}`);
       }
-    };
-
-    // Start the first poll immediately, then set up the interval
-    pollJobProgress();
-    const intervalId = setInterval(() => {
-      if (isPolling && pollCount < maxPollAttempts) {
-        pollJobProgress();
-      } else if (pollCount >= maxPollAttempts) {
-        clearInterval(intervalId);
-        setIsPolling(false);
-        console.log('[MappingReviewScreen] Polling stopped due to max attempts reached');
-      }
-    }, 5000); // Poll every 5 seconds
-
-    // Cleanup function to clear the interval when the component unmounts or polling stops
-    return () => {
-      console.log(`[MappingReviewScreen] Cleaning up polling for job ID: ${currentJobId}`);
-      clearInterval(intervalId);
-    };
-  }, [currentJobId, isPolling, connectionId, fetchMappingSuggestions]);
+    }
+  }, [syncProgress, connectionId, fetchMappingSuggestions]);
 
   useEffect(() => {
     navigation.setOptions({ 
@@ -1360,6 +1279,31 @@ const MappingReviewScreen = () => {
   };
 
   const renderProgressBar = () => {
+    // Show WebSocket sync progress if available
+    if (syncProgress && syncProgress.status === 'syncing') {
+      return (
+        <View style={styles.progressContainer}>
+          <View style={styles.progressHeader}>
+            <Text style={styles.progressTitle}>Syncing Products</Text>
+            <Text style={styles.progressPercentage}>{`${Math.round(syncProgress.progress)}%`}</Text>
+          </View>
+          <Progress.Bar 
+            progress={syncProgress.progress / 100} 
+            width={null}
+            height={12}
+            borderRadius={8}
+            color={theme.colors.primary} 
+            unfilledColor={theme.colors.surface}
+            borderWidth={0}
+          />
+          <Text style={styles.progressSubtitle}>
+            {syncProgress.description}
+          </Text>
+        </View>
+      );
+    }
+
+    // Fallback to summary data progress
     if (!summaryData) return null;
 
     const { 
@@ -1645,117 +1589,6 @@ const MappingReviewScreen = () => {
     </TouchableOpacity>
   );
 
-  const renderSyncRulesModal = () => (
-    <Modal
-      visible={showSyncRules}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={() => setShowSyncRules(false)}
-    >
-      <View style={syncRulesStyles.modalContainer}>
-        <View style={syncRulesStyles.modalHeader}>
-          <TouchableOpacity onPress={() => setShowSyncRules(false)}>
-            <Icon name="close" size={24} color={theme.colors.text} />
-          </TouchableOpacity>
-          <Text style={syncRulesStyles.modalTitle}>Sync Settings</Text>
-          <TouchableOpacity onPress={() => setShowSyncRules(false)}>
-            <Text style={syncRulesStyles.doneButton}>Done</Text>
-          </TouchableOpacity>
-        </View>
-        
-        <ScrollView style={syncRulesStyles.modalContent}>
-          <Card style={syncRulesStyles.ruleSection}>
-            <Text style={syncRulesStyles.sectionTitle}>Sync Direction</Text>
-            <Text style={syncRulesStyles.sectionSubtitle}>How should data flow between SSSync and {platformName}?</Text>
-            {renderSyncDirectionOption('two-way', 'Two-way sync', 'Changes flow in both directions', 'sync')}
-            {renderSyncDirectionOption('push-only', 'Push to platform', 'SSSync updates your platform only', 'upload')}
-            {renderSyncDirectionOption('pull-only', 'Pull from platform', 'Platform updates SSSync only', 'download')}
-          </Card>
-
-          <Card style={syncRulesStyles.ruleSection}>
-            <Text style={syncRulesStyles.sectionTitle}>Conflict Resolution</Text>
-            <Text style={syncRulesStyles.sectionSubtitle}>When product details differ, which should win?</Text>
-            {renderSourceOption('sssync', 'SSSync wins', 'Use SSSync data when conflicts occur', 'shield-check')}
-            {renderSourceOption('platform', `${platformName} wins`, `Use ${platformName} data when conflicts occur`, 'store')}
-          </Card>
-
-          <Card style={syncRulesStyles.ruleSection}>
-            <Text style={syncRulesStyles.sectionTitle}>What to Sync</Text>
-            <View style={syncRulesStyles.switchRow}>
-              <View style={syncRulesStyles.switchLabelContainer}>
-                <Icon name="package-variant" size={20} color={theme.colors.text} />
-                <Text style={syncRulesStyles.switchLabel}>Inventory levels</Text>
-              </View>
-              <TouchableOpacity onPress={() => setSyncInventory(!syncInventory)}>
-                <Icon 
-                  name={syncInventory ? 'toggle-switch' : 'toggle-switch-off'} 
-                  size={32} 
-                  color={syncInventory ? theme.colors.primary : theme.colors.textSecondary} 
-                />
-              </TouchableOpacity>
-            </View>
-            <View style={syncRulesStyles.switchRow}>
-              <View style={syncRulesStyles.switchLabelContainer}>
-                <Icon name="currency-usd" size={20} color={theme.colors.text} />
-                <Text style={syncRulesStyles.switchLabel}>Pricing</Text>
-              </View>
-              <TouchableOpacity onPress={() => setSyncPricing(!syncPricing)}>
-                <Icon 
-                  name={syncPricing ? 'toggle-switch' : 'toggle-switch-off'} 
-                  size={32} 
-                  color={syncPricing ? theme.colors.primary : theme.colors.textSecondary} 
-                />
-              </TouchableOpacity>
-            </View>
-          </Card>
-
-          <TouchableOpacity 
-            style={syncRulesStyles.advancedToggle} 
-            onPress={() => setShowAdvancedRules(!showAdvancedRules)}
-          >
-            <Icon 
-              name={showAdvancedRules ? 'chevron-down' : 'chevron-right'} 
-              size={22} 
-              color={theme.colors.primary} 
-            />
-            <Text style={syncRulesStyles.advancedText}>Advanced Settings</Text>
-          </TouchableOpacity>
-          
-          {showAdvancedRules && (
-            <Card style={syncRulesStyles.ruleSection}>
-              <Text style={syncRulesStyles.sectionTitle}>Automatic Actions</Text>
-              <View style={syncRulesStyles.switchRow}>
-                <View style={syncRulesStyles.switchLabelContainer}>
-                  <Icon name="plus-circle" size={20} color={theme.colors.text} />
-                  <Text style={syncRulesStyles.switchLabel}>Auto-create new products</Text>
-                </View>
-                <TouchableOpacity onPress={() => setAutoCreate(!autoCreate)}>
-                  <Icon 
-                    name={autoCreate ? 'toggle-switch' : 'toggle-switch-off'} 
-                    size={32} 
-                    color={autoCreate ? theme.colors.primary : theme.colors.textSecondary} 
-                  />
-                </TouchableOpacity>
-              </View>
-              <View style={syncRulesStyles.switchRow}>
-                <View style={syncRulesStyles.switchLabelContainer}>
-                  <Icon name="update" size={20} color={theme.colors.text} />
-                  <Text style={syncRulesStyles.switchLabel}>Auto-update existing products</Text>
-                </View>
-                <TouchableOpacity onPress={() => setAutoUpdate(!autoUpdate)}>
-                  <Icon 
-                    name={autoUpdate ? 'toggle-switch' : 'toggle-switch-off'} 
-                    size={32} 
-                    color={autoUpdate ? theme.colors.primary : theme.colors.textSecondary} 
-                  />
-                </TouchableOpacity>
-              </View>
-            </Card>
-          )}
-        </ScrollView>
-      </View>
-    </Modal>
-  );
 
   // Sync rules styles
   const syncRulesStyles = StyleSheet.create({
@@ -1854,6 +1687,76 @@ const MappingReviewScreen = () => {
       color: theme.colors.text,
       marginLeft: 12,
     },
+    inputRow: {
+      marginBottom: 15,
+    },
+    inputContainer: {
+      marginBottom: 15,
+    },
+    inputLabel: {
+      fontSize: 14,
+      fontWeight: '500',
+      color: theme.colors.text,
+      marginBottom: 8,
+    },
+    numberInput: {
+      borderWidth: 1,
+      borderColor: '#e0e0e0',
+      borderRadius: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      fontSize: 16,
+      color: theme.colors.text,
+      backgroundColor: theme.colors.background,
+    },
+    previewCard: {
+      backgroundColor: '#f8f9fa',
+      borderRadius: 8,
+      padding: 15,
+      marginBottom: 15,
+    },
+    previewRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: 4,
+    },
+    previewRowHighlighted: {
+      backgroundColor: theme.colors.primary + '10',
+      paddingHorizontal: 8,
+      borderRadius: 4,
+      marginHorizontal: -8,
+    },
+    previewLabel: {
+      fontSize: 14,
+      color: theme.colors.text,
+      fontWeight: '500',
+    },
+    previewValue: {
+      fontSize: 14,
+      color: theme.colors.text,
+      fontWeight: '600',
+    },
+    previewValueHighlighted: {
+      fontSize: 14,
+      color: theme.colors.primary,
+      fontWeight: '600',
+    },
+    infoBox: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: '#FFF3CD',
+      borderRadius: 6,
+      padding: 10,
+      borderWidth: 1,
+      borderColor: '#FFE69C',
+    },
+    infoText: {
+      fontSize: 12,
+      color: '#856404',
+      marginLeft: 8,
+      flex: 1,
+    },
     advancedToggle: {
       flexDirection: 'row',
       justifyContent: 'center',
@@ -1867,9 +1770,7 @@ const MappingReviewScreen = () => {
       marginLeft: 8,
     },
   });
-  // --- END NEW ---
 
-  // Moved StyleSheet.create inside the component to access theme
   const styles = StyleSheet.create({
     container: {
       flex: 1,
@@ -2993,7 +2894,7 @@ const MappingReviewScreen = () => {
     const progressValue = jobProgress?.progress || 0;
     const progressPercent = Math.round(progressValue * 100);
     const isStalled = jobProgress && !jobProgress.isActive && !jobProgress.isCompleted && !jobProgress.isFailed;
-    
+
     return (
       <View style={styles.container}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
@@ -3167,9 +3068,9 @@ const MappingReviewScreen = () => {
       {/* Search Modal */}
       {renderSearchResults()}
       
-      {/* Sync Rules Modal */}
+      {/* Sync Rules Modal 
       {renderSyncRulesModal()}
-      
+      */}
       
       <Modal
         transparent={true}
@@ -3327,39 +3228,86 @@ const MappingReviewScreen = () => {
               <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 20, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 3, paddingBottom: 32, }}>
                 {/* Stepper header aligning to mock */}
                 <View style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#E5E5E5', alignItems: 'center' }}>
-                  <Text style={{ fontWeight: '700', color: theme.colors.text, fontSize: 18 }}>{wizardStep===0?'Import To Which Platforms?':wizardStep===1?'Set Sync Settings':wizardStep===2?'Set Sync Settings':wizardStep===3?'Set Sync Settings':'Is This Right?'}</Text>
+                  <Text style={{ fontWeight: '700', color: theme.colors.text, fontSize: 18 }}>{
+                  wizardStep===0?'Inventory: Merge or Keep Separate?':wizardStep===1?'Set Sync Settings':wizardStep===2?'Set Sync Settings':wizardStep===3?'Set Sync Settings':wizardStep===4?'Set Sync Settings':'Is This Right?'}</Text>
                 </View>
 
                 {/* Steps */}
                 {wizardStep === 0 && (
-                  <View style={{ paddingHorizontal:0, paddingTop: 20 }}>
-                    <View
-                      style={{
-                        flexDirection: 'row',
-                        flexWrap: 'wrap',
-                        justifyContent: 'space-between',
-                        marginBottom: 24,
-                        marginHorizontal: 30,
-                        rowGap: 16,
-                        columnGap: 8,
+                  <View style={{ paddingHorizontal: 0, paddingTop: 20 }}>
+                    <Text style={{ color: theme.colors.textSecondary, marginBottom: 16, textAlign: 'center' }}>
+                      How should we handle your existing inventory?
+                    </Text>
+
+                    {/* Option: Pool Inventory - Merge */}
+                    <TouchableOpacity 
+                      style={{ 
+                        borderWidth: 2, 
+                        borderColor: inventoryMergeMode === 'merged' ? theme.colors.primary : '#E5E5E5', 
+                        borderRadius: 12, 
+                        padding: 20, 
+                        marginBottom: 16,
+                        backgroundColor: inventoryMergeMode === 'merged' ? '#F0F9FF' : '#fff'
                       }}
+                      onPress={() => setInventoryMergeMode('merged')}
                     >
-                      {[
-                        {k:'shopify',Svg:ShopifySvg},{k:'square',Svg:SquareSvg},{k:'clover',Svg:CloverSvg},
-                        {k:'ebay',Svg:EbaySvg},{k:'facebook',Svg:FacebookSvg},{k:'amazon',Svg:AmazonSvg},
-                      ].map(({k,Svg}) => (
-                        <TouchableOpacity
-                          key={k}
-                          style={{ minWidth: '25%', borderWidth: 2, borderColor: selectedPlatformsState.includes(k)? '#93C822':'#E5E5E5', borderRadius: 12, paddingVertical: 18, alignItems: 'center', backgroundColor: '#fff' }}
-                          onPress={() => setSelectedPlatformsState(prev => prev.includes(k)? prev.filter(x=>x!==k):[...prev,k])}
-                        >
-                          <Svg width={32} height={32} />
-                          <Text style={{ marginTop: 8, fontWeight: '600', color: theme.colors.text }}>{k==='ebay'?'Ebay':k.charAt(0).toUpperCase()+k.slice(1)}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                        <View style={{ 
+                          width: 20, height: 20, borderRadius: 10, borderWidth: 2, 
+                          borderColor: inventoryMergeMode === 'merged' ? theme.colors.primary : '#E5E5E5',
+                          backgroundColor: inventoryMergeMode === 'merged' ? theme.colors.primary : 'transparent',
+                          marginRight: 12
+                        }} />
+                        <Text style={{ fontWeight: '700', color: theme.colors.text, fontSize: 16 }}>
+                          Pool Inventory - Merge Existing Inventory (Recommended)
+                        </Text>
+                      </View>
+                      <Text style={{ color: theme.colors.textSecondary, marginLeft: 32, marginBottom: 8 }}>
+                        Match products across platforms by SKU/barcode/title
+                      </Text>
+                      <Text style={{ color: theme.colors.textSecondary, marginLeft: 32, marginBottom: 8 }}>
+                        Keep your existing platform listings intact
+                      </Text>
+                      <Text style={{ color: theme.colors.textSecondary, marginLeft: 32, fontSize: 12, fontStyle: 'italic' }}>
+                        (Use when you have established stores)
+                      </Text>
+                    </TouchableOpacity>
+
+                    {/* Option: Keep Separate */}
+                    <TouchableOpacity 
+                      style={{ 
+                        borderWidth: 2, 
+                        borderColor: inventoryMergeMode === 'separate' ? theme.colors.primary : '#E5E5E5', 
+                        borderRadius: 12, 
+                        padding: 20,
+                        backgroundColor: inventoryMergeMode === 'separate' ? '#F0F9FF' : '#fff'
+                      }}
+                      onPress={() => setInventoryMergeMode('separate')}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                        <View style={{ 
+                          width: 20, height: 20, borderRadius: 10, borderWidth: 2, 
+                          borderColor: inventoryMergeMode === 'separate' ? theme.colors.primary : '#E5E5E5',
+                          backgroundColor: inventoryMergeMode === 'separate' ? theme.colors.primary : 'transparent',
+                          marginRight: 12
+                        }} />
+                        <Text style={{ fontWeight: '700', color: theme.colors.text, fontSize: 16 }}>
+                          Keep Separate - Platform-Specific
+                        </Text>
+                      </View>
+                      <Text style={{ color: theme.colors.textSecondary, marginLeft: 32, marginBottom: 8 }}>
+                        Keep each platform's inventory completely separate
+                      </Text>
+                      <Text style={{ color: theme.colors.textSecondary, marginLeft: 32, marginBottom: 8 }}>
+                        Products won't sync between platforms
+                      </Text>
+                      <Text style={{ color: theme.colors.textSecondary, marginLeft: 32, fontSize: 12, fontStyle: 'italic' }}>
+                        (Use when selling different items on each platform)
+                      </Text>
+                    </TouchableOpacity>
+
                     <View style={{ marginTop: 20 }}>
-                      <Button title="Confirm Platforms" onPress={() => setWizardStep(1)} />
+                      <Button title="Continue" onPress={() => setWizardStep(1)} disabled={!inventoryMergeMode} />
                     </View>
                   </View>
                 )}
@@ -3448,6 +3396,45 @@ const MappingReviewScreen = () => {
 
                 {wizardStep === 4 && (
                   <View style={{ paddingTop: 20 }}>
+                    <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Adjust inventory buffer per platform (Optional)</Text>
+                    <View style={{ marginBottom: 24 }}>
+                      {platformConnections.map((connection) => (
+                        <View key={connection.Id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 12 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                            <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: getPlatformColor(connection.PlatformType), marginRight: 12 }} />
+                            <View>
+                              <Text style={{ fontWeight: '600', color: theme.colors.text }}>{connection.DisplayName}</Text>
+                              <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>{connection.PlatformType}</Text>
+                            </View>
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <TouchableOpacity style={{ padding: 8 }} onPress={() => 
+                              setInventoryBuffer(prev => ({ ...prev, [connection.Id]: Math.max(0, (prev[connection.Id] || 0) - 1) }))}> 
+                              <Icon name="minus" size={18} />
+                            </TouchableOpacity>
+                            <TextInput
+                              style={{ width: 60, textAlign: 'center', fontWeight: '700', color: theme.colors.text, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 6, paddingVertical: 4 }}
+                              value={`${(inventoryBuffer[connection.Id] || 0)}`}
+                              onChangeText={(text) => {
+                                const numericValue = parseInt(text) || 0;
+                                setInventoryBuffer(prev => ({ ...prev, [connection.Id]: Math.max(0, numericValue) }));
+                              }}
+                              keyboardType="numeric"
+                              placeholder="0"
+                            />
+                            <TouchableOpacity style={{ padding: 8 }} onPress={() => 
+                              setInventoryBuffer(prev => ({ ...prev, [connection.Id]: (prev[connection.Id] || 0) + 1 }))}> 
+                              <Icon name="plus" size={18} />
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                )}
+
+                {wizardStep === 5 && (
+                  <View style={{ paddingTop: 20 }}>
                     <View style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 24 }}>
                       <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Matched/New/Ignored</Text>
                       <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>{counts.matched} matched • {counts.review} review → new • {counts.ignore} ignored</Text>
@@ -3501,7 +3488,19 @@ const MappingReviewScreen = () => {
                                 'Content-Type': 'application/json',
                               },
                               body: JSON.stringify({
-                                confirmedMatches: confirmedMappings
+                                confirmedMatches: confirmedMappings,
+                                syncRules: {
+                                  inventoryBuffer: globalInventoryBuffer,
+                                  syncInventory: syncInventory,
+                                  syncPricing: syncPricing,
+                                  productDetailsSoT: sourceOfTruth === 'sssync' ? 'ANORHA' : 'PLATFORM',
+                                  inventorySoT: sourceOfTruth === 'sssync' ? 'ANORHA' : 'PLATFORM',
+                                  propagateCreates: autoCreate,
+                                  propagateUpdates: autoUpdate,
+                                  propagateChanges: syncDirection === 'two-way' || syncDirection === 'push-only',
+                                  inventoryMergeMode: inventoryMergeMode || 'merged',
+                                  locationHandling: 'auto_merge'
+                                }
                               })
                             });
 
@@ -3551,14 +3550,15 @@ const MappingReviewScreen = () => {
                   </View>
                 )}
 
-                {/* Nav controls - only show for steps 1-4 */}
+                {/* Nav controls - only show for steps 1-5 */}
                 {wizardStep > 0 && (
                   <>
                     <Text style={{ color: theme.colors.textSecondary, textAlign: 'center', marginTop: 20, marginBottom: 8 }}>
                       {wizardStep === 1 && 'Auto/Manual'}
                       {wizardStep === 2 && 'Auto Delist'}
                       {wizardStep === 3 && 'Price Buffer'}
-                      {wizardStep === 4 && 'Review'}
+                      {wizardStep === 4 && 'Inventory Buffer'}
+                      {wizardStep === 5 && 'Review'}
                     </Text>
                     <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 20 }}>
                       <TouchableOpacity
@@ -3575,7 +3575,7 @@ const MappingReviewScreen = () => {
                         <Icon name="chevron-left" size={22} />
                       </TouchableOpacity>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        {[1, 2, 3, 4].map(i => (
+                        {[1, 2, 3, 4, 5].map(i => (
                           <View
                             key={`dot-${i}`}
                             style={{
@@ -3588,9 +3588,9 @@ const MappingReviewScreen = () => {
                         ))}
                       </View>
                       <TouchableOpacity
-                        disabled={wizardStep === 4}
-                        onPress={() => setWizardStep((s) => Math.min(4, s + 1))}
-                        style={{ padding: 10, opacity: wizardStep === 4 ? 0.5 : 1 }}
+                        disabled={wizardStep === 5}
+                        onPress={() => setWizardStep((s) => Math.min(5, s + 1))}
+                        style={{ padding: 10, opacity: wizardStep === 5 ? 0.5 : 1 }}
                       >
                         <Icon name="chevron-right" size={22} />
                       </TouchableOpacity>

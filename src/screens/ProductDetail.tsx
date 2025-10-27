@@ -120,6 +120,12 @@ const ProductDetailScreen = observer(
     const [isLockedByOther, setIsLockedByOther] = useState(false);
     const [lockOwner, setLockOwner] = useState<string | null>(null);
 
+    // Phase 2: Draft state for auto-save and versioning
+    const [draftData, setDraftData] = useState<Record<string, any> | null>(null);
+    const [isLoadingDraft, setIsLoadingDraft] = useState(false);
+    const [draftVersions, setDraftVersions] = useState<Array<{ id: string; createdAt: string; platforms: any; publishedPlatforms?: string[] }>>([]);
+    const debounceTimerRef = useRef<any>(null);
+
     // Current form data (now live)
     const [formData, setFormData] = useState<EditFormData>({
       Title: '',
@@ -791,6 +797,110 @@ const ProductDetailScreen = observer(
         loadPlatformData();
       }
     }, [detailedItem, loadPlatformData]);
+
+    // Phase 2: Load drafts from backend
+    useEffect(() => {
+      if (!detailedItem) return;
+
+      let canceled = false;
+      setIsLoadingDraft(true);
+
+      (async () => {
+        try {
+          const token = await ensureSupabaseJwt();
+          const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || SSSYNC_API_BASE_URL;
+
+          if (!token) {
+            console.log('[ProductDetail] No auth token for draft loading');
+            return;
+          }
+
+          const response = await fetch(`${baseUrl}/api/products/drafts/${detailedItem.Id}`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            }
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            if (!canceled) {
+              console.log('[ProductDetail] ✅ Loaded draft data');
+              setDraftData(data.currentDraft?.draftData || null);
+              setDraftVersions(data.versions || []);
+              
+              // Merge draft data with editPlatforms if draft exists
+              if (data.currentDraft?.draftData) {
+                const hydratedPlatforms = hydratePlatformsFromBackend(data.currentDraft.draftData, editPlatforms);
+                setEditPlatforms(hydratedPlatforms);
+              }
+            }
+          } else {
+            console.log('[ProductDetail] Draft data not found (expected for new products)');
+          }
+        } catch (error) {
+          console.error('[ProductDetail] Error loading draft:', error);
+        } finally {
+          if (!canceled) {
+            setIsLoadingDraft(false);
+          }
+        }
+      })();
+
+      return () => { canceled = true };
+    }, [detailedItem?.Id]);
+
+    // Phase 2.4: Auto-save editPlatforms to backend (debounced 2s)
+    useEffect(() => {
+      if (!detailedItem || Object.keys(editPlatforms).length === 0) {
+        return;
+      }
+
+      // Clear existing timer
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+
+      // Set new timer - save after 2s of idle
+      debounceTimerRef.current = setTimeout(async () => {
+        try {
+          const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || SSSYNC_API_BASE_URL;
+          const token = await ensureSupabaseJwt();
+
+          if (!baseUrl || !token) {
+            console.log('[ProductDetail AutoSave] Missing baseUrl or token');
+            return;
+          }
+
+          const response = await fetch(`${baseUrl}/api/products/drafts/${detailedItem.Id}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              draftData: editPlatforms
+            })
+          });
+
+          if (response.ok) {
+            console.log('[ProductDetail AutoSave] ✅ Draft auto-saved successfully');
+          } else {
+            const errorText = await response.text();
+            console.error('[ProductDetail AutoSave] ❌ Failed to auto-save draft:', response.status, errorText);
+          }
+        } catch (error) {
+          console.error('[ProductDetail AutoSave] ❌ Error auto-saving draft:', error);
+        }
+      }, 2000); // 2 second debounce
+
+      return () => {
+        if (debounceTimerRef.current) {
+          clearTimeout(debounceTimerRef.current);
+        }
+      };
+    }, [editPlatforms, detailedItem?.Id]);
 
     // Set up realtime subscriptions
     useEffect(() => {

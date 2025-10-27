@@ -1,331 +1,380 @@
 {
-    "results": [
-        {
-            "sourceIndex": 0,
-            "sourceType": "image",
-            "matches": [
+    "productId": "3805b9c3-eb3e-4ad2-9eed-c5f2ed433012",
+    "variantId": "b36f4e53-ca0a-490b-911a-82ebf2e510e9",
+    "publishIntent": "PUBLISH_PLATFORM_LIVE",
+    "platformDetails": {
+        "canonical": {
+            "title": "AROEVE HEPA Air Purifier MK01 – White (Open Box)",
+            "sku": "299348929",
+            "price": 130,
+            "description": "[Hook] Breathe cleaner air with the AROEVE HEPA Air Purifier MK01, designed for efficient particle removal. [Features] true HEPA filtration captures 99.97% of particles down to 0.3 microns, while the sleek white finish blends with any décor. [Use Cases] Ideal for bedrooms, living rooms, or home offices to reduce allergens, dust, and odors. [Specs] Model: MK01; Color: White; Coverage: up to 300 sq ft; Noise Level: ≤35 dB; Power: 45W; Dimensions: 12\" x 12\" x 20\"; Weight: 6.5 lbs. [Closer] Enjoy quieter, healthier spaces – fully functional, open‑box price.",
+            "tags": [
+                "AROEVE",
+                "HEPA",
+                "Air Purifier",
+                "MK01",
+                "White",
+                "Open Box",
+                "Indoor Air Quality",
+                "Allergy Relief",
+                "Home Appliance",
+                "Dust Removal",
+                "Quiet Operation",
+                "Energy Efficient",
+                "Compact",
+                "Living Room",
+                "Bedroom"
+            ],
+            "vendor": "AROEVE",
+            "productType": "Air Purifier",
+            "status": "active",
+            "seoTitle": "AROEVE HEPA Air Purifier MK01 – White (Open Box)",
+            "seoDescription": "Open‑box AROEVE HEPA Air Purifier MK01 in white. true HEPA filter, quiet operation, covers 300 sq ft. Perfect for allergy relief at a great price.",
+            "variants": [
                 {
-                    "productId": "38b378fe-49fd-449d-883b-9c28c9d76a71",
-                    "ProductVariantId": "b20ddb2c-2585-43b1-af67-e2969841b506",
-                    "title": "clearing off unused accessories in my treasure chest (dry box) SALES ! List of Item(s) to SELL > 1, XF 16mm F2.8 WR lens hood (new, extra unit) RM 68 each 2,",
-                    "description": "Scanned product (target_image)",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1755025201122-1755025213475.jpg",
-                    "businessTemplate": null,
-                    "price": 0,
-                    "productUrl": "https://sssync.app/products/38b378fe-49fd-449d-883b-9c28c9d76a71",
-                    "imageSimilarity": 0.786521149485044,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.747195092010792,
-                    "retrievalChannels": "dense"
+                    "option1_name": "Size",
+                    "option1_value": "Sm",
+                    "price": 130,
+                    "inventoryByLocation": {
+                        "default": {
+                            "quantity": 0,
+                            "price": "130"
+                        },
+                        "gid://shopify/Location/84140818688": {
+                            "quantity": 19,
+                            "price": 134
+                        },
+                        "gid://shopify/Location/84140785920": {
+                            "quantity": 392,
+                            "price": 12
+                        },
+                        "LY3ETP80S0CFK": {
+                            "quantity": 900,
+                            "price": "130"
+                        },
+                        "LV82RJ4G6GJAM": {
+                            "quantity": 2983,
+                            "price": 4130
+                        }
+                    }
                 },
                 {
-                    "productId": "7dac662c-8e0c-4198-b27a-9e00fbd26ab8",
-                    "ProductVariantId": "7e7c60cf-ece4-4521-bcd8-7eb136910df5",
-                    "title": "Logitech G502 HERO Wired Gaming Mouse - 910-005469 974575227349| eBay",
-                    "description": "Scanned product (target_image)",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1754940131410-1754940186078.jpg",
-                    "businessTemplate": null,
-                    "price": 30,
-                    "productUrl": "https://sssync.app/products/7dac662c-8e0c-4198-b27a-9e00fbd26ab8",
-                    "imageSimilarity": 0.780383242345856,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.741364080228564,
-                    "retrievalChannels": "dense"
+                    "option1_name": "Size",
+                    "option1_value": "Md",
+                    "price": 130,
+                    "inventoryByLocation": {
+                        "default": {
+                            "quantity": 0,
+                            "price": "130"
+                        },
+                        "gid://shopify/Location/84140818688": {
+                            "quantity": 20,
+                            "price": 1306
+                        },
+                        "gid://shopify/Location/84140785920": {
+                            "quantity": 24,
+                            "price": 13084
+                        },
+                        "LY3ETP80S0CFK": {
+                            "quantity": 800,
+                            "price": 200
+                        },
+                        "LV82RJ4G6GJAM": {
+                            "quantity": 2938,
+                            "price": 132
+                        }
+                    }
+                }
+            ]
+        },
+        "square": {
+            "object": {
+                "id": "#placeholder",
+                "type": "ITEM",
+                "itemData": {
+                    "gtin": null,
+                    "name": "AROEVE HEPA Air Purifier MK01 – White (Open Box)",
+                    "locations": "All Available Locations",
+                    "variations": [
+                        {
+                            "id": "#placeholder_variant",
+                            "type": "ITEM_VARIATION",
+                            "itemVariationData": {
+                                "sku": "AROEVE-MK01-WHT",
+                                "name": "White",
+                                "priceMoney": {
+                                    "amount": 1799,
+                                    "currency": "USD"
+                                },
+                                "pricingType": "FIXED_PRICING"
+                            }
+                        }
+                    ],
+                    "description": "Open‑box AROEVE HEPA Air Purifier with true HEPA filter, quiet operation, covers up to 300 sq ft. Ideal for home use.",
+                    "categorySuggestion": "Home > Air Purifiers"
+                }
+            },
+            "name": "AROEVE HEPA Air Purifier MK01 – White (Open Box)",
+            "description": "Open‑box AROEVE HEPA Air Purifier with true HEPA filter, quiet operation, covers up to 300 sq ft. Ideal for home use.",
+            "categorySuggestion": "Home > Air Purifiers",
+            "price": "130",
+            "sku": "299348929",
+            "title": "AROEVE HEPA Air Purifier MK01 – White (Open Box)",
+            "tags": [
+                "AROEVE",
+                "HEPA",
+                "Air Purifier",
+                "MK01",
+                "White",
+                "Open Box",
+                "Indoor Air Quality",
+                "Allergy Relief",
+                "Home Appliance",
+                "Dust Removal",
+                "Quiet Operation",
+                "Energy Efficient",
+                "Compact",
+                "Living Room",
+                "Bedroom"
+            ],
+            "images": [
+                {
+                    "imageAltText": "AROEVE HEPA Air Purifier front view",
+                    "imagePosition": 1,
+                    "productImageURL": "https://i.ebayimg.com/images/g/VlYAAOSwNXFlGMs2/s-l140.webp"
                 },
                 {
-                    "productId": "105a19cf-44c5-4420-b3ba-f465f3226027",
-                    "ProductVariantId": "1abb18ee-1a1c-450e-b6fa-0b392dbe8f61",
-                    "title": "Amazon.com: Logitech Lift for Mac Wireless Vertical Ergonomic Mouse, Bluetooth, Quiet Clicks, Silent Smartwheel, 4 Customizable Buttons, for macOS/iPadOS/MacBook Pro/Macbook Air/iMac/iPad - Off White : Electronics",
-                    "description": "Scanned product (backfill_script)",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/1751088030066_1.jpg",
-                    "businessTemplate": "General Products",
-                    "price": 80,
-                    "productUrl": "https://sssync.app/products/105a19cf-44c5-4420-b3ba-f465f3226027",
-                    "imageSimilarity": 0.778575671996138,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.739646888396331,
-                    "retrievalChannels": "dense"
+                    "imageAltText": "AROEVE HEPA Air Purifier side view",
+                    "imagePosition": 2,
+                    "productImageURL": "https://i.ebayimg.com/images/g/g38AAOSws~RlGM0g/s-l140.webp"
                 },
                 {
-                    "productId": "f75a7518-2171-4e2f-9d39-e575abf9d1e3",
-                    "ProductVariantId": "7bc39914-7542-41ff-9c29-2936a92e88fc",
-                    "title": "HTQ Wireless Nintendo Switch Pro Controller for Android, Bluetooth Gamepad with RGB Lights & Turbo Vibration - Walmart.com",
-                    "description": "Scanned product (target_image)",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1756793218251-1756793234960.jpg",
-                    "businessTemplate": null,
-                    "price": 25,
-                    "productUrl": "https://sssync.app/products/f75a7518-2171-4e2f-9d39-e575abf9d1e3",
-                    "imageSimilarity": 0.774750888347631,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.73601334393025,
-                    "retrievalChannels": "dense"
-                },
-                {
-                    "productId": "6605bf79-b1e3-4316-9f42-dce0666492aa",
-                    "ProductVariantId": "4e8b655c-b7b9-4c2f-b3f6-6a750b7aad20",
-                    "title": "DJI Mic Mini Wireless Microphone Transmitter - White",
-                    "description": "Elevate your audio experience with the DJI Mic Mini, a compact and lightweight wireless microphone transmitter designed for creators on the go. Featuring advanced wireless technology, this device ensures clear and crisp audio capture, making it perfect for vlogging, interviews, and content creation. The sleek white design and fluffy windscreen accessory provide both style and functionality, while its compatibility with various devices ensures seamless integration into your workflow.",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/1749996477113_1.jpg",
-                    "businessTemplate": "General Products",
-                    "price": 199.99,
-                    "productUrl": "https://sssync.app/products/6605bf79-b1e3-4316-9f42-dce0666492aa",
-                    "imageSimilarity": 0.755292787832453,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.71752814844083,
-                    "retrievalChannels": "dense"
-                },
-                {
-                    "productId": "d11fae3b-eba9-41e7-b874-b6001f009b3f",
-                    "ProductVariantId": "6ccf39c2-d321-4f24-8919-c7b88432db44",
-                    "title": "Amazon.com: Bose QuietComfort Wireless Over-Ear Active Noise Canceling Headphones (884367-0100) Bundle Including: Goby Labs Headphone Cleaner, Fiber Cloth (Renewed) : Electronics",
-                    "description": "Scanned product (target_image)",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1756349273168-1756349336303.jpg",
-                    "businessTemplate": null,
-                    "price": 0,
-                    "productUrl": "https://sssync.app/products/d11fae3b-eba9-41e7-b874-b6001f009b3f",
-                    "imageSimilarity": 0.752892926162904,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.715248279854759,
-                    "retrievalChannels": "dense"
-                },
-                {
-                    "productId": "0c95642c-4d2a-447a-922a-7a055547d904",
-                    "ProductVariantId": "a0c79093-b369-42e1-a269-67e8e03e59b9",
-                    "title": "Buy DJI Mic Mini - Wireless Microphone- DJI Store",
-                    "description": "Scanned product (target_image)",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1755204948137-1755205019441.jpg",
-                    "businessTemplate": null,
-                    "price": 59,
-                    "productUrl": "https://sssync.app/products/0c95642c-4d2a-447a-922a-7a055547d904",
-                    "imageSimilarity": 0.748526260168938,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.711099947160491,
-                    "retrievalChannels": "dense"
-                },
-                {
-                    "productId": "efef9aaa-5b19-44a9-a2b3-9b6005f577bd",
-                    "ProductVariantId": "a483b761-1226-4af5-9739-036939120e7a",
-                    "title": "Apple iPad Air 4th Gen (Green)",
-                    "description": "Experience the sleek design and powerful performance of the Apple iPad. This device is perfect for entertainment, productivity, and creativity on the go. With its vibrant display and intuitive interface, it's ideal for browsing, streaming, and gaming.",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/1749087315799_2.jpg",
-                    "businessTemplate": "General Products",
-                    "price": 499.99,
-                    "productUrl": "https://sssync.app/products/efef9aaa-5b19-44a9-a2b3-9b6005f577bd",
-                    "imageSimilarity": 0.745247915670401,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.707985519886881,
-                    "retrievalChannels": "dense"
-                },
-                {
-                    "productId": "edb5dc4c-b6de-4a14-8a72-fc959635aa92",
-                    "ProductVariantId": "27592434-455d-4ab2-9236-c3f687dd40e9",
-                    "title": "Nintendo Switch Lot With Accessories TESTED WORKING | eBay",
-                    "description": "Scanned product (target_image)",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1756349141288-1756349335758.jpg",
-                    "businessTemplate": null,
-                    "price": 0,
-                    "productUrl": "https://sssync.app/products/edb5dc4c-b6de-4a14-8a72-fc959635aa92",
-                    "imageSimilarity": 0.728837560803486,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.692395682763312,
-                    "retrievalChannels": "dense"
-                },
-                {
-                    "productId": "d7785488-024b-4a1c-8033-9d5f2d922ab4",
-                    "ProductVariantId": "31403bcb-f241-4da2-b988-470559e70235",
-                    "title": "Amazon.com: Bussmann BPCB185100 Circuit Breaker : Automotive",
-                    "description": "Scanned product (target_image)",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1755144937007-1755145036644.jpg",
-                    "businessTemplate": null,
-                    "price": 0,
-                    "productUrl": "https://sssync.app/products/d7785488-024b-4a1c-8033-9d5f2d922ab4",
-                    "imageSimilarity": 0.705810448700509,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.670519926265483,
-                    "retrievalChannels": "dense"
-                },
-                {
-                    "productId": "5cfcd8f4-7949-4b13-a027-944305c6bc04",
-                    "ProductVariantId": "5f532154-5e5a-4454-ac9d-724b9caf5e9f",
-                    "title": "Vintage Aiptek Video Camera w/Digital Zoom 8.4mm F2.8 USED Untested | eBay",
-                    "description": "Scanned product (target_image)",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1755064071858-1755065142427.jpg",
-                    "businessTemplate": null,
-                    "price": 10,
-                    "productUrl": "https://sssync.app/products/5cfcd8f4-7949-4b13-a027-944305c6bc04",
-                    "imageSimilarity": 0.705286303005033,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.670021987854782,
-                    "retrievalChannels": "dense"
-                },
-                {
-                    "productId": "51b49d20-c2db-4f06-934e-ed6951fbc0bf",
-                    "ProductVariantId": "ac14db7b-efa3-4c34-ac8a-fdba35e749a3",
-                    "title": "La Roche-posay Toleriane Double Repair Moisturizer UV SPF 30 2.5oz Exp 2026+ 3337875545846| eBay",
-                    "description": "Scanned product (target_image)",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1755129877644-1755129888654.jpg",
-                    "businessTemplate": null,
-                    "price": 16,
-                    "productUrl": "https://sssync.app/products/51b49d20-c2db-4f06-934e-ed6951fbc0bf",
-                    "imageSimilarity": 0.696160871019313,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.661352827468347,
-                    "retrievalChannels": "dense"
-                },
-                {
-                    "productId": "7e96b98b-5b94-4adf-955f-1be0da1b5e75",
-                    "ProductVariantId": "993b22f8-715f-4abe-a5a3-fdd4e90547aa",
-                    "title": "Fuji Cardia Hite Date 35 mm f/2.8 AF Film Camera Tested Working Used in Japan | eBay",
-                    "description": "Scanned product (target_image)",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1756663048988-1756663123282.jpg",
-                    "businessTemplate": null,
-                    "price": 0,
-                    "productUrl": "https://sssync.app/products/7e96b98b-5b94-4adf-955f-1be0da1b5e75",
-                    "imageSimilarity": 0.685491480172696,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.651216906164061,
-                    "retrievalChannels": "dense"
-                },
-                {
-                    "productId": "3a788bea-ec94-48ee-99dc-990bb2452d0b",
-                    "ProductVariantId": "6c6b9c5e-69e1-41fe-b604-57477c453c49",
-                    "title": "Farberware Premium Scissors - Sharp & Durable for Crafting and Kitchen Use",
-                    "description": "Elevate your crafting and kitchen experience with the Farberware Premium Scissors. Crafted with high-quality materials, these scissors feature sharp, durable blades and comfortable grips, making them perfect for a variety of tasks, from cutting fabric to preparing meals. The stainless steel blades ensure a clean cut every time, while the ergonomic design reduces fatigue. Ideal for crafters, cooks, and anyone in need of reliable scissors.",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/1748743353727_1.jpg",
-                    "businessTemplate": "General Products",
-                    "price": 14.99,
-                    "productUrl": "https://sssync.app/products/3a788bea-ec94-48ee-99dc-990bb2452d0b",
-                    "imageSimilarity": 0.681416032061095,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.647345230458041,
-                    "retrievalChannels": "dense"
-                },
-                {
-                    "productId": "f886dab6-6e2d-4711-8cb7-e476d1ad0c13",
-                    "ProductVariantId": "ecd9b9ea-7d86-4f7b-b0b9-f009b048de88",
-                    "title": "Amazon.com: Liquid Silicone Ear Plugs, 3 Layer Noise Reduction Soundproof Earplugs with Filter, Comfortable for Drummers and Noise Cancelling Needs (Transparent) : Health & Household",
-                    "description": "Scanned product (backfill_script)",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/1748543207544_1.jpg",
-                    "businessTemplate": "General Products",
-                    "price": 0,
-                    "productUrl": "https://sssync.app/products/f886dab6-6e2d-4711-8cb7-e476d1ad0c13",
-                    "imageSimilarity": 0.680688419259975,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.646653998296976,
-                    "retrievalChannels": "dense"
-                },
-                {
-                    "productId": "c24981f0-5ed1-4f95-b07e-fa87ee48b4d8",
-                    "ProductVariantId": "7166bfc8-0a5a-4e66-9e71-5b79fa6da36b",
-                    "title": "Aiptek DZO-V58N Silver Video Camera Camcorder Media Player",
-                    "description": "Capture life's precious moments with the Aiptek DZO-V58N video camera camcorder. This versatile device combines the functionality of a camera and a media player, allowing you to record videos and play back your favorite media. With its sleek silver design and compact size, it's perfect for on-the-go use. Features include MPEG4 video recording at 720x480 resolution, 260fps, and a built-in stabilizer for smooth footage. The device also supports MP3 playback and has a USB connection for easy file transfer.",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/1747279881867_1.jpg",
-                    "businessTemplate": "General Products",
-                    "price": 99.99,
-                    "productUrl": "https://sssync.app/products/c24981f0-5ed1-4f95-b07e-fa87ee48b4d8",
-                    "imageSimilarity": 0.680189807403696,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.646180317033512,
-                    "retrievalChannels": "dense"
-                },
-                {
-                    "productId": "606537dc-809c-4e50-9bdc-019c47ba2664",
-                    "ProductVariantId": "252f51b3-7b43-4a9f-9710-8030f232c04c",
-                    "title": "SMISKI Bed Series Soineski chibiski GLOW IN THE DARK Figure Japan | eBay",
-                    "description": "Scanned product (target_image)",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1755065116518-1755065142138.jpg",
-                    "businessTemplate": null,
-                    "price": 35,
-                    "productUrl": "https://sssync.app/products/606537dc-809c-4e50-9bdc-019c47ba2664",
-                    "imageSimilarity": 0.665183623587605,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.631924442408224,
-                    "retrievalChannels": "dense"
-                },
-                {
-                    "productId": "f42ace6a-00f4-413e-b4ec-2c1a1191bdae",
-                    "ProductVariantId": "8f5b7d71-1f59-4245-9fad-591eae270527",
-                    "title": "Bussmann Circuit Breaker BP-CB185-100",
-                    "description": "Scanned product (target_image)",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1755041443451-1755041548019.jpg",
-                    "businessTemplate": null,
-                    "price": 35,
-                    "productUrl": "https://sssync.app/products/f42ace6a-00f4-413e-b4ec-2c1a1191bdae",
-                    "imageSimilarity": 0.664292216300969,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.631077605485921,
-                    "retrievalChannels": "dense"
-                },
-                {
-                    "productId": "69cfaa5b-fb12-4075-90d2-95c426eb395e",
-                    "ProductVariantId": "e370a3a2-d696-4ddb-9aba-77be7687d715",
-                    "title": "Dyson V7 VACUUM ONLY - REPLACEMENT | eBay",
-                    "description": "Scanned product (target_image)",
-                    "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1756790617425-1756790708218.jpg",
-                    "businessTemplate": null,
-                    "price": 65,
-                    "productUrl": "https://sssync.app/products/69cfaa5b-fb12-4075-90d2-95c426eb395e",
-                    "imageSimilarity": 0.656031309607458,
-                    "textSimilarity": 0,
-                    "combinedScore": 0.623229744127085,
-                    "retrievalChannels": "dense"
+                    "imageAltText": "AROEVE HEPA Air Purifier top view",
+                    "imagePosition": 3,
+                    "productImageURL": "https://i.ebayimg.com/images/g/78YAAOSwX8FlGM0h/s-l140.webp"
                 }
             ],
-            "confidence": "low",
-            "processingTimeMs": 2889,
-            "rerankerAnalysis": {
-                "type": "fast-text",
-                "confidence": 0.07471950920107921,
-                "processingTimeMs": 2,
-                "rankingMethod": "vector_fallback",
-                "alternatives": [
-                    {
-                        "productId": "7dac662c-8e0c-4198-b27a-9e00fbd26ab8",
-                        "ProductVariantId": "7e7c60cf-ece4-4521-bcd8-7eb136910df5",
-                        "title": "Logitech G502 HERO Wired Gaming Mouse - 910-005469 974575227349| eBay",
-                        "description": "Scanned product (target_image)",
-                        "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1754940131410-1754940186078.jpg",
-                        "businessTemplate": null,
-                        "price": 30,
-                        "productUrl": "https://sssync.app/products/7dac662c-8e0c-4198-b27a-9e00fbd26ab8",
-                        "imageSimilarity": 0.780383242345856,
-                        "textSimilarity": 0,
-                        "combinedScore": 0.741364080228564,
-                        "retrievalChannels": "dense"
+            "options": [
+                {
+                    "name": "Size",
+                    "values": [
+                        "Sm",
+                        "Md"
+                    ]
+                }
+            ],
+            "variants": [
+                {
+                    "id": "square-var-Size:Sm",
+                    "optionValues": {
+                        "Size": "Sm"
                     },
-                    {
-                        "productId": "105a19cf-44c5-4420-b3ba-f465f3226027",
-                        "ProductVariantId": "1abb18ee-1a1c-450e-b6fa-0b392dbe8f61",
-                        "title": "Amazon.com: Logitech Lift for Mac Wireless Vertical Ergonomic Mouse, Bluetooth, Quiet Clicks, Silent Smartwheel, 4 Customizable Buttons, for macOS/iPadOS/MacBook Pro/Macbook Air/iMac/iPad - Off White : Electronics",
-                        "description": "Scanned product (backfill_script)",
-                        "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/1751088030066_1.jpg",
-                        "businessTemplate": "General Products",
-                        "price": 80,
-                        "productUrl": "https://sssync.app/products/105a19cf-44c5-4420-b3ba-f465f3226027",
-                        "imageSimilarity": 0.778575671996138,
-                        "textSimilarity": 0,
-                        "combinedScore": 0.739646888396331,
-                        "retrievalChannels": "dense"
-                    },
-                    {
-                        "productId": "f75a7518-2171-4e2f-9d39-e575abf9d1e3",
-                        "ProductVariantId": "7bc39914-7542-41ff-9c29-2936a92e88fc",
-                        "title": "HTQ Wireless Nintendo Switch Pro Controller for Android, Bluetooth Gamepad with RGB Lights & Turbo Vibration - Walmart.com",
-                        "description": "Scanned product (target_image)",
-                        "imageUrl": "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1756793218251-1756793234960.jpg",
-                        "businessTemplate": null,
-                        "price": 25,
-                        "productUrl": "https://sssync.app/products/f75a7518-2171-4e2f-9d39-e575abf9d1e3",
-                        "imageSimilarity": 0.774750888347631,
-                        "textSimilarity": 0,
-                        "combinedScore": 0.73601334393025,
-                        "retrievalChannels": "dense"
+                    "price": "130",
+                    "inventoryByLocation": {
+                        "default": {
+                            "quantity": 0,
+                            "price": "130"
+                        },
+                        "LY3ETP80S0CFK": {
+                            "quantity": 900,
+                            "price": "130"
+                        },
+                        "LV82RJ4G6GJAM": {
+                            "quantity": 2983,
+                            "price": 4130
+                        }
                     }
-                ]
-            }
+                },
+                {
+                    "id": "square-var-Size:Md",
+                    "optionValues": {
+                        "Size": "Md"
+                    },
+                    "price": "130",
+                    "inventoryByLocation": {
+                        "default": {
+                            "quantity": 0,
+                            "price": "130"
+                        },
+                        "LY3ETP80S0CFK": {
+                            "quantity": 800,
+                            "price": 200
+                        },
+                        "LV82RJ4G6GJAM": {
+                            "quantity": 2938,
+                            "price": 132
+                        }
+                    }
+                }
+            ]
+        },
+        "shopify": {
+            "seo": {
+                "seoTitle": "AROEVE HEPA Air Purifier MK01 – White (Open Box)",
+                "seoDescription": "Open‑box AROEVE HEPA Air Purifier MK01 in white. true HEPA filter, quiet operation, covers 300 sq ft. Perfect for allergy relief at a great price."
+            },
+            "tags": [
+                "AROEVE",
+                "HEPA",
+                "Air Purifier",
+                "MK01",
+                "White",
+                "Open Box",
+                "Indoor Air Quality",
+                "Allergy Relief",
+                "Home Appliance",
+                "Dust Removal",
+                "Quiet Operation",
+                "Energy Efficient",
+                "Compact",
+                "Living Room",
+                "Bedroom"
+            ],
+            "title": "AROEVE HEPA Air Purifier MK01 – White (Open Box)",
+            "images": [
+                {
+                    "imageAltText": "AROEVE HEPA Air Purifier front view",
+                    "imagePosition": 1,
+                    "productImageURL": "https://i.ebayimg.com/images/g/VlYAAOSwNXFlGMs2/s-l140.webp"
+                },
+                {
+                    "imageAltText": "AROEVE HEPA Air Purifier side view",
+                    "imagePosition": 2,
+                    "productImageURL": "https://i.ebayimg.com/images/g/g38AAOSws~RlGM0g/s-l140.webp"
+                },
+                {
+                    "imageAltText": "AROEVE HEPA Air Purifier top view",
+                    "imagePosition": 3,
+                    "productImageURL": "https://i.ebayimg.com/images/g/78YAAOSwX8FlGM0h/s-l140.webp"
+                }
+            ],
+            "status": "active",
+            "vendor": "AROEVE",
+            "giftCard": false,
+            "variants": [
+                {
+                    "id": "shopify-var-Size:Sm",
+                    "optionValues": {
+                        "Size": "Sm"
+                    },
+                    "price": "130",
+                    "inventoryByLocation": {
+                        "default": {
+                            "quantity": 0,
+                            "price": "130"
+                        },
+                        "gid://shopify/Location/84140818688": {
+                            "quantity": 19,
+                            "price": 134
+                        },
+                        "gid://shopify/Location/84140785920": {
+                            "quantity": 392,
+                            "price": 12
+                        },
+                        "LY3ETP80S0CFK": {
+                            "quantity": 900,
+                            "price": "130"
+                        },
+                        "LV82RJ4G6GJAM": {
+                            "quantity": 2983,
+                            "price": 4130
+                        }
+                    }
+                },
+                {
+                    "id": "shopify-var-Size:Md",
+                    "optionValues": {
+                        "Size": "Md"
+                    },
+                    "price": "130",
+                    "inventoryByLocation": {
+                        "default": {
+                            "quantity": 0,
+                            "price": "130"
+                        },
+                        "gid://shopify/Location/84140818688": {
+                            "quantity": 20,
+                            "price": 1306
+                        },
+                        "gid://shopify/Location/84140785920": {
+                            "quantity": 24,
+                            "price": 13084
+                        },
+                        "LY3ETP80S0CFK": {
+                            "quantity": 800,
+                            "price": 200
+                        },
+                        "LV82RJ4G6GJAM": {
+                            "quantity": 2938,
+                            "price": 132
+                        }
+                    }
+                }
+            ],
+            "description": "[Hook] Breathe cleaner air with the AROEVE HEPA Air Purifier MK01, designed for efficient particle removal. [Features] true HEPA filtration captures 99.97% of particles down to 0.3 microns, while the sleek white finish blends with any décor. [Use Cases] Ideal for bedrooms, living rooms, or home offices to reduce allergens, dust, and odors. [Specs] Model: MK01; Color: White; Coverage: up to 300 sq ft; Noise Level: ≤35 dB; Power: 45W; Dimensions: 12\" x 12\" x 20\"; Weight: 6.5 lbs. [Closer] Enjoy quieter, healthier spaces – fully functional, open‑box price.",
+            "productType": "Air Purifier",
+            "googleShopping": {
+                "mpn": "MK01",
+                "gender": "Unisex",
+                "ageGroup": "Adult",
+                "condition": "used",
+                "customLabel0": "",
+                "customLabel1": "",
+                "customLabel2": "",
+                "customLabel3": "",
+                "customLabel4": "",
+                "adWordsLabels": "",
+                "customProduct": false,
+                "adWordsGrouping": "",
+                "googleProductCategory": "Home & Garden > Household Appliances > Air Purifiers"
+            },
+            "productCategory": "Home > Air Purifiers",
+            "publishedOnOnlineStore": true,
+            "seoTitle": "AROEVE HEPA Air Purifier MK01 – White (Open Box)",
+            "seoDescription": "Open‑box AROEVE HEPA Air Purifier MK01 in white. true HEPA filter, quiet operation, covers 300 sq ft. Perfect for allergy relief at a great price.",
+            "sku": "299348929",
+            "price": "130",
+            "options": [
+                {
+                    "name": "Size",
+                    "values": [
+                        "Sm",
+                        "Md"
+                    ]
+                }
+            ]
+        },
+        "facebook": {
+            "id": "AROEVE-MK01-White",
+            "link": "https://www.ebay.com/itm/AROEVE-HEPA-Air-Purifier-MK01-White-Open-Box/1234567890",
+            "brand": "AROEVE",
+            "price": "130",
+            "title": "AROEVE HEPA Air Purifier MK01 – White (Open Box)",
+            "condition": "used",
+            "image_link": "https://i.ebayimg.com/images/g/VlYAAOSwNXFlGMs2/s-l140.webp",
+            "description": "Open‑box AROEVE air purifier, works great, a few cosmetic marks but fully functional. Perfect for cleaner air at home. $15.99 OBO.",
+            "availability": "in stock",
+            "categorySuggestion": "Home > Air Purifiers",
+            "google_product_category": "Home & Garden > Household Appliances > Air Purifiers",
+            "sku": "299348929"
         }
+    },
+    "media": {
+        "imageUris": [
+            "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1760632568324-1760632598576.jpg"
+        ],
+        "coverImageIndex": 0
+    },
+    "selectedPlatformsToPublish": [
+        "square",
+        "shopify"
     ],
-    "totalProcessingTimeMs": 4804,
-    "overallConfidence": "low",
-    "recommendedAction": "fallback_to_manual"
+    "connectionIds": {
+        "square": [
+            "04573af5-ac82-47d3-a921-64ee9d23caf4"
+        ],
+        "shopify": [
+            "195eed2d-2797-49c4-ae8b-43bc97b73528"
+        ]
+    }
 }

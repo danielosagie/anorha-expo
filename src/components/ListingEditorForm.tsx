@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle } from 'react';
+import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import ShopifySvg from '../assets/shopify.svg';
@@ -11,11 +11,13 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes, X, Sparkles } from 'lucide-react-native';
 import { black, grey400 } from 'react-native-paper/lib/typescript/styles/themes/v2/colors';
 import { overlay } from 'react-native-paper';
+import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 
 export type PlatformsData = Record<string, any>;
 
 type Props = {
   platforms: PlatformsData;
+  updateCounter?: number; // NEW: Signal when platforms ref content changes
   images: string[];
   platformLocations?: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>>;
   onChangePlatforms: (next: PlatformsData) => void;
@@ -90,7 +92,7 @@ const DEFAULT_INVENTORY_TYPE_BY_PLATFORM: Record<string, InventoryType> = {
   depop: 'BASIC',
 };
 
-function ListingEditorFormInner({ platforms, images, platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored }: Props, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, updateCounter, images, platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored }: Props, ref: React.Ref<ListingEditorFormRef>) {
   const platformKeys = useMemo(() => {
     const keys = Object.keys(platforms || {}).filter((k) => typeof k === 'string' && k.trim().length > 0);
     console.log('[ListingEditorForm] platformKeys:', keys);
@@ -110,6 +112,9 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
   const [optionEditorOpen, setOptionEditorOpen] = useState<boolean>(false);
   const [newOptionName, setNewOptionName] = useState<string>('');
   const [newOptionValues, setNewOptionValues] = useState<string[]>(['']);
+  const [allPlatformOptions, setAllPlatformOptions] = useState<Array<{ name: string; values: string[]; sources: string[] }>>([]);
+  const [optionPresets, setOptionPresets] = useState<Array<{ name: string; values: string[] }>>([]);
+  const [loadingPlatformOptions, setLoadingPlatformOptions] = useState<boolean>(false);
   const [openImagePickerFor, setOpenImagePickerFor] = useState<string | null>(null);
   const [variantImagePicker, setVariantImagePicker] = useState<{ variantId: string; open: boolean } | null>(null);
   const [showPlatformPicker, setShowPlatformPicker] = useState<boolean>(false);
@@ -118,6 +123,9 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
   useImperativeHandle(ref, () => ({
     openPlatformPicker: () => setShowPlatformPicker(true),
   }), []);
+
+  const lastPlatformRef = useRef<string>('');
+  const lastOptionsRef = useRef<string>('');
 
   // Update activeTab only if current tab becomes invalid. Avoid redundant resets.
   useEffect(() => {
@@ -132,7 +140,7 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
     }
   }, [canonicalKey, platformKeys, activeTab]);
   const activePlatformKey = activeTab === 'all' ? canonicalKey : activeTab;
-  const activeData = useMemo<PlatformState>(() => (platforms[activePlatformKey] || {}) as PlatformState, [activePlatformKey, platforms]);
+  const activeData = useMemo<PlatformState>(() => (platforms[activePlatformKey] || {}) as PlatformState, [activePlatformKey, platforms, updateCounter]);
   
   // When in 'all' tab, aggregate locations and quantities from all platforms
   const aggregatedLocations = useMemo(() => {
@@ -200,6 +208,10 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
   const patchPlatform = (updater: (prev: PlatformState) => PlatformState) => {
     const prev = (platforms[activePlatformKey] || {}) as PlatformState;
     const nextPlatform = updater(prev);
+    console.log(`[PATCH] ${activePlatformKey}: variants before=${(prev.variants || []).length}, after=${(nextPlatform.variants || []).length}`);
+    if (nextPlatform.variants?.length) {
+      console.log(`[PATCH] First variant inv keys:`, Object.keys(nextPlatform.variants[0]?.inventoryByLocation || {}));
+    }
     onChangePlatforms({ ...platforms, [activePlatformKey]: nextPlatform });
   };
 
@@ -234,6 +246,15 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
     return [{ id: 'loc-default', name: 'Default Location' }];
   }, [activeData.locations, activePlatformKey, platformLocations]);
   const [selectedLocationId, setSelectedLocationId] = useState<string>(locations[0]?.id || 'loc-1');
+
+  // CRITICAL: When locations change, reset selectedLocationId to first valid location
+  useEffect(() => {
+    const firstValidLoc = locations[0]?.id || 'loc-1';
+    if (!locations.find(l => l.id === selectedLocationId)) {
+      console.log(`[LOC-RESET] selectedLocationId ${selectedLocationId} no longer valid! Resetting to ${firstValidLoc}`);
+      setSelectedLocationId(firstValidLoc);
+    }
+  }, [locations]);
 
   // Debug logging for inventory state (after locations are defined)
   console.log('[ListingEditorForm] Inventory state:', {
@@ -338,12 +359,38 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
       patchPlatform(prev => ({ ...prev, options: cleaned }));
     }
     
-    // Variants should reflect any option changes
-    // setTimeout to avoid double setState in same render
-    console.log('[Options useEffect] Scheduling recomputeVariants');
-    setTimeout(recomputeVariants, 0);
+    // CRITICAL FIX: Only recompute variants if OPTIONS changed, not just platform
+    const optionsJson = JSON.stringify(activeData.options || []);
+    const platformChanged = lastPlatformRef.current !== activePlatformKey;
+    const optionsChanged = lastOptionsRef.current !== optionsJson;
+    
+    console.log('[Options useEffect] Changes detected:', { platformChanged, optionsChanged, hasPreviousPlatform: !!lastPlatformRef.current, prevOptions: lastOptionsRef.current, currentOptions: optionsJson });
+    
+    // ONLY recompute if options actually changed, NOT on platform switch
+    if (optionsChanged && (optionsJson !== '[]' || lastOptionsRef.current !== '[]')) {
+      // Options truly changed (not just switching to empty options)
+      console.log('[Options useEffect] Scheduling recomputeVariants (options actually changed)');
+      setTimeout(recomputeVariants, 0);
+    } else if (platformChanged && lastPlatformRef.current) {
+      // Just switching platforms - DON'T recompute, preserve variants from current platform
+      console.log('[Options useEffect] Platform switched - NOT recomputing variants (preserving data)');
+    } else if (!lastPlatformRef.current) {
+      // First load of ANY platform
+      console.log('[Options useEffect] First load - recomputing variants');
+      setTimeout(recomputeVariants, 0);
+    }
+    
+    lastPlatformRef.current = activePlatformKey;
+    lastOptionsRef.current = optionsJson;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePlatformKey, JSON.stringify(activeData.options || [])]);
+
+  // Fetch platform options when options editor opens
+  useEffect(() => {
+    if (optionEditorOpen) {
+      fetchAllPlatformOptions();
+    }
+  }, [optionEditorOpen]);
 
   // Variant editing helpers
   const setVariantOptionValue = (variantId: string, optionName: string, newValue: string) => {
@@ -394,6 +441,52 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
     setOptionEditorOpen(false);
     setNewOptionName('');
     setNewOptionValues(['']);
+  };
+
+  async function getToken() {
+    return await ensureSupabaseJwt();
+  }
+
+  const fetchAllPlatformOptions = async () => {
+    setLoadingPlatformOptions(true);
+    try {
+
+      const { data: {user}} = await supabase.auth.getUser();
+      
+      // Get the Supabase JWT from our Clerk↔Supabase bridge
+      const token = await getToken();
+
+      if (!token) {
+        console.error('No valid session found');
+        return;
+      }
+      
+      if (!user) {
+        throw new Error('User not authenticated');
+      }
+
+      
+
+      // Get user ID from auth context or props
+      const userId = `${user.id}`; 
+      
+      const response = await fetch(`https://api.sssync.app/api/products/platform-options/${userId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setAllPlatformOptions(data.platformOptions || []);
+        setOptionPresets(data.presets || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch platform options:', error);
+    } finally {
+      setLoadingPlatformOptions(false);
+    }
   };
   const handleDoneOption = () => {
     const name = newOptionName.trim();
@@ -472,14 +565,37 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
   }, [activePlatformKey]);
 
   const setVariantAtLocation = (variantId: string, locId: string, field: 'quantity'|'price'|'image', value: any) => {
+    console.log(`[INV] setVariantAtLocation START - variant: ${variantId}, location: ${locId}, field: ${field}, value: ${value}`);
     patchPlatform(prev => {
       const variants = (prev.variants || []).map(v => {
         if (v.id !== variantId) return v;
+        
+        console.log(`[INV] Found variant ${variantId}, current inventoryByLocation keys:`, Object.keys(v.inventoryByLocation || {}));
+        
         const inv = { ...(v.inventoryByLocation || {}) };
-        inv[locId] = { quantity: inv[locId]?.quantity || 0, price: inv[locId]?.price, image: inv[locId]?.image, [field]: value } as any;
+        if (!inv[locId]) {
+          console.log(`[INV] ⚠️  Location ${locId} missing! Creating new entry`);
+          inv[locId] = { quantity: 0, price: 0 };
+        }
+        
+        const oldVal = inv[locId][field];
+        inv[locId] = { ...inv[locId], [field]: value };
+        
+        console.log(`[INV] Updated ${field}: ${oldVal} → ${value} at location ${locId}`);
+        console.log(`[INV] After update, inventoryByLocation keys:`, Object.keys(inv));
+        
         return { ...v, inventoryByLocation: inv };
       });
-      return { ...prev, variants } as PlatformState;
+      return { ...prev, variants };
+    });
+  };
+
+  // NEW: Set global variant price (does not touch per-location quantities)
+  const setVariantPrice = (variantId: string, price: number) => {
+    console.log(`[PRICE] setVariantPrice START - variant: ${variantId}, price: ${price}`);
+    patchPlatform(prev => {
+      const variants = (prev.variants || []).map(v => v.id === variantId ? { ...v, price } : v);
+      return { ...prev, variants };
     });
   };
 
@@ -540,6 +656,7 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
     onChangePlatforms(next);
     if (activeTab === platformKey) setActiveTab('all');
   };
+
 
   return (
     <View style={{ paddingBottom: 120 }}>
@@ -774,11 +891,15 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
         <View style={styles.card}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <Text style={styles.sectionTitle}>Variants</Text>
-            {!!onSuggestVariants && (
-              <TouchableOpacity style={styles.btnSecondary} onPress={() => onSuggestVariants(activePlatformKey)}>
-                <Text style={{ color: '#000' }}>Suggest variants</Text>
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity 
+              style={styles.btnSecondary} 
+              onPress={() => {
+                setOptionEditorOpen(true);
+                fetchAllPlatformOptions();
+              }}
+            >
+              <Text style={{ color: '#000' }}>Options</Text>
+            </TouchableOpacity>
           </View>
 
           {Array.isArray(variantSuggestions) && variantSuggestions.length > 0 && (
@@ -823,6 +944,89 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
           {/* Inline options wizard / summary */}
           {optionEditorOpen ? (
             <View style={{ marginTop: 10 }}>
+              {/* Platform Options Section */}
+              <View style={{ marginBottom: 20 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <Text style={styles.fieldLabel}>Your Platform Options</Text>
+                  <TouchableOpacity 
+                    style={styles.btnSecondary} 
+                    onPress={fetchAllPlatformOptions}
+                    disabled={loadingPlatformOptions}
+                  >
+                    <Text style={{ color: '#000' }}>
+                      {loadingPlatformOptions ? 'Loading...' : 'Refresh'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                
+                {allPlatformOptions.length > 0 ? (
+                  <View style={{ maxHeight: 200, backgroundColor: '#f5f5f5', borderRadius: 8, padding: 10 }}>
+                    <ScrollView showsVerticalScrollIndicator={true}>
+                      {allPlatformOptions.map((option, idx) => (
+                        <TouchableOpacity
+                          key={`platform-${option.name}-${idx}`}
+                          style={[styles.optionChip, { marginBottom: 8, backgroundColor: '#fff' }]}
+                          onPress={() => {
+                            setNewOptionName(option.name);
+                            setNewOptionValues(option.values);
+                          }}
+                        >
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                            <Text style={{ fontWeight: 'bold' }}>{option.name}</Text>
+                            <View style={{ flexDirection: 'row', gap: 4 }}>
+                              {option.sources.map(source => (
+                                <View key={source} style={{ backgroundColor: '#e0e0e0', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                                  <Text style={{ fontSize: 10, color: '#666', textTransform: 'capitalize' }}>{source}</Text>
+                                </View>
+                              ))}
+                            </View>
+                          </View>
+                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+                            {option.values.map(value => (
+                              <Text key={value} style={{ fontSize: 12, color: '#666' }}>
+                                {value}
+                              </Text>
+                            ))}
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                ) : (
+                  <Text style={{ color: '#999', fontStyle: 'italic', textAlign: 'center', padding: 20 }}>
+                    No platform options found. Use presets below or create new ones.
+                  </Text>
+                )}
+              </View>
+
+              {/* Presets Section */}
+              <View style={{ marginBottom: 20 }}>
+                <Text style={styles.fieldLabel}>Presets</Text>
+                <View style={{ maxHeight: 150, backgroundColor: '#f0f8ff', borderRadius: 8, padding: 10 }}>
+                  <ScrollView showsVerticalScrollIndicator={true}>
+                    {optionPresets.map((preset, idx) => (
+                      <TouchableOpacity
+                        key={`preset-${preset.name}-${idx}`}
+                        style={[styles.optionChip, { marginBottom: 8, backgroundColor: '#fff' }]}
+                        onPress={() => {
+                          setNewOptionName(preset.name);
+                          setNewOptionValues(preset.values);
+                        }}
+                      >
+                        <Text style={{ fontWeight: 'bold', marginBottom: 4 }}>{preset.name}</Text>
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+                          {preset.values.map(value => (
+                            <Text key={value} style={{ fontSize: 12, color: '#666' }}>
+                              {value}
+                            </Text>
+                          ))}
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              </View>
+
               <Text style={styles.fieldLabel}>Option Name</Text>
               <TextInput
                 style={styles.input}
@@ -847,12 +1051,23 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
                 <Text style={{ color: '#000', marginLeft: 6 }}>Add another option</Text>
               </TouchableOpacity>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>
-                <TouchableOpacity style={styles.btnSecondary} onPress={handleCancelOption}>
-                  <Text style={{ color: '#000' }}>Cancel</Text>
+                <TouchableOpacity 
+                  style={[styles.btnSecondary, { backgroundColor: '#fee2e2' }]} 
+                  onPress={() => {
+                    patchPlatform(prev => ({ ...prev, options: [], variants: [] }));
+                    setOptionEditorOpen(false);
+                  }}
+                >
+                  <Text style={{ color: '#dc2626' }}>Clear All</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.btnPrimary} onPress={handleDoneOption}>
-                  <Text style={{ color: '#fff' }}>Done</Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <TouchableOpacity style={styles.btnSecondary} onPress={handleCancelOption}>
+                    <Text style={{ color: '#000' }}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.btnPrimary} onPress={handleDoneOption}>
+                    <Text style={{ color: '#fff' }}>Done</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
           ) : (
@@ -899,7 +1114,10 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
             {selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all' && (
               <Dropdown label={locations.find(l=>l.id===selectedLocationId)?.name || 'Select Location'} options={locations.map(l=>l.name)} value={locations.find(l=>l.id===selectedLocationId)?.name || locations[0]?.name || ''} onChange={(name)=>{
                 const loc = locations.find(l=>l.name===name);
-                if (loc) setSelectedLocationId(loc.id);
+                if (loc) {
+                  console.log(`[LOC] Location changed from ${selectedLocationId} to ${loc.id}`);
+                  setSelectedLocationId(loc.id);
+                }
               }} />
             )}
           </View>
@@ -951,6 +1169,12 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
                   </Text>
                 </TouchableOpacity>
               ))}
+              {/* Pricing capability indicator moved here */}
+              <View style={{ marginLeft: 'auto', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 4, backgroundColor: activePlatformKey === 'shopify' ? '#E3F2FD' : '#E8F5E9' }}>
+                <Text style={{ fontSize: 11, fontWeight: '600', color: activePlatformKey === 'shopify' ? '#1976D2' : '#388E3C' }}>
+                  {activePlatformKey === 'shopify' ? '🔒 Global Price' : '📍 Per-Location Pricing'}
+                </Text>
+              </View>
             </View>
           )}
         </View>
@@ -1063,19 +1287,31 @@ function ListingEditorFormInner({ platforms, images, platformLocations, onChange
                 const defaultPrice = variant.price ?? activeData.price ?? 0;
                 const isOverride = inv.price !== undefined && inv.price !== null && inv.price !== defaultPrice;
                 
+                console.log(`[INV-RENDER] Variant ${variant.id} at loc ${invKey}: allLocs=${Object.keys(variant.inventoryByLocation || {}).join(',')}, qty=${inv.quantity}, price=${inv.price}`);
+                
                 return (
-                  <VariantInventoryRow
-                    key={`${variant.id}-${variantIdx}`}
-                    variantName={variantName}
-                    variantId={variant.id}
-                    invKey={invKey}
-                    quantity={inv.quantity ?? 0}
-                    price={inv.price ?? defaultPrice}
-                    isOverride={isOverride}
-                    onChangeQuantity={(qty) => setVariantAtLocation(variant.id, invKey, 'quantity', qty)}
-                    onChangePrice={(p) => setVariantAtLocation(variant.id, invKey, 'price', p)}
-                    onSelectImage={() => setVariantImagePicker({ variantId: variant.id, open: true })}
-                  />
+                  <View key={`${variant.id}-${variantIdx}`} style={{ marginBottom: 12 }}>
+                    {/* Location-specific row with quantity and price below */}
+                    <VariantInventoryRow
+                      variantName={variantName}
+                      variantId={variant.id}
+                      invKey={invKey}
+                      quantity={inv.quantity ?? 0}
+                      price={inv.price ?? defaultPrice}
+                      isOverride={isOverride}
+                      onChangeQuantity={(qty) => setVariantAtLocation(variant.id, invKey, 'quantity', qty)}
+                      onChangePrice={(p) => {
+                        // Update variant global price (Shopify) or per-location price (Square/Clover)
+                        if (activePlatformKey === 'shopify') {
+                          setVariantPrice(variant.id, p);
+                        } else {
+                          setVariantAtLocation(variant.id, invKey, 'price', p);
+                        }
+                      }}
+                      onSelectImage={() => setVariantImagePicker({ variantId: variant.id, open: true })}
+                      platformKey={activePlatformKey}
+                    />
+                  </View>
                 );
               })
             )
@@ -1273,7 +1509,7 @@ function SimpleQuantityInput({ quantity, onChangeQuantity }: { quantity: number;
   );
 }
 
-function VariantInventoryRow({ variantName, variantId, invKey, quantity, price, isOverride, onChangeQuantity, onChangePrice, onSelectImage }: {
+function VariantInventoryRow({ variantName, variantId, invKey, quantity, price, isOverride, onChangeQuantity, onChangePrice, onSelectImage, platformKey }: {
   variantName: string;
   variantId: string;
   invKey: string;
@@ -1283,11 +1519,16 @@ function VariantInventoryRow({ variantName, variantId, invKey, quantity, price, 
   onChangeQuantity: (qty: number) => void;
   onChangePrice: (price: number) => void;
   onSelectImage: () => void;
+  platformKey?: string; // NEW: Platform type to determine pricing UI
 }) {
   const [localQty, setLocalQty] = useState(String(quantity));
   const [localPrice, setLocalPrice] = useState(String(price));
   const qtyTimeoutRef = React.useRef<any>(null);
   const priceTimeoutRef = React.useRef<any>(null);
+
+  // Determine if platform supports per-location pricing
+  const isShopify = platformKey === 'shopify';
+  const supportsPerLocationPricing = platformKey === 'square' || platformKey === 'clover';
 
   // Sync from parent when values change externally
   useEffect(() => {
@@ -1342,38 +1583,38 @@ function VariantInventoryRow({ variantName, variantId, invKey, quantity, price, 
       )}
       <View style={{ flexDirection: "column", gap: 12, alignSelf: 'flex-start'}}>
         <Text style={{backgroundColor: '#F8F9FB',alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12, color: '#000', fontWeight: '600'}}>{variantName}</Text>
+        
+        {/* Platform indicator */}
+        {platformKey && (
+          <View style={{alignSelf: 'flex-start', paddingVertical: 4, paddingHorizontal: 8, backgroundColor: isShopify ? '#E3F2FD' : '#E8F5E9', borderRadius: 4}}>
+            <Text style={{fontSize: 11, color: isShopify ? '#1976D2' : '#388E3C', fontWeight: '600'}}>
+              {isShopify ? '🔒 Global Price' : '📍 Per-Location Pricing'}
+            </Text>
+          </View>
+        )}
+        
         <View style={{flexDirection: 'row', justifyContent:'flex-end', gap: 9, alignItems: 'center', alignSelf: 'flex-end'}}>
           <Text style={{ color: '#000' }}>Quantity:</Text>
           <TextInput
             style={styles.qtyInput}
             value={localQty}
             onChangeText={handleQtyChange}
+            keyboardType={'decimal-pad'}
           />
         </View>
+        
+        {/* Price input under quantity */}
         <View style={{flexDirection: 'row', justifyContent:'flex-end', gap: 9, alignItems: 'center', alignSelf: 'flex-end'}}>
           <Text style={{ color: isOverride ? '#FFD700' : '#000', fontWeight: isOverride ? '700' : '400' }}>Price:</Text>
-              <TextInput
-                placeholder="$30"
-                style={[
-                  styles.qtyInput,
-                  isOverride && {
-                    borderColor: '#FFD700',
-                    borderWidth: 2,
-                    backgroundColor: '#FFFEF0',
-                    color: '#FFD700',
-                    fontWeight: '700',
-                  }
-                ]}
-                value={localPrice}
-                onChangeText={handlePriceChange}
-                keyboardType={"decimal-pad"}
-              />
+          <TextInput
+            style={styles.qtyInput}
+            value={localPrice}
+            onChangeText={handlePriceChange}
+            keyboardType={'decimal-pad'}
+            editable={true}
+          />
         </View>
       </View>
-
-      <TouchableOpacity style={styles.variantImgSlot} onPress={onSelectImage}>
-        <Icon name="plus" size={20} color="#888" />
-      </TouchableOpacity>
     </View>
   );
 }
