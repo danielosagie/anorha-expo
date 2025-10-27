@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useAuth, useUser } from '@clerk/clerk-expo';
+import { ensureSupabaseJwt } from '../lib/supabase';
 
 const COLLABORATION_URL = 'https://api.sssync.app/collaboration';
 
@@ -25,8 +26,11 @@ interface PresenceUser {
   currentPage?: string;
 }
 
+async function getToken() {
+  return ensureSupabaseJwt();
+}
+
 export function useCollaboration() {
-  const { getToken } = useAuth();
   const { user } = useUser();
   const socketRef = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -41,13 +45,7 @@ export function useCollaboration() {
     (async () => {
       try {
         // Try to get Supabase template token, fallback to default Clerk token
-        let token: string | null = null;
-        try {
-          token = await getToken({ template: 'supabase' });
-        } catch (e) {
-          console.log('[Collaboration] Supabase template not available, using default token');
-          token = await getToken();
-        }
+        const token = await getToken()
         
         if (!token) {
           console.error('[Collaboration] No token available');
@@ -82,15 +80,15 @@ export function useCollaboration() {
       console.error('[Collaboration] Connection error:', error.message);
     });
 
-        // Listen for presence updates
-        socket.on('presence:update', ({ users }: { users: PresenceUser[] }) => {
-          setOnlineUsers(users.filter((u) => u.status === 'online'));
-        });
+    // Listen for presence updates
+    socket.on('presence:update', ({ users }: { users: PresenceUser[] }) => {
+      setOnlineUsers(users.filter((u) => u.status === 'online'));
+    });
 
-        socketRef.current = socket;
-      } catch (error) {
-        console.error('[Collaboration] Failed to initialize socket:', error);
-      }
+    socketRef.current = socket;
+    } catch (error) {
+      console.error('[Collaboration] Failed to initialize socket:', error);
+    }
     })();
 
     return () => {

@@ -162,6 +162,8 @@ const MappingReviewScreen = () => {
   const navigation = useNavigation<MappingReviewScreenNavigationProp>();
   const { connectionId, platformName, jobId } = route.params;
   const legendState: LegendStateObservables | null = useLegendState();
+  const [connection, setConnection] = useState<any>()
+
 
   const [suggestions, setSuggestions] = useState<MappingSuggestion[] | null>(null);
   // Persist review progress
@@ -219,8 +221,17 @@ const MappingReviewScreen = () => {
   const [wizardVisible, setWizardVisible] = useState(false);
   const [wizardStep, setWizardStep] = useState(0); // 0 platforms, 1 sync mode, 2 delist, 3 buffer, 4 review
   const [selectedPlatformsState, setSelectedPlatformsState] = useState<string[]>([]);
-  // New: inventory merge mode selection
   const [inventoryMergeMode, setInventoryMergeMode] = useState<'merged' | 'separate' | null>('merged');
+  
+  // Pools Selection State
+  const [pools, setPools] = useState<any[]>([]);
+  const [selectedPool, setSelectedPool] = useState<string | null>(null);
+  const [isLoadingPools, setIsLoadingPools] = useState(false);
+  const [isCreatingPool, setIsCreatingPool] = useState(false);
+  const [poolNameInput, setPoolNameInput] = useState('');
+
+
+  // Sync Settings
   const [syncMode, setSyncMode] = useState<'auto' | 'manual'>('auto');
   const [delistMode, setDelistMode] = useState<'auto' | 'manual'>('auto');
   const [priceBuffer, setPriceBuffer] = useState<Record<string, number>>({});
@@ -256,6 +267,123 @@ const MappingReviewScreen = () => {
       </Animated.View>
     );
   };
+
+  // Get current platform connection for user
+  useEffect(() => {
+    const loadConnection = async () => {
+      try {
+        const token = await ensureSupabaseJwt();
+        const response = await fetch(
+          `https://api.sssync.app/api/platform-connections/${connectionId}`,
+          {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            }
+          }
+        );
+        
+        if (response.ok) {
+          const conn = await response.json();
+          setConnection(conn);  // Store full connection object
+        }
+      } catch (error) {
+        console.error('Error loading connection:', error);
+      }
+    };
+    
+    if (connectionId) {
+      loadConnection();
+    }
+  }, [connectionId]);
+
+  // Fetch current Pools on mount
+  useEffect(() => {
+    const fetchPools = async () => {
+      try {
+        setIsLoadingPools(true);
+        const token = await ensureSupabaseJwt();
+
+        const orgId = connection?.OrgId;
+        if (!orgId) {
+          console.warn('[MappingReviewScreen] No orgId available to fetch pools');
+          return;
+        }
+
+        const response = await fetch(`https://api.sssync.app/api/pools/org/${orgId}`, 
+        {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch pools');
+        }
+
+        if (pools && pools.length > 0 && !selectedPool) {
+          setSelectedPool(pools[0].id);
+        }
+
+      } catch (error) {
+        console.error('[MappingReviewScreen] Error fetching pools:', error);
+
+      } finally {
+        setIsLoadingPools(false);
+      };
+
+      if (connection) {
+        fetchPools();
+      }
+    }
+  }, [connection, connectionId]);
+
+  // ✅ POOLS: Create new pool
+  const handleCreatePool = async () => {
+    if (!poolNameInput.trim()) {
+      Alert.alert('Please enter a pool name');
+      return;
+    }
+
+    try {
+      setIsCreatingPool(true);
+      const token = await ensureSupabaseJwt();
+      const orgId = connection?.OrgId;
+
+      const response = await fetch('https://api.sssync.app/api/pools', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          orgId,
+          name: poolNameInput,
+          description: `Pool for ${connection?.DisplayName || 'new connection'}`,
+          syncInventory: true,
+          syncPricing: true
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create pool');
+      }
+
+      const newPool = await response.json();
+      setPools([...pools, newPool]);
+      setSelectedPool(newPool.id);
+      setPoolNameInput('');
+    } catch (error) {
+      console.error('[MappingReviewScreen] Error creating pool:', error);
+      Alert.alert('Error', 'Failed to create pool');
+    } finally {
+      setIsCreatingPool(false);
+    }
+  };
+  
 
   // Effect to load platform connections
   useEffect(() => {
@@ -836,25 +964,46 @@ const MappingReviewScreen = () => {
       const token = await ensureSupabaseJwt();
       if (!token) throw new Error("Authentication token not found.");
 
+      // ✅ Step 1: Confirm mappings
       const response = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/confirm-mappings`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ mappings: mappingsToConfirm }),
+        body: JSON.stringify({ confirmedMatches: mappingsToConfirm }),
       });
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
         throw new Error(errorData.message || `Failed to confirm mappings. Status: ${response.status}`);
       }
-      Alert.alert("Mappings Confirmed", "Selected mappings have been submitted successfully.");
-      // Optionally, refresh suggestions or navigate away
+      
+      console.log("[MappingReviewScreen] Mappings confirmed successfully. Now activating sync...");
+
+      // ✅ Step 2: Automatically activate sync so status moves: ready_to_sync → syncing → active
+      const activateResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/activate-sync`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!activateResponse.ok) {
+        const errorData = await activateResponse.json().catch(() => ({ message: `HTTP error! Status: ${activateResponse.status}` }));
+        throw new Error(errorData.message || `Failed to activate sync. Status: ${activateResponse.status}`);
+      }
+
+      console.log("[MappingReviewScreen] Sync activated successfully!");
+      Alert.alert("Success", "Mappings confirmed and sync activated. Processing has started.");
+      
+      // Optionally refresh suggestions or navigate
       fetchMappingSuggestions(connectionId);
     } catch (err: any) {
-      console.error("[MappingReviewScreen] Error confirming mappings:", err);
+      console.error("[MappingReviewScreen] Error confirming/activating mappings:", err);
       setError(err.message || "An unexpected error occurred while confirming mappings.");
+      Alert.alert("Error", err.message || "Failed to confirm mappings. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -2981,6 +3130,7 @@ const MappingReviewScreen = () => {
       <View style={[styles.container, styles.centered]}>
         <ActivityIndicator size="large" color={theme.colors.primary} />
         <Text style={[styles.loadingText, { color: theme.colors.text }]}>Loading {platformName} Suggestions...</Text>
+        {renderProgressCard()}
       </View>
     );
   }
@@ -3229,86 +3379,212 @@ const MappingReviewScreen = () => {
                 {/* Stepper header aligning to mock */}
                 <View style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#E5E5E5', alignItems: 'center' }}>
                   <Text style={{ fontWeight: '700', color: theme.colors.text, fontSize: 18 }}>{
-                  wizardStep===0?'Inventory: Merge or Keep Separate?':wizardStep===1?'Set Sync Settings':wizardStep===2?'Set Sync Settings':wizardStep===3?'Set Sync Settings':wizardStep===4?'Set Sync Settings':'Is This Right?'}</Text>
+                  wizardStep===0?'Add Platform To Which Pool':wizardStep===1?'Set Sync Settings':wizardStep===2?'Set Sync Settings':wizardStep===3?'Set Sync Settings':wizardStep===4?'Set Sync Settings':'Is This Right?'}</Text>
                 </View>
 
                 {/* Steps */}
                 {wizardStep === 0 && (
                   <View style={{ paddingHorizontal: 0, paddingTop: 20 }}>
                     <Text style={{ color: theme.colors.textSecondary, marginBottom: 16, textAlign: 'center' }}>
-                      How should we handle your existing inventory?
+                      Select which inventory pool to use for this connection
                     </Text>
 
-                    {/* Option: Pool Inventory - Merge */}
-                    <TouchableOpacity 
-                      style={{ 
-                        borderWidth: 2, 
-                        borderColor: inventoryMergeMode === 'merged' ? theme.colors.primary : '#E5E5E5', 
-                        borderRadius: 12, 
-                        padding: 20, 
-                        marginBottom: 16,
-                        backgroundColor: inventoryMergeMode === 'merged' ? '#F0F9FF' : '#fff'
-                      }}
-                      onPress={() => setInventoryMergeMode('merged')}
-                    >
-                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                        <View style={{ 
-                          width: 20, height: 20, borderRadius: 10, borderWidth: 2, 
-                          borderColor: inventoryMergeMode === 'merged' ? theme.colors.primary : '#E5E5E5',
-                          backgroundColor: inventoryMergeMode === 'merged' ? theme.colors.primary : 'transparent',
-                          marginRight: 12
-                        }} />
-                        <Text style={{ fontWeight: '700', color: theme.colors.text, fontSize: 16 }}>
-                          Pool Inventory - Merge Existing Inventory (Recommended)
-                        </Text>
+                    {isLoadingPools ? (
+                      <View style={{ padding: 40, alignItems: 'center' }}>
+                        <ActivityIndicator size="large" color={theme.colors.primary} />
                       </View>
-                      <Text style={{ color: theme.colors.textSecondary, marginLeft: 32, marginBottom: 8 }}>
-                        Match products across platforms by SKU/barcode/title
-                      </Text>
-                      <Text style={{ color: theme.colors.textSecondary, marginLeft: 32, marginBottom: 8 }}>
-                        Keep your existing platform listings intact
-                      </Text>
-                      <Text style={{ color: theme.colors.textSecondary, marginLeft: 32, fontSize: 12, fontStyle: 'italic' }}>
-                        (Use when you have established stores)
-                      </Text>
-                    </TouchableOpacity>
+                    ) : (
+                      <>
+                        {/* Existing Pools */}
+                        {pools.length > 0 && (
+                          <View style={{ marginBottom: 20 }}>
+                            {pools.map((pool) => (
+                              <TouchableOpacity
+                                key={pool.id}
+                                style={{
+                                  borderWidth: 1,
+                                  borderColor: selectedPool === pool.id ? theme.colors.primary : '#E5E7EB',
+                                  borderRadius: 12,
+                                  padding: 20,
+                                  marginBottom: 12,
+                                  backgroundColor: selectedPool === pool.id ? theme.colors.primary + '10' : '#fff',
+                                  flexDirection: 'row',
+                                  alignItems: 'center',
+                                  shadowColor: '#000',
+                                  shadowOffset: { width: 0, height: 1 },
+                                  shadowOpacity: 0.05,
+                                  shadowRadius: 2,
+                                  elevation: 1,
+                                }}
+                                onPress={() => setSelectedPool(pool.id)}
+                              >
+                                <View style={{
+                                  width: 48,
+                                  height: 48,
+                                  borderRadius: 8,
+                                  backgroundColor: '#96C93F',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  marginRight: 16,
+                                  position: 'relative'
+                                }}>
+                                  <ShopifySvg width={24} height={24} />
+                                  {/* Add platform icons overlay */}
+                                  <View style={{
+                                    position: 'absolute',
+                                    bottom: -4,
+                                    right: -4,
+                                    flexDirection: 'row',
+                                    backgroundColor: '#fff',
+                                    borderRadius: 8,
+                                    padding: 2,
+                                    shadowColor: '#000',
+                                    shadowOffset: { width: 0, height: 1 },
+                                    shadowOpacity: 0.1,
+                                    shadowRadius: 2,
+                                    elevation: 2,
+                                  }}>
+                                    <SquareSvg width={12} height={12} />
+                                  </View>
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                  <Text style={{ fontWeight: '600', fontSize: 16, color: theme.colors.text }}>
+                                    {pool.name}
+                                  </Text>
+                                  {pool.description && (
+                                    <Text style={{ color: theme.colors.textSecondary, fontSize: 14, marginTop: 2 }}>
+                                      {pool.description}
+                                    </Text>
+                                  )}
+                                </View>
+                                <View style={{
+                                  width: 24,
+                                  height: 24,
+                                  borderRadius: 12,
+                                  borderWidth: 2,
+                                  borderColor: selectedPool === pool.id ? theme.colors.primary : '#E5E7EB',
+                                  backgroundColor: selectedPool === pool.id ? theme.colors.primary : 'transparent',
+                                  alignItems: 'center',
+                                  justifyContent: 'center'
+                                }}>
+                                  {selectedPool === pool.id && (
+                                    <View style={{
+                                      width: 8,
+                                      height: 8,
+                                      borderRadius: 4,
+                                      backgroundColor: '#fff'
+                                    }} />
+                                  )}
+                                </View>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
+                        )}
 
-                    {/* Option: Keep Separate */}
-                    <TouchableOpacity 
-                      style={{ 
-                        borderWidth: 2, 
-                        borderColor: inventoryMergeMode === 'separate' ? theme.colors.primary : '#E5E5E5', 
-                        borderRadius: 12, 
-                        padding: 20,
-                        backgroundColor: inventoryMergeMode === 'separate' ? '#F0F9FF' : '#fff'
-                      }}
-                      onPress={() => setInventoryMergeMode('separate')}
-                    >
-                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                        <View style={{ 
-                          width: 20, height: 20, borderRadius: 10, borderWidth: 2, 
-                          borderColor: inventoryMergeMode === 'separate' ? theme.colors.primary : '#E5E5E5',
-                          backgroundColor: inventoryMergeMode === 'separate' ? theme.colors.primary : 'transparent',
-                          marginRight: 12
-                        }} />
-                        <Text style={{ fontWeight: '700', color: theme.colors.text, fontSize: 16 }}>
-                          Keep Separate - Platform-Specific
-                        </Text>
-                      </View>
-                      <Text style={{ color: theme.colors.textSecondary, marginLeft: 32, marginBottom: 8 }}>
-                        Keep each platform's inventory completely separate
-                      </Text>
-                      <Text style={{ color: theme.colors.textSecondary, marginLeft: 32, marginBottom: 8 }}>
-                        Products won't sync between platforms
-                      </Text>
-                      <Text style={{ color: theme.colors.textSecondary, marginLeft: 32, fontSize: 12, fontStyle: 'italic' }}>
-                        (Use when selling different items on each platform)
-                      </Text>
-                    </TouchableOpacity>
+                        {/* Create New Pool */}
+                        <TouchableOpacity
+                          style={{
+                            borderWidth: 2,
+                            borderColor: selectedPool === 'create-new' ? theme.colors.primary : '#D1D5DB',
+                            borderStyle: selectedPool === 'create-new' ? 'solid' : 'dashed',
+                            borderRadius: 12,
+                            padding: 20,
+                            marginBottom: 16,
+                            backgroundColor: selectedPool === 'create-new' ? theme.colors.primary + '10' : '#F9FAFB',
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            shadowColor: '#000',
+                            shadowOffset: { width: 0, height: 1 },
+                            shadowOpacity: 0.05,
+                            shadowRadius: 2,
+                            elevation: 1,
+                          }}
+                          onPress={() => setSelectedPool('create-new')}
+                        >
+                          <View style={{
+                            width: 48,
+                            height: 48,
+                            borderRadius: 8,
+                            backgroundColor: selectedPool === 'create-new' ? theme.colors.primary + '20' : '#F3F4F6',
+                            borderWidth: 2,
+                            borderColor: selectedPool === 'create-new' ? theme.colors.primary : '#D1D5DB',
+                            borderStyle: 'dashed',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            marginRight: 16
+                          }}>
+                            <Icon name="plus" size={24} color={selectedPool === 'create-new' ? theme.colors.primary : theme.colors.textSecondary} />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontWeight: '600', fontSize: 16, color: theme.colors.text }}>
+                              Create New Pool
+                            </Text>
+                            <Text style={{ color: theme.colors.textSecondary, fontSize: 14, marginTop: 2 }}>
+                              Set up a new inventory pool
+                            </Text>
+                          </View>
+                          <View style={{
+                            width: 24,
+                            height: 24,
+                            borderRadius: 12,
+                            borderWidth: 2,
+                            borderColor: selectedPool === 'create-new' ? theme.colors.primary : '#E5E7EB',
+                            backgroundColor: selectedPool === 'create-new' ? theme.colors.primary : 'transparent',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                          }}>
+                            {selectedPool === 'create-new' && (
+                              <View style={{
+                                width: 8,
+                                height: 8,
+                                borderRadius: 4,
+                                backgroundColor: '#fff'
+                              }} />
+                            )}
+                          </View>
+                        </TouchableOpacity>
 
-                    <View style={{ marginTop: 20 }}>
-                      <Button title="Continue" onPress={() => setWizardStep(1)} disabled={!inventoryMergeMode} />
-                    </View>
+                        {/* Pool Name Input - Show when create new is selected */}
+                        {selectedPool === 'create-new' && (
+                          <View style={{ marginBottom: 16 }}>
+                            <TextInput
+                              style={{
+                                borderWidth: 1,
+                                borderColor: '#E5E7EB',
+                                borderRadius: 8,
+                                paddingHorizontal: 16,
+                                paddingVertical: 12,
+                                color: theme.colors.text,
+                                fontSize: 16,
+                                backgroundColor: '#fff'
+                              }}
+                              placeholder="Enter pool name (e.g., 'Main', 'Wholesale')"
+                              placeholderTextColor={theme.colors.textSecondary}
+                              value={poolNameInput}
+                              onChangeText={setPoolNameInput}
+                              editable={!isCreatingPool}
+                              autoFocus={true}
+                            />
+                          </View>
+                        )}
+
+                        {/* Continue button */}
+                        <View style={{ marginTop: 20 }}>
+                          <Button
+                            title="Continue"
+                            onPress={() => {
+                              if (selectedPool === 'create-new') {
+                                handleCreatePool();
+                              } else {
+                                setWizardStep(1);
+                              }
+                            }}
+                            loading={isCreatingPool}
+                            disabled={selectedPool === 'create-new' ? !poolNameInput.trim() || isCreatingPool : !selectedPool}
+                          />
+                        </View>
+                      </>
+                    )}
                   </View>
                 )}
 
@@ -3499,7 +3775,8 @@ const MappingReviewScreen = () => {
                                   propagateUpdates: autoUpdate,
                                   propagateChanges: syncDirection === 'two-way' || syncDirection === 'push-only',
                                   inventoryMergeMode: inventoryMergeMode || 'merged',
-                                  locationHandling: 'auto_merge'
+                                  locationHandling: 'auto_merge',
+                                  poolId: selectedPool
                                 }
                               })
                             });
@@ -3608,4 +3885,3 @@ const MappingReviewScreen = () => {
 };
 
 export default MappingReviewScreen;
-

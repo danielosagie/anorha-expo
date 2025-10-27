@@ -365,10 +365,8 @@ const ProfileScreen = () => {
     }, [refreshTrigger])
   );
 
-  // --- DEBUG: Add useEffect to log connections state changes ---
+  // --- Calculate active counts by platform for BottomNav ---
   useEffect(() => {
-    console.log('[ProfileScreen STATE DEBUG] Connections state updated:', JSON.stringify(platformConnections, null, 2));
-    // Derive active counts by platform for BottomNav
     const counts: Record<string, number> = {};
     platformConnections.forEach((c) => {
       if (c.Status?.toLowerCase() === 'active') {
@@ -377,7 +375,6 @@ const ProfileScreen = () => {
     });
     setPlatformActiveCounts(counts);
   }, [platformConnections]);
-  // --- END DEBUG ---
 
   // --- GLOBAL OVERLAY: wire platform start connect ---
   const overlay = usePlatformPickerOverlay();
@@ -1072,13 +1069,6 @@ const ProfileScreen = () => {
       )}
     </TouchableOpacity>
   );
-  
-  // Add this log to see the state value during each render
-  console.log('[ProfileScreen] Rendering with shopifyFlowStep:', shopifyFlowStep);
-  
-  // Add these logs to check the state and menuItems content
-  console.log('[ProfileScreen] Rendering - isDevMode:', isDevMode);
-  console.log('[ProfileScreen] Rendering - menuItems:', JSON.stringify(menuItems.map(item => ({ title: item.title, hasCustomComponent: !!item.customComponent }))));
   
   // Add a state for the realtime channel
   const [realtimeChannel, setRealtimeChannel] = useState<RealtimeChannel | null>(null);
