@@ -13,6 +13,7 @@ import {
   Pressable,
   Clipboard,
   ScrollView,
+  Modal,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Camera, CameraView, CameraType, FlashMode, BarcodeScanningResult } from 'expo-camera';
@@ -567,6 +568,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     });
     
     // Always open sheet - it will show empty state if no photos
+    setShowMatchSheet(false);
+    matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
     setShowDeepSearchSheet(true);
     sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4); // Position for 60% height sheet
   }, [sheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems.length, activeItemId]); 
@@ -915,6 +918,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             setCurrentMatchItemId(itemId);
             setCurrentInstruction('matches_found');
             stopProgressAnimation();
+            // Ensure bulk sheet is closed before opening match sheet
+            setShowDeepSearchSheet(false);
+            sheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
             setShowMatchSheet(true);
             matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2); // Taller sheet (80% height visible)
           } else {
@@ -924,6 +930,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             stopProgressAnimation();
             showNotificationMessage('No matches found. Item created - use search options to find your product.', 4000);
             setTimeout(() => {
+              setShowMatchSheet(false);
+              matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
               setShowDeepSearchSheet(true);
               sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
             }, 1000);
@@ -945,6 +953,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         stopProgressAnimation();
         showNotificationMessage('Quick scan failed. Item created - use search options.', 3000);
         setTimeout(() => {
+          setShowMatchSheet(false);
+          matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
           setShowDeepSearchSheet(true);
           sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
         }, 1000);
@@ -991,9 +1001,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
     setMatchData(store.matchData);
     setCurrentMatchItemId(itemId);
+    // Close bulk sheet before opening match sheet
+    setShowDeepSearchSheet(false);
+    sheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
     setShowMatchSheet(true);
     matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2);
-  }, [quickScanStore, matchSheetTranslateY, showNotificationMessage]);
+  }, [quickScanStore, matchSheetTranslateY, sheetTranslateY, showNotificationMessage]);
 
   // Send payload of first photos for analysis/matching
   const performAnalyze = useCallback(async (firstPhotos: CapturedPhoto[]) => {
@@ -1560,17 +1573,34 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
          />
       </CameraView>
 
-      {/* Match results sheet */}
-      {showMatchSheet && matchData && (
-        <MatchResultsSheet 
-          matchData={matchData}
-          onClose={closeMatchSheet}
-          onUseForSelection={() => openMatchSelectionForItem(currentMatchItemId)}
-          sheetStyle={matchSheetAnimatedStyle}
-        />
-      )}
+      {/* Match results sheet (rendered above TabBar via Modal) */}
+      <Modal
+        visible={!!showMatchSheet && !!matchData}
+        transparent
+        animationType="none"
+        statusBarTranslucent
+        onRequestClose={closeMatchSheet}
+        presentationStyle="overFullScreen"
+      >
+        {showMatchSheet && matchData ? (
+          <MatchResultsSheet 
+            matchData={matchData}
+            onClose={closeMatchSheet}
+            onUseForSelection={() => openMatchSelectionForItem(currentMatchItemId)}
+            sheetStyle={matchSheetAnimatedStyle}
+          />
+        ) : null}
+      </Modal>
 
-      {/* Bulk items sheet */}
+      {/* Bulk items sheet (rendered above TabBar via Modal) */}
+      <Modal
+        visible={!!showDeepSearchSheet}
+        transparent
+        animationType="none"
+        statusBarTranslucent
+        onRequestClose={closeBulkItemsSheet}
+        presentationStyle="overFullScreen"
+      >
       {showDeepSearchSheet && (() => {
         console.log('[SHEET CONDITIONAL] Sheet IS showing - showDeepSearchSheet is true');
         console.log('[SHEET PROPS] ==================');
@@ -1622,6 +1652,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           />
         );
       })()}
+      </Modal>
     </GestureHandlerRootView>
   );
 };
@@ -1836,7 +1867,7 @@ const MatchResultsSheet: React.FC<{
             
             return (
               <TouchableOpacity 
-                key={candidate.id} 
+                key={`match-${candidate.id}-${index}`} 
                 style={[
                   styles.matchCard,
                   isSelected && styles.matchCardSelected
@@ -2539,7 +2570,7 @@ const styles = StyleSheet.create({
   // Bottom Controls Styles
   bottomControls: {
     position: 'absolute',
-    bottom: 0,
+    bottom: 100,
     left: 0,
     right: 0,
     paddingBottom: Platform.OS === 'ios' ? 34 : 20,
@@ -2609,7 +2640,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingTop: 20,
-    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    paddingBottom: 44,
     marginBottom: 30,
     minHeight: SCREEN_HEIGHT * 0.9,
     maxHeight: SCREEN_HEIGHT * 0.9,
@@ -2623,7 +2654,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingTop: 20,
-    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    paddingBottom: 44,
     height: SCREEN_HEIGHT * 0.6, // Fixed 60% height
   },
   sheetHeader: {

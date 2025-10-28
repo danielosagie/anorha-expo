@@ -65,37 +65,21 @@ export default function TeamScreen() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
+      // Replace the manual org fetch with:
       const token = await ensureSupabaseJwt();
-      if (!token) return;
+      const activeOrgResponse = await fetch(
+        `${SSSYNC_API_BASE_URL}/api/organizations/user/active-org`,
+        {
+          headers: { 'Authorization': `Bearer ${token}` },
+        }
+      );
 
-      // Get user's current org
-      const { data: orgMemberships } = await supabase
-        .from('OrgMemberships')
-        .select(`
-          Id,
-          Role,
-          OrgId,
-          Organizations (
-            Id,
-            Name
-          )
-        `)
-        .eq('UserId', user.id)
-        .limit(1)
-        .single();
-
-      if (!orgMemberships) {
-        showMessage({
-          message: 'No Organization',
-          description: 'You are not part of any organization yet.',
-          type: 'warning',
-        });
-        return;
+      if (activeOrgResponse.ok) {
+        const { activeOrg } = await activeOrgResponse.json();
+        setCurrentOrg({ Id: activeOrg.Id, Name: activeOrg.Name });
+        
+        // Then fetch members from this org
       }
-
-      const org = (orgMemberships.Organizations as any);
-      setCurrentOrg({ Id: org.Id, Name: org.Name });
-      setCurrentUserRole(orgMemberships.Role as 'admin' | 'member');
 
       // Load team members
       const { data: teamMembers } = await supabase

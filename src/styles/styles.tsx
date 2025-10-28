@@ -91,14 +91,15 @@ const styles = StyleSheet.create({
   
   // Tab bar styles
   tabBar: {
+    paddingHorizontal: 40,
+    marginHorizontal: 10,
     backgroundColor: '#FFFFFF',
-    borderTopColor: '#F0F0F0',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.1,
     shadowRadius: 3,
     elevation: 10,
-    height: 60,
+    height: 80,
     paddingBottom: 5,
   },
   tabBarItem: {

@@ -31,6 +31,8 @@ import { AuthContext } from '../context/AuthContext';
 import { useLegendStateControl } from '../context/LegendStateControlContext';
 import BottomNav from '../components/BottomNav';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
+import OrgSwitcher from '../components/OrgSwitcher';
+
 
 
 const SSSYNC_API_BASE_URL = "https://api.sssync.app"; // Keep if used for constructing backend URLs
@@ -1144,6 +1146,28 @@ const ProfileScreen = () => {
     }
   };
 
+  // Add this to ProfileScreen or AppNavigator useEffect on startup
+  const syncUserOrgs = async () => {
+    const token = await ensureSupabaseJwt();
+    
+    // Call sync endpoint to create OrgMemberships from Clerk teams
+    const response = await fetch(
+      'https://api.sssync.app/api/organizations/sync-clerk-teams',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    
+    if (response.ok) {
+      console.log('Synced Clerk teams with orgs');
+      // Then reload orgs in OrgSwitcher
+    }
+  };
+
   // Clean up the subscription when the component unmounts
   useEffect(() => {
     setupRealtimeSubscription();
@@ -1164,6 +1188,14 @@ const ProfileScreen = () => {
       contentContainerStyle={styles.scrollViewContent}
       showsVerticalScrollIndicator={false}
     >
+      // Inside ProfileScreen component, after title:
+      <OrgSwitcher 
+        onOrgChanged={(orgId, orgName) => {
+          // Reload TeamScreen data when org changes
+          setRefreshTrigger(prev => prev + 1);
+        }}
+      />
+
       <Animated.View entering={FadeInUp.delay(100).duration(500)}>
         <Text style={[styles.title, { color: theme.colors.text }]}>Profile</Text>
         

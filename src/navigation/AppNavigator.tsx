@@ -24,7 +24,7 @@ import OnboardConnectionScreen from '../screens/OnboardConnectionScreen';
 
 // Import the context from its new location
 import { AuthContext, AuthContextType } from '../context/AuthContext';
-import { supabase, stopClerkSupabaseBridge } from '../lib/supabase';
+import { supabase, stopClerkSupabaseBridge, ensureSupabaseJwt } from '../lib/supabase';
 // Screens
 import InitialScreen from '../screens/InitialScreen';
 import OnboardingSlides from '../screens/OnboardingSlides';
@@ -249,13 +249,37 @@ const Tab = createBottomTabNavigator();
 
 // Define TabNavigator separately - this fixes the "MainTabs doesn't exist" error
 const TabNavigator = () => {
+  // Create a custom tab bar style with rounded corners and horizontal padding
+  const customTabBarStyle = {
+    ...styles.tabBar,
+    borderRadius: 30,
+    marginHorizontal: 0,
+    marginBottom: 16,
+    overflow: 'hidden' as const,
+    paddingHorizontal: 16,
+    backgroundColor: '#ffffff',
+    borderColor: "rgba(0, 0, 0, 0.07)",
+    borderWidth: 2,
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 10 },
+    position: 'absolute' as const,
+    left: 12,
+    right: 12,
+    bottom: 18,
+    height: 84,
+  };
+
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarStyle: styles.tabBar,
+        tabBarStyle: customTabBarStyle,
       }}
-      tabBar={(props: any) => <TabBar {...props} />}
+      
+      tabBar={(props: any) => <TabBar {...props} style={customTabBarStyle} />}
       initialRouteName="Dashboard"
     >
       <Tab.Screen 
@@ -489,6 +513,27 @@ const AppNavigator = () => {
     })();
   }, []);
   
+   // Add this to ProfileScreen or AppNavigator useEffect on startup
+   const syncUserOrgs = async () => {
+    const token = await ensureSupabaseJwt();
+    
+    // Call sync endpoint to create OrgMemberships from Clerk teams
+    const response = await fetch(
+      'https://api.sssync.app/api/organizations/sync-clerk-teams',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    
+    if (response.ok) {
+      console.log('Synced Clerk teams with orgs');
+      // Then reload orgs in OrgSwitcher
+    }
+  };
 
   // Simplified: just determine which stack to show based on auth state
   useEffect(() => {
