@@ -301,6 +301,9 @@ const ProfileScreen = () => {
     try {
       console.log('[ProfileScreen] Attempting to fetch user connections');
       
+      // Add a small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
       // First try to get connections from SSSync API for most up-to-date status
       const session = await supabase.auth.getSession();
       const token = session?.data?.session?.access_token;
@@ -391,8 +394,16 @@ const ProfileScreen = () => {
   // Load LocationPools for the current organization
   const loadPools = useCallback(async () => {
     try {
-      if (!currentOrg?.id) return;
+      if (!currentOrg?.id) {
+        console.log('[ProfileScreen] No currentOrg.id yet, skipping pool load');
+        setPools([]);
+        return;
+      }
       setLoadingPools(true);
+      
+      // Add a small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
       const { data } = await supabase
         .from('LocationPools')
         .select('id, name, description, org_id')
@@ -406,6 +417,7 @@ const ProfileScreen = () => {
         list = list.filter((p) => allowed.has(p.id));
       }
       setPools(list.map((p) => ({ id: p.id, name: p.name, description: p.description })));
+      console.log('[ProfileScreen] Loaded pools:', list.length);
     } catch (e) {
       console.error('[ProfileScreen] Failed loading pools', e);
       setPools([]);
@@ -416,7 +428,7 @@ const ProfileScreen = () => {
 
   useEffect(() => {
     loadPools();
-  }, [loadPools, refreshTrigger]);
+  }, [currentOrg?.id, loadPools, refreshTrigger]);
 
   // --- GLOBAL OVERLAY: wire platform start connect ---
   const overlay = usePlatformPickerOverlay();
@@ -1234,6 +1246,7 @@ const ProfileScreen = () => {
           // Reload TeamScreen data when org changes
           setRefreshTrigger(prev => prev + 1);
         }}
+        currentOrgId={currentOrg?.id}
       />
 
       <Animated.View entering={FadeInUp.delay(100).duration(500)}>
@@ -1506,44 +1519,106 @@ const ProfileScreen = () => {
         </Card>
       </Animated.View>
 
-      {/* Locations / Pools Card */}
+      {/* Locations & Pools (Unified) Card */}
       <Animated.View entering={FadeInUp.delay(250).duration(500)}>
         <Card style={styles.card}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Locations</Text>
+            <Text style={styles.sectionTitle}>Location Groups & Connections</Text>
             <TouchableOpacity onPress={() => Alert.alert('Manage Locations', 'Coming soon')}> 
               <Text style={[styles.sectionAction, { color: theme.colors.primary }]}>Manage</Text>
             </TouchableOpacity>
           </View>
+          
           {loadingPools ? (
-            <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginVertical: 8 }} />
+            <ActivityIndicator size="large" color={theme.colors.primary} style={{ marginVertical: 20 }} />
           ) : (
             <View>
-              {pools.map((pool) => {
-                const poolConnections = platformConnections.filter(
-                  (c) => (c as any).pool_id === pool.id && (c.Status || '').toLowerCase() === 'active'
-                );
-                return (
-                  <View key={pool.id} style={styles.locationRow}>
-                    <Text style={styles.locationName}>{pool.name}</Text>
-                    <View style={styles.locationIcons}>
-                      {poolConnections.map((c) => {
-                        const IconComp = getPlatformIcon(c.PlatformType as PlatformId);
-                        return IconComp ? (
-                          <View key={c.Id} style={styles.locationIconWrap}>
-                            <IconComp width={18} height={18} />
+              {/* Show location groups with their connections */}
+              {pools.length > 0 ? (
+                <View>
+                  {pools.map((pool) => {
+                    const poolConnections = platformConnections.filter(
+                      (c) => (c as any).pool_id === pool.id
+                    );
+                    const activeConnections = poolConnections.filter(
+                      (c) => (c.Status || '').toLowerCase() === 'active'
+                    );
+                    
+                    return (
+                      <View key={pool.id} style={styles.poolCard}>
+                        {/* Pool Header */}
+                        <View style={styles.poolHeader}>
+                          <View style={styles.poolTitleContainer}>
+                            <Icon name="map-marker-multiple" size={20} color={theme.colors.primary} />
+                            <View style={{ marginLeft: 12, flex: 1 }}>
+                              <Text style={styles.poolName}>{pool.name}</Text>
+                              {pool.description && (
+                                <Text style={styles.poolDescription}>{pool.description}</Text>
+                              )}
+                            </View>
                           </View>
-                        ) : null;
-                      })}
-                    </View>
-                  </View>
-                );
-              })}
-              {pools.length === 0 && (
-                <Text style={styles.noConnectionsText}>No locations yet.</Text>
+                          <View style={styles.poolBadge}>
+                            <Text style={styles.poolBadgeText}>
+                              {activeConnections.length}/{poolConnections.length}
+                            </Text>
+                          </View>
+                        </View>
+
+                        {/* Connections for this pool */}
+                        {poolConnections.length > 0 ? (
+                          <View style={styles.poolConnectionsList}>
+                            {poolConnections.map((conn) => {
+                              const platformConfig = AVAILABLE_PLATFORMS.find(p => p.key === conn.PlatformType);
+                              const PlatformIconComponent = platformConfig ? getPlatformIcon(platformConfig.key) : null;
+                              const statusInfo = getStatusDisplay(conn.Status);
+                              
+                              return (
+                                <View key={conn.Id} style={styles.poolConnectionItem}>
+                                  {PlatformIconComponent ? (
+                                    <PlatformIconComponent width={24} height={24} />
+                                  ) : (
+                                    <Icon name="store" size={24} color="#555" />
+                                  )}
+                                  
+                                  <View style={styles.poolConnectionInfo}>
+                                    <Text style={styles.poolConnectionName}>
+                                      {conn.DisplayName || platformConfig?.name || 'Unknown'}
+                                    </Text>
+                                    <View style={styles.statusRow}>
+                                      {statusInfo.icon === 'loading' ? (
+                                        <ActivityIndicator size="small" color={statusInfo.color} />
+                                      ) : (
+                                        <Icon name={statusInfo.icon} size={14} color={statusInfo.color} />
+                                      )}
+                                      <Text style={[styles.poolConnectionStatus, { color: statusInfo.color }]}>
+                                        {statusInfo.label}
+                                      </Text>
+                                    </View>
+                                  </View>
+                                </View>
+                              );
+                            })}
+                          </View>
+                        ) : (
+                          <Text style={styles.noConnectionsText}>No connections in this location</Text>
+                        )}
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : (
+                <View style={styles.emptyStateContainer}>
+                  <Icon name="folder-open" size={48} color="#ccc" style={{ marginBottom: 12 }} />
+                  <Text style={styles.noConnectionsText}>No location groups yet</Text>
+                  <Text style={styles.emptyStateSubtext}>
+                    Create a location group to organize your platform connections
+                  </Text>
+                </View>
               )}
+
+              {/* Create New Location Button */}
               <Button
-                title="Create New Location/Group"
+                title={pools.length > 0 ? "Add Another Location" : "Create First Location"}
                 onPress={() => Alert.alert('Create Location', 'This will be added in the location manager')}
                 style={styles.addConnectionButton}
               />
@@ -1797,8 +1872,7 @@ const styles = StyleSheet.create({
   },
   accountName: {
     fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 4,
+    fontWeight: 'bold',    marginBottom: 4,
   },
   accountEmail: {
     fontSize: 14,
@@ -1988,31 +2062,6 @@ const styles = StyleSheet.create({
   addConnectionButton: {
     marginTop: 20,
     marginBottom: 10,
-  },
-  locationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  locationName: {
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  locationIcons: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  locationIconWrap: {
-    width: 22,
-    height: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F3F4F6',
-    borderRadius: 11,
-    marginLeft: 6,
   },
   modalOverlay: {
     flex: 1,
@@ -2411,4 +2460,80 @@ const styles = StyleSheet.create({
     maxHeight: '20%',
   },
   // --- END Overlay styles ---
+  poolCard: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  poolHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  poolTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  poolName: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginLeft: 8,
+  },
+  poolDescription: {
+    fontSize: 14,
+    color: '#666',
+  },
+  poolBadge: {
+    backgroundColor: '#e0e0e0',
+    borderRadius: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  poolBadgeText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  poolConnectionsList: {
+    marginTop: 8,
+  },
+  poolConnectionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+    gap: 12,
+  },
+  poolConnectionInfo: {
+    flex: 1,
+    marginLeft: 4,
+  },
+  poolConnectionName: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  poolConnectionStatus: {
+    fontSize: 12,
+    marginLeft: 6,
+    fontWeight: '500',
+  },
+  emptyStateContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emptyStateSubtext: {
+    fontSize: 14,
+    color: '#999',
+    textAlign: 'center',
+  },
 });
+

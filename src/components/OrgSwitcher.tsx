@@ -50,14 +50,18 @@ export default function OrgSwitcher({ currentOrgId, onOrgChanged }: OrgSwitcherP
       const token = await ensureSupabaseJwt();
       if (!token) return;
 
-      const response = await fetch(`${API_BASE_URL}/api/organizations/my-orgs`, {
+      // Fetch all user organizations
+      const response = await fetch(`${API_BASE_URL}/api/organizations`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
       });
 
-      if (!response.ok) throw new Error('Failed to load orgs');
+      if (!response.ok) {
+        console.error('[OrgSwitcher] Failed to load orgs, status:', response.status);
+        throw new Error('Failed to load orgs');
+      }
 
       const data = await response.json();
       const orgs: Organization[] = data.map((item: any) => ({
@@ -67,8 +71,10 @@ export default function OrgSwitcher({ currentOrgId, onOrgChanged }: OrgSwitcherP
       }));
 
       setOrganizations(orgs);
+      console.log('[OrgSwitcher] Loaded organizations:', orgs.length);
 
-      const activeResponse = await fetch(`${API_BASE_URL}/api/organizations/user/active-org`, {
+      // Fetch active organization
+      const activeResponse = await fetch(`${API_BASE_URL}/api/organizations/me/active`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -77,13 +83,19 @@ export default function OrgSwitcher({ currentOrgId, onOrgChanged }: OrgSwitcherP
 
       if (activeResponse.ok) {
         const activeData = await activeResponse.json();
-        setCurrentOrg({
-          Id: activeData.activeOrg.Id,
-          Name: activeData.activeOrg.Name,
-          Role: activeData.activeOrg.userRole,
-        });
+        console.log('[OrgSwitcher] Active org response:', activeData);
+        // The backend returns { orgId }, find the matching org
+        const activeOrg = orgs.find(org => org.Id === activeData.orgId);
+        if (activeOrg) {
+          setCurrentOrg(activeOrg);
+          console.log('[OrgSwitcher] Set current org to:', activeOrg.Name);
+        } else if (orgs.length > 0) {
+          setCurrentOrg(orgs[0]);
+          console.log('[OrgSwitcher] No active org matched, defaulted to first:', orgs[0].Name);
+        }
       } else if (orgs.length > 0) {
         setCurrentOrg(orgs[0]);
+        console.log('[OrgSwitcher] Failed to get active org, defaulted to first:', orgs[0].Name);
       }
     } catch (error) {
       console.error('[OrgSwitcher] Error loading orgs:', error);
