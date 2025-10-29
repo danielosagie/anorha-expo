@@ -77,6 +77,7 @@ export default function TeamScreen() {
       if (activeOrgResponse.ok) {
         const { activeOrg } = await activeOrgResponse.json();
         setCurrentOrg({ Id: activeOrg.Id, Name: activeOrg.Name });
+        setCurrentUserRole(activeOrg.Role); // Set current user role from active org
         
         // Then fetch members from this org
       }
@@ -96,7 +97,7 @@ export default function TeamScreen() {
             LastName
           )
         `)
-        .eq('OrgId', org.Id);
+        .eq('OrgId', currentOrg?.Id);
 
       if (teamMembers) {
         const formattedMembers: TeamMember[] = teamMembers.map((m: any) => ({
@@ -115,9 +116,9 @@ export default function TeamScreen() {
       }
 
       // Load pending invitations (admin only)
-      if (orgMemberships.Role === 'admin') {
+      if (currentOrg) {
         const response = await fetch(
-          `${SSSYNC_API_BASE_URL}/api/organizations/${org.Id}/invitations`,
+          `${SSSYNC_API_BASE_URL}/api/organizations/${currentOrg.Id}/invitations`,
           {
             headers: {
               'Authorization': `Bearer ${token}`,
@@ -142,7 +143,7 @@ export default function TeamScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [currentOrg]);
 
   useEffect(() => {
     loadTeamData();

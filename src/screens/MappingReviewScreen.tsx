@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Alert, TouchableOpacity, Modal, Pressable, FlatList, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Alert, TouchableOpacity, Modal, Pressable, FlatList, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator'; // Assuming this is your stack param list
@@ -112,6 +112,7 @@ interface JobProgress {
   isFailed: boolean;
   total?: number;
   processed?: number;
+  elapsedSeconds?: number; // NEW: Track elapsed time
 }
 // --- END NEW ---
 
@@ -351,7 +352,26 @@ const MappingReviewScreen = () => {
     try {
       setIsCreatingPool(true);
       const token = await ensureSupabaseJwt();
-      const orgId = connection?.OrgId;
+      
+      // ✅ FIX: Get orgId from connection OR fetch user's active org
+      let orgId = connection?.OrgId;
+      if (!orgId) {
+        console.warn('[MappingReviewScreen] Connection missing OrgId, fetching user active org...');
+        const response = await fetch(`https://api.sssync.app/api/organizations/me/active`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          orgId = data.orgId;
+          console.log('[MappingReviewScreen] Got active orgId:', orgId);
+        } else {
+          throw new Error('Could not determine organization');
+        }
+      }
 
       const response = await fetch('https://api.sssync.app/api/pools', {
         method: 'POST',
@@ -369,7 +389,8 @@ const MappingReviewScreen = () => {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to create pool');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || 'Failed to create pool');
       }
 
       const newPool = await response.json();
@@ -378,7 +399,7 @@ const MappingReviewScreen = () => {
       setPoolNameInput('');
     } catch (error) {
       console.error('[MappingReviewScreen] Error creating pool:', error);
-      Alert.alert('Error', 'Failed to create pool');
+      Alert.alert('Error', error instanceof Error ? error.message : 'Failed to create pool');
     } finally {
       setIsCreatingPool(false);
     }
@@ -727,15 +748,38 @@ const MappingReviewScreen = () => {
     if (syncProgress) {
       console.log('[MappingReviewScreen] Received sync progress:', syncProgress);
       
-      if (syncProgress.status === 'active') {
-        console.log('[MappingReviewScreen] Sync completed successfully');
+      // Update progress for UI
+      if (syncProgress.progress !== undefined) {
+        setJobProgress({
+          progress: syncProgress.progress / 100,
+          description: syncProgress.description || 'Processing...',
+          elapsedSeconds: syncProgress.elapsedSeconds,
+          isActive: syncProgress.status === 'scanning' || syncProgress.status === 'syncing',
+          isCompleted: syncProgress.status === 'review' || syncProgress.status === 'active',
+          isFailed: syncProgress.status === 'error',
+        });
+      }
+      
+      // When scan completes (status = 'review'), fetch suggestions and move to review
+      if (syncProgress.status === 'review') {
+        console.log('[MappingReviewScreen] Scan completed successfully');
         setLoading(false);
-        // Navigate to success screen or refresh data
+        setIsPolling(false); // Stop polling
+        // Fetch suggestions to populate the review screen
+        fetchMappingSuggestions(connectionId);
+      } else if (syncProgress.status === 'active') {
+        console.log('[MappingReviewScreen] Sync activated');
+        setLoading(false);
         fetchMappingSuggestions(connectionId);
       } else if (syncProgress.status === 'error') {
-        console.log('[MappingReviewScreen] Sync failed');
+        console.log('[MappingReviewScreen] Scan/Sync failed');
         setLoading(false);
-        setError(`Sync failed: ${syncProgress.description}`);
+        setIsPolling(false);
+        setError(`Operation failed: ${syncProgress.description}`);
+      } else if (syncProgress.status === 'scanning') {
+        // Show progress during scan - don't stop polling
+        console.log(`[MappingReviewScreen] Scanning progress: ${syncProgress.progress}%`);
+        setIsPolling(true);
       }
     }
   }, [syncProgress, connectionId, fetchMappingSuggestions]);
@@ -3375,507 +3419,518 @@ const MappingReviewScreen = () => {
           <Modal visible={wizardVisible} transparent animationType="fade" onRequestClose={() => setWizardVisible(false)}>
             <View style={{ flex: 1, justifyContent: 'flex-end',  backgroundColor: 'rgba(0, 0, 0, 0.7)' }}>
               <Pressable style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0)' }} onPress={() => setWizardVisible(false)} />
-              <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 20, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 3, paddingBottom: 32, }}>
-                {/* Stepper header aligning to mock */}
-                <View style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#E5E5E5', alignItems: 'center' }}>
-                  <Text style={{ fontWeight: '700', color: theme.colors.text, fontSize: 18 }}>{
-                  wizardStep===0?'Add Platform To Which Pool':wizardStep===1?'Set Sync Settings':wizardStep===2?'Set Sync Settings':wizardStep===3?'Set Sync Settings':wizardStep===4?'Set Sync Settings':'Is This Right?'}</Text>
-                </View>
+              <KeyboardAvoidingView 
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                style={{ maxHeight: '90%' }}
+              >
+                <ScrollView 
+                  contentContainerStyle={{ flexGrow: 1 }}
+                  scrollEnabled={true}
+                  nestedScrollEnabled={true}
+                >
+                  <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 20, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 3, paddingBottom: 32, }}>
+                    {/* Stepper header aligning to mock */}
+                    <View style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#E5E5E5', alignItems: 'center' }}>
+                      <Text style={{ fontWeight: '700', color: theme.colors.text, fontSize: 18 }}>{
+                      wizardStep===0?'Add Platform To Which Pool':wizardStep===1?'Set Sync Settings':wizardStep===2?'Set Sync Settings':wizardStep===3?'Set Sync Settings':wizardStep===4?'Set Sync Settings':'Is This Right?'}</Text>
+                    </View>
 
-                {/* Steps */}
-                {wizardStep === 0 && (
-                  <View style={{ paddingHorizontal: 0, paddingTop: 20 }}>
-                    <Text style={{ color: theme.colors.textSecondary, marginBottom: 16, textAlign: 'center' }}>
-                      Select which inventory pool to use for this connection
-                    </Text>
+                    {/* Steps */}
+                    {wizardStep === 0 && (
+                      <View style={{ paddingHorizontal: 0, paddingTop: 20 }}>
+                        <Text style={{ color: theme.colors.textSecondary, marginBottom: 16, textAlign: 'center' }}>
+                          Select which inventory pool to use for this connection
+                        </Text>
 
-                    {isLoadingPools ? (
-                      <View style={{ padding: 40, alignItems: 'center' }}>
-                        <ActivityIndicator size="large" color={theme.colors.primary} />
-                      </View>
-                    ) : (
-                      <>
-                        {/* Existing Pools */}
-                        {pools.length > 0 && (
-                          <View style={{ marginBottom: 20 }}>
-                            {pools.map((pool) => (
-                              <TouchableOpacity
-                                key={pool.id}
-                                style={{
-                                  borderWidth: 1,
-                                  borderColor: selectedPool === pool.id ? theme.colors.primary : '#E5E7EB',
-                                  borderRadius: 12,
-                                  padding: 20,
-                                  marginBottom: 12,
-                                  backgroundColor: selectedPool === pool.id ? theme.colors.primary + '10' : '#fff',
-                                  flexDirection: 'row',
-                                  alignItems: 'center',
-                                  shadowColor: '#000',
-                                  shadowOffset: { width: 0, height: 1 },
-                                  shadowOpacity: 0.05,
-                                  shadowRadius: 2,
-                                  elevation: 1,
-                                }}
-                                onPress={() => setSelectedPool(pool.id)}
-                              >
-                                <View style={{
-                                  width: 48,
-                                  height: 48,
-                                  borderRadius: 8,
-                                  backgroundColor: '#96C93F',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  marginRight: 16,
-                                  position: 'relative'
-                                }}>
-                                  <ShopifySvg width={24} height={24} />
-                                  {/* Add platform icons overlay */}
-                                  <View style={{
-                                    position: 'absolute',
-                                    bottom: -4,
-                                    right: -4,
-                                    flexDirection: 'row',
-                                    backgroundColor: '#fff',
-                                    borderRadius: 8,
-                                    padding: 2,
-                                    shadowColor: '#000',
-                                    shadowOffset: { width: 0, height: 1 },
-                                    shadowOpacity: 0.1,
-                                    shadowRadius: 2,
-                                    elevation: 2,
-                                  }}>
-                                    <SquareSvg width={12} height={12} />
-                                  </View>
-                                </View>
-                                <View style={{ flex: 1 }}>
-                                  <Text style={{ fontWeight: '600', fontSize: 16, color: theme.colors.text }}>
-                                    {pool.name}
-                                  </Text>
-                                  {pool.description && (
-                                    <Text style={{ color: theme.colors.textSecondary, fontSize: 14, marginTop: 2 }}>
-                                      {pool.description}
-                                    </Text>
-                                  )}
-                                </View>
-                                <View style={{
-                                  width: 24,
-                                  height: 24,
-                                  borderRadius: 12,
-                                  borderWidth: 2,
-                                  borderColor: selectedPool === pool.id ? theme.colors.primary : '#E5E7EB',
-                                  backgroundColor: selectedPool === pool.id ? theme.colors.primary : 'transparent',
-                                  alignItems: 'center',
-                                  justifyContent: 'center'
-                                }}>
-                                  {selectedPool === pool.id && (
+                        {isLoadingPools ? (
+                          <View style={{ padding: 40, alignItems: 'center' }}>
+                            <ActivityIndicator size="large" color={theme.colors.primary} />
+                          </View>
+                        ) : (
+                          <>
+                            {/* Existing Pools */}
+                            {pools.length > 0 && (
+                              <View style={{ marginBottom: 20 }}>
+                                {pools.map((pool) => (
+                                  <TouchableOpacity
+                                    key={pool.id}
+                                    style={{
+                                      borderWidth: 1,
+                                      borderColor: selectedPool === pool.id ? theme.colors.primary : '#E5E7EB',
+                                      borderRadius: 12,
+                                      padding: 20,
+                                      marginBottom: 12,
+                                      backgroundColor: selectedPool === pool.id ? theme.colors.primary + '10' : '#fff',
+                                      flexDirection: 'row',
+                                      alignItems: 'center',
+                                      shadowColor: '#000',
+                                      shadowOffset: { width: 0, height: 1 },
+                                      shadowOpacity: 0.05,
+                                      shadowRadius: 2,
+                                      elevation: 1,
+                                    }}
+                                    onPress={() => setSelectedPool(pool.id)}
+                                  >
                                     <View style={{
-                                      width: 8,
-                                      height: 8,
-                                      borderRadius: 4,
-                                      backgroundColor: '#fff'
-                                    }} />
-                                  )}
-                                </View>
-                              </TouchableOpacity>
-                            ))}
-                          </View>
-                        )}
-
-                        {/* Create New Pool */}
-                        <TouchableOpacity
-                          style={{
-                            borderWidth: 2,
-                            borderColor: selectedPool === 'create-new' ? theme.colors.primary : '#D1D5DB',
-                            borderStyle: selectedPool === 'create-new' ? 'solid' : 'dashed',
-                            borderRadius: 12,
-                            padding: 20,
-                            marginBottom: 16,
-                            backgroundColor: selectedPool === 'create-new' ? theme.colors.primary + '10' : '#F9FAFB',
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            shadowColor: '#000',
-                            shadowOffset: { width: 0, height: 1 },
-                            shadowOpacity: 0.05,
-                            shadowRadius: 2,
-                            elevation: 1,
-                          }}
-                          onPress={() => setSelectedPool('create-new')}
-                        >
-                          <View style={{
-                            width: 48,
-                            height: 48,
-                            borderRadius: 8,
-                            backgroundColor: selectedPool === 'create-new' ? theme.colors.primary + '20' : '#F3F4F6',
-                            borderWidth: 2,
-                            borderColor: selectedPool === 'create-new' ? theme.colors.primary : '#D1D5DB',
-                            borderStyle: 'dashed',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            marginRight: 16
-                          }}>
-                            <Icon name="plus" size={24} color={selectedPool === 'create-new' ? theme.colors.primary : theme.colors.textSecondary} />
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ fontWeight: '600', fontSize: 16, color: theme.colors.text }}>
-                              Create New Pool
-                            </Text>
-                            <Text style={{ color: theme.colors.textSecondary, fontSize: 14, marginTop: 2 }}>
-                              Set up a new inventory pool
-                            </Text>
-                          </View>
-                          <View style={{
-                            width: 24,
-                            height: 24,
-                            borderRadius: 12,
-                            borderWidth: 2,
-                            borderColor: selectedPool === 'create-new' ? theme.colors.primary : '#E5E7EB',
-                            backgroundColor: selectedPool === 'create-new' ? theme.colors.primary : 'transparent',
-                            alignItems: 'center',
-                            justifyContent: 'center'
-                          }}>
-                            {selectedPool === 'create-new' && (
-                              <View style={{
-                                width: 8,
-                                height: 8,
-                                borderRadius: 4,
-                                backgroundColor: '#fff'
-                              }} />
+                                      width: 48,
+                                      height: 48,
+                                      borderRadius: 8,
+                                      backgroundColor: '#96C93F',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      marginRight: 16,
+                                      position: 'relative'
+                                    }}>
+                                      <ShopifySvg width={24} height={24} />
+                                      {/* Add platform icons overlay */}
+                                      <View style={{
+                                        position: 'absolute',
+                                        bottom: -4,
+                                        right: -4,
+                                        flexDirection: 'row',
+                                        backgroundColor: '#fff',
+                                        borderRadius: 8,
+                                        padding: 2,
+                                        shadowColor: '#000',
+                                        shadowOffset: { width: 0, height: 1 },
+                                        shadowOpacity: 0.1,
+                                        shadowRadius: 2,
+                                        elevation: 2,
+                                      }}>
+                                        <SquareSvg width={12} height={12} />
+                                      </View>
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                      <Text style={{ fontWeight: '600', fontSize: 16, color: theme.colors.text }}>
+                                        {pool.name}
+                                      </Text>
+                                      {pool.description && (
+                                        <Text style={{ color: theme.colors.textSecondary, fontSize: 14, marginTop: 2 }}>
+                                          {pool.description}
+                                        </Text>
+                                      )}
+                                    </View>
+                                    <View style={{
+                                      width: 24,
+                                      height: 24,
+                                      borderRadius: 12,
+                                      borderWidth: 2,
+                                      borderColor: selectedPool === pool.id ? theme.colors.primary : '#E5E7EB',
+                                      backgroundColor: selectedPool === pool.id ? theme.colors.primary : 'transparent',
+                                      alignItems: 'center',
+                                      justifyContent: 'center'
+                                    }}>
+                                      {selectedPool === pool.id && (
+                                        <View style={{
+                                          width: 8,
+                                          height: 8,
+                                          borderRadius: 4,
+                                          backgroundColor: '#fff'
+                                        }} />
+                                      )}
+                                    </View>
+                                  </TouchableOpacity>
+                                ))}
+                              </View>
                             )}
-                          </View>
-                        </TouchableOpacity>
 
-                        {/* Pool Name Input - Show when create new is selected */}
-                        {selectedPool === 'create-new' && (
-                          <View style={{ marginBottom: 16 }}>
-                            <TextInput
+                            {/* Create New Pool */}
+                            <TouchableOpacity
                               style={{
-                                borderWidth: 1,
-                                borderColor: '#E5E7EB',
-                                borderRadius: 8,
-                                paddingHorizontal: 16,
-                                paddingVertical: 12,
-                                color: theme.colors.text,
-                                fontSize: 16,
-                                backgroundColor: '#fff'
+                                borderWidth: 2,
+                                borderColor: selectedPool === 'create-new' ? theme.colors.primary : '#D1D5DB',
+                                borderStyle: selectedPool === 'create-new' ? 'solid' : 'dashed',
+                                borderRadius: 12,
+                                padding: 20,
+                                marginBottom: 16,
+                                backgroundColor: selectedPool === 'create-new' ? theme.colors.primary + '10' : '#F9FAFB',
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                shadowColor: '#000',
+                                shadowOffset: { width: 0, height: 1 },
+                                shadowOpacity: 0.05,
+                                shadowRadius: 2,
+                                elevation: 1,
                               }}
-                              placeholder="Enter pool name (e.g., 'Main', 'Wholesale')"
-                              placeholderTextColor={theme.colors.textSecondary}
-                              value={poolNameInput}
-                              onChangeText={setPoolNameInput}
-                              editable={!isCreatingPool}
-                              autoFocus={true}
-                            />
-                          </View>
-                        )}
+                              onPress={() => setSelectedPool('create-new')}
+                            >
+                              <View style={{
+                                width: 48,
+                                height: 48,
+                                borderRadius: 8,
+                                backgroundColor: selectedPool === 'create-new' ? theme.colors.primary + '20' : '#F3F4F6',
+                                borderWidth: 2,
+                                borderColor: selectedPool === 'create-new' ? theme.colors.primary : '#D1D5DB',
+                                borderStyle: 'dashed',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                marginRight: 16
+                              }}>
+                                <Icon name="plus" size={24} color={selectedPool === 'create-new' ? theme.colors.primary : theme.colors.textSecondary} />
+                              </View>
+                              <View style={{ flex: 1 }}>
+                                <Text style={{ fontWeight: '600', fontSize: 16, color: theme.colors.text }}>
+                                  Create New Pool
+                                </Text>
+                                <Text style={{ color: theme.colors.textSecondary, fontSize: 14, marginTop: 2 }}>
+                                  Set up a new inventory pool
+                                </Text>
+                              </View>
+                              <View style={{
+                                width: 24,
+                                height: 24,
+                                borderRadius: 12,
+                                borderWidth: 2,
+                                borderColor: selectedPool === 'create-new' ? theme.colors.primary : '#E5E7EB',
+                                backgroundColor: selectedPool === 'create-new' ? theme.colors.primary : 'transparent',
+                                alignItems: 'center',
+                                justifyContent: 'center'
+                              }}>
+                                {selectedPool === 'create-new' && (
+                                  <View style={{
+                                    width: 8,
+                                    height: 8,
+                                    borderRadius: 4,
+                                    backgroundColor: '#fff'
+                                  }} />
+                                )}
+                              </View>
+                            </TouchableOpacity>
 
-                        {/* Continue button */}
+                            {/* Pool Name Input - Show when create new is selected */}
+                            {selectedPool === 'create-new' && (
+                              <View style={{ marginBottom: 16 }}>
+                                <TextInput
+                                  style={{
+                                    borderWidth: 1,
+                                    borderColor: '#E5E7EB',
+                                    borderRadius: 8,
+                                    paddingHorizontal: 16,
+                                    paddingVertical: 12,
+                                    color: theme.colors.text,
+                                    fontSize: 16,
+                                    backgroundColor: '#fff'
+                                  }}
+                                  placeholder="Enter pool name (e.g., 'Main', 'Wholesale')"
+                                  placeholderTextColor={theme.colors.textSecondary}
+                                  value={poolNameInput}
+                                  onChangeText={setPoolNameInput}
+                                  editable={!isCreatingPool}
+                                  autoFocus={true}
+                                />
+                              </View>
+                            )}
+
+                            {/* Continue button */}
+                            <View style={{ marginTop: 20 }}>
+                              <Button
+                                title="Continue"
+                                onPress={() => {
+                                  if (selectedPool === 'create-new') {
+                                    handleCreatePool();
+                                  } else {
+                                    setWizardStep(1);
+                                  }
+                                }}
+                                loading={isCreatingPool}
+                                disabled={selectedPool === 'create-new' ? !poolNameInput.trim() || isCreatingPool : !selectedPool}
+                              />
+                            </View>
+                          </>
+                        )}
+                      </View>
+                    )}
+
+                    {wizardStep === 1 && (
+                      <View style={{ paddingTop: 20 }}>
+                        <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Sync updates automatically or only on approval</Text>
+                        <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
+                          <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: syncMode === 'auto' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setSyncMode('auto')}>
+                            
+                            <View style={{marginBottom: 12}}>
+                              <Sparkles width={32} height={32}></Sparkles>
+                            </View>
+                            <Text style={{ fontWeight: '600', color: theme.colors.text }}>Auto</Text>
+                            <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>(timestamp-based)</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={{ flex: 1,flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: syncMode === 'manual' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setSyncMode('manual')}>
+                            <View style={{marginBottom: 12}}>
+                              <Hammer width={32} height={32}></Hammer>
+                            </View>
+                        
+                            <Text style={{ fontWeight: '600', color: theme.colors.text }}>Manual</Text>
+                            <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>(Manual Approval)</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    )}
+
+                    {wizardStep === 2 && (
+                      <View style={{ paddingTop: 20 }}>
+                        <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Choose how auction listings behave (FB & Ebay) </Text>
+                        <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
+                          <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: delistMode === 'auto' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setDelistMode('auto')}>
+                            <View style={{marginBottom: 12}}>
+                              <Unlink width={32} height={32}></Unlink>  
+                            </View>
+                            <Text style={{ fontWeight: '600', color: theme.colors.text }}>Auto Delist</Text>
+                            <Text style={{ textAlign: 'center', color: theme.colors.textSecondary, marginTop: 4 }}>Sold listings are automatically removed</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: delistMode === 'manual' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setDelistMode('manual')}>
+                            <View style={{marginBottom: 12}}>
+                              <Link width={32} height={32}></Link>  
+                            </View>
+                            <Text style={{ fontWeight: '600', color: theme.colors.text }}>Manual Delist</Text>
+                            <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>Sold listings stay up</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    )}
+
+                    {wizardStep === 3 && (
+                      <View style={{ paddingTop: 20 }}>
+                        <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Adjust prices by % per platform (Optional)</Text>
+                        <View style={{ marginBottom: 24 }}>
+                          {platformConnections.map((connection) => (
+                            <View key={connection.Id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 12 }}>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                                <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: getPlatformColor(connection.PlatformType), marginRight: 12 }} />
+                                <View>
+                                  <Text style={{ fontWeight: '600', color: theme.colors.text }}>{connection.DisplayName}</Text>
+                                  <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>{connection.PlatformType}</Text>
+                                </View>
+                              </View>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                <TouchableOpacity style={{ padding: 8 }} onPress={() => setPriceBuffer(prev => ({ ...prev, [connection.Id]: (prev[connection.Id] || 0) - 1 }))}>
+                                  <Icon name="minus" size={18} />
+                                </TouchableOpacity>
+                                <TextInput
+                                  style={{ width: 60, textAlign: 'center', fontWeight: '700', color: theme.colors.text, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 6, paddingVertical: 4 }}
+                                  value={`${(priceBuffer[connection.Id] || 0).toFixed(1)}%`}
+                                  onChangeText={(text) => {
+                                    const numericValue = parseFloat(text.replace('%', '')) || 0;
+                                    setPriceBuffer(prev => ({ ...prev, [connection.Id]: numericValue }));
+                                  }}
+                                  keyboardType="numeric"
+                                />
+                                <TouchableOpacity style={{ padding: 8 }} onPress={() => setPriceBuffer(prev => ({ ...prev, [connection.Id]: (prev[connection.Id] || 0) + 1 }))}>
+                                  <Icon name="plus" size={18} />
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+                      </View>
+                    )}
+
+                    {wizardStep === 4 && (
+                      <View style={{ paddingTop: 20 }}>
+                        <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Adjust inventory buffer per platform (Optional)</Text>
+                        <View style={{ marginBottom: 24 }}>
+                          {platformConnections.map((connection) => (
+                            <View key={connection.Id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 12 }}>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                                <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: getPlatformColor(connection.PlatformType), marginRight: 12 }} />
+                                <View>
+                                  <Text style={{ fontWeight: '600', color: theme.colors.text }}>{connection.DisplayName}</Text>
+                                  <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>{connection.PlatformType}</Text>
+                                </View>
+                              </View>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                <TouchableOpacity style={{ padding: 8 }} onPress={() => 
+                                  setInventoryBuffer(prev => ({ ...prev, [connection.Id]: Math.max(0, (prev[connection.Id] || 0) - 1) }))}> 
+                                  <Icon name="minus" size={18} />
+                                </TouchableOpacity>
+                                <TextInput
+                                  style={{ width: 60, textAlign: 'center', fontWeight: '700', color: theme.colors.text, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 6, paddingVertical: 4 }}
+                                  value={`${(inventoryBuffer[connection.Id] || 0)}`}
+                                  onChangeText={(text) => {
+                                    const numericValue = parseInt(text) || 0;
+                                    setInventoryBuffer(prev => ({ ...prev, [connection.Id]: Math.max(0, numericValue) }));
+                                  }}
+                                  keyboardType="numeric"
+                                  placeholder="0"
+                                />
+                                <TouchableOpacity style={{ padding: 8 }} onPress={() => 
+                                  setInventoryBuffer(prev => ({ ...prev, [connection.Id]: (prev[connection.Id] || 0) + 1 }))}> 
+                                  <Icon name="plus" size={18} />
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+                      </View>
+                    )}
+
+                    {wizardStep === 5 && (
+                      <View style={{ paddingTop: 20 }}>
+                        <View style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 24 }}>
+                          <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Matched/New/Ignored</Text>
+                          <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>{counts.matched} matched • {counts.review} review → new • {counts.ignore} ignored</Text>
+                          
+                          <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Selected Platforms</Text>
+                          <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>{selectedPlatformsState.join(', ') || 'None'}</Text>
+                          
+                          <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Sync Settings</Text>
+                          <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>Mode: {syncMode === 'auto' ? 'Auto' : 'Manual'} • Delist: {delistMode === 'auto' ? 'Auto' : 'Manual'}</Text>
+                          
+                          {Object.keys(priceBuffer).length > 0 && (
+                            <>
+                              <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Price Adjustments</Text>
+                              <Text style={{ color: theme.colors.textSecondary }}>
+                                {platformConnections
+                                  .filter(conn => priceBuffer[conn.Id] !== 0)
+                                  .map(conn => `${conn.DisplayName}: ${priceBuffer[conn.Id] > 0 ? '+' : ''}${priceBuffer[conn.Id]}%`)
+                                  .join(', ') || 'No adjustments'}
+                              </Text>
+                            </>
+                          )}
+                        </View>
                         <View style={{ marginTop: 20 }}>
-                          <Button
-                            title="Continue"
+                          <Button 
+                            title="Complete Import" 
+                            loading={isSubmitting}
+                            onPress={async () => {
+                              setIsSubmitting(true);
+                              try {
+                                // Get the confirmed mappings from suggestions (all selected items)
+                                // Transform to match backend DTO: ConfirmMappingsDto
+                                const confirmedMappings = (suggestions || [])
+                                  .filter(item => item.isSelected)
+                                  .map(item => ({
+                                    platformProductId: item.platformProduct.id,
+                                    platformVariantId: item.platformProduct.id, // Same as product ID for now
+                                    platformProductSku: item.platformProduct.sku,
+                                    platformProductTitle: item.platformProduct.title,
+                                    sssyncVariantId: item.suggestedCanonicalProduct?.id || null,
+                                    action: item.action === 'CREATE_NEW' ? 'create' : item.action === 'LINK_EXISTING' ? 'link' : 'ignore'
+                                  }));
+
+                                console.log('[MappingReview] Confirming mappings:', confirmedMappings.length);
+                                
+                                // Call the confirm-mappings endpoint
+                                const token = await ensureSupabaseJwt();
+                                const confirmResponse = await fetch(`https://api.sssync.app/api/sync/connections/${connectionId}/confirm-mappings`, {
+                                  method: 'POST',
+                                  headers: {
+                                    'Authorization': `Bearer ${token}`,
+                                    'Content-Type': 'application/json',
+                                  },
+                                  body: JSON.stringify({
+                                    confirmedMatches: confirmedMappings,
+                                    syncRules: {
+                                      inventoryBuffer: globalInventoryBuffer,
+                                      syncInventory: syncInventory,
+                                      syncPricing: syncPricing,
+                                      productDetailsSoT: sourceOfTruth === 'sssync' ? 'ANORHA' : 'PLATFORM',
+                                      inventorySoT: sourceOfTruth === 'sssync' ? 'ANORHA' : 'PLATFORM',
+                                      propagateCreates: autoCreate,
+                                      propagateUpdates: autoUpdate,
+                                      propagateChanges: syncDirection === 'two-way' || syncDirection === 'push-only',
+                                      inventoryMergeMode: inventoryMergeMode || 'merged',
+                                      locationHandling: 'auto_merge',
+                                      poolId: selectedPool
+                                    }
+                                  })
+                                });
+
+                                if (!confirmResponse.ok) {
+                                  const error = await confirmResponse.text();
+                                  throw new Error(`Failed to confirm mappings: ${error}`);
+                                }
+
+                                console.log('[MappingReview] Mappings confirmed, activating sync...');
+
+                                // Activate the sync
+                                const syncResponse = await fetch(`https://api.sssync.app/api/sync/connections/${connectionId}/activate-sync`, {
+                                  method: 'POST',
+                                  headers: {
+                                    'Authorization': `Bearer ${token}`,
+                                    'Content-Type': 'application/json',
+                                  }
+                                });
+
+                                if (!syncResponse.ok) {
+                                  const error = await syncResponse.text();
+                                  throw new Error(`Failed to activate sync: ${error}`);
+                                }
+
+                                const { jobId } = await syncResponse.json();
+                                console.log('[MappingReview] Sync activated with job ID:', jobId);
+
+                                // Close wizard and navigate to confirmation
+                                setWizardVisible(false);
+                                navigation.navigate('PublishConfirmation', {
+                                  platforms: selectedPlatformsState,
+                                  priceBuffer,
+                                  syncMode,
+                                  delistMode,
+                                  jobId,
+                                  origin: 'import'
+                                } as any);
+                              } catch (error: any) {
+                                console.error('[MappingReview] Error completing import:', error);
+                                Alert.alert('Import Error', error.message || 'Failed to complete import. Please try again.');
+                              } finally {
+                                setIsSubmitting(false);
+                              }
+                            }} 
+                          />
+                        </View>
+                      </View>
+                    )}
+
+                    {/* Nav controls - only show for steps 1-5 */}
+                    {wizardStep > 0 && (
+                      <>
+                        <Text style={{ color: theme.colors.textSecondary, textAlign: 'center', marginTop: 20, marginBottom: 8 }}>
+                          {wizardStep === 1 && 'Auto/Manual'}
+                          {wizardStep === 2 && 'Auto Delist'}
+                          {wizardStep === 3 && 'Price Buffer'}
+                          {wizardStep === 4 && 'Inventory Buffer'}
+                          {wizardStep === 5 && 'Review'}
+                        </Text>
+                        <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 20 }}>
+                          <TouchableOpacity
                             onPress={() => {
-                              if (selectedPool === 'create-new') {
-                                handleCreatePool();
+                              if (wizardStep === 1) {
+                                // If going back from step 1, allow reselecting platforms
+                                setWizardStep(0);
                               } else {
-                                setWizardStep(1);
+                                setWizardStep((s) => Math.max(1, s - 1));
                               }
                             }}
-                            loading={isCreatingPool}
-                            disabled={selectedPool === 'create-new' ? !poolNameInput.trim() || isCreatingPool : !selectedPool}
-                          />
+                            style={{ padding: 10, opacity: 1 }}
+                          >
+                            <Icon name="chevron-left" size={22} />
+                          </TouchableOpacity>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            {[1, 2, 3, 4, 5].map(i => (
+                              <View
+                                key={`dot-${i}`}
+                                style={{
+                                  width: 8,
+                                  height: 8,
+                                  borderRadius: 4,
+                                  backgroundColor: i === wizardStep ? theme.colors.primary : '#E5E7EB'
+                                }}
+                              />
+                            ))}
+                          </View>
+                          <TouchableOpacity
+                            disabled={wizardStep === 5}
+                            onPress={() => setWizardStep((s) => Math.min(5, s + 1))}
+                            style={{ padding: 10, opacity: wizardStep === 5 ? 0.5 : 1 }}
+                          >
+                            <Icon name="chevron-right" size={22} />
+                          </TouchableOpacity>
                         </View>
                       </>
                     )}
+
                   </View>
-                )}
-
-                {wizardStep === 1 && (
-                  <View style={{ paddingTop: 20 }}>
-                    <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Sync updates automatically or only on approval</Text>
-                    <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
-                      <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: syncMode === 'auto' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setSyncMode('auto')}>
-                        
-                        <View style={{marginBottom: 12}}>
-                          <Sparkles width={32} height={32}></Sparkles>
-                        </View>
-                        <Text style={{ fontWeight: '600', color: theme.colors.text }}>Auto</Text>
-                        <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>(timestamp-based)</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={{ flex: 1,flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: syncMode === 'manual' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setSyncMode('manual')}>
-                        <View style={{marginBottom: 12}}>
-                          <Hammer width={32} height={32}></Hammer>
-                        </View>
-                    
-                        <Text style={{ fontWeight: '600', color: theme.colors.text }}>Manual</Text>
-                        <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>(Manual Approval)</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                )}
-
-                {wizardStep === 2 && (
-                  <View style={{ paddingTop: 20 }}>
-                    <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Choose how auction listings behave (FB & Ebay) </Text>
-                    <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
-                      <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: delistMode === 'auto' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setDelistMode('auto')}>
-                        <View style={{marginBottom: 12}}>
-                          <Unlink width={32} height={32}></Unlink>  
-                        </View>
-                        <Text style={{ fontWeight: '600', color: theme.colors.text }}>Auto Delist</Text>
-                        <Text style={{ textAlign: 'center', color: theme.colors.textSecondary, marginTop: 4 }}>Sold listings are automatically removed</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: delistMode === 'manual' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setDelistMode('manual')}>
-                        <View style={{marginBottom: 12}}>
-                          <Link width={32} height={32}></Link>  
-                        </View>
-                        <Text style={{ fontWeight: '600', color: theme.colors.text }}>Manual Delist</Text>
-                        <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>Sold listings stay up</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                )}
-
-                {wizardStep === 3 && (
-                  <View style={{ paddingTop: 20 }}>
-                    <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Adjust prices by % per platform (Optional)</Text>
-                    <View style={{ marginBottom: 24 }}>
-                      {platformConnections.map((connection) => (
-                        <View key={connection.Id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 12 }}>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-                            <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: getPlatformColor(connection.PlatformType), marginRight: 12 }} />
-                            <View>
-                              <Text style={{ fontWeight: '600', color: theme.colors.text }}>{connection.DisplayName}</Text>
-                              <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>{connection.PlatformType}</Text>
-                            </View>
-                          </View>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                            <TouchableOpacity style={{ padding: 8 }} onPress={() => setPriceBuffer(prev => ({ ...prev, [connection.Id]: (prev[connection.Id] || 0) - 1 }))}>
-                              <Icon name="minus" size={18} />
-                            </TouchableOpacity>
-                            <TextInput
-                              style={{ width: 60, textAlign: 'center', fontWeight: '700', color: theme.colors.text, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 6, paddingVertical: 4 }}
-                              value={`${(priceBuffer[connection.Id] || 0).toFixed(1)}%`}
-                              onChangeText={(text) => {
-                                const numericValue = parseFloat(text.replace('%', '')) || 0;
-                                setPriceBuffer(prev => ({ ...prev, [connection.Id]: numericValue }));
-                              }}
-                              keyboardType="numeric"
-                            />
-                            <TouchableOpacity style={{ padding: 8 }} onPress={() => setPriceBuffer(prev => ({ ...prev, [connection.Id]: (prev[connection.Id] || 0) + 1 }))}>
-                              <Icon name="plus" size={18} />
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-                      ))}
-                    </View>
-                  </View>
-                )}
-
-                {wizardStep === 4 && (
-                  <View style={{ paddingTop: 20 }}>
-                    <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Adjust inventory buffer per platform (Optional)</Text>
-                    <View style={{ marginBottom: 24 }}>
-                      {platformConnections.map((connection) => (
-                        <View key={connection.Id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 12 }}>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-                            <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: getPlatformColor(connection.PlatformType), marginRight: 12 }} />
-                            <View>
-                              <Text style={{ fontWeight: '600', color: theme.colors.text }}>{connection.DisplayName}</Text>
-                              <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>{connection.PlatformType}</Text>
-                            </View>
-                          </View>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                            <TouchableOpacity style={{ padding: 8 }} onPress={() => 
-                              setInventoryBuffer(prev => ({ ...prev, [connection.Id]: Math.max(0, (prev[connection.Id] || 0) - 1) }))}> 
-                              <Icon name="minus" size={18} />
-                            </TouchableOpacity>
-                            <TextInput
-                              style={{ width: 60, textAlign: 'center', fontWeight: '700', color: theme.colors.text, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 6, paddingVertical: 4 }}
-                              value={`${(inventoryBuffer[connection.Id] || 0)}`}
-                              onChangeText={(text) => {
-                                const numericValue = parseInt(text) || 0;
-                                setInventoryBuffer(prev => ({ ...prev, [connection.Id]: Math.max(0, numericValue) }));
-                              }}
-                              keyboardType="numeric"
-                              placeholder="0"
-                            />
-                            <TouchableOpacity style={{ padding: 8 }} onPress={() => 
-                              setInventoryBuffer(prev => ({ ...prev, [connection.Id]: (prev[connection.Id] || 0) + 1 }))}> 
-                              <Icon name="plus" size={18} />
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-                      ))}
-                    </View>
-                  </View>
-                )}
-
-                {wizardStep === 5 && (
-                  <View style={{ paddingTop: 20 }}>
-                    <View style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 24 }}>
-                      <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Matched/New/Ignored</Text>
-                      <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>{counts.matched} matched • {counts.review} review → new • {counts.ignore} ignored</Text>
-                      
-                      <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Selected Platforms</Text>
-                      <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>{selectedPlatformsState.join(', ') || 'None'}</Text>
-                      
-                      <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Sync Settings</Text>
-                      <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>Mode: {syncMode === 'auto' ? 'Auto' : 'Manual'} • Delist: {delistMode === 'auto' ? 'Auto' : 'Manual'}</Text>
-                      
-                      {Object.keys(priceBuffer).length > 0 && (
-                        <>
-                          <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Price Adjustments</Text>
-                          <Text style={{ color: theme.colors.textSecondary }}>
-                            {platformConnections
-                              .filter(conn => priceBuffer[conn.Id] !== 0)
-                              .map(conn => `${conn.DisplayName}: ${priceBuffer[conn.Id] > 0 ? '+' : ''}${priceBuffer[conn.Id]}%`)
-                              .join(', ') || 'No adjustments'}
-                          </Text>
-                        </>
-                      )}
-                    </View>
-                    <View style={{ marginTop: 20 }}>
-                      <Button 
-                        title="Complete Import" 
-                        loading={isSubmitting}
-                        onPress={async () => {
-                          setIsSubmitting(true);
-                          try {
-                            // Get the confirmed mappings from suggestions (all selected items)
-                            // Transform to match backend DTO: ConfirmMappingsDto
-                            const confirmedMappings = (suggestions || [])
-                              .filter(item => item.isSelected)
-                              .map(item => ({
-                                platformProductId: item.platformProduct.id,
-                                platformVariantId: item.platformProduct.id, // Same as product ID for now
-                                platformProductSku: item.platformProduct.sku,
-                                platformProductTitle: item.platformProduct.title,
-                                sssyncVariantId: item.suggestedCanonicalProduct?.id || null,
-                                action: item.action === 'CREATE_NEW' ? 'create' : item.action === 'LINK_EXISTING' ? 'link' : 'ignore'
-                              }));
-
-                            console.log('[MappingReview] Confirming mappings:', confirmedMappings.length);
-                            
-                            // Call the confirm-mappings endpoint
-                            const token = await ensureSupabaseJwt();
-                            const confirmResponse = await fetch(`https://api.sssync.app/api/sync/connections/${connectionId}/confirm-mappings`, {
-                              method: 'POST',
-                              headers: {
-                                'Authorization': `Bearer ${token}`,
-                                'Content-Type': 'application/json',
-                              },
-                              body: JSON.stringify({
-                                confirmedMatches: confirmedMappings,
-                                syncRules: {
-                                  inventoryBuffer: globalInventoryBuffer,
-                                  syncInventory: syncInventory,
-                                  syncPricing: syncPricing,
-                                  productDetailsSoT: sourceOfTruth === 'sssync' ? 'ANORHA' : 'PLATFORM',
-                                  inventorySoT: sourceOfTruth === 'sssync' ? 'ANORHA' : 'PLATFORM',
-                                  propagateCreates: autoCreate,
-                                  propagateUpdates: autoUpdate,
-                                  propagateChanges: syncDirection === 'two-way' || syncDirection === 'push-only',
-                                  inventoryMergeMode: inventoryMergeMode || 'merged',
-                                  locationHandling: 'auto_merge',
-                                  poolId: selectedPool
-                                }
-                              })
-                            });
-
-                            if (!confirmResponse.ok) {
-                              const error = await confirmResponse.text();
-                              throw new Error(`Failed to confirm mappings: ${error}`);
-                            }
-
-                            console.log('[MappingReview] Mappings confirmed, activating sync...');
-
-                            // Activate the sync
-                            const syncResponse = await fetch(`https://api.sssync.app/api/sync/connections/${connectionId}/activate-sync`, {
-                              method: 'POST',
-                              headers: {
-                                'Authorization': `Bearer ${token}`,
-                                'Content-Type': 'application/json',
-                              }
-                            });
-
-                            if (!syncResponse.ok) {
-                              const error = await syncResponse.text();
-                              throw new Error(`Failed to activate sync: ${error}`);
-                            }
-
-                            const { jobId } = await syncResponse.json();
-                            console.log('[MappingReview] Sync activated with job ID:', jobId);
-
-                            // Close wizard and navigate to confirmation
-                            setWizardVisible(false);
-                            navigation.navigate('PublishConfirmation', {
-                              platforms: selectedPlatformsState,
-                              priceBuffer,
-                              syncMode,
-                              delistMode,
-                              jobId,
-                              origin: 'import'
-                            } as any);
-                          } catch (error: any) {
-                            console.error('[MappingReview] Error completing import:', error);
-                            Alert.alert('Import Error', error.message || 'Failed to complete import. Please try again.');
-                          } finally {
-                            setIsSubmitting(false);
-                          }
-                        }} 
-                      />
-                    </View>
-                  </View>
-                )}
-
-                {/* Nav controls - only show for steps 1-5 */}
-                {wizardStep > 0 && (
-                  <>
-                    <Text style={{ color: theme.colors.textSecondary, textAlign: 'center', marginTop: 20, marginBottom: 8 }}>
-                      {wizardStep === 1 && 'Auto/Manual'}
-                      {wizardStep === 2 && 'Auto Delist'}
-                      {wizardStep === 3 && 'Price Buffer'}
-                      {wizardStep === 4 && 'Inventory Buffer'}
-                      {wizardStep === 5 && 'Review'}
-                    </Text>
-                    <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 20 }}>
-                      <TouchableOpacity
-                        onPress={() => {
-                          if (wizardStep === 1) {
-                            // If going back from step 1, allow reselecting platforms
-                            setWizardStep(0);
-                          } else {
-                            setWizardStep((s) => Math.max(1, s - 1));
-                          }
-                        }}
-                        style={{ padding: 10, opacity: 1 }}
-                      >
-                        <Icon name="chevron-left" size={22} />
-                      </TouchableOpacity>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        {[1, 2, 3, 4, 5].map(i => (
-                          <View
-                            key={`dot-${i}`}
-                            style={{
-                              width: 8,
-                              height: 8,
-                              borderRadius: 4,
-                              backgroundColor: i === wizardStep ? theme.colors.primary : '#E5E7EB'
-                            }}
-                          />
-                        ))}
-                      </View>
-                      <TouchableOpacity
-                        disabled={wizardStep === 5}
-                        onPress={() => setWizardStep((s) => Math.min(5, s + 1))}
-                        style={{ padding: 10, opacity: wizardStep === 5 ? 0.5 : 1 }}
-                      >
-                        <Icon name="chevron-right" size={22} />
-                      </TouchableOpacity>
-                    </View>
-                  </>
-                )}
-
-              </View>
+                </ScrollView>
+              </KeyboardAvoidingView>
             </View>
           </Modal>
         </>

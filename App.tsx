@@ -24,6 +24,7 @@ import ProcessResumptionModal from './src/components/ProcessResumptionModal';
 import { useProcessResumption } from './src/hooks/useProcessState';
 import { ProcessState, ProcessType } from './src/utils/ProcessPersistence';
 import SafeErrorBoundary from './src/utils/SafeErrorBoundary';
+import { OrgProvider } from './src/context/OrgContext';
 
 // Feature flag to disable new functionality during debugging
 const ENABLE_PROCESS_FEATURES = false;
@@ -330,7 +331,9 @@ const App: React.FC = () => {
         >
           {isSignedIn ? (
             <WithSessionProvider>
-              <AuthedAppContent navigationRef={navigationRef} />
+              {React.createElement(OrgProvider as any, null, (
+                <AuthedAppContent navigationRef={navigationRef} />
+              ))}
             </WithSessionProvider>
           ) : (
             <ThemeProvider>

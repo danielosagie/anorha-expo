@@ -551,6 +551,12 @@ const AppNavigator = () => {
     }
   }, [clerkLoaded, isSignedIn]);
 
+  // Add this to ProfileScreen or AppNavigator useEffect on startup
+  useEffect(() => {
+    if (isSignedIn && clerkLoaded) {
+      syncUserOrgs();
+    }
+  }, [isSignedIn, clerkLoaded]);
 
   // Add AppState listener for session expiry
   useEffect(() => {

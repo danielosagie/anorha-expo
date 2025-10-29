@@ -6,7 +6,7 @@ interface SyncProgress {
   connectionId: string;
   progress: number;
   description: string;
-  status: 'scanning' | 'syncing' | 'active' | 'error' | 'completed';
+  status: 'scanning' | 'syncing' | 'active' | 'error' | 'completed' | 'review'; // NEW: Added 'review' status for scan completion
   jobId?: string;
   elapsedSeconds?: number;
   details?: Record<string, any>;

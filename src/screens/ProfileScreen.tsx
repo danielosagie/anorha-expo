@@ -6,6 +6,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import PlaceholderImage from '../components/Placeholder';
+import OrgSwitcher from '../components/OrgSwitcher';
 import ShopifySvg from '../assets/shopify.svg';
 import AmazonSvg from '../assets/amazon.svg';
 import FacebookSvg from '../assets/facebook.svg';
@@ -31,7 +32,12 @@ import { AuthContext } from '../context/AuthContext';
 import { useLegendStateControl } from '../context/LegendStateControlContext';
 import BottomNav from '../components/BottomNav';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
-import OrgSwitcher from '../components/OrgSwitcher';
+import { useOrg } from '../context/OrgContext';
+
+
+
+
+
 
 
 
@@ -180,6 +186,7 @@ const ProfileScreen = () => {
   const route = useRoute<RouteProp<ProfileScreenRouteParams, 'Profile'>>();
   const { resetLegendState } = useLegendStateControl();
   const { toggles } = usePlatformConnections();
+  const { currentOrg } = useOrg();
   
   // For refresh trigger from route params
   const routeRefreshParam = route.params?.refresh || 0;
@@ -210,6 +217,9 @@ const ProfileScreen = () => {
   const [isAddConnectionModalVisible, setIsAddConnectionModalVisible] = useState(false);
   const [bottomNavState, setBottomNavState] = useState<'open' | 'closed'>('closed');
   const [platformActiveCounts, setPlatformActiveCounts] = useState<Record<string, number>>({});
+  // Pools state (Location Groups)
+  const [pools, setPools] = useState<Array<{ id: string; name: string; description?: string }>>([]);
+  const [loadingPools, setLoadingPools] = useState(false);
 
 
   
@@ -377,6 +387,36 @@ const ProfileScreen = () => {
     });
     setPlatformActiveCounts(counts);
   }, [platformConnections]);
+
+  // Load LocationPools for the current organization
+  const loadPools = useCallback(async () => {
+    try {
+      if (!currentOrg?.id) return;
+      setLoadingPools(true);
+      const { data } = await supabase
+        .from('LocationPools')
+        .select('id, name, description, org_id')
+        .eq('org_id', currentOrg.id)
+        .order('created_at', { ascending: true });
+
+      let list = (data as any[]) || [];
+      // If not admin, restrict to assigned pools
+      if (currentOrg.role !== 'org:admin' && Array.isArray(currentOrg.assignedPoolIds)) {
+        const allowed = new Set(currentOrg.assignedPoolIds);
+        list = list.filter((p) => allowed.has(p.id));
+      }
+      setPools(list.map((p) => ({ id: p.id, name: p.name, description: p.description })));
+    } catch (e) {
+      console.error('[ProfileScreen] Failed loading pools', e);
+      setPools([]);
+    } finally {
+      setLoadingPools(false);
+    }
+  }, [currentOrg?.id, currentOrg?.role, currentOrg?.assignedPoolIds]);
+
+  useEffect(() => {
+    loadPools();
+  }, [loadPools, refreshTrigger]);
 
   // --- GLOBAL OVERLAY: wire platform start connect ---
   const overlay = usePlatformPickerOverlay();
@@ -1465,6 +1505,52 @@ const ProfileScreen = () => {
           {/* --- END UPDATED Integrations Rendering --- */}
         </Card>
       </Animated.View>
+
+      {/* Locations / Pools Card */}
+      <Animated.View entering={FadeInUp.delay(250).duration(500)}>
+        <Card style={styles.card}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Locations</Text>
+            <TouchableOpacity onPress={() => Alert.alert('Manage Locations', 'Coming soon')}> 
+              <Text style={[styles.sectionAction, { color: theme.colors.primary }]}>Manage</Text>
+            </TouchableOpacity>
+          </View>
+          {loadingPools ? (
+            <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginVertical: 8 }} />
+          ) : (
+            <View>
+              {pools.map((pool) => {
+                const poolConnections = platformConnections.filter(
+                  (c) => (c as any).pool_id === pool.id && (c.Status || '').toLowerCase() === 'active'
+                );
+                return (
+                  <View key={pool.id} style={styles.locationRow}>
+                    <Text style={styles.locationName}>{pool.name}</Text>
+                    <View style={styles.locationIcons}>
+                      {poolConnections.map((c) => {
+                        const IconComp = getPlatformIcon(c.PlatformType as PlatformId);
+                        return IconComp ? (
+                          <View key={c.Id} style={styles.locationIconWrap}>
+                            <IconComp width={18} height={18} />
+                          </View>
+                        ) : null;
+                      })}
+                    </View>
+                  </View>
+                );
+              })}
+              {pools.length === 0 && (
+                <Text style={styles.noConnectionsText}>No locations yet.</Text>
+              )}
+              <Button
+                title="Create New Location/Group"
+                onPress={() => Alert.alert('Create Location', 'This will be added in the location manager')}
+                style={styles.addConnectionButton}
+              />
+            </View>
+          )}
+        </Card>
+      </Animated.View>
       
       {/* Settings Card */}
       <Animated.View entering={FadeInUp.delay(300).duration(500)}>
@@ -1902,6 +1988,31 @@ const styles = StyleSheet.create({
   addConnectionButton: {
     marginTop: 20,
     marginBottom: 10,
+  },
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  locationName: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  locationIcons: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  locationIconWrap: {
+    width: 22,
+    height: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 11,
+    marginLeft: 6,
   },
   modalOverlay: {
     flex: 1,
