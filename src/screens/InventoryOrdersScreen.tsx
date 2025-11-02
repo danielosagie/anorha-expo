@@ -136,30 +136,12 @@ const InventoryOrdersScreen = observer(() => {
     }
   }, [legendState]);
 
-  const activeProductVariants = useMemo(() => {
-    if (!legendObservables?.productVariants$) return {};
-    return legendObservables.productVariants$.get() || {};
-  }, [legendObservables]);
-
-  const activePlatformMappings = useMemo(() => {
-    if (!legendObservables?.platformProductMappings$) return {};
-    return (legendObservables.platformProductMappings$.get() || {}) as Record<string, PlatformProductMapping>;
-  }, [legendObservables]);
-
-  const activeInventoryLevels = useMemo(() => {
-    if (!legendObservables?.inventoryLevels$) return {};
-    return (legendObservables.inventoryLevels$.get() || {}) as Record<string, InventoryLevel>;
-  }, [legendObservables]);
-
-  const activeProductImages = useMemo(() => {
-    if (!legendObservables?.productImages$) return {};
-    return (legendObservables.productImages$.get() || {}) as Record<string, ProductImage>;
-  }, [legendObservables]);
-
-  const activeMarketplaceListings = useMemo(() => {
-    if (!legendObservables?.marketplaceListings$) return {};
-    return (legendObservables.marketplaceListings$.get() || {}) as Record<string, MarketplaceListing>;
-  }, [legendObservables]);
+  // Direct access to observables - observer() will track these automatically for reactivity
+  const activeProductVariants = legendObservables?.productVariants$?.get() || {};
+  const activePlatformMappings = (legendObservables?.platformProductMappings$?.get() || {}) as Record<string, PlatformProductMapping>;
+  const activeInventoryLevels = (legendObservables?.inventoryLevels$?.get() || {}) as Record<string, InventoryLevel>;
+  const activeProductImages = (legendObservables?.productImages$?.get() || {}) as Record<string, ProductImage>;
+  const activeMarketplaceListings = (legendObservables?.marketplaceListings$?.get() || {}) as Record<string, MarketplaceListing>;
 
   const enrichedProductVariants = useMemo((): EnrichedProductVariant[] => {
     const variants = activeProductVariants;
@@ -169,7 +151,7 @@ const InventoryOrdersScreen = observer(() => {
 
     if (Object.keys(variants).length === 0 || platformConnections.length === 0) return [];
 
-    let productVariantIdsToDisplay = Object.keys(variants);
+    let productVariantIdsToDisplay = Array.from(new Set(Object.keys(variants)));
 
     // Filter by platform
     if (selectedPlatformType) {
@@ -232,11 +214,14 @@ const InventoryOrdersScreen = observer(() => {
       const variantLevels = Object.values(levels).filter((level: InventoryLevel) => level.ProductVariantId === variantId);
       const totalQuantity = variantLevels.reduce((sum, level) => sum + level.Quantity, 0);
 
-      const variantMappings = Object.values(mappings).filter((mapping: PlatformProductMapping) => mapping.ProductVariantId === variantId);
-      const platformNames = variantMappings.map((mapping: PlatformProductMapping) => {
-        const connection = platformConnections.find((conn: PlatformConnection) => conn.Id === mapping.PlatformConnectionId);
-        return connection ? connection.PlatformType.toLowerCase() : 'unknown';
-      });
+      // Use the actual boolean flags from ProductVariants to determine platform status
+      const platformNames: string[] = [];
+      if (variant.OnShopify) platformNames.push('shopify');
+      if (variant.OnSquare) platformNames.push('square');
+      if (variant.OnClover) platformNames.push('clover');
+      if (variant.OnAmazon) platformNames.push('amazon');
+      if (variant.OnEbay) platformNames.push('ebay');
+      if (variant.OnFacebook) platformNames.push('facebook');
 
       return {
         ...variant,
@@ -246,8 +231,16 @@ const InventoryOrdersScreen = observer(() => {
       };
     });
 
-    return enrichedVariants;
-  }, [activeProductVariants, activeProductImages, activeInventoryLevels, activePlatformMappings, platformConnections, selectedPlatformType, selectedLocationIds]);
+    // Deduplicate by Id to prevent duplicates (defensive coding for real-time updates)
+    // Keep the most recent version (last one encountered) to ensure we have latest updates
+    const uniqueVariants = new Map<string, EnrichedProductVariant>();
+    enrichedVariants.forEach(variant => {
+      // Always set (overwrite) to ensure we get the latest version
+      uniqueVariants.set(variant.Id, variant);
+    });
+
+    return Array.from(uniqueVariants.values());
+  }, [activeProductVariants, activeProductImages, activeInventoryLevels, activePlatformMappings, platformConnections, selectedPlatformType, selectedLocationIds, legendObservables]);
 
   // Apply search and sort filters
   const filteredInventory = useMemo(() => {
@@ -400,6 +393,7 @@ const InventoryOrdersScreen = observer(() => {
                 onChangeText={handleSearchChange}
                 onScan={handleBarcodeScan}
                 onScannerOpen={() => {
+                  console.log('[InventoryOrdersScreen] Scanner button pressed, opening scanner');
                   setScannerOpen(true);
                   scannerResultHandlerRef.current = (code: string) => {
                     handleBarcodeScan(code);
@@ -534,7 +528,10 @@ const InventoryOrdersScreen = observer(() => {
             }}
           />
           <TouchableOpacity
-            onPress={() => setScannerOpen(false)}
+            onPress={() => {
+              console.log('[InventoryOrdersScreen] Scanner close button pressed');
+              setScannerOpen(false);
+            }}
             style={styles.scannerCloseButton}
           >
             <Icon name="close" size={28} color="#fff" />
@@ -674,17 +671,42 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   scannerCamera: {
-    width: '100%',
-    height: '100%',
+    flex: 1,
   },
   scannerCloseButton: {
     position: 'absolute',
-    top: 40,
+    top: 100,
     right: 20,
     zIndex: 10,
-  }, scannerDockFull: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 5000 },
-  scannerFullBleed: { backgroundColor: '#000', borderBottomLeftRadius: 16, borderBottomRightRadius: 16, overflow: 'hidden' },
-  scannerCloseFull: { position: 'absolute', top: 100, right: 12, backgroundColor: 'rgba(0,0,0,0.5)', width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  },
+  scannerDockFull: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 5000,
+    height: 240,
+    width: "100%", 
+  },
+  scannerFullBleed: {
+    flex: 1,
+    backgroundColor: '#000',
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16,
+    overflow: 'hidden',
+  },
+  scannerCloseFull: {
+    position: 'absolute',
+    top: 100,
+    right: 12,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });
 
 export default InventoryOrdersScreen; 
