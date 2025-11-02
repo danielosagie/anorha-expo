@@ -11,6 +11,25 @@ import { useTheme } from '../context/ThemeContext';
 import PlaceholderImage from './PlaceholderImage';
 import PlatformAvatar from './PlatformAvatar';
 
+/*
+  Why are platform avatars not showing anymore after refreshing?
+  It's likely that after refresh (hot reload/fast refresh/expo refresh), the SVG imports
+  such as ShopifySvg, AmazonSvg, etc., are being invalidated or not re-imported correctly.
+
+  PlatformAvatar uses dynamic .svg imports and selects the component
+  at runtime. If there is a metro bundler cache or hot reload issue, those
+  icon component references may be missing or stale.
+
+  - Ensure the SVG files are correctly imported.
+  - Ensure any remote data source for `platformNames` is not returning unexpected values.
+  - If you see the `store` icon fallback, it means `getPlatformIcon` is returning null.
+  - A common cause is inconsistent or unexpected string casing/whitespace or platformName value in your platformNames array.
+
+  QUICK DIAGNOSTIC:
+  - Try console.log(platformNames) right here.
+  - Confirm `platformNames` is non-empty and strings match those expected by PlatformAvatar.
+  - Try lowercasing your platform strings explicitly before passing to PlatformAvatar for safety.
+*/
 
 interface InventoryListCardProps {
   id: string;
@@ -42,6 +61,11 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
       : seed;
     return colors[numId % colors.length];
   };
+
+  // Robust: lowercase and trim all platform names for safety
+  const normalizedPlatformNames = (platformNames || []).map(name =>
+    typeof name === 'string' ? name.trim().toLowerCase() : ''
+  );
 
   return (
     <TouchableOpacity
@@ -90,21 +114,19 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
 
             {/* Platform Avatars */}
             <View style={styles.platformAvatars}>
-                <View style={{marginLeft: 6, flexDirection: 'row', alignItems: 'center',}}>
-                    {(platformNames || []).map((platformName: string, index: number) => (
-                    <View
+              <View style={{ marginLeft: 6, flexDirection: 'row', alignItems: 'center' }}>
+                {normalizedPlatformNames.map((platformName: string, index: number) => (
+                  <View
                     key={`${platformName}-${index}`}
                     style={styles.avatarWrapper}
-                    >
+                  >
                     <PlatformAvatar
-                        platformType={platformName}
-                        size="small"
+                      platformType={platformName}
+                      size="small"
                     />
-                    </View>
+                  </View>
                 ))}
-
-
-                </View>
+              </View>
             </View>
 
             <View

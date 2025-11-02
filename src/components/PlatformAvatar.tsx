@@ -1,14 +1,10 @@
 import React from 'react';
 import {
   View,
-  TouchableOpacity,
-  Text,
   StyleSheet,
-  ScrollView,
   Platform,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { useTheme } from '../context/ThemeContext';
 import ShopifySvg from '../assets/shopify.svg';
 import AmazonSvg from '../assets/amazon.svg';
 import FacebookSvg from '../assets/facebook.svg';
@@ -21,17 +17,6 @@ interface PlatformAvatarProps {
   size?: 'small' | 'medium' | 'large';
 }
 
-const getPlatformIcon = (platformType: string) => {
-    const type = platformType.toLowerCase();
-    if (type.includes('shopify')) return ShopifySvg;
-    if (type.includes('square')) return SquareSvg;
-    if (type.includes('clover')) return CloverSvg;
-    if (type.includes('amazon')) return AmazonSvg;
-    if (type.includes('ebay')) return EbaySvg;
-    if (type.includes('facebook')) return FacebookSvg;
-    return null; // Return nul
-};
-
 const PlatformAvatar: React.FC<PlatformAvatarProps> = ({
   platformType,
   size = 'medium',
@@ -43,7 +28,25 @@ const PlatformAvatar: React.FC<PlatformAvatarProps> = ({
   };
 
   const config = sizeConfig[size];
-  const icon = getPlatformIcon(platformType);
+  const type = platformType.toLowerCase().trim();
+
+  const platformSvgMap: Record<string, React.FC<any>> = {
+    shopify: ShopifySvg,
+    square: SquareSvg,
+    clover: CloverSvg,
+    amazon: AmazonSvg,
+    ebay: EbaySvg,
+    facebook: FacebookSvg,
+  };
+
+  // Find the SVG component that matches
+  let SVGComponent = null;
+  for (const [key, component] of Object.entries(platformSvgMap)) {
+    if (type.includes(key)) {
+      SVGComponent = component;
+      break;
+    }
+  }
 
   return (
     <View
@@ -56,22 +59,18 @@ const PlatformAvatar: React.FC<PlatformAvatarProps> = ({
         },
       ]}
     >
-      {(() => {
-        const IconComponent = getPlatformIcon(platformType);
-        return IconComponent ? (
-            <IconComponent
-            width={16}
-            height={16}
-            />
-        ) : (
-            <Icon
-            name="store"
-            size={16}
-            color={'#FFFFFF'}
-            style={styles.platformIcon}
-            />
-        );
-        })()}
+      {SVGComponent ? (
+        <SVGComponent
+          width={config.icon}
+          height={config.icon}
+        />
+      ) : (
+        <Icon
+          name="store"
+          size={config.icon}
+          color={'#666'}
+        />
+      )}
     </View>
   );
 };
@@ -94,9 +93,6 @@ const styles = StyleSheet.create({
         elevation: 1,
       },
     }),
-  },
-  platformIcon: {
-    marginRight: 6,
   },
 });
 

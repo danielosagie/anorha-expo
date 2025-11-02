@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, ScrollView, Modal, ActivityIndicator, Alert } from 'react-native';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, ScrollView, Modal, ActivityIndicator, Alert, SafeAreaView } from 'react-native';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -17,6 +17,7 @@ import PlatformFilterChips from '../components/PlatformFilterChips';
 import PoolLocationCombobox from '../components/PoolLocationCombobox';
 import InventoryListCard from '../components/InventoryListCard';
 import SortByDropdown from '../components/SortByDropdown';
+import { CameraView } from 'expo-camera';
 
 type InventoryOrdersScreenNavigationProp = StackNavigationProp<AppStackParamList, 'TabNavigator'>;
 
@@ -56,6 +57,8 @@ const InventoryOrdersScreen = observer(() => {
   const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
   const [scannedBarcode, setScannedBarcode] = useState<string | null>(null);
   const [barcodeSearchError, setBarcodeSearchError] = useState<string | null>(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const scannerResultHandlerRef = useRef<((code: string) => void) | null>(null);
 
   // Loading & Data State
   const [platformConnections, setPlatformConnections] = useState<PlatformConnection[]>([]);
@@ -232,7 +235,7 @@ const InventoryOrdersScreen = observer(() => {
       const variantMappings = Object.values(mappings).filter((mapping: PlatformProductMapping) => mapping.ProductVariantId === variantId);
       const platformNames = variantMappings.map((mapping: PlatformProductMapping) => {
         const connection = platformConnections.find((conn: PlatformConnection) => conn.Id === mapping.PlatformConnectionId);
-        return connection ? `${connection.PlatformType} (${connection.DisplayName})` : 'Unknown Platform';
+        return connection ? connection.PlatformType.toLowerCase() : 'unknown';
       });
 
       return {
@@ -396,6 +399,14 @@ const InventoryOrdersScreen = observer(() => {
                 value={searchQuery}
                 onChangeText={handleSearchChange}
                 onScan={handleBarcodeScan}
+                onScannerOpen={() => {
+                  setScannerOpen(true);
+                  scannerResultHandlerRef.current = (code: string) => {
+                    handleBarcodeScan(code);
+                    setScannerOpen(false);
+                    scannerResultHandlerRef.current = null;
+                  };
+                }}
                 onClear={handleSearchClear}
               />
 
@@ -504,6 +515,34 @@ const InventoryOrdersScreen = observer(() => {
           </Animated.View>
         )}
       </View>
+
+      {/* Full-screen Scanner Modal - renders above everything */}
+      {scannerOpen && (
+      <View style={styles.scannerDockFull} pointerEvents="box-none">
+        <View style={styles.scannerFullBleed}>
+          <CameraView
+            style={styles.scannerCamera}
+            facing="back"
+            onBarcodeScanned={(result: any) => {
+              const code = result?.data || result?.rawValue;
+              if (code && scannerResultHandlerRef.current) {
+                scannerResultHandlerRef.current(code);
+              }
+            }}
+            barcodeScannerSettings={{
+              barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
+            }}
+          />
+          <TouchableOpacity
+            onPress={() => setScannerOpen(false)}
+            style={styles.scannerCloseButton}
+          >
+            <Icon name="close" size={28} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      </View>
+      )}
+
     </View>
   );
 });
@@ -628,6 +667,24 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 16,
   },
+  scannerModalContainer: {
+    flex: 1,
+    backgroundColor: 'black',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scannerCamera: {
+    width: '100%',
+    height: '100%',
+  },
+  scannerCloseButton: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    zIndex: 10,
+  }, scannerDockFull: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 5000 },
+  scannerFullBleed: { backgroundColor: '#000', borderBottomLeftRadius: 16, borderBottomRightRadius: 16, overflow: 'hidden' },
+  scannerCloseFull: { position: 'absolute', top: 100, right: 12, backgroundColor: 'rgba(0,0,0,0.5)', width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
 });
 
 export default InventoryOrdersScreen; 
