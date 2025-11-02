@@ -19,6 +19,9 @@ import Card from './Card';
 import ShopifySvg from '../assets/shopify.svg';
 import SquareSvg from '../assets/square.svg';
 import CloverSvg from '../assets/clover.svg';
+import { ensureSupabaseJwt } from '../lib/supabase';
+
+const API_BASE_URL = "https://api.sssync.app";
 
 const PLATFORM_LOGOS = {
   shopify: ShopifySvg,
@@ -59,14 +62,19 @@ export default function CreateLocationPoolModal({
   const loadAvailableLocations = async () => {
     try {
       setLoading(true);
+      const token = await ensureSupabaseJwt();
       const response = await fetch(
-        `${process.env.REACT_APP_API_URL || 'http://localhost:3000'}/api/pools/locations/available?orgId=${orgId}`,
+        `${API_BASE_URL}/api/pools/locations/available?orgId=${orgId}`,
         {
           headers: {
-            'Authorization': `Bearer ${await getToken()}`,
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
           },
         }
       );
+      if (!response.ok) {
+        throw new Error(`Failed to load locations: ${response.status}`);
+      }
       const data = await response.json();
       setAvailableLocations(data);
     } catch (error) {
@@ -78,8 +86,7 @@ export default function CreateLocationPoolModal({
   };
 
   const getToken = async () => {
-    // Implement based on your auth setup
-    return 'YOUR_TOKEN_HERE';
+    return await ensureSupabaseJwt();
   };
 
   const toggleLocationSelection = (locationId: string) => {
@@ -100,32 +107,40 @@ export default function CreateLocationPoolModal({
 
     try {
       setCreatingPool(true);
+      const token = await ensureSupabaseJwt();
       const response = await fetch(
-        `${process.env.REACT_APP_API_URL || 'http://localhost:3000'}/api/pools`,
+        `${API_BASE_URL}/api/pools`,
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${await getToken()}`,
+            'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            org_id: orgId,
-            name: poolName,
-            description: poolDescription,
-            sync_inventory: syncInventory,
-            sync_pricing: syncPricing,
-            location_ids: selectedLocations,
+            orgId: orgId,
+            name: poolName.trim(),
+            description: poolDescription.trim() || undefined,
+            syncInventory: syncInventory,
+            syncPricing: syncPricing,
+            location_ids: selectedLocations.length > 0 ? selectedLocations : undefined,
           }),
         }
       );
 
-      if (!response.ok) throw new Error('Failed to create pool');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMessage = errorData.message || 'Failed to create location pool';
+        Alert.alert('Error', errorMessage);
+        return;
+      }
 
+      const newPool = await response.json();
       Alert.alert('Success', 'Location pool created successfully');
       handleClose();
       onSuccess();
     } catch (error) {
-      Alert.alert('Error', 'Failed to create location pool');
+      console.error('Error creating pool:', error);
+      Alert.alert('Error', error instanceof Error ? error.message : 'Failed to create location pool');
     } finally {
       setCreatingPool(false);
     }
@@ -263,7 +278,7 @@ export default function CreateLocationPoolModal({
             <Button
               title="Back"
               onPress={() => setStep(1)}
-              variant="secondary"
+              outlined
               style={{ flex: 1 }}
             />
           )}

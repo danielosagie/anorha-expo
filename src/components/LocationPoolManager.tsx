@@ -20,6 +20,9 @@ import Card from './Card';
 import ShopifySvg from '../assets/shopify.svg';
 import SquareSvg from '../assets/square.svg';
 import CloverSvg from '../assets/clover.svg';
+import { ensureSupabaseJwt } from '../lib/supabase';
+
+const API_BASE_URL = "https://api.sssync.app";
 
 const PLATFORM_LOGOS = {
   shopify: ShopifySvg,
@@ -114,8 +117,7 @@ export default function LocationPoolManager({
   };
 
   const getToken = async () => {
-    // Implement based on your auth setup
-    return 'YOUR_TOKEN_HERE';
+    return await ensureSupabaseJwt();
   };
 
   const handleAddLocations = async () => {
@@ -395,7 +397,7 @@ export default function LocationPoolManager({
                     setShowLocationPicker(false);
                     setSelectedLocations([]);
                   }}
-                  variant="secondary"
+                  outlined
                 />
                 <Button
                   title="Add Locations"

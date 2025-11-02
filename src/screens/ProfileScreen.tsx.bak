@@ -1343,40 +1343,6 @@ const ProfileScreen = () => {
             </TouchableOpacity>
           </View>
           
-
-          {/* Seller Stats Section 
-          <View style={[styles.sellerStatsSection, { backgroundColor: theme.colors.surface }]}>
-            <Text style={[styles.sellerStatsSectionTitle, { color: theme.colors.text }]}>Your Activity</Text>
-            <View style={styles.sellerStatsRow}>
-              <View style={styles.sellerStatItem}>
-                <Text style={[styles.sellerStatValue, { color: theme.colors.primary }]}>{filteredInventory.length}</Text>
-                <Text style={[styles.sellerStatLabel, { color: theme.colors.textSecondary }]}>Products Listed</Text>
-              </View>
-              <View style={styles.sellerStatItem}>
-                <Text style={[styles.sellerStatValue, { color: theme.colors.primary }]}>
-                  {legendObservables?.marketplaceListings$ && legendObservables.userId ?
-                    Object.values(activeMarketplaceListings)
-                      .filter((listing: MarketplaceListing) => {
-                        const productForListing = enrichedProductVariants.find(p => p.Id === listing.ProductVariantId);
-                        return listing.IsEnabled &&
-                          listing.SellerUserId === legendObservables.userId &&
-                          (productForListing !== undefined);
-                      }).length
-                    : 0}
-                </Text>
-                <Text style={[styles.sellerStatLabel, { color: theme.colors.textSecondary }]}>Active Listings</Text>
-              </View>
-              <View style={styles.sellerStatItem}>
-                <Text style={[styles.sellerStatValue, { color: theme.colors.primary }]}>
-                  {platformLocations.filter((loc: PlatformLocation) => loc.IsPOS).length}
-                </Text>
-                <Text style={[styles.sellerStatLabel, { color: theme.colors.textSecondary }]}>POS Locations</Text>
-              </View>
-            </View>
-          </View>
-          */}
-
-
           <View style={styles.statsContainer}>
             <View style={styles.statItem}>
               <Text style={styles.statValue}>45</Text>
@@ -1621,22 +1587,14 @@ const ProfileScreen = () => {
       </Animated.View>
 
       {/* Locations & Pools Card */}
-      {currentOrg?.id ? (
-        <Animated.View entering={FadeInUp.delay(250).duration(500)}>
-          <Card style={styles.card}>
-            <LocationGroupsManager
-              orgId={currentOrg.id}
-              platformConnections={platformConnections}
-            />
-          </Card>
-        </Animated.View>
-      ) : (
-        <Animated.View entering={FadeInUp.delay(250).duration(500)}>
-          <Card style={styles.card}>
-            <Text style={styles.noConnectionsText}>Loading organization...</Text>
-          </Card>
-        </Animated.View>
-      )}
+      <Animated.View entering={FadeInUp.delay(250).duration(500)}>
+        <Card style={styles.card}>
+          <LocationGroupsManager
+            orgId={currentOrg?.id || ''}
+            platformConnections={platformConnections}
+          />
+        </Card>
+      </Animated.View>
       
       {/* Settings Card */}
       <Animated.View entering={FadeInUp.delay(300).duration(500)}>

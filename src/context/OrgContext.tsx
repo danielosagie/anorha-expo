@@ -77,24 +77,54 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const token = await ensureSupabaseJwt();
-      const response = await fetch(`${API_BASE}/api/organizations/user/all-orgs`, {
-        headers: { 'Authorization': `Bearer ${token}` },
+      
+      // Fetch user's organizations from /api/organizations
+      const orgsResponse = await fetch(`${API_BASE}/api/organizations`, {
+        headers: { 'Authorization': `Bearer ${token}` }
       });
 
-      if (!response.ok) {
+      if (!orgsResponse.ok) {
         throw new Error('Failed to fetch orgs');
       }
 
-      const { orgs, activeOrgId } = await response.json();
+      const orgsData = await orgsResponse.json();
       
-      setAvailableOrgs(orgs);
+      // Parse response format: [{ Role, Organizations: { Id, Name, ... } }, ...]
+      const formattedOrgs: UserOrgAccess[] = (orgsData || []).map((membership: any) => ({
+        id: membership.Organizations.Id,
+        name: membership.Organizations.Name,
+        role: membership.Role as 'org:admin' | 'org:member',
+        assignedPoolIds: membership.assigned_pool_ids || [],
+        isActive: false,
+      }));
+
+      // Fetch active organization
+      const activeResponse = await fetch(`${API_BASE}/api/organizations/me/active`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+
+      let activeOrgId: string | null = null;
+      if (activeResponse.ok) {
+        const activeData = await activeResponse.json();
+        activeOrgId = activeData.orgId;
+      }
+
+      // Mark active org
+      const orgsWithActive = formattedOrgs.map(org => ({
+        ...org,
+        isActive: org.id === activeOrgId,
+      }));
+
+      setAvailableOrgs(orgsWithActive);
       
-      // Set current org to the active one
-      const active = orgs.find((org: UserOrgAccess) => org.id === activeOrgId);
+      // Set current org
+      const active = orgsWithActive.find((org) => org.id === activeOrgId);
       if (active) {
+        console.log('[OrgContext] Setting current org to:', active.name);
         setCurrentOrg(active);
-      } else if (orgs.length > 0) {
-        setCurrentOrg(orgs[0]);
+      } else if (orgsWithActive.length > 0) {
+        console.log('[OrgContext] Using first org:', orgsWithActive[0].name);
+        setCurrentOrg(orgsWithActive[0]);
       }
 
       setError(null);

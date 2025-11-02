@@ -306,12 +306,34 @@ const MappingReviewScreen = () => {
         setIsLoadingPools(true);
         const token = await ensureSupabaseJwt();
 
-        const orgId = connection?.OrgId;
+        let orgId = connection?.OrgId;
+        console.log('[MappingReviewScreen] Initial orgId from connection:', orgId);
+        
+        // If connection doesn't have orgId, fetch user's active org
         if (!orgId) {
-          console.warn('[MappingReviewScreen] No orgId available to fetch pools');
-          return;
+          console.log('[MappingReviewScreen] No orgId from connection, fetching active org...');
+          const activeOrgResponse = await fetch(`https://api.sssync.app/api/organizations/me/active`, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            }
+          });
+
+          if (activeOrgResponse.ok) {
+            const activeOrgData = await activeOrgResponse.json();
+            orgId = activeOrgData.id || activeOrgData.orgId;
+            console.log('[MappingReviewScreen] Got active orgId:', orgId);
+          } else {
+            console.error('[MappingReviewScreen] Failed to fetch active org:', activeOrgResponse.status);
+            Alert.alert('Error', 'Could not determine organization. Please try again.');
+            setPools([]);
+            return;
+          }
         }
 
+        console.log('[MappingReviewScreen] Fetching pools for orgId:', orgId);
+        
         const response = await fetch(`https://api.sssync.app/api/pools/org/${orgId}`, 
         {
           method: 'GET',
@@ -321,31 +343,43 @@ const MappingReviewScreen = () => {
           }
         });
 
+        console.log('[MappingReviewScreen] Pools API response status:', response.status);
+
         if (!response.ok) {
-          throw new Error('Failed to fetch pools');
+          const errorText = await response.text();
+          console.error('[MappingReviewScreen] Failed to fetch pools:', response.status, errorText);
+          Alert.alert('Error', `Failed to fetch pools: ${response.status}`);
+          setPools([]);
+          return;
         }
 
-        if (pools && pools.length > 0 && !selectedPool) {
-          setSelectedPool(pools[0].id);
+        const data = await response.json();
+        const poolsList = Array.isArray(data) ? data : [];
+        setPools(poolsList);
+        console.log('[MappingReviewScreen] ✅ Loaded pools from API:', poolsList.length, poolsList);
+
+        // Auto-select first pool if available and none selected
+        if (poolsList.length > 0 && !selectedPool) {
+          console.log('[MappingReviewScreen] Auto-selecting first pool:', poolsList[0].id);
+          setSelectedPool(poolsList[0].id);
         }
 
       } catch (error) {
         console.error('[MappingReviewScreen] Error fetching pools:', error);
-
+        Alert.alert('Error', 'Failed to load pools: ' + (error instanceof Error ? error.message : String(error)));
+        setPools([]);
       } finally {
         setIsLoadingPools(false);
-      };
-
-      if (connection) {
-        fetchPools();
       }
-    }
-  }, [connection, connectionId]);
+    };
+
+    fetchPools();
+  }, [connectionId]); // Only depend on connectionId
 
   // ✅ POOLS: Create new pool
   const handleCreatePool = async () => {
     if (!poolNameInput.trim()) {
-      Alert.alert('Please enter a pool name');
+      Alert.alert('Error', 'Please enter a pool name');
       return;
     }
 
@@ -381,7 +415,7 @@ const MappingReviewScreen = () => {
         },
         body: JSON.stringify({
           orgId,
-          name: poolNameInput,
+          name: poolNameInput.trim(),
           description: `Pool for ${connection?.DisplayName || 'new connection'}`,
           syncInventory: true,
           syncPricing: true
@@ -394,9 +428,32 @@ const MappingReviewScreen = () => {
       }
 
       const newPool = await response.json();
-      setPools([...pools, newPool]);
-      setSelectedPool(newPool.id);
+      
+      // Refresh pools list from API to ensure consistency
+      const poolsResponse = await fetch(`https://api.sssync.app/api/pools/org/${orgId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        }
+      });
+      
+      if (poolsResponse.ok) {
+        const poolsData = await poolsResponse.json();
+        const poolsList = Array.isArray(poolsData) ? poolsData : [];
+        setPools(poolsList);
+        
+        // Select the newly created pool
+        const createdPool = poolsList.find((p: any) => p.id === newPool.id) || newPool;
+        setSelectedPool(createdPool.id);
+      } else {
+        // Fallback: add to existing list
+        setPools([...pools, newPool]);
+        setSelectedPool(newPool.id);
+      }
+      
       setPoolNameInput('');
+      setWizardStep(1); // Move to next step
     } catch (error) {
       console.error('[MappingReviewScreen] Error creating pool:', error);
       Alert.alert('Error', error instanceof Error ? error.message : 'Failed to create pool');
@@ -1091,7 +1148,7 @@ const MappingReviewScreen = () => {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ confirmedMatches: mappingsPayload }),
+        body: JSON.stringify({ confirmedMatches: mappingsPayload, syncRules: { poolId: selectedPool } }),
       });
       
       if (!confirmResponse.ok) {
@@ -1101,7 +1158,7 @@ const MappingReviewScreen = () => {
       
       console.log('[MappingReviewScreen] Mappings confirmed successfully.');
       
-      // Step 2: Activate the sync with sync rules
+      // Step 2: Activate the sync with sync rules (include poolId and inventoryMergeMode)
       const syncRules = {
         syncDirection,
         sourceOfTruth,
@@ -1109,6 +1166,8 @@ const MappingReviewScreen = () => {
         autoUpdate,
         syncInventory,
         syncPricing,
+        poolId: selectedPool || undefined, // ✅ Send pool ID if selected
+        inventoryMergeMode: inventoryMergeMode || 'merged', // ✅ Fallback merge mode for backward compat
       };
       
       const activateResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/activate-sync`, {

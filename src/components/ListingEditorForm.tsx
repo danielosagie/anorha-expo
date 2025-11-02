@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput } from 'react-native';
+import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle, useRef, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Modal, Pressable, FlatList, SectionList, Alert } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import ShopifySvg from '../assets/shopify.svg';
 import AmazonSvg from '../assets/amazon.svg';
@@ -91,6 +91,34 @@ const DEFAULT_INVENTORY_TYPE_BY_PLATFORM: Record<string, InventoryType> = {
   whatnot: 'BASIC',
   depop: 'BASIC',
 };
+
+// ✅ PRESET OPTIONS - baked into client, no API needed
+export const PRESET_OPTIONS = [
+  {
+    name: 'Clothing Sizes',
+    values: ['XS', 'S', 'M', 'L', 'XL', 'XXL', '2XL', '3XL']
+  },
+  {
+    name: 'Shoe Sizes',
+    values: ['5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15']
+  },
+  {
+    name: 'Colors',
+    values: ['Black', 'White', 'Red', 'Blue', 'Green', 'Yellow', 'Purple', 'Pink', 'Orange', 'Brown', 'Gray', 'Navy', 'Beige']
+  },
+  {
+    name: 'Materials',
+    values: ['Cotton', 'Polyester', 'Wool', 'Silk', 'Leather', 'Linen', 'Nylon', 'Denim', 'Spandex']
+  },
+  {
+    name: 'Condition',
+    values: ['New', 'Like New', 'Good', 'Fair', 'Used', 'Refurbished']
+  },
+  {
+    name: 'Size (General)',
+    values: ['One Size', 'Small', 'Medium', 'Large', 'Extra Large']
+  }
+];
 
 function ListingEditorFormInner({ platforms, updateCounter, images, platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored }: Props, ref: React.Ref<ListingEditorFormRef>) {
   const platformKeys = useMemo(() => {
@@ -1035,6 +1063,34 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                 placeholder="eg: Size"
                 placeholderTextColor={"#999999"}
               />
+
+              {/* ✅ Show preset and platform options as quick suggestions */}
+              <Text style={[styles.fieldLabel, { marginTop: 10 }]}>Quick Presets & Platform Options</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
+                {[...PRESET_OPTIONS, ...allPlatformOptions].map((opt, idx) => (
+                  <TouchableOpacity
+                    key={`quick-preset-${idx}`}
+                    style={{
+                      paddingHorizontal: 10,
+                      paddingVertical: 6,
+                      marginRight: 8,
+                      backgroundColor: newOptionName === opt.name ? '#dbeafe' : '#f3f4f6',
+                      borderRadius: 6,
+                      borderWidth: newOptionName === opt.name ? 2 : 1,
+                      borderColor: newOptionName === opt.name ? '#3b82f6' : '#d1d5db'
+                    }}
+                    onPress={() => {
+                      setNewOptionName(opt.name);
+                      setNewOptionValues(opt.values.slice(0, 1).map(v => v) || ['']);
+                    }}
+                  >
+                    <Text style={{ fontSize: 12, color: newOptionName === opt.name ? '#1e40af' : '#666' }}>
+                      {opt.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
               <Text style={[styles.fieldLabel, { marginTop: 10 }]}>Option Values</Text>
               {newOptionValues.map((v, idx) => (
                 <TextInput

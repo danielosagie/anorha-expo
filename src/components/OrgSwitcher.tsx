@@ -200,7 +200,7 @@ export default function OrgSwitcher({ currentOrgId, onOrgChanged }: OrgSwitcherP
           styles.triggerButton,
           { 
             backgroundColor: theme.colors.background,
-            borderColor: theme.colors.border || '#e0e0e0',
+            borderColor: '#e0e0e0',
           },
         ]}
         onPress={() => setIsDropdownVisible(true)}
