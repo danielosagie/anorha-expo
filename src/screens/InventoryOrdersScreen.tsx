@@ -11,7 +11,7 @@ import { ProductVariant as ProductVariantData, ProductImage, InventoryLevel, Pla
 import { useNavigation } from '@react-navigation/native';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { StackNavigationProp } from '@react-navigation/stack';
-import { supabase } from '../../lib/supabase';
+import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import SearchBarWithScanner from '../components/SearchBarWithScanner';
 import PlatformFilterChips from '../components/PlatformFilterChips';
 import PoolLocationCombobox from '../components/PoolLocationCombobox';
@@ -256,7 +256,7 @@ const InventoryOrdersScreen = observer(() => {
     // Barcode search
     if (scannedBarcode && !searchQuery) {
       filtered = filtered.filter((item: EnrichedProductVariant) =>
-        item.Sku?.toLowerCase().includes(scannedBarcode.toLowerCase())
+        item.Barcode?.toLowerCase().includes(scannedBarcode.toLowerCase())
       );
 
       if (filtered.length === 0) {
@@ -309,6 +309,56 @@ const InventoryOrdersScreen = observer(() => {
   const handleBarcodeScan = (barcode: string) => {
     setScannedBarcode(barcode);
     setSearchQuery('');
+    // New: Make API call to search backend for barcode
+    searchBarcodeOnBackend(barcode);
+  };
+
+  const searchBarcodeOnBackend = async (barcode: string) => {
+    try {
+      setBarcodeSearchError(null);
+      console.log(`[InventoryOrdersScreen] Searching backend for barcode: ${barcode}`);
+
+      const token = await ensureSupabaseJwt();
+      if (!token) {
+        setBarcodeSearchError('Authentication required. Please log in again.');
+        return;
+      }
+
+      const response = await fetch(`https://api.sssync.app/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          setBarcodeSearchError(`Product not found with barcode: ${barcode}`);
+        } else {
+          setBarcodeSearchError(`Search failed: ${response.statusText}`);
+        }
+        setScannedBarcode(null);
+        return;
+      }
+
+      const data = await response.json();
+
+      if (data.error) {
+        setBarcodeSearchError(data.error);
+        setScannedBarcode(null);
+        return;
+      }
+
+      console.log(`[InventoryOrdersScreen] Backend found variant:`, data.variant);
+      // Result will be used in filteredInventory below
+      // Don't clear the scannedBarcode - it's already set and will filter the list
+    } catch (error) {
+      console.error(`[InventoryOrdersScreen] Barcode search error:`, error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      setBarcodeSearchError(`Error searching for barcode: ${errorMessage}`);
+      setScannedBarcode(null);
+    }
   };
 
   const handleSearchChange = (text: string) => {
@@ -547,7 +597,7 @@ const InventoryOrdersScreen = observer(() => {
 const styles = StyleSheet.create({
   background: {
     flex: 1,
-    backgroundColor: "#ECF9E1",
+    backgroundColor: "rgb(208, 255, 170)",
   },
   container: {
     borderTopRightRadius: 36,

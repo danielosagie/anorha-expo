@@ -46,6 +46,7 @@ import MatchSelectionScreen, { JobResponse } from '../screens/MatchSelectionScre
 import GenerateDetailsScreen from '../screens/GenerateDetailsScreen';
 import VerifyCodeScreen from '../screens/VerifyCodeScreen';
 import MarketplaceChatScreen from '../screens/MarketplaceChatScreen';
+import ActivityFeedScreen from '../screens/ActivityFeedScreen';
 import PublishConfirmationScreen from '../screens/PublishConfirmationScreen';
 import { isFeatureEnabled } from '../config/features';
 import { SessionContext } from '../context/SessionContext';
@@ -232,6 +233,7 @@ export type AppStackParamList = {
   OnboardConnectionScreen: {
 
   };
+  ActivityFeed: undefined;
 };
 
 type RootStackParamList = {
@@ -286,7 +288,7 @@ const TabNavigator = () => {
         name="Dashboard" 
         component={DashboardScreen}
         options={{
-          tabBarLabel: 'Dashboard',
+          tabBarLabel: 'Home',
           tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Icon name="view-dashboard-outline" color={color} size={size} />
           ),
@@ -298,7 +300,7 @@ const TabNavigator = () => {
         options={{
           tabBarLabel: 'Inventory',
           tabBarIcon: ({ color, size }: { color: string; size: number }) => (
-            <Icon name="package-variant-closed" color={color} size={size} />
+            <Icon name="package-variant" color={color} size={size} />
           ),
         }}
       />
@@ -329,15 +331,18 @@ const TabNavigator = () => {
       
       */}
     
-      <Tab.Screen 
-        name="MarketplaceChat" 
-        component={MarketplaceChatScreen}
+      <Tab.Screen
+        name="ActivityFeed"
+        component={ActivityFeedScreen}
         options={{
-          tabBarLabel: 'Chat',
-          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
-            <Icon name="message-outline" color={color} size={size} />
+          tabBarLabel: 'Activity',
+          tabBarIcon: ({ color, size, focused }: { color: string; size: number; focused: boolean }) => (
+            <Icon 
+              name="clipboard-clock-outline" 
+              color={focused ? "#FF9900" : color} 
+              size={size} 
+            />
           ),
-          tabBarButton: isFeatureEnabled('MARKETPLACE_CHAT_ENABLED') ? undefined : () => null,
         }}
       />
       <Tab.Screen 

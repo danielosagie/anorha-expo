@@ -192,6 +192,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Barcode state
   const [scannedBarcode, setScannedBarcode] = useState<string | null>(null);
   const [barcodeNotificationCount, setBarcodeNotificationCount] = useState(0);
+  const [barcodeSearchResult, setBarcodeSearchResult] = useState<any | null>(null);
+  const [barcodeSearching, setBarcodeSearching] = useState(false);
+  const [showBarcodeResultModal, setShowBarcodeResultModal] = useState(false);
   
   // UI state
   const [currentInstruction, setCurrentInstruction] = useState<CameraInstruction>('ready');
@@ -517,6 +520,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       
       console.log('Barcode scanned:', scanningResult.data);
       
+      // Search backend for this barcode
+      searchBarcodeOnBackend(scanningResult.data);
+      
       // Show multiple notifications as requested
       for (let i = 0; i < 30; i++) {
         setTimeout(() => {
@@ -530,6 +536,57 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }, 3000);
     }
   }, [cameraMode, scannedBarcode]);
+
+  // Search backend for product by barcode
+  const searchBarcodeOnBackend = useCallback(async (barcode: string) => {
+    try {
+      setBarcodeSearching(true);
+      console.log(`[BARCODE] Searching backend for barcode: ${barcode}`);
+
+      const token = await ensureSupabaseJwt();
+      if (!token) {
+        Alert.alert('Authentication Error', 'Please log in again.');
+        setBarcodeSearching(false);
+        return;
+      }
+
+      const response = await fetch(
+        `https://api.sssync.app/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`,
+        {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      if (!response.ok) {
+        console.log(`[BARCODE] Search returned status ${response.status}`);
+        setBarcodeSearching(false);
+        return;
+      }
+
+      const data = await response.json();
+
+      if (data.error) {
+        console.log(`[BARCODE] Product not found: ${data.error}`);
+        Alert.alert('Product Not Found', data.error);
+        setBarcodeSearching(false);
+        return;
+      }
+
+      console.log(`[BARCODE] Found product:`, data.variant.Title);
+      setBarcodeSearchResult(data);
+      setShowBarcodeResultModal(true);
+      setBarcodeSearching(false);
+    } catch (error) {
+      console.error(`[BARCODE] Search error:`, error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      Alert.alert('Search Error', `Failed to search: ${errorMessage}`);
+      setBarcodeSearching(false);
+    }
+  }, []);
 
   // Toggle flash mode
   const toggleFlash = useCallback(() => {
@@ -1652,6 +1709,128 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           />
         );
       })()}
+      </Modal>
+
+      {/* Barcode Search Result Modal */}
+      <Modal
+        visible={showBarcodeResultModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowBarcodeResultModal(false)}
+      >
+        <SafeAreaView style={[styles.container, { backgroundColor: '#f9f9f9' }]}>
+          {/* Header */}
+          <View style={styles.sheetHeader}>
+            <TouchableOpacity 
+              onPress={() => setShowBarcodeResultModal(false)}
+              style={styles.closeButton}
+            >
+              <Icon name="close" size={24} color="#333" />
+            </TouchableOpacity>
+            <Text style={styles.sheetHeaderTitle}>Product Found</Text>
+            <View style={{ width: 24 }} />
+          </View>
+
+          {barcodeSearching ? (
+            <View style={styles.loadingContainer}>
+              <Icon name="loading" size={40} color="#93C822" />
+              <Text style={styles.loadingText}>Searching...</Text>
+            </View>
+          ) : barcodeSearchResult ? (
+            <ScrollView style={styles.barcodeResultContainer}>
+              {/* Product Image */}
+              {barcodeSearchResult.images && barcodeSearchResult.images.length > 0 && (
+                <Image
+                  source={{ uri: barcodeSearchResult.images[0].ImageUrl }}
+                  style={styles.barcodeProductImage}
+                />
+              )}
+
+              {/* Product Details */}
+              <View style={styles.barcodeProductDetails}>
+                <Text style={styles.barcodeProductTitle}>
+                  {barcodeSearchResult.variant.Title}
+                </Text>
+
+                {barcodeSearchResult.variant.Description && (
+                  <Text style={styles.barcodeProductDescription} numberOfLines={3}>
+                    {barcodeSearchResult.variant.Description}
+                  </Text>
+                )}
+
+                <View style={styles.barcodeProductMeta}>
+                  <View style={styles.barcodeMetaItem}>
+                    <Text style={styles.barcodeMetaLabel}>SKU</Text>
+                    <Text style={styles.barcodeMetaValue}>
+                      {barcodeSearchResult.variant.Sku}
+                    </Text>
+                  </View>
+
+                  <View style={styles.barcodeMetaItem}>
+                    <Text style={styles.barcodeMetaLabel}>Barcode</Text>
+                    <Text style={styles.barcodeMetaValue}>
+                      {barcodeSearchResult.variant.Barcode}
+                    </Text>
+                  </View>
+
+                  {barcodeSearchResult.variant.Price && (
+                    <View style={styles.barcodeMetaItem}>
+                      <Text style={styles.barcodeMetaLabel}>Price</Text>
+                      <Text style={[styles.barcodeMetaValue, { color: '#4CAF50', fontWeight: '700' }]}>
+                        ${barcodeSearchResult.variant.Price}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
+                {/* Platform Indicators */}
+                <View style={styles.barcodePlatformIndicators}>
+                  {barcodeSearchResult.variant.OnShopify && (
+                    <View style={styles.barcodePlatformChip}>
+                      <Icon name="shopify" size={14} color="#96BE1E" />
+                      <Text style={styles.barcodePlatformChipText}>Shopify</Text>
+                    </View>
+                  )}
+                  {barcodeSearchResult.variant.OnSquare && (
+                    <View style={styles.barcodePlatformChip}>
+                      <Icon name="square" size={14} color="#3C3C3C" />
+                      <Text style={styles.barcodePlatformChipText}>Square</Text>
+                    </View>
+                  )}
+                  {barcodeSearchResult.variant.OnClover && (
+                    <View style={styles.barcodePlatformChip}>
+                      <Icon name="clover" size={14} color="#00AA44" />
+                      <Text style={styles.barcodePlatformChipText}>Clover</Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+
+              {/* Actions */}
+              <View style={styles.barcodeActions}>
+                <TouchableOpacity
+                  style={styles.primaryButton}
+                  onPress={() => {
+                    // Navigate to product detail page
+                    (navigation as any).navigate('ProductDetail', {
+                      variantId: barcodeSearchResult.variant.Id,
+                    });
+                    setShowBarcodeResultModal(false);
+                  }}
+                >
+                  <Text style={styles.primaryButtonText}>View Full Details</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.secondaryButton}
+                  onPress={() => setShowBarcodeResultModal(false)}
+                >
+                  <Text style={styles.secondaryButtonText}>Back to Scanning</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          ) : null}
+        </SafeAreaView>
       </Modal>
     </GestureHandlerRootView>
   );
@@ -3266,6 +3445,99 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 4,
     textAlign: 'center',
+  },
+  closeButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    zIndex: 10,
+  },
+  sheetHeaderTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 10,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    color: '#93C822',
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 10,
+  },
+  barcodeResultContainer: {
+    padding: 20,
+    backgroundColor: 'white',
+    borderRadius: 10,
+    marginHorizontal: 20,
+    marginBottom: 20,
+  },
+  barcodeProductImage: {
+    width: '100%',
+    height: 200,
+    borderRadius: 10,
+    marginBottom: 20,
+  },
+  barcodeProductDetails: {
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+  },
+  barcodeProductTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 10,
+  },
+  barcodeProductDescription: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 10,
+  },
+  barcodeProductMeta: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  barcodeMetaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  barcodeMetaLabel: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
+  },
+  barcodeMetaValue: {
+    fontSize: 14,
+    color: '#333',
+    fontWeight: '600',
+  },
+  barcodePlatformIndicators: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  barcodePlatformChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  barcodePlatformChipText: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
+  },
+  barcodeActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 20,
   },
 });
 

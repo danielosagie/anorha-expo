@@ -1317,7 +1317,6 @@ const ProfileScreen = () => {
       />
 
       <Animated.View entering={FadeInUp.delay(100).duration(500)}>
-        <Text style={[styles.title, { color: theme.colors.text }]}>Profile</Text>
         
         {/* Account Card */}
         <Card style={styles.card}>

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { View, TouchableOpacity, Text, StyleSheet, Platform, ViewStyle, StyleProp } from 'react-native';
+import { View, TouchableOpacity, Text, StyleSheet, Platform, ViewStyle, StyleProp, Animated, Easing } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
@@ -8,15 +8,17 @@ const getTabIcon = (routeName: string): string => {
     case 'Dashboard':
       return 'view-dashboard-outline';
     case 'Inventory':
-      return 'cube-outline';
+      return 'package-variant';
     case 'Marketplace':
       return 'store-outline';
     case 'MarketplaceChat':
       return 'message-outline';
     case 'AddProduct':
       return 'plus';
+    case 'ActivityFeed':
+      return 'clipboard-clock-outline';
     case 'Profile':
-      return 'account-outline';
+      return 'cog-outline';
     default:
       return 'circle';
   }
@@ -33,6 +35,24 @@ const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, style }
   const theme = useTheme();
   const lastNonAddRouteRef = useRef<string>('Dashboard');
   const currentRouteName = state?.routes?.[state.index]?.name;
+  const isAddFocused = currentRouteName === 'AddProduct';
+
+  // Animated rotation for the Add (+) button → × when focused
+  const addRotateAnim = useRef(new Animated.Value(isAddFocused ? 1 : 0)).current;
+
+  useEffect(() => {
+    Animated.timing(addRotateAnim, {
+      toValue: isAddFocused ? 1 : 0,
+      duration: 440,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [isAddFocused, addRotateAnim]);
+
+  const addRotate = addRotateAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '45deg'],
+  });
 
   useEffect(() => {
     if (currentRouteName && currentRouteName !== 'AddProduct') {
@@ -82,7 +102,9 @@ const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, style }
               <View style={styles.addOuterCircle}>
                 {/* Inner circle for subtle ring */}
                 <View style={styles.addInnerCircle}>
-                  <Icon name={isFocused ? 'close' : icon} size={28} color={'#FFF'} />
+                  <Animated.View style={{ transform: [{ rotate: addRotate }] }}>
+                    <Icon name={'plus'} size={28} color={'#FFF'} />
+                  </Animated.View>
                 </View>
               </View>
             </TouchableOpacity>
@@ -99,15 +121,15 @@ const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, style }
             onPress={onPress}
             style={styles.tabItem}
           >
-            <Icon 
-              name={icon} 
-              size={24} 
-              color={isFocused ? theme.colors.primary : '#999'}
+            <Icon
+              name={icon}
+              size={24}
+              color={isFocused && route.name === 'ActivityFeed' ? '#FF9900' : (isFocused ? theme.colors.primary : '#999')}
             />
-            <Text 
+            <Text
               style={[
-                styles.tabLabel, 
-                { color: isFocused ? theme.colors.primary : '#999' }
+                styles.tabLabel,
+                { color: isFocused && route.name === 'ActivityFeed' ? '#FF9900' : (isFocused ? theme.colors.primary : '#999') }
               ]}
             >
               {label}

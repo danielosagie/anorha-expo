@@ -116,6 +116,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
+
+  specialTabBar: {
+    backgroundColor: "#FF9900",
+  },
   
   // List styles
   listItem: {

@@ -6,6 +6,7 @@ const theme = {
     primary: '#8BB04F', // The teal/green from your chart
     secondary: '#F17F5F', // The orange/salmon from Amazon bar
     accent: '#3CAD46', // Green from Clover
+    accent2: "#FF9900",
     background: '#FFFFFF',
     surface: '#F8F9FB',
     text: '#333333',
