@@ -478,40 +478,72 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
   const fetchAllPlatformOptions = async () => {
     setLoadingPlatformOptions(true);
     try {
-
-      const { data: {user}} = await supabase.auth.getUser();
-      
-      // Get the Supabase JWT from our Clerk↔Supabase bridge
-      const token = await getToken();
-
-      if (!token) {
-        console.error('No valid session found');
-        return;
-      }
-      
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         throw new Error('User not authenticated');
       }
 
-      
+      console.log('[fetchAllPlatformOptions] ⚡ Querying PlatformOptions directly from DB (no API call)...');
 
-      // Get user ID from auth context or props
-      const userId = `${user.id}`; 
-      
-      const response = await fetch(`https://api.sssync.app/api/products/platform-options/${userId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setAllPlatformOptions(data.platformOptions || []);
-        setOptionPresets(data.presets || []);
+      // Step 1: Get active connections for this user
+      const { data: connections, error: connError } = await supabase
+        .from('PlatformConnections')
+        .select('Id')
+        .eq('UserId', user.id)
+        .eq('IsEnabled', true);
+
+      if (connError || !connections || connections.length === 0) {
+        console.log('[fetchAllPlatformOptions] No active connections found');
+        setAllPlatformOptions([]);
+        setOptionPresets([]);
+        return;
       }
+
+      const connectionIds = connections.map(c => c.Id);
+      console.log('[fetchAllPlatformOptions] Found', connectionIds.length, 'active connections');
+
+      // Step 2: Query PlatformOptions for these connections
+      const { data: platformOptions, error } = await supabase
+        .from('PlatformOptions')
+        .select('Name, Values, Source')
+        .in('PlatformConnectionId', connectionIds);
+
+      if (error) {
+        console.error('[fetchAllPlatformOptions] DB query error:', error);
+        return;
+      }
+
+      console.log('[fetchAllPlatformOptions] Retrieved', platformOptions?.length || 0, 'raw options from DB');
+
+      // Step 3: Group by option name to deduplicate and merge
+      const optionsByName = new Map<string, { values: Set<string>; sources: Set<string> }>();
+      for (const option of platformOptions || []) {
+        const optionName = option.Name?.trim();
+        if (!optionName) continue;
+
+        if (!optionsByName.has(optionName)) {
+          optionsByName.set(optionName, { values: new Set<string>(), sources: new Set<string>() });
+        }
+
+        const stored = optionsByName.get(optionName)!;
+        for (const value of option.Values || []) {
+          if (value) stored.values.add(value);
+        }
+        if (option.Source) stored.sources.add(option.Source);
+      }
+
+      // Step 4: Convert to array format
+      const formatted = Array.from(optionsByName).map(([name, data]) => ({
+        name,
+        values: Array.from(data.values),
+        sources: Array.from(data.sources)
+      }));
+
+      console.log('[fetchAllPlatformOptions] ✅ Loaded', formatted.length, 'deduplicated platform options from DB in <1s');
+      setAllPlatformOptions(formatted);
+      setOptionPresets(formatted); // Reuse as presets too
     } catch (error) {
-      console.error('Failed to fetch platform options:', error);
+      console.error('[fetchAllPlatformOptions] Error:', error);
     } finally {
       setLoadingPlatformOptions(false);
     }
@@ -1027,7 +1059,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                 )}
               </View>
 
-              {/* Presets Section */}
+              {/* Presets Section 
               <View style={{ marginBottom: 20 }}>
                 <Text style={styles.fieldLabel}>Presets</Text>
                 <View style={{ maxHeight: 150, backgroundColor: '#f0f8ff', borderRadius: 8, padding: 10 }}>
@@ -1054,6 +1086,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                   </ScrollView>
                 </View>
               </View>
+              */}
 
               <Text style={styles.fieldLabel}>Option Name</Text>
               <TextInput
@@ -1064,7 +1097,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                 placeholderTextColor={"#999999"}
               />
 
-              {/* ✅ Show preset and platform options as quick suggestions */}
+              {/* Show preset and platform options as quick suggestions
               <Text style={[styles.fieldLabel, { marginTop: 10 }]}>Quick Presets & Platform Options</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
                 {[...PRESET_OPTIONS, ...allPlatformOptions].map((opt, idx) => (
@@ -1090,6 +1123,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                   </TouchableOpacity>
                 ))}
               </ScrollView>
+              */}
 
               <Text style={[styles.fieldLabel, { marginTop: 10 }]}>Option Values</Text>
               {newOptionValues.map((v, idx) => (

@@ -671,61 +671,66 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             headers: { Authorization: `Bearer ${token}` },
           });
           let connections = connRes.ok ? await connRes.json() : [];
-          
-          // SYNC LOCATIONS: Fetch fresh location data from platforms via API
-          console.log('[GenerateDetails] Syncing locations for all connections...');
-          for (const conn of connections) {
-            const platform = conn.PlatformType?.toLowerCase();
-            if (!platform) continue;
-            
-            try {
-              const syncRes = await fetch(`${baseUrl}/api/platform-connections/${conn.Id}/sync-locations`, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}` }
-              });
-              
-              if (syncRes.ok) {
-                const syncData = await syncRes.json();
-                console.log(`[GenerateDetails] Synced ${syncData.locations?.length || 0} locations for ${platform}`);
-                // Update connection with fresh location data
-                if (syncData.locations) {
-                  conn.PlatformSpecificData = {
-                    ...(conn.PlatformSpecificData || {}),
-                    locations: syncData.locations
-                  };
-                }
-              }
-            } catch (syncError) {
-              console.warn(`[GenerateDetails] Location sync failed for ${platform} (non-blocking):`, syncError);
-            }
-          }
-          
           setAllConnections(connections);
           
-          // Extract locations from synced connections
+          // ⚡ OPTIMIZED: Query PlatformLocations directly from DB instead of calling sync endpoint
+          console.log('[GenerateDetails] ⚡ Loading locations directly from PlatformLocations table...');
+          
+          const connectionIds = connections.map((c: any) => c.Id);
+          if (connectionIds.length === 0) {
+            console.log('[GenerateDetails] No connections found');
+            setPlatformLocations({});
+            return;
+          }
+          
+          // Query PlatformLocations directly from Supabase
+          const { data: platformLocs, error } = await supabase
+            .from('PlatformLocations')
+            .select('PlatformConnectionId, PlatformLocationId, Name')
+            .in('PlatformConnectionId', connectionIds);
+          
+          if (error) {
+            console.error('[GenerateDetails] Failed to query PlatformLocations:', error);
+            setPlatformLocations({});
+            return;
+          }
+          
+          console.log('[GenerateDetails] ✅ Retrieved', platformLocs?.length || 0, 'locations from DB in <1s');
+          
+          // Build map: connectionId -> location objects
+          const locsByConnection = new Map<string, Array<{ id: string; name: string }>>();
+          for (const loc of platformLocs || []) {
+            if (!locsByConnection.has(loc.PlatformConnectionId)) {
+              locsByConnection.set(loc.PlatformConnectionId, []);
+            }
+            locsByConnection.get(loc.PlatformConnectionId)!.push({
+              id: loc.PlatformLocationId,
+              name: loc.Name || 'Unnamed Location'
+            });
+          }
+          
+          // Extract locations by platform type
           const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>> = {};
           for (const conn of connections) {
             const platform = conn.PlatformType?.toLowerCase();
             if (!platform || !conn.IsEnabled) continue;
             
-            const platformData = conn.PlatformSpecificData || {};
-            const locations = platformData.locations || [];
-            
+            const locs = locsByConnection.get(conn.Id) || [];
             if (!locsByPlatform[platform]) locsByPlatform[platform] = [];
             
-            for (const loc of locations) {
+            for (const loc of locs) {
               locsByPlatform[platform].push({
-                id: loc.id || loc.gid || '',
-                name: loc.name || 'Unnamed Location',
+                ...loc,
                 connectionId: conn.Id,
                 connectionName: conn.DisplayName || conn.PlatformType
               });
             }
           }
+          
           console.log('[GenerateDetails] Built platform locations:', Object.keys(locsByPlatform).map(p => `${p}: ${locsByPlatform[p].length} locs`));
           setPlatformLocations(locsByPlatform);
         } catch (e) {
-          console.error('Failed to fetch connections:', e);
+          console.error('Failed to fetch connections/locations:', e);
         }
       })();
     }, []);
@@ -2091,7 +2096,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     })();
 
     return () => { canceled = true };
-  }, [route.params?.variantId, results]);
+  }, [(route.params as any)?.variantId, results]);
   
 
   return (

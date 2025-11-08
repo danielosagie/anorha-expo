@@ -376,6 +376,44 @@ const MappingReviewScreen = () => {
     fetchPools();
   }, [connectionId]); // Only depend on connectionId
 
+  // Load existing quick settings on mount (for wizard pre-population)
+  useEffect(() => {
+    const loadExistingSettings = async () => {
+      if (!connectionId) return;
+
+      try {
+        const token = await ensureSupabaseJwt();
+        const response = await fetch(`https://api.sssync.app/api/connections/${connectionId}/quick-settings`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          }
+        });
+
+        if (response.ok) {
+          const quickSettings = await response.json();
+          console.log('[MappingReviewScreen] Loaded existing quick settings:', quickSettings);
+
+          // Pre-populate wizard state with existing settings
+          setSelectedPool(quickSettings.poolId || null);
+          setSyncMode(quickSettings.autoSyncMode ? 'auto' : 'manual');
+          setDelistMode(quickSettings.autoDelist ? 'auto' : 'manual');
+          setPriceBuffer(quickSettings.priceAdjustment || {});
+          setInventoryBuffer(quickSettings.inventoryBuffer || {});
+        } else {
+          console.log('[MappingReviewScreen] No existing quick settings found, using defaults');
+          // Keep default values for new connections
+        }
+      } catch (error) {
+        console.error('[MappingReviewScreen] Error loading existing quick settings:', error);
+        // Keep default values on error
+      }
+    };
+
+    loadExistingSettings();
+  }, [connectionId]);
+
   // ✅ POOLS: Create new pool
   const handleCreatePool = async () => {
     if (!poolNameInput.trim()) {
@@ -1141,42 +1179,55 @@ const MappingReviewScreen = () => {
           action: s.action === 'LINK_EXISTING' ? 'link' : (s.action === 'CREATE_NEW' ? 'create' : 'ignore')
       }));
       
-      // Step 1: Confirm all mappings
+      // Step 1: Confirm all mappings (mappings only, no sync rules)
       const confirmResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/confirm-mappings`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ confirmedMatches: mappingsPayload, syncRules: { poolId: selectedPool } }),
+        body: JSON.stringify({ confirmedMatches: mappingsPayload }),
       });
-      
+
       if (!confirmResponse.ok) {
         const errorData = await confirmResponse.json().catch(() => ({ message: `HTTP error! Status: ${confirmResponse.status}` }));
         throw new Error(errorData.message || `Failed to confirm mappings. Status: ${confirmResponse.status}`);
       }
-      
+
       console.log('[MappingReviewScreen] Mappings confirmed successfully.');
-      
-      // Step 2: Activate the sync with sync rules (include poolId and inventoryMergeMode)
-      const syncRules = {
-        syncDirection,
-        sourceOfTruth,
-        autoCreate,
-        autoUpdate,
-        syncInventory,
-        syncPricing,
-        poolId: selectedPool || undefined, // ✅ Send pool ID if selected
-        inventoryMergeMode: inventoryMergeMode || 'merged', // ✅ Fallback merge mode for backward compat
+
+      // Step 2: Update quick settings (settings already configured during wizard)
+      const quickSettings = {
+        poolId: selectedPool || undefined,
+        autoSyncMode: syncMode === 'auto',
+        autoDelist: delistMode === 'auto',
+        priceAdjustment: priceBuffer,
+        inventoryBuffer: inventoryBuffer
       };
-      
+
+      const settingsResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/connections/${connectionId}/quick-settings`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(quickSettings)
+      });
+
+      if (!settingsResponse.ok) {
+        const errorText = await settingsResponse.text();
+        throw new Error(`Failed to update quick settings: ${errorText || settingsResponse.status}`);
+      }
+
+      console.log('[MappingReviewScreen] Quick settings updated successfully.');
+
+      // Step 3: Activate the sync (no sync rules needed - settings are in connection data)
       const activateResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/activate-sync`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ syncRules }),
+        }
       });
       
       if (!activateResponse.ok) {
@@ -3867,7 +3918,7 @@ const MappingReviewScreen = () => {
 
                                 console.log('[MappingReview] Confirming mappings:', confirmedMappings.length);
                                 
-                                // Call the confirm-mappings endpoint
+                                // Call the confirm-mappings endpoint (mappings only, no sync rules)
                                 const token = await ensureSupabaseJwt();
                                 const confirmResponse = await fetch(`https://api.sssync.app/api/sync/connections/${connectionId}/confirm-mappings`, {
                                   method: 'POST',
@@ -3876,20 +3927,7 @@ const MappingReviewScreen = () => {
                                     'Content-Type': 'application/json',
                                   },
                                   body: JSON.stringify({
-                                    confirmedMatches: confirmedMappings,
-                                    syncRules: {
-                                      inventoryBuffer: globalInventoryBuffer,
-                                      syncInventory: syncInventory,
-                                      syncPricing: syncPricing,
-                                      productDetailsSoT: sourceOfTruth === 'sssync' ? 'ANORHA' : 'PLATFORM',
-                                      inventorySoT: sourceOfTruth === 'sssync' ? 'ANORHA' : 'PLATFORM',
-                                      propagateCreates: autoCreate,
-                                      propagateUpdates: autoUpdate,
-                                      propagateChanges: syncDirection === 'two-way' || syncDirection === 'push-only',
-                                      inventoryMergeMode: inventoryMergeMode || 'merged',
-                                      locationHandling: 'auto_merge',
-                                      poolId: selectedPool
-                                    }
+                                    confirmedMatches: confirmedMappings
                                   })
                                 });
 
@@ -3898,9 +3936,34 @@ const MappingReviewScreen = () => {
                                   throw new Error(`Failed to confirm mappings: ${error}`);
                                 }
 
-                                console.log('[MappingReview] Mappings confirmed, activating sync...');
+                                console.log('[MappingReview] Mappings confirmed, updating quick settings...');
 
-                                // Activate the sync
+                                // Step 2: Update quick settings with wizard selections
+                                const quickSettings = {
+                                  poolId: selectedPool || undefined,
+                                  autoSyncMode: syncMode === 'auto',
+                                  autoDelist: delistMode === 'auto',
+                                  priceAdjustment: priceBuffer,
+                                  inventoryBuffer: inventoryBuffer
+                                };
+
+                                const settingsResponse = await fetch(`https://api.sssync.app/api/connections/${connectionId}/quick-settings`, {
+                                  method: 'PUT',
+                                  headers: {
+                                    'Authorization': `Bearer ${token}`,
+                                    'Content-Type': 'application/json',
+                                  },
+                                  body: JSON.stringify(quickSettings)
+                                });
+
+                                if (!settingsResponse.ok) {
+                                  const error = await settingsResponse.text();
+                                  throw new Error(`Failed to update quick settings: ${error}`);
+                                }
+
+                                console.log('[MappingReview] Quick settings updated, activating sync...');
+
+                                // Step 3: Activate the sync
                                 const syncResponse = await fetch(`https://api.sssync.app/api/sync/connections/${connectionId}/activate-sync`, {
                                   method: 'POST',
                                   headers: {

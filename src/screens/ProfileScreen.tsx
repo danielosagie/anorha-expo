@@ -36,6 +36,7 @@ import { useOrg } from '../context/OrgContext';
 import CreateLocationPoolModal from '../components/CreateLocationPoolModal';
 import LocationPoolManager from '../components/LocationPoolManager';
 import LocationGroupsManager from '../components/LocationGroupsManager';
+import LocationsManagerV2 from '../components/LocationsManagerV2';
 
 
 
@@ -1619,23 +1620,15 @@ const ProfileScreen = () => {
         </Card>
       </Animated.View>
 
-      {/* Locations & Pools Card */}
-      {currentOrg?.id ? (
-        <Animated.View entering={FadeInUp.delay(250).duration(500)}>
-          <Card style={styles.card}>
-            <LocationGroupsManager
-              orgId={currentOrg.id}
-              platformConnections={platformConnections}
-            />
-          </Card>
-        </Animated.View>
-      ) : (
-        <Animated.View entering={FadeInUp.delay(250).duration(500)}>
-          <Card style={styles.card}>
-            <Text style={styles.noConnectionsText}>Loading organization...</Text>
-          </Card>
-        </Animated.View>
-      )}
+      {/* Locations & Pools Card (v2) - render unconditionally; component resolves orgId */}
+      <Animated.View entering={FadeInUp.delay(250).duration(500)}>
+        <Card style={styles.card}>
+          <LocationsManagerV2
+            orgId={currentOrg?.id}
+            platformConnections={platformConnections}
+          />
+        </Card>
+      </Animated.View>
       
       {/* Settings Card */}
       <Animated.View entering={FadeInUp.delay(300).duration(500)}>

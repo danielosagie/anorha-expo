@@ -3,6 +3,12 @@ import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIn
 import { useTheme } from '../context/ThemeContext';
 import Button from '../components/Button';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import ShopifySvg from '../assets/shopify.svg';
+import AmazonSvg from '../assets/amazon.svg';
+import FacebookSvg from '../assets/facebook.svg';
+import EbaySvg from '../assets/ebay.svg';
+import CloverSvg from '../assets/clover.svg';
+import SquareSvg from '../assets/square.svg';
 import ListingEditorForm, { ListingEditorFormRef } from '../components/ListingEditorForm';
 import BottomActionBar from '../components/BottomActionBar';
 import ExpoBarcodeScanner from '../components/ExpoBarcodeScanner';
@@ -27,6 +33,11 @@ const SSSYNC_API_BASE_URL = 'https://api.sssync.app';
 
 // Toggle to use manual save via BottomActionBar
 const ENABLE_AUTOSAVE = false;
+
+// 🚨 CRITICAL: ProductDetail should be READ-ONLY
+// It should ONLY read from cached database data (Supabase + PlatformSpecificData)
+// It should NEVER make platform API calls like sync-locations
+// Platform syncing should only happen during import/setup, then updates via webhooks
 
 // Enhanced interfaces
 interface ProductDetailNavigationProps {
@@ -83,11 +94,47 @@ interface GroupedInventoryLocations {
   };
 }
 
+// SVG logo helpers
+const platformSvgMap: Record<string, React.FC<any>> = {
+  shopify: ShopifySvg,
+  square: SquareSvg,
+  clover: CloverSvg,
+  amazon: AmazonSvg,
+  ebay: EbaySvg,
+  facebook: FacebookSvg,
+};
+
+function getPlatformLogoComponent(platformType?: string) {
+  const type = (platformType || '').toLowerCase();
+  const found = Object.entries(platformSvgMap).find(([key]) => type.includes(key));
+  return found ? found[1] : null;
+}
+
 const ProductDetailScreen = observer(
   ({ route, navigation }: { route: ProductDetailRouteProps; navigation: ProductDetailNavigationProps }) => {
     const theme = useTheme();
     const passedItem = route.params?.item;
     const productId = route.params?.productId || passedItem?.Id;
+
+    // 🚨 DEBUG: Intercept all fetch calls from this component
+    React.useEffect(() => {
+      const originalFetch = window.fetch;
+      window.fetch = function(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+        const url = input?.toString() || '';
+        if (url.includes('sync-locations')) {
+          console.error('[ProductDetail] 🚨 DETECTED sync-locations call from ProductDetail:', url, init);
+          // Don't actually make the call - this is forbidden in ProductDetail
+          return Promise.reject(new Error('sync-locations calls are forbidden in ProductDetail'));
+        }
+        if (url.includes('/api/platform-connections/') && url.includes('/sync')) {
+          console.warn('[ProductDetail] ⚠️ Platform sync call detected:', url);
+        }
+        return originalFetch.call(this, input as RequestInfo, init);
+      };
+      return () => {
+        window.fetch = originalFetch;
+      };
+    }, []);
 
     // State management
     const [detailedItem, setDetailedItem] = useState<ProductVariant | undefined | null>(passedItem);
@@ -109,11 +156,24 @@ const ProductDetailScreen = observer(
     const [lastSaveTime, setLastSaveTime] = useState<number>(0);
     const [isUploadingImages, setIsUploadingImages] = useState(false);
     const listingEditorRef = useRef<ListingEditorFormRef | null>(null);
-    const [editPlatforms, setEditPlatforms] = useState<Record<string, any>>({});
-    
-    // Debounce timer for auto-save
-    const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const SAVE_DEBOUNCE_MS = 1000; // Wait 1 second after last change before saving
+
+    // ========== CRITICAL FIX: useRef for data persistence + auto-save ==========
+    const [updateCounter, setUpdateCounter] = useState(0);
+    const platformsRef = useRef<Record<string, any>>({});
+    const [, forceUpdate] = useState({});
+    const debounceTimerRef = useRef<any>(null);
+    const lastHydratedItemRef = useRef<string | null>(null);
+    const lastSavedRef = useRef<string>('');
+
+    // Get displayedPlatforms from ref (for render)
+    const displayedPlatforms = platformsRef.current;
+
+    const updatePlatforms = (updater: (prev: Record<string, any>) => Record<string, any>) => {
+      platformsRef.current = updater(platformsRef.current);
+      forceUpdate({}); // Trigger re-render
+      setUpdateCounter(c => c + 1); // Signal content change
+      console.log('[ProductDetail] Updated platforms, triggering auto-save...');
+    };
 
     // Collaboration state
     const collaboration = useCollaboration();
@@ -124,7 +184,6 @@ const ProductDetailScreen = observer(
     const [draftData, setDraftData] = useState<Record<string, any> | null>(null);
     const [isLoadingDraft, setIsLoadingDraft] = useState(false);
     const [draftVersions, setDraftVersions] = useState<Array<{ id: string; createdAt: string; platforms: any; publishedPlatforms?: string[] }>>([]);
-    const debounceTimerRef = useRef<any>(null);
 
     // Current form data (now live)
     const [formData, setFormData] = useState<EditFormData>({
@@ -202,40 +261,10 @@ const ProductDetailScreen = observer(
 
         const platformConnections = connectionsData as PlatformConnection[];
         console.log('Loaded platform connections:', platformConnections.length);
-        
-        // SYNC LOCATIONS: Fetch fresh location data from platforms via API
-        const token = await ensureSupabaseJwt();
-        if (token) {
-          try {
-            const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || SSSYNC_API_BASE_URL;
-            // Sync locations for each connection
-            for (const conn of platformConnections) {
-              const platform = conn.PlatformType?.toLowerCase();
-              if (!platform) continue;
-              
-              // Call backend to sync locations (will update PlatformSpecificData.locations)
-              const syncRes = await fetch(`${baseUrl}/api/platform-connections/${conn.Id}/sync-locations`, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}` }
-              });
-              
-              if (syncRes.ok) {
-                const syncData = await syncRes.json();
-                console.log(`[ProductDetail] Synced ${syncData.locations?.length || 0} locations for ${platform}`);
-                // Update connection with fresh location data
-                if (syncData.locations) {
-                  conn.PlatformSpecificData = {
-                    ...(conn.PlatformSpecificData as any || {}),
-                    locations: syncData.locations
-                  };
-                }
-              }
-            }
-          } catch (syncError) {
-            console.warn('[ProductDetail] Location sync failed (non-blocking):', syncError);
-          }
-        }
-        
+
+        // NOTE: Location syncing is handled elsewhere (e.g., when connections are created)
+        // to avoid excessive API calls. We rely on cached location data in PlatformSpecificData.
+
         setConnections(platformConnections);
 
         // Load inventory levels for this product
@@ -249,6 +278,36 @@ const ProductDetailScreen = observer(
         } else {
           console.log('Loaded inventory levels:', inventoryData?.length || 0);
         }
+
+        // ⚡ OPTIMIZED: Load locations from PlatformLocations table instead of PlatformSpecificData
+        const connectionIds = platformConnections.map(c => c.Id);
+        const locations: Array<{ id: string; name: string; connectionId: string; connectionName: string }> = [];
+        
+        if (connectionIds.length > 0) {
+          const { data: platformLocs, error: locError } = await supabase
+            .from('PlatformLocations')
+            .select('PlatformConnectionId, PlatformLocationId, Name')
+            .in('PlatformConnectionId', connectionIds);
+          
+          if (locError) {
+            console.error('Error loading platform locations:', locError);
+          } else {
+            platformLocs?.forEach(loc => {
+              const conn = platformConnections.find(c => c.Id === loc.PlatformConnectionId);
+              if (conn) {
+                locations.push({
+                  id: loc.PlatformLocationId,
+                  name: loc.Name || 'Unnamed Location',
+                  connectionId: loc.PlatformConnectionId,
+                  connectionName: conn.DisplayName || conn.PlatformType
+                });
+              }
+            });
+            console.log('[ProductDetail] ✅ Loaded', locations.length, 'locations from DB in <1s');
+          }
+        }
+
+        console.log('Built locations:', locations.length);
 
         // Load platform mappings to get the correct platform data
         const { data: mappingsData, error: mappingsError } = await supabase
@@ -328,41 +387,163 @@ const ProductDetailScreen = observer(
         console.log('Grouped inventory:', Object.keys(grouped).length, 'platforms');
         setGroupedInventory(grouped);
 
+        // Store mappings for hydration useEffect
+        setMappings(mappingsData as PlatformProductMapping[] || []);
+
       } catch (error) {
         console.error('Error loading platform data:', error);
       }
     }, [detailedItem, getLocationName]);
 
+    // Load additional product details (images, tags, variants, etc.) - consolidated like PastScansScreen
+    const loadProductDetails = useCallback(async () => {
+      if (!detailedItem) return;
+
+      try {
+        console.log('[ProductDetail] Loading consolidated product details for:', detailedItem.Id);
+
+        // Load full product with variants and images like PastScansScreen does
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        const { data: products, error: productsError } = await supabase
+          .from('Products')
+          .select(`
+            Id,
+            UserId,
+            IsArchived,
+            CreatedAt,
+            UpdatedAt,
+            OrgId,
+            ProductVariants!inner (
+              Id,
+              ProductId,
+              Title,
+              Description,
+              Price,
+              CompareAtPrice,
+              Sku,
+              Barcode,
+              Weight,
+              WeightUnit,
+              Options,
+              Metadata,
+              IsTaxable,
+              RequiresShipping,
+              TaxCode,
+              OnShopify,
+              OnSquare,
+              OnClover,
+              OnAmazon,
+              OnEbay,
+              OnFacebook,
+              PrimaryImageUrl,
+              CreatedAt,
+              UpdatedAt,
+              ProductImages!ProductImages_ProductVariantId_fkey (
+                Id,
+                ImageUrl,
+                AltText,
+                Position
+              )
+            )
+          `)
+          .eq('Id', detailedItem.ProductId)
+          .eq('UserId', user.id)
+          .single();
+
+        if (productsError) {
+          console.error('[ProductDetail] Error loading product details:', productsError);
+          return;
+        }
+
+        if (!products?.ProductVariants?.[0]) {
+          console.warn('[ProductDetail] No variant found for product');
+          return;
+        }
+
+        const variant = products.ProductVariants[0];
+        const sortedImages = variant.ProductImages
+          ?.sort((a: any, b: any) => (a.Position || 0) - (b.Position || 0))
+          ?.map((img: any) => img.ImageUrl) || [];
+
+        console.log('[ProductDetail] Loaded variant with', sortedImages.length, 'images and options:', variant.Options);
+
+        // Update detailedItem with full data - DO NOT call setEditPlatforms here
+        // The hydration useEffect will handle populating editPlatforms when detailedItem changes
+        const enrichedItem = {
+          ...detailedItem,
+          ...variant,
+          ImageUrls: sortedImages,
+          // Include all the fields we need
+          Options: variant.Options || {},
+          Metadata: variant.Metadata || {},
+          IsTaxable: variant.IsTaxable,
+          RequiresShipping: variant.RequiresShipping,
+          TaxCode: variant.TaxCode,
+          PrimaryImageUrl: variant.PrimaryImageUrl,
+        };
+
+        setDetailedItem(enrichedItem);
+
+        // Update form data with all available fields
+        setFormData({
+          Title: enrichedItem.Title || '',
+          Description: enrichedItem.Description || '',
+          Price: enrichedItem.Price || 0,
+          CompareAtPrice: enrichedItem.CompareAtPrice || 0,
+          Sku: enrichedItem.Sku || '',
+          Barcode: enrichedItem.Barcode || '',
+          Weight: enrichedItem.Weight || 0,
+          WeightUnit: enrichedItem.WeightUnit || 'kg',
+          RequiresShipping: enrichedItem.RequiresShipping !== false,
+          IsTaxable: enrichedItem.IsTaxable !== false,
+          TaxCode: enrichedItem.TaxCode || '',
+        });
+
+      } catch (error) {
+        console.error('[ProductDetail] Error in loadProductDetails:', error);
+      }
+    }, [detailedItem]);
+
     // Helper to build platform locations from connections
     const buildPlatformLocations = useCallback(() => {
+      // ⚡ OPTIMIZED: Build from already-loaded grouped inventory state
+      // No additional Supabase query needed - data was already fetched in loadPlatformData
       const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>> = {};
       
-      connections.forEach(conn => {
-        const platform = conn.PlatformType?.toLowerCase();
-        if (!platform || !conn.IsEnabled) return;
-        
-        const platformData = conn.PlatformSpecificData || {};
-        const locations = (platformData as any).locations || [];
+      // Build from groupedInventory which contains all locations already loaded from DB
+      Object.values(groupedInventory).forEach(platformGroup => {
+        const platform = platformGroup.platformType?.toLowerCase();
+        if (!platform) return;
         
         if (!locsByPlatform[platform]) locsByPlatform[platform] = [];
         
-        locations.forEach((loc: any) => {
-          locsByPlatform[platform].push({
-            id: loc.id || loc.gid || '',
-            name: loc.name || 'Unnamed Location',
-            connectionId: conn.Id,
-            connectionName: conn.DisplayName || conn.PlatformType
-          });
+        platformGroup.locations.forEach(loc => {
+          // Avoid duplicates
+          const exists = locsByPlatform[platform].some(l => l.id === loc.id);
+          if (!exists) {
+            locsByPlatform[platform].push({
+              id: loc.id,
+              name: loc.locationName || 'Unnamed Location',
+              connectionId: loc.platformConnectionId,
+              connectionName: platformGroup.displayName
+            });
+          }
         });
       });
       
       return locsByPlatform;
-    }, [connections]);
+    }, [groupedInventory]);
 
     // Auto-save function with proper API call
     const performAutoSave = useCallback(async () => {
-      if (!detailedItem || !hasUnsavedChanges) return;
+      if (!detailedItem || !hasUnsavedChanges) {
+        console.log('[ProductDetail] Skipping auto-save: no item or no changes');
+        return;
+      }
 
+      console.log('[ProductDetail] Starting auto-save for product:', detailedItem.Id);
       setIsSaving(true);
       try {
         const token = await ensureSupabaseJwt();
@@ -372,10 +553,10 @@ const ProductDetailScreen = observer(
           return;
         }
 
-        // CRITICAL FIX: Use editPlatforms data from ListingEditorForm, not just formData
+        // CRITICAL FIX: Use displayedPlatforms data from ListingEditorForm, not just formData
         // Extract canonical data from shopify platform (or first available)
-        const canonicalKey = Object.keys(editPlatforms).includes('shopify') ? 'shopify' : Object.keys(editPlatforms)[0];
-        const canonical = editPlatforms[canonicalKey] || {};
+        const canonicalKey = Object.keys(displayedPlatforms).includes('shopify') ? 'shopify' : Object.keys(displayedPlatforms)[0];
+        const canonical = displayedPlatforms[canonicalKey] || {};
         
         // Prepare update data - using the correct API structure from the backend
         const updateData = {
@@ -391,7 +572,7 @@ const ProductDetailScreen = observer(
           IsTaxable: formData.IsTaxable,
           TaxCode: formData.TaxCode,
           // IMPORTANT: Include platform-specific data (variants, options, tags, etc)
-          PlatformSpecificData: editPlatforms,
+          PlatformSpecificData: displayedPlatforms,
           Tags: canonical.tags || [],
           Vendor: canonical.vendor,
           ProductType: canonical.productType,
@@ -414,7 +595,9 @@ const ProductDetailScreen = observer(
           throw new Error(errorData.message || `Failed to update product. Status: ${response.status}`);
         }
 
-        // Push updates to mapped platforms using catalog update (best-effort, do not block UI)
+        // 🚨 WARNING: This pushes updates TO platforms (outbound), which is OK for ProductDetail
+        // But we should NEVER pull/sync data FROM platforms in ProductDetail (inbound calls)
+        console.log('[ProductDetail] Pushing product updates to mapped platforms');
         try {
           const token2 = token;
           const baseUrl = SSSYNC_API_BASE_URL;
@@ -424,6 +607,7 @@ const ProductDetailScreen = observer(
           // Find mappings for this variant to know which connections to target
           const mapRes = await fetch(`${baseUrl}/api/platform-product-mappings?productVariantId=${encodeURIComponent(detailedItem.Id)}`, { headers: { Authorization: `Bearer ${token2}` } });
           const maps = mapRes.ok ? await mapRes.json() : [];
+          console.log(`[ProductDetail] Found ${maps.length} platform mappings to update`);
           for (const m of maps) {
             const conn = (userConnections || []).find((c:any)=> c.Id === m.PlatformConnectionId);
             if (!conn) continue;
@@ -431,13 +615,16 @@ const ProductDetailScreen = observer(
             // Minimal canonical to update price/title
             const product = { Title: updateData.Title, Description: updateData.Description };
             const variants = [{ Id: m.ProductVariantId, Sku: updateData.Sku, Price: updateData.Price, Barcode: updateData.Barcode, Title: updateData.Title }];
+            console.log(`[ProductDetail] Updating ${platform} product ${m.PlatformProductId}`);
             await fetch(`${baseUrl}/api/catalog/${platform}/connections/${conn.Id}/products/${m.PlatformProductId}`, {
               method: 'PUT',
               headers: { Authorization: `Bearer ${token2}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({ product, variants })
-            }).catch(()=>{});
+            }).catch((error) => console.warn(`[ProductDetail] Failed to update ${platform}:`, error));
           }
-        } catch {}
+        } catch (error) {
+          console.warn('[ProductDetail] Error pushing updates to platforms:', error);
+        }
 
         // Also update Supabase directly for immediate UI updates
         const { error: supabaseError } = await supabase
@@ -465,17 +652,6 @@ const ProductDetailScreen = observer(
       }
     }, [detailedItem, formData, hasUnsavedChanges]);
 
-    // Debounced auto-save
-    const scheduleAutoSave = useCallback(() => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-      
-      saveTimeoutRef.current = setTimeout(() => {
-        performAutoSave();
-      }, SAVE_DEBOUNCE_MS);
-    }, [performAutoSave]);
-
     // Handle form changes with auto-save
     const handleFormChange = useCallback((field: keyof EditFormData, value: any) => {
       setFormData(prev => ({
@@ -483,8 +659,7 @@ const ProductDetailScreen = observer(
         [field]: value
       }));
       setHasUnsavedChanges(true);
-      if (ENABLE_AUTOSAVE) scheduleAutoSave();
-    }, [scheduleAutoSave]);
+    }, []);
 
     // Update inventory quantity with auto-save using the correct API endpoint
     const updateInventoryQuantity = useCallback(async (
@@ -794,13 +969,15 @@ const ProductDetailScreen = observer(
     // Load platform data when product is available
     useEffect(() => {
       if (detailedItem) {
+        console.log('[ProductDetail] Loading data for product:', detailedItem.Id);
         loadPlatformData();
+        loadProductDetails(); // Load additional product data
       }
-    }, [detailedItem, loadPlatformData]);
+    }, [detailedItem?.Id]); // Only depend on item ID to prevent loops
 
-    // Phase 2: Load drafts from backend
+    // Phase 2: Load drafts from backend (after hydration)
     useEffect(() => {
-      if (!detailedItem) return;
+      if (!detailedItem || !platformsRef.current || Object.keys(platformsRef.current).length === 0) return;
 
       let canceled = false;
       setIsLoadingDraft(true);
@@ -829,11 +1006,45 @@ const ProductDetailScreen = observer(
               console.log('[ProductDetail] ✅ Loaded draft data');
               setDraftData(data.currentDraft?.draftData || null);
               setDraftVersions(data.versions || []);
-              
-              // Merge draft data with editPlatforms if draft exists
+
+              // Only use draft data if it enhances the published data (has more fields)
               if (data.currentDraft?.draftData) {
-                const hydratedPlatforms = hydratePlatformsFromBackend(data.currentDraft.draftData, editPlatforms);
-                setEditPlatforms(hydratedPlatforms);
+                console.log('[ProductDetail] Evaluating draft data:', Object.keys(data.currentDraft.draftData));
+
+                // Check if draft data is actually more complete than published data
+                const draftHasMoreData = Object.values(data.currentDraft.draftData).some((platformData: any) =>
+                  platformData && (
+                    platformData.title ||
+                    platformData.price ||
+                    platformData.weight ||
+                    (platformData.variants && platformData.variants.length > 0)
+                  )
+                );
+
+                if (draftHasMoreData) {
+                  console.log('[ProductDetail] Draft has meaningful data, merging...');
+
+                  // Deep merge draft changes onto existing published data
+                  const mergedPlatforms = { ...platformsRef.current };
+                  for (const [platformKey, draftPlatformData] of Object.entries(data.currentDraft.draftData)) {
+                    if (mergedPlatforms[platformKey]) {
+                      // Merge platform data
+                      mergedPlatforms[platformKey] = {
+                        ...mergedPlatforms[platformKey],
+                        ...draftPlatformData as any
+                      };
+                    } else {
+                      // Add new platform from draft
+                      mergedPlatforms[platformKey] = draftPlatformData;
+                    }
+                  }
+
+                  platformsRef.current = mergedPlatforms;
+                  lastSavedRef.current = JSON.stringify(mergedPlatforms);
+                  forceUpdate({}); // Trigger re-render with merged data
+                } else {
+                  console.log('[ProductDetail] Draft data is incomplete, ignoring to preserve published data');
+                }
               }
             }
           } else {
@@ -849,27 +1060,31 @@ const ProductDetailScreen = observer(
       })();
 
       return () => { canceled = true };
-    }, [detailedItem?.Id]);
+    }, [detailedItem?.Id, updateCounter]); // updateCounter changes when platforms are updated
 
-    // Phase 2.4: Auto-save editPlatforms to backend (debounced 2s)
+    // ========== AUTO-SAVE DEBOUNCE: Save to /api/products/drafts every 2s idle ==========
     useEffect(() => {
-      if (!detailedItem || Object.keys(editPlatforms).length === 0) {
+      if (!detailedItem || !platformsRef.current || Object.keys(platformsRef.current).length === 0) {
         return;
       }
 
-      // Clear existing timer
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }
 
-      // Set new timer - save after 2s of idle
       debounceTimerRef.current = setTimeout(async () => {
         try {
           const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || SSSYNC_API_BASE_URL;
           const token = await ensureSupabaseJwt();
 
           if (!baseUrl || !token) {
-            console.log('[ProductDetail AutoSave] Missing baseUrl or token');
+            console.log('[ProductDetail AutoSave] Missing baseUrl or token, skipping');
+            return;
+          }
+
+          const currentData = JSON.stringify(platformsRef.current);
+          if (currentData === lastSavedRef.current) {
+            console.log('[ProductDetail AutoSave] No changes, skipping save');
             return;
           }
 
@@ -880,11 +1095,12 @@ const ProductDetailScreen = observer(
               'Authorization': `Bearer ${token}`
             },
             body: JSON.stringify({
-              draftData: editPlatforms
+              draftData: platformsRef.current
             })
           });
 
           if (response.ok) {
+            lastSavedRef.current = currentData;
             console.log('[ProductDetail AutoSave] ✅ Draft auto-saved successfully');
           } else {
             const errorText = await response.text();
@@ -893,14 +1109,14 @@ const ProductDetailScreen = observer(
         } catch (error) {
           console.error('[ProductDetail AutoSave] ❌ Error auto-saving draft:', error);
         }
-      }, 2000); // 2 second debounce
+      }, 2000);
 
       return () => {
         if (debounceTimerRef.current) {
           clearTimeout(debounceTimerRef.current);
         }
       };
-    }, [editPlatforms, detailedItem?.Id]);
+    }, [displayedPlatforms, detailedItem?.Id]);
 
     // Set up realtime subscriptions
     useEffect(() => {
@@ -1064,14 +1280,6 @@ const ProductDetailScreen = observer(
       };
     }, [detailedItem?.ProductId, collaboration.isConnected]);
 
-    // Cleanup auto-save timer
-    useEffect(() => {
-      return () => {
-        if (saveTimeoutRef.current) {
-          clearTimeout(saveTimeoutRef.current);
-        }
-      };
-    }, []);
 
     const handleBarcodeScanned = (code: string) => {
       handleFormChange('Barcode', code);
@@ -1126,37 +1334,45 @@ const ProductDetailScreen = observer(
       return type || 'unknown';
     };
 
-    // Hydrate ListingEditorForm with canonical data for all mapped platforms
+    // Hydrate platforms data using unified utilities (like GenerateDetailsScreen)
     useEffect(() => {
       if (!detailedItem) return;
-      
-      console.log('[ProductDetail] Hydrating platforms. DetailedItem:', detailedItem);
-      
+
+      // Only hydrate if this is new data (different product ID)
+      const currentItemId = detailedItem.Id;
+      if (lastHydratedItemRef.current === currentItemId) {
+        console.log('[ProductDetail] Skipping re-hydration - same product');
+        return;
+      }
+
+      console.log('[ProductDetail] Hydrating new data. ProductId:', currentItemId);
+
       // Create canonical base from product variant
       const base = createCanonicalBase(detailedItem);
 
-      setEditPlatforms(prev => {
-        // Start with canonical shopify platform
-        const backendPlatforms: Record<string, any> = {
-          shopify: base
-        };
-        
-        // Add platforms for each mapping
-        (mappings || []).forEach(m => {
-          const conn = connections.find(c => c.Id === m.PlatformConnectionId);
-          const key = normalizePlatformKey(conn?.PlatformType);
-          if (key && key !== 'shopify') {
-            backendPlatforms[key] = base;
-          }
-        });
-        
-        // Use unified hydration - preserves user edits
-        const hydrated = hydratePlatformsFromBackend(backendPlatforms, prev);
-        
-        console.log('[ProductDetail] editPlatforms updated:', Object.keys(hydrated), 'shopify.title:', hydrated.shopify?.title);
-        return hydrated;
+      // Start with canonical shopify platform
+      const backendPlatforms: Record<string, any> = {
+        shopify: base
+      };
+
+      // Add platforms for each mapping
+      (mappings || []).forEach(m => {
+        const conn = connections.find(c => c.Id === m.PlatformConnectionId);
+        const key = normalizePlatformKey(conn?.PlatformType);
+        if (key && key !== 'shopify') {
+          backendPlatforms[key] = base;
+        }
       });
-    }, [detailedItem, mappings, connections]);
+
+      console.log('[ProductDetail] Backend platforms:', Object.keys(backendPlatforms));
+
+      // Hydrate into platformsRef (preserves user edits)
+      const hydrated = hydratePlatformsFromBackend(backendPlatforms, platformsRef.current);
+      console.log('[ProductDetail] Hydrated platforms:', Object.keys(hydrated));
+      updatePlatforms(() => hydrated);
+
+      lastHydratedItemRef.current = currentItemId;
+    }, [detailedItem?.Id]); // Only depend on item ID like GenerateDetailsScreen
 
     if (isLoading) {
       return (
@@ -1211,13 +1427,13 @@ const ProductDetailScreen = observer(
           <Card style={styles.basicSection}>
             <ListingEditorForm
               ref={listingEditorRef}
-              platforms={editPlatforms}
+              platforms={displayedPlatforms}
               images={detailedItem?.ImageUrls || []}
-              platformLocations={buildPlatformLocations()} 
-              onChangePlatforms={(next) => { 
+              platformLocations={buildPlatformLocations()}
+              onChangePlatforms={(next) => {
                 console.log('[ProductDetail] ListingEditorForm onChange:', Object.keys(next));
-                setEditPlatforms(next); 
-                setHasUnsavedChanges(true); 
+                updatePlatforms(() => next);
+                setHasUnsavedChanges(true);
               }}
               onChangeImages={(next) => { reorderImages(next); }}
               onOpenFieldPanel={undefined}
@@ -1240,22 +1456,24 @@ const ProductDetailScreen = observer(
                   const connection = connections.find(c => c.Id === mapping.PlatformConnectionId);
                   const platformName = connection?.DisplayName || `${connection?.PlatformType || 'Unknown'} Account`;
                   const platformType = connection?.PlatformType || 'unknown';
+                  const Logo = getPlatformLogoComponent(platformType);
                   return (
                     <View key={mapping.Id} style={styles.platformRow}>
                       <View style={styles.platformInfo}>
-                        <Icon name={getPlatformIcon(platformType)} size={20} color={theme.colors.primary} />
+                        <View style={styles.platformLogoContainer}>
+                          {Logo ? (
+                            <Logo width={18} height={18} />
+                          ) : (
+                            <Icon name="store" size={18} color={'#666'} />
+                          )}
+                        </View>
                         <View style={styles.platformDetails}>
                           <Text style={[styles.platformName, { color: theme.colors.text }]}>{platformName}</Text>
-                          <Text style={[styles.platformSku, { color: theme.colors.textSecondary }]}>SKU: {mapping.PlatformSku || detailedItem.Sku || 'N/A'}</Text>
-                          <Text style={[styles.platformStatus, { 
-                            color: mapping.SyncStatus === 'Success' ? theme.colors.success : 
-                                   mapping.SyncStatus === 'Failed' ? theme.colors.error : 
-                                   theme.colors.warning 
-                          }]}>Status: {mapping.SyncStatus || 'Connected'}</Text>
+                          <Text style={[styles.platformStatus, {color: theme.colors.text}]}>Status: {mapping.SyncStatus || 'Connected'}</Text>
                         </View>
                       </View>
                       <TouchableOpacity 
-                        style={[styles.syncButton, { backgroundColor: theme.colors.error }]}
+                        style={styles.delistButton}
                         onPress={() => {
                           Alert.alert('Delist', `Remove listing from ${platformName}?`, [
                             { text: 'Cancel', style: 'cancel' },
@@ -1263,16 +1481,18 @@ const ProductDetailScreen = observer(
                           ]);
                         }}
                       >
-                        <Icon name="minus-circle" size={16} color="#fff" />
+                        <Icon name="archive-outline" size={16} color={theme.colors.text} style={{ marginRight: 6 }} />
+                        <Text style={[styles.delistButtonText, { color: theme.colors.text }]}>Delist</Text>
                       </TouchableOpacity>
                     </View>
                   );
                 })}
                 <TouchableOpacity
-                  style={[styles.platformRow, { justifyContent: 'center' }]}
+                  style={styles.addPlatformRow}
                   onPress={() => listingEditorRef.current?.openPlatformPicker?.()}
                 >
-                  <Text style={[styles.platformName, { color: theme.colors.primary }]}>+ Add Platform</Text>
+                  <Icon name="plus" size={16} color={theme.colors.textSecondary} style={{ marginRight: 8 }} />
+                  <Text style={[styles.addPlatformText, { color: theme.colors.textSecondary }]}>Add Platform</Text>
                 </TouchableOpacity>
               </>
             ) : (
@@ -1289,7 +1509,7 @@ const ProductDetailScreen = observer(
           <Card style={[
             styles.dangerZoneSection,
             {
-              borderColor: theme.colors.error,
+              borderColor: "#F12C2D",
               backgroundColor: '#FAFBFC',
               borderWidth: 1.5,
               borderRadius: 10,
@@ -1318,7 +1538,7 @@ const ProductDetailScreen = observer(
                   flexDirection: 'row',
                   alignItems: 'center',
                   borderWidth: 1.5,
-                  borderColor: theme.colors.warning,
+                  borderColor: "#FFBC13",
                   borderRadius: 8,
                   paddingVertical: 12,
                   paddingHorizontal: 12,
@@ -1338,7 +1558,7 @@ const ProductDetailScreen = observer(
                 }}
               >
                 <Icon name="archive" size={20} color={theme.colors.warning} style={{ marginRight: 8 }} />
-                <Text style={{ color: theme.colors.warning, fontWeight: '500', fontSize: 16 }}>
+                <Text style={{ color: "#FFBC13", fontWeight: '400', fontSize: 16 }}>
                   Archive Product
                 </Text>
               </TouchableOpacity>
@@ -1347,8 +1567,8 @@ const ProductDetailScreen = observer(
                 style={{
                   flexDirection: 'row',
                   alignItems: 'center',
-                  borderWidth: 1.5,
-                  borderColor: theme.colors.error,
+                  borderWidth: 1.25,
+                  borderColor: "#F12C2D",
                   borderRadius: 8,
                   paddingVertical: 12,
                   paddingHorizontal: 12,
@@ -1657,6 +1877,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
   },
+  platformLogoContainer: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   platformDetails: {
     marginLeft: 12,
     flex: 1,
@@ -1686,6 +1916,20 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginLeft: 8,
   },
+  delistButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#D0D5DD',
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
+  delistButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
   noPlatformsContainer: {
     alignItems: 'center',
     paddingVertical: 20,
@@ -1694,6 +1938,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginBottom: 16,
     textAlign: 'center',
+  },
+  addPlatformRow: {
+    marginTop: 8,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: '#D0D5DD',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+  },
+  addPlatformText: {
+    fontSize: 16,
+    fontWeight: '500',
   },
   removeImageButton: {
     position: 'absolute',
