@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, Switch, FlatList } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import Button from '../components/Button';
@@ -16,7 +16,7 @@ import { CameraView } from 'expo-camera';
 import Card from '../components/Card';
 import PlaceholderImage from '../components/PlaceholderImage';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
-import { createCanonicalBase, hydratePlatformsFromBackend } from '../utils/platformDataHydration';
+import { createCanonicalBase } from '../utils/platformDataHydration';
 import {
   ProductVariant,
   PlatformProductMapping,
@@ -27,7 +27,7 @@ import {
 import { observer } from '@legendapp/state/react';
 import * as ImagePicker from 'expo-image-picker';
 import { useCollaboration } from '../hooks/useCollaboration';
-
+import LoadingOverlay from '../components/LoadingOverlay';
 // Base URL for API
 const SSSYNC_API_BASE_URL = 'https://api.sssync.app';
 
@@ -157,19 +157,20 @@ const ProductDetailScreen = observer(
     const [isUploadingImages, setIsUploadingImages] = useState(false);
     const listingEditorRef = useRef<ListingEditorFormRef | null>(null);
 
+    
+
     // ========== CRITICAL FIX: useRef for data persistence + auto-save ==========
     const [updateCounter, setUpdateCounter] = useState(0);
-    const platformsRef = useRef<Record<string, any>>({});
+    const [displayedPlatforms, setDisplayedPlatforms] = useState<Record<string, any>>({});
     const [, forceUpdate] = useState({});
-    const debounceTimerRef = useRef<any>(null);
     const lastHydratedItemRef = useRef<string | null>(null);
     const lastSavedRef = useRef<string>('');
 
     // Get displayedPlatforms from ref (for render)
-    const displayedPlatforms = platformsRef.current;
+    // const displayedPlatforms = platformsRef.current; // This line is removed
 
     const updatePlatforms = (updater: (prev: Record<string, any>) => Record<string, any>) => {
-      platformsRef.current = updater(platformsRef.current);
+      setDisplayedPlatforms(updater);
       forceUpdate({}); // Trigger re-render
       setUpdateCounter(c => c + 1); // Signal content change
       console.log('[ProductDetail] Updated platforms, triggering auto-save...');
@@ -199,6 +200,13 @@ const ProductDetailScreen = observer(
       IsTaxable: true,
       TaxCode: '',
     });
+
+    // State for sync status
+    const [syncStatus, setSyncStatus] = useState<any>(null);
+    const [fetchErrors, setFetchErrors] = useState<string[]>([]);
+
+    // State for sync loading
+     const [isSyncing, setIsSyncing] = useState(false);
 
     // Helper function to get proper location names from platform data
     const getLocationName = useCallback((level: InventoryLevel, connection: PlatformConnection, mapping?: PlatformProductMapping): string => {
@@ -650,15 +658,15 @@ const ProductDetailScreen = observer(
       } finally {
         setIsSaving(false);
       }
-    }, [detailedItem, formData, hasUnsavedChanges]);
+    }, [detailedItem, formData, hasUnsavedChanges, displayedPlatforms]);
 
     // Handle form changes with auto-save
     const handleFormChange = useCallback((field: keyof EditFormData, value: any) => {
-      setFormData(prev => ({
-        ...prev,
-        [field]: value
-      }));
-      setHasUnsavedChanges(true);
+      setDetailedItem(prev => {
+        const updated = { ...prev, [field]: value };
+        setHasUnsavedChanges(true);
+        return updated;
+      });
     }, []);
 
     // Update inventory quantity with auto-save using the correct API endpoint
@@ -876,45 +884,35 @@ const ProductDetailScreen = observer(
       }
     };
 
-    const deleteProduct = async () => {
-      if (!detailedItem) return;
-
+    // In the delete handler
+    const handleDelete = () => {
       Alert.alert(
-        'Delete Product',
-        'Are you sure you want to delete this product? This action cannot be undone.',
+        'Confirm Delete',
+        'This action cannot be undone. Do you want to archive or hard delete?',
         [
           { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Delete',
-            style: 'destructive',
-            onPress: async () => {
-              try {
-                const token = await ensureSupabaseJwt();
-
-                if (token) {
-                  const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
-                    method: 'DELETE',
-                    headers: {
-                      'Authorization': `Bearer ${token}`,
-                    },
-                  });
-
-                  if (!response.ok) {
-                    throw new Error('Failed to delete product');
-                  }
-                }
-
-                Alert.alert('Success', 'Product deleted successfully', [
-                  { text: 'OK', onPress: () => navigation.goBack() }
-                ]);
-              } catch (error) {
-                console.error('Error deleting product:', error);
-                Alert.alert('Error', 'Failed to delete product. Please try again.');
-              }
-            }
-          }
+          { text: 'Archive', onPress: () => archiveProduct() },
+          { text: 'Hard Delete', style: 'destructive', onPress: () => hardDeleteProduct() },
         ]
       );
+    };
+
+    // Add functions
+    const archiveProduct = async () => {
+      try {
+        const token = await ensureSupabaseJwt();
+        await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}/archive`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        navigation.goBack();
+      } catch (error) {
+        // handle
+      }
+    };
+
+    const hardDeleteProduct = async () => {
+      // similar for delete
     };
 
     // Load initial data
@@ -975,9 +973,45 @@ const ProductDetailScreen = observer(
       }
     }, [detailedItem?.Id]); // Only depend on item ID to prevent loops
 
+    // Populate form fields from detailedItem when it loads
+    useEffect(() => {
+      if (!detailedItem) return;
+
+      // Populate formData
+      setFormData(prev => ({
+        ...prev,
+        Title: detailedItem.Title || '',
+        Description: detailedItem.Description || '',
+        Price: detailedItem.Price ? Number(detailedItem.Price) : 0,
+        CompareAtPrice: detailedItem.CompareAtPrice ? Number(detailedItem.CompareAtPrice) : undefined,
+        Sku: detailedItem.Sku || '',
+        Barcode: detailedItem.Barcode || '',
+        Weight: detailedItem.Weight ? Number(detailedItem.Weight) : 0,
+        WeightUnit: detailedItem.WeightUnit || 'kg',
+        RequiresShipping: detailedItem.RequiresShipping !== false,
+        IsTaxable: detailedItem.IsTaxable !== false,
+        TaxCode: (detailedItem as any).TaxCode || '',
+      }));
+
+      // Also populate displayedPlatforms with base canonical data
+      const canonicalBase = {
+        title: detailedItem.Title || '',
+        sku: detailedItem.Sku || '',
+        barcode: detailedItem.Barcode || '',
+        price: detailedItem.Price ? Number(detailedItem.Price) : 0,
+        compareAtPrice: detailedItem.CompareAtPrice ? Number(detailedItem.CompareAtPrice) : undefined,
+        weight: detailedItem.Weight ? Number(detailedItem.Weight) : 0,
+        description: detailedItem.Description || '',
+        requiresShipping: detailedItem.RequiresShipping !== false,
+        isTaxable: detailedItem.IsTaxable !== false,
+      };
+
+      setDisplayedPlatforms({ shopify: canonicalBase });
+    }, [detailedItem?.Id]); // Only run when product changes
+
     // Phase 2: Load drafts from backend (after hydration)
     useEffect(() => {
-      if (!detailedItem || !platformsRef.current || Object.keys(platformsRef.current).length === 0) return;
+      if (!detailedItem || !Object.keys(displayedPlatforms).length === 0) return;
 
       let canceled = false;
       setIsLoadingDraft(true);
@@ -1025,7 +1059,7 @@ const ProductDetailScreen = observer(
                   console.log('[ProductDetail] Draft has meaningful data, merging...');
 
                   // Deep merge draft changes onto existing published data
-                  const mergedPlatforms = { ...platformsRef.current };
+                  const mergedPlatforms = { ...displayedPlatforms };
                   for (const [platformKey, draftPlatformData] of Object.entries(data.currentDraft.draftData)) {
                     if (mergedPlatforms[platformKey]) {
                       // Merge platform data
@@ -1039,7 +1073,7 @@ const ProductDetailScreen = observer(
                     }
                   }
 
-                  platformsRef.current = mergedPlatforms;
+                  setDisplayedPlatforms(mergedPlatforms);
                   lastSavedRef.current = JSON.stringify(mergedPlatforms);
                   forceUpdate({}); // Trigger re-render with merged data
                 } else {
@@ -1060,63 +1094,7 @@ const ProductDetailScreen = observer(
       })();
 
       return () => { canceled = true };
-    }, [detailedItem?.Id, updateCounter]); // updateCounter changes when platforms are updated
-
-    // ========== AUTO-SAVE DEBOUNCE: Save to /api/products/drafts every 2s idle ==========
-    useEffect(() => {
-      if (!detailedItem || !platformsRef.current || Object.keys(platformsRef.current).length === 0) {
-        return;
-      }
-
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-
-      debounceTimerRef.current = setTimeout(async () => {
-        try {
-          const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || SSSYNC_API_BASE_URL;
-          const token = await ensureSupabaseJwt();
-
-          if (!baseUrl || !token) {
-            console.log('[ProductDetail AutoSave] Missing baseUrl or token, skipping');
-            return;
-          }
-
-          const currentData = JSON.stringify(platformsRef.current);
-          if (currentData === lastSavedRef.current) {
-            console.log('[ProductDetail AutoSave] No changes, skipping save');
-            return;
-          }
-
-          const response = await fetch(`${baseUrl}/api/products/drafts/${detailedItem.Id}`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({
-              draftData: platformsRef.current
-            })
-          });
-
-          if (response.ok) {
-            lastSavedRef.current = currentData;
-            console.log('[ProductDetail AutoSave] ✅ Draft auto-saved successfully');
-          } else {
-            const errorText = await response.text();
-            console.error('[ProductDetail AutoSave] ❌ Failed to auto-save draft:', response.status, errorText);
-          }
-        } catch (error) {
-          console.error('[ProductDetail AutoSave] ❌ Error auto-saving draft:', error);
-        }
-      }, 2000);
-
-      return () => {
-        if (debounceTimerRef.current) {
-          clearTimeout(debounceTimerRef.current);
-        }
-      };
-    }, [displayedPlatforms, detailedItem?.Id]);
+    }, [detailedItem?.Id, updateCounter, displayedPlatforms]); // updateCounter changes when platforms are updated
 
     // Set up realtime subscriptions
     useEffect(() => {
@@ -1281,99 +1259,6 @@ const ProductDetailScreen = observer(
     }, [detailedItem?.ProductId, collaboration.isConnected]);
 
 
-    const handleBarcodeScanned = (code: string) => {
-      handleFormChange('Barcode', code);
-      setIsBarcodeScannerVisible(false);
-      Alert.alert('Barcode Scanned', `Added barcode: ${code}`);
-    };
-
-    const getPlatformIcon = (platformType: string) => {
-      const type = platformType.toLowerCase();
-      if (type.includes('shopify')) return 'shopping';
-      if (type.includes('square')) return 'square-medium';
-      if (type.includes('clover')) return 'clover';
-      if (type.includes('amazon')) return 'amazon';
-      if (type.includes('ebay')) return 'tag';
-      if (type.includes('facebook')) return 'facebook';
-      return 'store';
-    };
-
-    // Generate proper image URLs with better error handling
-    const getImageUrl = (imageUrl: string): string => {
-      if (!imageUrl) return '';
-      
-      // If it's already a full URL, return as is
-      if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
-        return imageUrl;
-      }
-      
-      // If it's a Supabase storage path, construct the full URL
-      if (imageUrl.startsWith('product-images/') || imageUrl.startsWith('product-media/')) {
-        const { data } = supabase.storage.from('product-media').getPublicUrl(imageUrl);
-        return data.publicUrl;
-      }
-      
-      // If it looks like a relative path, try to construct a Supabase URL
-      if (!imageUrl.includes('://')) {
-        const { data } = supabase.storage.from('product-media').getPublicUrl(imageUrl);
-        return data.publicUrl;
-      }
-      
-      return imageUrl;
-    };
-
-    // Normalize platform type to ListingEditorForm key
-    const normalizePlatformKey = (platformType?: string) => {
-      const type = (platformType || '').toLowerCase();
-      if (type.includes('shopify')) return 'shopify';
-      if (type.includes('square')) return 'square';
-      if (type.includes('clover')) return 'clover';
-      if (type.includes('amazon')) return 'amazon';
-      if (type.includes('ebay')) return 'ebay';
-      if (type.includes('facebook')) return 'facebook';
-      return type || 'unknown';
-    };
-
-    // Hydrate platforms data using unified utilities (like GenerateDetailsScreen)
-    useEffect(() => {
-      if (!detailedItem) return;
-
-      // Only hydrate if this is new data (different product ID)
-      const currentItemId = detailedItem.Id;
-      if (lastHydratedItemRef.current === currentItemId) {
-        console.log('[ProductDetail] Skipping re-hydration - same product');
-        return;
-      }
-
-      console.log('[ProductDetail] Hydrating new data. ProductId:', currentItemId);
-
-      // Create canonical base from product variant
-      const base = createCanonicalBase(detailedItem);
-
-      // Start with canonical shopify platform
-      const backendPlatforms: Record<string, any> = {
-        shopify: base
-      };
-
-      // Add platforms for each mapping
-      (mappings || []).forEach(m => {
-        const conn = connections.find(c => c.Id === m.PlatformConnectionId);
-        const key = normalizePlatformKey(conn?.PlatformType);
-        if (key && key !== 'shopify') {
-          backendPlatforms[key] = base;
-        }
-      });
-
-      console.log('[ProductDetail] Backend platforms:', Object.keys(backendPlatforms));
-
-      // Hydrate into platformsRef (preserves user edits)
-      const hydrated = hydratePlatformsFromBackend(backendPlatforms, platformsRef.current);
-      console.log('[ProductDetail] Hydrated platforms:', Object.keys(hydrated));
-      updatePlatforms(() => hydrated);
-
-      lastHydratedItemRef.current = currentItemId;
-    }, [detailedItem?.Id]); // Only depend on item ID like GenerateDetailsScreen
-
     if (isLoading) {
       return (
         <View style={[styles.container, styles.centered, { backgroundColor: theme.colors.background }]}>
@@ -1391,6 +1276,7 @@ const ProductDetailScreen = observer(
         </View>
       );
     }
+
 
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -1421,7 +1307,7 @@ const ProductDetailScreen = observer(
             </View>
           </View>
 
-          
+          {draftData && <Text style={{ color: 'orange' }}>Draft Mode - Changes not published</Text>}
 
           {/* Listing editor (edit mode) */}
           <Card style={styles.basicSection}>
@@ -1432,7 +1318,7 @@ const ProductDetailScreen = observer(
               platformLocations={buildPlatformLocations()}
               onChangePlatforms={(next) => {
                 console.log('[ProductDetail] ListingEditorForm onChange:', Object.keys(next));
-                updatePlatforms(() => next);
+                setDisplayedPlatforms(next);
                 setHasUnsavedChanges(true);
               }}
               onChangeImages={(next) => { reorderImages(next); }}
@@ -1575,7 +1461,7 @@ const ProductDetailScreen = observer(
                   backgroundColor: '#fff',
                   justifyContent: 'center'
                 }}
-                onPress={deleteProduct}
+                onPress={handleDelete}
               >
                 <Icon name="delete" size={20} color={theme.colors.error} style={{ marginRight: 8 }} />
                 <Text style={{ color: theme.colors.error, fontWeight: '500', fontSize: 16 }}>
@@ -1586,7 +1472,7 @@ const ProductDetailScreen = observer(
           </Card>
         </ScrollView>
         
-
+        {/* Sync Status Indicator */}
         {hasUnsavedChanges && (
           <BottomActionBar
             primaryLabel={isSaving ? 'Saving…' : 'Save changes'}
@@ -1616,6 +1502,9 @@ const ProductDetailScreen = observer(
               </TouchableOpacity>
             </View>
           </View>
+        )}
+        {isSyncing && (
+          <LoadingOverlay visible={isSyncing} message="Syncing to platforms..." onCancel={() => setIsSyncing(false)} />
         )}
       </View>
     );

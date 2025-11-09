@@ -68,6 +68,15 @@ interface DbPlatformLocation {
   Name: string | null;
 }
 
+// Delete confirmation state
+interface DeletePoolState {
+  visible: boolean;
+  poolId: string | null;
+  mergeTarget: string | null;
+  availablePools: LocationPool[];
+  loading: boolean;
+}
+
 const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platformConnections }) => {
   const theme = useTheme();
 
@@ -88,6 +97,15 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
   const [existingRows, setExistingRows] = useState<PoolLocationRow[]>([]);
   const [selectedByConnection, setSelectedByConnection] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+
+  // Delete modal state
+  const [deleteState, setDeleteState] = useState<DeletePoolState>({
+    visible: false,
+    poolId: null,
+    mergeTarget: null,
+    availablePools: [],
+    loading: false,
+  });
 
   const connectionIds = useMemo(() => platformConnections?.map((c) => c.Id) || [], [platformConnections]);
 
@@ -305,6 +323,88 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
     }
   };
 
+  // NEW: Load available pools for merge target selection
+  const loadAvailablePoolsForDelete = useCallback(async (excludePoolId: string) => {
+    try {
+      const token = await ensureSupabaseJwt();
+      if (!resolvedOrgId) return [];
+
+      const res = await fetch(`${API_BASE_URL}/api/pools/org/${resolvedOrgId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!res.ok) throw new Error('Failed to load pools for delete');
+
+      const poolData: LocationPool[] = await res.json();
+      const filteredPools = (Array.isArray(poolData) ? poolData : []).filter(p => p.id !== excludePoolId);
+      
+      setDeleteState(prev => ({ ...prev, availablePools: filteredPools }));
+      return filteredPools;
+    } catch (e) {
+      console.error('[LocationsManagerV2] loadAvailablePoolsForDelete error', e);
+      setDeleteState(prev => ({ ...prev, availablePools: [] }));
+      return [];
+    }
+  }, [resolvedOrgId]);
+
+  // NEW: Handle pool delete confirmation
+  const confirmDeletePool = async () => {
+    if (!deleteState.poolId || !resolvedOrgId || deleteState.mergeTarget === null) {
+      Alert.alert('Error', 'Invalid delete state');
+      return;
+    }
+
+    setDeleteState(prev => ({ ...prev, loading: true }));
+
+    try {
+      const token = await ensureSupabaseJwt();
+
+      const res = await fetch(`${API_BASE_URL}/api/pools/${deleteState.poolId}`, {
+        method: 'DELETE',
+        headers: { 
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          mergeIntoPoolId: deleteState.mergeTarget === 'none' ? undefined : deleteState.mergeTarget 
+        }),
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`Delete failed: ${res.status} - ${errorText}`);
+      }
+
+      Alert.alert('Success', 'Pool deleted successfully');
+      setDeleteState({ visible: false, poolId: null, mergeTarget: null, availablePools: [], loading: false });
+      await loadList(); // Refresh the list
+    } catch (e) {
+      console.error('[LocationsManagerV2] deletePool error', e);
+      Alert.alert('Error', e instanceof Error ? e.message : 'Failed to delete pool');
+      setDeleteState(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  // NEW: Open delete confirmation for a pool
+  const openDeletePool = async (poolId: string, poolName: string) => {
+    await loadAvailablePoolsForDelete(poolId);
+    setDeleteState({
+      visible: true,
+      poolId,
+      mergeTarget: 'main', // Default to main pool
+      availablePools: [],
+      loading: false,
+    });
+    Alert.alert(
+      'Delete Pool',
+      `Are you sure you want to delete "${poolName}"? This will move its locations to another pool.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', onPress: () => {} }, // Modal will handle
+      ]
+    );
+  };
+
   const renderListItemRight = (platformType?: string) => {
     if (!platformType) return null;
     const Logo = PLATFORM_LOGOS[platformType as keyof typeof PLATFORM_LOGOS];
@@ -357,7 +457,19 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                 onPress={() => setSelectedListItem({ kind: 'pool', id: p.id })}
               >
                 <Text style={styles.listItemText}>{p.name} - Pool</Text>
-                <Icon name="lock" size={14} color="#999" />
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Icon name="lock" size={14} color="#999" />
+                  {/* Delete button for pools */}
+                  <TouchableOpacity
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      openDeletePool(p.id, p.name);
+                    }}
+                    style={{ padding: 4 }}
+                  >
+                    <Icon name="delete-outline" size={20} color="#ff4444" />
+                  </TouchableOpacity>
+                </View>
               </TouchableOpacity>
             ))}
 
@@ -470,6 +582,86 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                 onPress={handleConfirm}
                 loading={saving}
                 disabled={!groupName.trim()}
+                style={{ flex: 1 }}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* NEW: Delete Confirmation Modal */}
+      <Modal visible={deleteState.visible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { maxWidth: 350 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Delete Pool</Text>
+              <TouchableOpacity onPress={() => setDeleteState(prev => ({ ...prev, visible: false }))}>
+                <Icon name="close" size={22} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+              <Text style={styles.label}>Select merge target for locations:</Text>
+              <View style={{ marginTop: 8 }}>
+                {/* Option: Delete without merging (if no locations or user choice) */}
+                <TouchableOpacity
+                  style={[
+                    styles.chip, 
+                    deleteState.mergeTarget === 'none' && styles.chipSelected,
+                    { marginBottom: 8, alignSelf: 'flex-start' }
+                  ]}
+                  onPress={() => setDeleteState(prev => ({ ...prev, mergeTarget: 'none' }))}
+                >
+                  <Text style={[
+                    styles.chipText, 
+                    deleteState.mergeTarget === 'none' && styles.chipTextSelected
+                  ]}>
+                    Delete without merging (locations become single)
+                  </Text>
+                </TouchableOpacity>
+
+                {/* Available pools picker */}
+                <ScrollView style={{ maxHeight: 200 }}>
+                  {deleteState.availablePools.map((pool) => (
+                    <TouchableOpacity
+                      key={pool.id}
+                      style={[
+                        styles.chip, 
+                        deleteState.mergeTarget === pool.id && styles.chipSelected,
+                        { marginBottom: 4, alignSelf: 'flex-start' }
+                      ]}
+                      onPress={() => setDeleteState(prev => ({ ...prev, mergeTarget: pool.id }))}
+                    >
+                      <Text style={[
+                        styles.chipText, 
+                        deleteState.mergeTarget === pool.id && styles.chipTextSelected
+                      ]}>
+                        {pool.name}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+
+                {deleteState.availablePools.length === 0 && (
+                  <Text style={{ fontSize: 12, color: '#999', marginTop: 8 }}>
+                    No other pools available. Locations will become single.
+                  </Text>
+                )}
+              </View>
+            </View>
+
+            <View style={styles.footerRow}>
+              <Button 
+                title="Cancel" 
+                outlined 
+                onPress={() => setDeleteState(prev => ({ ...prev, visible: false }))} 
+                style={{ flex: 1 }} 
+              />
+              <Button
+                title={deleteState.loading ? "Deleting..." : "Delete Pool"}
+                onPress={confirmDeletePool}
+                loading={deleteState.loading}
+                disabled={deleteState.loading || deleteState.mergeTarget === null}
                 style={{ flex: 1 }}
               />
             </View>

@@ -34,8 +34,7 @@ import BottomNav from '../components/BottomNav';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { useOrg } from '../context/OrgContext';
 import CreateLocationPoolModal from '../components/CreateLocationPoolModal';
-import LocationPoolManager from '../components/LocationPoolManager';
-import LocationGroupsManager from '../components/LocationGroupsManager';
+
 import LocationsManagerV2 from '../components/LocationsManagerV2';
 
 
