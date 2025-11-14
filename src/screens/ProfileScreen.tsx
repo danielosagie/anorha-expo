@@ -722,19 +722,8 @@ const ProfileScreen = () => {
       const token = await getApiToken();
       if (!token) throw new Error('Authentication token not found for starting scan.');
 
-      // If this is a reconciliation, first update the status to 'reconciling'
-      if (isReconnect) {
-        await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections/${connectionId}/status`, {
-          method: 'PATCH',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ status: 'reconciling' })
-        });
-        // Optimistically update local state or just reload after
-        loadConnections(); 
-      }
+      // ✅ REMOVED: Backend now handles setting status to 'reconciling' when queuing the job
+      // No need to manually set it here - this was causing the previousStatus to be saved as 'reconciling'
 
       // Show a loading notification
       showStatusNotification('Processing', `Starting scan for ${platformName}...`, 'info');

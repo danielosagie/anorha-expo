@@ -157,7 +157,8 @@ const ProductDetailScreen = observer(
     const [isUploadingImages, setIsUploadingImages] = useState(false);
     const listingEditorRef = useRef<ListingEditorFormRef | null>(null);
 
-    
+    // Add state after existing states (around line 160, after const [isUploadingImages, setIsUploadingImages] = useState(false);)
+    const [variantPricing, setVariantPricing] = useState<any[]>([]);
 
     // ========== CRITICAL FIX: useRef for data persistence + auto-save ==========
     const [updateCounter, setUpdateCounter] = useState(0);
@@ -477,6 +478,20 @@ const ProductDetailScreen = observer(
 
         console.log('[ProductDetail] Loaded variant with', sortedImages.length, 'images and options:', variant.Options);
 
+        // Load VariantPricing for this variant (ONLY active records, not soft-deleted)
+        const { data: variantPricingData, error: variantPricingError } = await supabase
+          .from('VariantPricing')
+          .select('*')
+          .eq('ProductVariantId', variant.Id)
+          .eq('IsDeleted', false); // Filter out soft-deleted variants
+
+        if (variantPricingError) {
+          console.warn('[ProductDetail] Error loading VariantPricing:', variantPricingError);
+        } else {
+          console.log('[ProductDetail] Loaded', variantPricingData?.length || 0, 'active variant pricing records');
+          setVariantPricing(variantPricingData || []);
+        }
+
         // Update detailedItem with full data - DO NOT call setEditPlatforms here
         // The hydration useEffect will handle populating editPlatforms when detailedItem changes
         const enrichedItem = {
@@ -603,36 +618,10 @@ const ProductDetailScreen = observer(
           throw new Error(errorData.message || `Failed to update product. Status: ${response.status}`);
         }
 
-        // 🚨 WARNING: This pushes updates TO platforms (outbound), which is OK for ProductDetail
-        // But we should NEVER pull/sync data FROM platforms in ProductDetail (inbound calls)
-        console.log('[ProductDetail] Pushing product updates to mapped platforms');
-        try {
-          const token2 = token;
-          const baseUrl = SSSYNC_API_BASE_URL;
-          // Get connections for this user to find platforms for this product
-          const connRes = await fetch(`${baseUrl}/api/platform-connections`, { headers: { Authorization: `Bearer ${token2}` } });
-          const userConnections = connRes.ok ? await connRes.json() : [];
-          // Find mappings for this variant to know which connections to target
-          const mapRes = await fetch(`${baseUrl}/api/platform-product-mappings?productVariantId=${encodeURIComponent(detailedItem.Id)}`, { headers: { Authorization: `Bearer ${token2}` } });
-          const maps = mapRes.ok ? await mapRes.json() : [];
-          console.log(`[ProductDetail] Found ${maps.length} platform mappings to update`);
-          for (const m of maps) {
-            const conn = (userConnections || []).find((c:any)=> c.Id === m.PlatformConnectionId);
-            if (!conn) continue;
-            const platform = (conn.PlatformType || '').toLowerCase();
-            // Minimal canonical to update price/title
-            const product = { Title: updateData.Title, Description: updateData.Description };
-            const variants = [{ Id: m.ProductVariantId, Sku: updateData.Sku, Price: updateData.Price, Barcode: updateData.Barcode, Title: updateData.Title }];
-            console.log(`[ProductDetail] Updating ${platform} product ${m.PlatformProductId}`);
-            await fetch(`${baseUrl}/api/catalog/${platform}/connections/${conn.Id}/products/${m.PlatformProductId}`, {
-              method: 'PUT',
-              headers: { Authorization: `Bearer ${token2}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ product, variants })
-            }).catch((error) => console.warn(`[ProductDetail] Failed to update ${platform}:`, error));
-          }
-        } catch (error) {
-          console.warn('[ProductDetail] Error pushing updates to platforms:', error);
-        }
+        // ✅ Platform syncing is handled automatically by the backend via syncCoordinatorService
+        // The PUT /api/products/:id endpoint automatically enqueues platform sync jobs
+        // No manual platform push needed - backend handles it in the background
+        console.log('[ProductDetail] Product updated successfully. Platform sync will happen automatically in the background.');
 
         // Also update Supabase directly for immediate UI updates
         const { error: supabaseError } = await supabase
@@ -1006,7 +995,19 @@ const ProductDetailScreen = observer(
         isTaxable: detailedItem.IsTaxable !== false,
       };
 
-      setDisplayedPlatforms({ shopify: canonicalBase });
+      setDisplayedPlatforms({ 
+        shopify: { 
+          ...canonicalBase, 
+          variants: variantPricing.map((v: any) => ({
+            optionValues: v.OptionValues,
+            price: v.Price,
+            compareAtPrice: v.CompareAtPrice,
+            sku: v.Sku,
+            barcode: v.Barcode,
+            inventoryByLocation: v.InventoryByLocation || {}
+          }))
+        } 
+      });
     }, [detailedItem?.Id]); // Only run when product changes
 
     // Phase 2: Load drafts from backend (after hydration)

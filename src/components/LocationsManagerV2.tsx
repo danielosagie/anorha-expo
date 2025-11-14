@@ -387,12 +387,14 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
 
   // NEW: Open delete confirmation for a pool
   const openDeletePool = async (poolId: string, poolName: string) => {
-    await loadAvailablePoolsForDelete(poolId);
+    const availablePools = await loadAvailablePoolsForDelete(poolId);
+    const defaultMergeTarget = availablePools.length > 0 ? availablePools[0].id : 'none';
+    
     setDeleteState({
       visible: true,
       poolId,
-      mergeTarget: 'main', // Default to main pool
-      availablePools: [],
+      mergeTarget: defaultMergeTarget, // Default to first available pool or 'none'
+      availablePools,
       loading: false,
     });
     Alert.alert(
