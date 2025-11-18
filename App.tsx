@@ -60,7 +60,7 @@ const App: React.FC = () => {
       const handleInitialUrl = async () => {
         const initialUrl = await Linking.getInitialURL();
         if (!initialUrl) return;
-        if (!initialUrl.startsWith('sssyncapp://auth-callback') && !initialUrl.startsWith('sssyncapp://auth/callback')) return;
+        if (!initialUrl.startsWith('anorhaapp://auth-callback') && !initialUrl.startsWith('anorhaapp://auth/callback')) return;
         try {
           const urlObject = new URL(initialUrl);
           const status = urlObject.searchParams.get('status');
@@ -75,7 +75,7 @@ const App: React.FC = () => {
       handleInitialUrl();
       const subscription = Linking.addEventListener('url', (event: { url: string }) => {
         const url = event.url;
-        if (!url.startsWith('sssyncapp://auth-callback') && !url.startsWith('sssyncapp://auth/callback')) return;
+        if (!url.startsWith('anorhaapp://auth-callback') && !url.startsWith('anorhaapp://auth/callback')) return;
         try {
           const urlObject = new URL(url);
           const status = urlObject.searchParams.get('status');

@@ -1,1 +1,327 @@
-{"created_at": "2025-08-14T21:02:30.047307+00:00", "id": "generate_1755205340875_mjh7yaxon", "job_id": "generate_1755205340875_mjh7yaxon", "status": "completed", "summary": {"averageProcessingTimeMs": 5958, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-14T07:20:30.034424+00:00", "id": "generate_1755156027368_j8vobos7q", "job_id": "generate_1755156027368_j8vobos7q", "status": "completed", "summary": {"averageProcessingTimeMs": 47603, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-14T07:15:00.098526+00:00", "id": "generate_1755155699672_0kk8r1xjh", "job_id": "generate_1755155699672_0kk8r1xjh", "status": "completed", "summary": {"averageProcessingTimeMs": 43045, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-14T07:15:00.025459+00:00", "id": "generate_1755155699261_kmxtvj743", "job_id": "generate_1755155699261_kmxtvj743", "status": "completed", "summary": {"averageProcessingTimeMs": 38150, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-14T04:20:30.026161+00:00", "id": "generate_1755145223674_xtibxc3wk", "job_id": "generate_1755145223674_xtibxc3wk", "status": "completed", "summary": {"averageProcessingTimeMs": 52105, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-14T04:12:20.027117+00:00", "id": "generate_1755144735424_9tu241p8u", "job_id": "generate_1755144735424_9tu241p8u", "status": "completed", "summary": {"averageProcessingTimeMs": 5230, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-14T00:06:50.036347+00:00", "id": "generate_1755130007506_i2vvtdn5m", "job_id": "generate_1755130007506_i2vvtdn5m", "status": "completed", "summary": {"averageProcessingTimeMs": 12947, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-13T22:31:50.13451+00:00", "id": "generate_1755124304791_nehatwkx2", "job_id": "generate_1755124304791_nehatwkx2", "status": "completed", "summary": {"averageProcessingTimeMs": 84737, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-13T21:26:10.030615+00:00", "id": "generate_1755120361643_l7gwnzjiz", "job_id": "generate_1755120361643_l7gwnzjiz", "status": "completed", "summary": {"averageProcessingTimeMs": 43412, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-13T15:36:20.0473+00:00", "id": "generate_1755099372442_yj2tp6ai2", "job_id": "generate_1755099372442_yj2tp6ai2", "status": "completed", "summary": {"averageProcessingTimeMs": 58846, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-13T15:09:50.098367+00:00", "id": "generate_1755097784901_ip7qgs6zc", "job_id": "generate_1755097784901_ip7qgs6zc", "status": "completed", "summary": {"averageProcessingTimeMs": 15348, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-13T07:05:10.031769+00:00", "id": "generate_1755068701315_x3v5uxcf7", "job_id": "generate_1755068701315_x3v5uxcf7", "status": "completed", "summary": {"averageProcessingTimeMs": 36153, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-13T06:29:40.030139+00:00", "id": "generate_1755066576124_us8tk8f5g", "job_id": "generate_1755066576124_us8tk8f5g", "status": "completed", "summary": {"averageProcessingTimeMs": 6739, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-13T06:07:10.027711+00:00", "id": "generate_1755065226517_iumeswkj6", "job_id": "generate_1755065226517_iumeswkj6", "status": "completed", "summary": {"averageProcessingTimeMs": 3755, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-12T23:36:00.032233+00:00", "id": "generate_1755041751404_mdamzole5", "job_id": "generate_1755041751404_mdamzole5", "status": "completed", "summary": {"averageProcessingTimeMs": 5466, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-12T15:43:40.032282+00:00", "id": "generate_1755013412854_137cgrgo4", "job_id": "generate_1755013412854_137cgrgo4", "status": "completed", "summary": {"averageProcessingTimeMs": 5044, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-12T06:22:10.073591+00:00", "id": "generate_1754979721128_s31qb1pu1", "job_id": "generate_1754979721128_s31qb1pu1", "status": "completed", "summary": {"averageProcessingTimeMs": 5508, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-12T05:35:10.066112+00:00", "id": "generate_1754976900487_ql1nnakla", "job_id": "generate_1754976900487_ql1nnakla", "status": "completed", "summary": {"averageProcessingTimeMs": 4593, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-12T05:35:10.036359+00:00", "id": "generate_1754976899980_wxzq2kq8z", "job_id": "generate_1754976899980_wxzq2kq8z", "status": "completed", "summary": {"averageProcessingTimeMs": 4707, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-12T05:16:00.103185+00:00", "id": "generate_1754975751051_fw20zry8l", "job_id": "generate_1754975751051_fw20zry8l", "status": "completed", "summary": {"averageProcessingTimeMs": 5414, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-12T01:42:40.0375+00:00", "id": "generate_1754962953152_nvi6sgccb", "job_id": "generate_1754962953152_nvi6sgccb", "status": "completed", "summary": {"averageProcessingTimeMs": 5142, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-11T22:31:30.04098+00:00", "id": "generate_1754951481213_1xq2549q8", "job_id": "generate_1754951481213_1xq2549q8", "status": "completed", "summary": {"averageProcessingTimeMs": 4112, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-11T19:27:10.033437+00:00", "id": "generate_1754940426747_1qbd2aea4", "job_id": "generate_1754940426747_1qbd2aea4", "status": "completed", "summary": {"averageProcessingTimeMs": 6085, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-10T23:53:30.049397+00:00", "id": "generate_1754870004532_ggazrwowl", "job_id": "generate_1754870004532_ggazrwowl", "status": "completed", "summary": {"averageProcessingTimeMs": 2281, "completed": 1, "failed": 0, "totalProducts": 1}}, {"created_at": "2025-08-10T23:22:20.078477+00:00", "id": "generate_1754868136816_h49j0elka", "job_id": "generate_1754868136816_h49j0elka", "status": "completed", "summary": {"averageProcessingTimeMs": 4109, "completed": 1, "failed": 0, "totalProducts": 1}}
+{
+    "productId": "55d90c3e-1dde-4989-949f-33e587c8366b",
+    "variantId": "594229f8-a618-46c9-bc46-cbb74bf9b343",
+    "publishIntent": "PUBLISH_PLATFORM_LIVE",
+    "platformDetails": {
+        "canonical": {
+            "title": "Aquaphor Healing Ointment Skin Protectant, Fragrance Free, 1.75oz, 2-Pack",
+            "sku": "RJHWNDEJ",
+            "price": 999,
+            "description": "Aquaphor Healing Ointment protects the skin to enhance the natural healing process and helps prevent external irritants from reaching the wound. The sting‑free formula soothes skin and helps restore the skin barrier.",
+            "tags": [
+                "Aquaphor",
+                "Healing Ointment",
+                "Skin Protectant",
+                "Fragrance Free",
+                "Moisturizer",
+                "Dermatology",
+                "Wound Care",
+                "2 Pack",
+                "1.75oz",
+                "Skin Barrier",
+                "Soothing",
+                "All Skin Types",
+                "Non‑Comedogenic",
+                "Pet Safe",
+                "Gentle"
+            ],
+            "vendor": "Aquaphor",
+            "productType": "Skin Protectant",
+            "status": "active",
+            "seoTitle": "Aquaphor Healing Ointment Skin Protectant, Fragrance Free, 1.75oz, 2-Pack",
+            "seoDescription": "Fragrance‑free Aquaphor Healing Ointment protects and soothes skin, ideal for dry patches, minor cuts, and barrier repair.",
+            "variants": [
+                {
+                    "option1_name": "Color",
+                    "option1_value": "Red",
+                    "price": 40,
+                    "inventoryByLocation": {
+                        "default": {
+                            "quantity": 0,
+                            "price": 0
+                        },
+                        "gid://shopify/Location/84140818688": {
+                            "quantity": 15,
+                            "price": 0
+                        },
+                        "gid://shopify/Location/84140785920": {
+                            "quantity": 80,
+                            "price": 0
+                        }
+                    }
+                },
+                {
+                    "option1_name": "Color",
+                    "option1_value": "Blue",
+                    "price": 40,
+                    "inventoryByLocation": {
+                        "default": {
+                            "quantity": 0,
+                            "price": 0
+                        },
+                        "gid://shopify/Location/84140818688": {
+                            "quantity": 20,
+                            "price": 0
+                        },
+                        "gid://shopify/Location/84140785920": {
+                            "quantity": 1,
+                            "price": 0
+                        }
+                    }
+                }
+            ]
+        },
+        "shopify": {
+            "title": "Aquaphor Healing Ointment Skin Protectant, Fragrance Free, 1.75oz, 2-Pack",
+            "description": "Aquaphor Healing Ointment protects the skin to enhance the natural healing process and helps prevent external irritants from reaching the wound. The sting‑free formula soothes skin and helps restore the skin barrier.",
+            "vendor": "Aquaphor",
+            "productCategory": "Health & Personal Care",
+            "productType": "Skin Protectant",
+            "tags": [
+                "Aquaphor",
+                "Healing Ointment",
+                "Skin Protectant",
+                "Fragrance Free",
+                "Moisturizer",
+                "Dermatology",
+                "Wound Care",
+                "2 Pack",
+                "1.75oz",
+                "Skin Barrier",
+                "Soothing",
+                "All Skin Types",
+                "Non‑Comedogenic",
+                "Pet Safe",
+                "Gentle"
+            ],
+            "status": "active",
+            "variants": [
+                {
+                    "id": "shopify-var-Color:Red",
+                    "optionValues": {
+                        "Color": "Red"
+                    },
+                    "price": 40,
+                    "inventoryByLocation": {
+                        "default": {
+                            "quantity": 0,
+                            "price": 0
+                        },
+                        "gid://shopify/Location/84140818688": {
+                            "quantity": 15,
+                            "price": 0
+                        },
+                        "gid://shopify/Location/84140785920": {
+                            "quantity": 80,
+                            "price": 0
+                        }
+                    }
+                },
+                {
+                    "id": "shopify-var-Color:Blue",
+                    "optionValues": {
+                        "Color": "Blue"
+                    },
+                    "price": 40,
+                    "inventoryByLocation": {
+                        "default": {
+                            "quantity": 0,
+                            "price": 0
+                        },
+                        "gid://shopify/Location/84140818688": {
+                            "quantity": 20,
+                            "price": 0
+                        },
+                        "gid://shopify/Location/84140785920": {
+                            "quantity": 1,
+                            "price": 0
+                        }
+                    }
+                }
+            ],
+            "images": [
+                {
+                    "productImageURL": "https://i5.walmartimages.com/seo/Aquaphor-Healing-Ointment-Skin-Protectant-Fragrance-Free-1-75oz-2-Pack_cdc3684b-d0c3-4679-a891-52ea3e221c36.1d6e7da117d50537c72f532c40637bcb.jpeg?odnHeight=573&odnWidth=573&odnBg=FFFFFF",
+                    "imagePosition": 1,
+                    "imageAltText": "Aquaphor Healing Ointment Fragrance Free 1.75oz 2-Pack"
+                }
+            ],
+            "publishedOnOnlineStore": true,
+            "giftCard": false,
+            "seo": {
+                "seoTitle": "Aquaphor Healing Ointment Skin Protectant, Fragrance Free, 1.75oz, 2-Pack",
+                "seoDescription": "Fragrance‑free Aquaphor Healing Ointment protects and soothes skin, ideal for dry patches, minor cuts, and barrier repair."
+            },
+            "googleShopping": {
+                "googleProductCategory": "Health & Beauty > Personal Care > Skin Care > Skin Protectants",
+                "gender": "Unisex",
+                "ageGroup": "Adult",
+                "mpn": "",
+                "adWordsGrouping": "",
+                "adWordsLabels": "",
+                "condition": "new",
+                "customProduct": false,
+                "customLabel0": "",
+                "customLabel1": "",
+                "customLabel2": "",
+                "customLabel3": "",
+                "customLabel4": ""
+            },
+            "seoTitle": "Aquaphor Healing Ointment Skin Protectant, Fragrance Free, 1.75oz, 2-Pack",
+            "seoDescription": "Fragrance‑free Aquaphor Healing Ointment protects and soothes skin, ideal for dry patches, minor cuts, and barrier repair.",
+            "options": [
+                {
+                    "name": "Color",
+                    "values": [
+                        "Red",
+                        "Blue"
+                    ]
+                }
+            ],
+            "sku": "RJHWNDEJ",
+            "price": "999"
+        },
+        "square": {
+            "object": {
+                "type": "ITEM",
+                "id": "#placeholder",
+                "itemData": {
+                    "name": "Aquaphor Healing Ointment Skin Protectant, Fragrance Free, 1.75oz, 2-Pack",
+                    "description": "Aquaphor Healing Ointment protects the skin to enhance the natural healing process and helps prevent external irritants from reaching the wound. The sting‑free formula soothes skin and helps restore the skin barrier.",
+                    "categorySuggestion": "Health & Personal Care > Skin Care",
+                    "gtin": null,
+                    "variations": [
+                        {
+                            "type": "ITEM_VARIATION",
+                            "id": "#placeholder_variant",
+                            "itemVariationData": {
+                                "sku": "AQ-HEAL-2PK",
+                                "name": "Regular",
+                                "pricingType": "FIXED_PRICING",
+                                "priceMoney": {
+                                    "amount": 1647,
+                                    "currency": "USD"
+                                }
+                            }
+                        }
+                    ],
+                    "locations": "All Available Locations"
+                }
+            },
+            "name": "Aquaphor Healing Ointment Skin Protectant, Fragrance Free, 1.75oz, 2-Pack",
+            "description": "Aquaphor Healing Ointment protects the skin to enhance the natural healing process and helps prevent external irritants from reaching the wound. The sting‑free formula soothes skin and helps restore the skin barrier.",
+            "categorySuggestion": "Health & Personal Care > Skin Care",
+            "price": 16.47,
+            "title": "Aquaphor Healing Ointment Skin Protectant, Fragrance Free, 1.75oz, 2-Pack",
+            "tags": [
+                "Aquaphor",
+                "Healing Ointment",
+                "Skin Protectant",
+                "Fragrance Free",
+                "Moisturizer",
+                "Dermatology",
+                "Wound Care",
+                "2 Pack",
+                "1.75oz",
+                "Skin Barrier",
+                "Soothing",
+                "All Skin Types",
+                "Non‑Comedogenic",
+                "Pet Safe",
+                "Gentle"
+            ],
+            "sku": "RJHWNDEJ",
+            "images": [
+                {
+                    "productImageURL": "https://i5.walmartimages.com/seo/Aquaphor-Healing-Ointment-Skin-Protectant-Fragrance-Free-1-75oz-2-Pack_cdc3684b-d0c3-4679-a891-52ea3e221c36.1d6e7da117d50537c72f532c40637bcb.jpeg?odnHeight=573&odnWidth=573&odnBg=FFFFFF",
+                    "imagePosition": 1,
+                    "imageAltText": "Aquaphor Healing Ointment Fragrance Free 1.75oz 2-Pack"
+                }
+            ],
+            "options": [
+                {
+                    "name": "Color",
+                    "values": [
+                        "Red",
+                        "Blue"
+                    ]
+                }
+            ],
+            "variants": [
+                {
+                    "id": "square-var-Color:Red",
+                    "optionValues": {
+                        "Color": "Red"
+                    },
+                    "price": 16.47,
+                    "inventoryByLocation": {
+                        "default": {
+                            "quantity": 0,
+                            "price": 16.47
+                        },
+                        "LY3ETP80S0CFK": {
+                            "quantity": 15,
+                            "price": 16.47
+                        },
+                        "LV82RJ4G6GJAM": {
+                            "quantity": 10,
+                            "price": 54
+                        }
+                    }
+                },
+                {
+                    "id": "square-var-Color:Blue",
+                    "optionValues": {
+                        "Color": "Blue"
+                    },
+                    "price": 16.47,
+                    "inventoryByLocation": {
+                        "default": {
+                            "quantity": 0,
+                            "price": 16.47
+                        },
+                        "LY3ETP80S0CFK": {
+                            "quantity": 50,
+                            "price": 16.47
+                        },
+                        "LV82RJ4G6GJAM": {
+                            "quantity": 46,
+                            "price": 19
+                        }
+                    }
+                }
+            ]
+        },
+        "facebook": {
+            "id": "AQ-HEAL-2PK",
+            "title": "Aquaphor Healing Ointment Skin Protectant, Fragrance Free, 1.75oz, 2-Pack",
+            "description": "Fragrance‑free Aquaphor Healing Ointment, 2‑pack (1.75 oz each). Soothes and protects skin, perfect for dry patches and minor cuts. $14.00 OBO",
+            "availability": "in stock",
+            "condition": "new",
+            "price": "14.00 USD",
+            "link": "https://www.walmart.com/ip/Aquaphor-Healing-Ointment-Skin-Protectant-Fragrance-Free-1-75oz-2-Pack/",
+            "image_link": "https://i5.walmartimages.com/seo/Aquaphor-Healing-Ointment-Skin-Protectant-Fragrance-Free-1-75oz-2-Pack_cdc3684b-d0c3-4679-a891-52ea3e221c36.1d6e7da117d50537c72f532c40637bcb.jpeg?odnHeight=573&odnWidth=573&odnBg=FFFFFF",
+            "brand": "Aquaphor",
+            "google_product_category": "Health & Beauty > Personal Care > Skin Care > Skin Protectants",
+            "categorySuggestion": "Health & Personal Care > Skin Care"
+        }
+    },
+    "media": {
+        "imageUris": [
+            "https://pqmxhoxffarcvaxeakwo.supabase.co/storage/v1/object/public/product-images/003204d6-4da7-4666-9470-2c55b8d4d1df/photo-1763399716731-1763399720367.jpg"
+        ],
+        "coverImageIndex": 0
+    },
+    "selectedPlatformsToPublish": [
+        "shopify",
+        "square"
+    ],
+    "connectionIds": {
+        "shopify": [
+            "195eed2d-2797-49c4-ae8b-43bc97b73528"
+        ],
+        "square": [
+            "04573af5-ac82-47d3-a921-64ee9d23caf4"
+        ]
+    }
+}

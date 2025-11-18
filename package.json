@@ -42,7 +42,7 @@
     "expo-secure-store": "~15.0.7",
     "expo-splash-screen": "~31.0.9",
     "expo-status-bar": "~3.0.8",
-    "expo-web-browser": "~15.0.7",
+    "expo-web-browser": "~15.0.9",
     "lucide-react": "^0.487.0",
     "lucide-react-native": "^0.487.0",
     "react": "19.1.0",

@@ -1,5 +1,6 @@
 import React, { useState, useContext, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput } from 'react-native';
+import { WebView } from 'react-native-webview';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -470,7 +471,7 @@ const ProfileScreen = () => {
       (async () => {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
-        const finalRedirectUri = 'sssyncapp://auth-callback?platform=ebay';
+        const finalRedirectUri = 'anorhaapp://auth-callback?platform=ebay';
         const url = `${SSSYNC_API_BASE_URL}/api/auth/ebay/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
         await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
       })();
@@ -577,7 +578,52 @@ const ProfileScreen = () => {
       Alert.alert('Resume Failed', err instanceof Error ? err.message : String(err));
     }
   };
-  // --- END: Fix & Resume ---
+ 
+  const handleOpenBilling = async () => {
+    let result = await WebBrowser.openBrowserAsync("https://app.anorha.app/billing")
+    {/*
+    try {
+      const token = await getApiToken();
+      if (!token) throw new Error('Not authenticated');
+      const res = await fetch(`${SSSYNC_API_BASE_URL}/billing/portal`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+      });
+      if (!res.ok) throw new Error(`Portal error ${res.status}`);
+      const { url } = await res.json();
+      await WebBrowser.openBrowserAsync(url);
+    } catch (err) {
+      logError('billing_portal_error', 'Failed to open billing portal', { error: String(err) });
+      Alert.alert('Billing', 'Could not open billing portal.');
+    }
+    */}
+  };
+
+  const handleOpenTeams = async () => {
+    let result = await WebBrowser.openBrowserAsync("https://app.anorha.app/teams")
+    {/*
+    try {
+      const token = await getApiToken();
+      if (!token) throw new Error('Not authenticated');
+      const res = await fetch(`${SSSYNC_API_BASE_URL}/billing/portal`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+      });
+      if (!res.ok) throw new Error(`Portal error ${res.status}`);
+      const { url } = await res.json();
+      await WebBrowser.openBrowserAsync(url);
+    } catch (err) {
+      logError('billing_portal_error', 'Failed to open billing portal', { error: String(err) });
+      Alert.alert('Billing', 'Could not open billing portal.');
+    }
+    */}
+  };
 
   // --- NEW: Logic for Guided Shopify Flow Step 4 (Open Browser) ---
   const openShopifyForCopy = async () => {
@@ -597,7 +643,7 @@ const ProfileScreen = () => {
     // The user just needs to copy the URL *from* that dashboard.
     const backendInitiationUrlBase = 'https://api.sssync.app/api/auth/shopify/initiate-store-picker';
     // Define and encode the final redirect URI needed by the backend
-    const finalRedirectUri = 'sssyncapp://auth-callback';
+    const finalRedirectUri = 'anorhaapp://auth-callback';
     const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
 
     // Append BOTH userId and finalRedirectUri
@@ -635,7 +681,7 @@ const ProfileScreen = () => {
 
     // Backend endpoint for direct login/authorization with shop name
     const directLoginUrlBase = 'https://api.sssync.app/api/auth/shopify/login';
-    const finalRedirectUri = 'sssyncapp://auth-callback';
+    const finalRedirectUri = 'anorhaapp://auth-callback';
     const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
 
     const directLoginUrl = `${directLoginUrlBase}?userId=${userId}&shop=${extractedShopName}&finalRedirectUri=${encodedFinalRedirectUri}`;
@@ -788,7 +834,7 @@ const ProfileScreen = () => {
       const sssyncUserId = user.id;
 
       // 2. Define finalRedirectUri
-      const finalRedirectUri = "sssyncapp://auth/callback?platform=clover"; // App-specific deep link
+      const finalRedirectUri = "anorhaapp://auth/callback?platform=clover"; // App-specific deep link
 
       // 3. Construct Backend Authorization URL
       const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/clover/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
@@ -868,7 +914,7 @@ const ProfileScreen = () => {
       const sssyncUserId = user.id;
 
       // 2. Define finalRedirectUri
-      const finalRedirectUri = "sssyncapp://auth/callback?platform=square"; // App-specific deep link
+      const finalRedirectUri = "anorhaapp://auth/callback?platform=square"; // App-specific deep link
 
       // 3. Construct Backend Authorization URL
       const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/square/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
@@ -946,7 +992,7 @@ const ProfileScreen = () => {
       }
       const sssyncUserId = user.id;
 
-      const finalRedirectUri = "sssyncapp://auth/callback?platform=facebook";
+      const finalRedirectUri = "anorhaapp://auth/callback?platform=facebook";
       const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/facebook/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
       console.log("[ProfileScreen] Facebook Connect: Backend Auth URL:", backendAuthUrl);
 
@@ -1059,6 +1105,11 @@ const ProfileScreen = () => {
   
   // Add state for dev mode
   const [isDevMode, setIsDevMode] = useState(false);
+  
+  // Billing modal state
+  const [showBillingPortal, setShowBillingPortal] = useState(false);
+  const [billingPortalUrl, setBillingPortalUrl] = useState<string | null>(null);
+  const [billingLoading, setBillingLoading] = useState(false);
 
   // Load dev mode setting on component mount
   useEffect(() => {
@@ -1085,64 +1136,39 @@ const ProfileScreen = () => {
 
   // Modify the menuItems array to be dynamic based on dev mode
   const menuItems = [
-    { icon: 'credit-card', title: 'Subscription & Billing', badge: entitlements?.planName || 'Free' },
+    { icon: 'credit-card', 
+      title: 'Subscription & Billing', 
+      badge: entitlements?.planName || 'Free',
+      onPress: () => handleOpenBilling()
+    },
     { 
       icon: 'account-group', 
       title: 'Team', 
-      onPress: () => navigation.navigate('Team' as never),
+      onPress: () => handleOpenTeams()
     },
-    { icon: 'shield-check', title: 'Privacy & Security' },
-    { icon: 'bell', title: 'Notifications' },
-    { icon: 'help-circle', title: 'Help & Support' },
-    // Developer Mode switch - its state is independent of the token button now
-    {
-      icon: 'code',
-      title: 'Developer Mode Switch', // Renamed for clarity in this context
-      customComponent: (
-        <View style={styles.devModeContainer}>
-          <Text style={styles.devModeText}>Developer Mode</Text>
-          <Switch
-            value={isDevMode}
-            onValueChange={toggleDevMode}
-            trackColor={{ false: '#767577', true: theme.colors.primary }}
-          />
-        </View>
-      )
-    },
-    // Billing portal entry
-    {
-      icon: 'credit-card-outline',
-      title: 'Manage Billing',
+    { 
+      icon: 'help-circle', 
+      title: 'Help & Support',
       onPress: async () => {
-        try {
-          const token = await getApiToken();
-          if (!token) throw new Error('Not authenticated');
-          const res = await fetch(`${SSSYNC_API_BASE_URL}/billing/portal`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            },
-          });
-          if (!res.ok) throw new Error(`Portal error ${res.status}`);
-          const { url } = await res.json();
-          await WebBrowser.openBrowserAsync(url);
-        } catch (err) {
-          logError('billing_portal_error', 'Failed to open billing portal', { error: String(err) });
-          Alert.alert('Billing', 'Could not open billing portal.');
-        }
-      },
+        await WebBrowser.openBrowserAsync('https://anorha.userjot.com/');
+      }
     },
+    // Developer Mode switch - its state is independent of the token button now
+  
+    // Billing portal entry
+    
     // "Show Auth Token" button is now always present
-    {
-      icon: 'key',
-      title: 'Show Auth Token',
-      onPress: logCurrentUserToken,
-    },
+    
     { icon: 'logout', title: 'Logout', isDestructive: true, onPress: handleLogout },
   ];
 
   // Modify the menu item rendering to handle custom components
+  {/*
+    icon: 'key',
+    title: 'Show Auth Token',
+    onPress: logCurrentUserToken,
+  */}
+  
   const renderMenuItem = (item: any, index: number) => (
     <TouchableOpacity 
       key={item.title} 
@@ -1618,48 +1644,13 @@ const ProfileScreen = () => {
         </Card>
       </Animated.View>
       
-      {/* Settings Card */}
-      <Animated.View entering={FadeInUp.delay(300).duration(500)}>
-        <Card style={styles.card}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Settings</Text>
-          </View>
-          
-          <View style={styles.settingsContainer}>
-            <View style={styles.settingItem}>
-              <View style={styles.settingInfo}>
-                <Icon name="bell" size={24} color="#555" style={styles.settingIcon} />
-                <Text style={styles.settingText}>Notifications</Text>
-              </View>
-              <Switch
-                value={notificationsEnabled}
-                onValueChange={setNotificationsEnabled}
-                trackColor={{ false: '#e0e0e0', true: theme.colors.primary + '50' }}
-                thumbColor={notificationsEnabled ? theme.colors.primary : '#f4f3f4'}
-              />
-            </View>
-            
-            <View style={styles.settingItem}>
-              <View style={styles.settingInfo}>
-                <Icon name="theme-light-dark" size={24} color="#555" style={styles.settingIcon} />
-                <Text style={styles.settingText}>Dark Mode</Text>
-              </View>
-              <Switch
-                value={darkModeEnabled}
-                onValueChange={setDarkModeEnabled}
-                trackColor={{ false: '#e0e0e0', true: theme.colors.primary + '50' }}
-                thumbColor={darkModeEnabled ? theme.colors.primary : '#f4f3f4'}
-              />
-            </View>
-          </View>
-        </Card>
-      </Animated.View>
+    
       
       {/* Menu Card */}
       <Animated.View entering={FadeInUp.delay(400).duration(500)}>
         <Card style={styles.card}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>More</Text>
+            <Text style={styles.sectionTitle}>Settings</Text>
           </View>
           
           <View style={styles.menuContainer}>
@@ -1705,7 +1696,7 @@ const ProfileScreen = () => {
                   (async () => {
                     const { data: { user } } = await supabase.auth.getUser();
                     if (!user) return;
-                    const finalRedirectUri = 'sssyncapp://auth-callback?platform=ebay';
+                    const finalRedirectUri = 'anorhaapp://auth-callback?platform=ebay';
                     const url = `${SSSYNC_API_BASE_URL}/api/auth/ebay/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
                     await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
                   })();
@@ -1724,103 +1715,128 @@ const ProfileScreen = () => {
       <Modal
           transparent={true}
           animationType="fade"
-          visible={shopifyFlowStep === 'enterInfo'} // Modal visible when in 'enterInfo' state
-          onRequestClose={() => setShopifyFlowStep('idle')} // Allow closing via back button etc.
+          visible={shopifyFlowStep === 'enterInfo'}
+          onRequestClose={() => setShopifyFlowStep('idle')}
       >
-          <Pressable style={styles.modalOverlay} onPress={() => setShopifyFlowStep('idle')}>
-            <Pressable style={styles.modalContent} onPress={() => {}}> {/* Prevent closing on inner press */}
-              <Text style={styles.modalTitle}>Connect Shopify</Text>
+          <Pressable style={styles.shopifyModalOverlay} onPress={() => setShopifyFlowStep('idle')}>
+            <Pressable style={styles.shopifyModalContent} onPress={() => {}}>
+              {/* Header with Icon */}
+              <View style={styles.shopifyModalHeader}>
+                <View style={styles.shopifyIconContainer}>
+                  <ShopifySvg width={40} height={40} />
+                </View>
+                <Text style={styles.shopifyModalTitle}>Connect Shopify</Text>
+                <TouchableOpacity 
+                  onPress={() => setShopifyFlowStep('idle')}
+                  style={styles.shopifyCloseButton}
+                >
+                  <Icon name="close" size={24} color="#999" />
+                </TouchableOpacity>
+              </View>
 
-              {/* --- Option A: Guided Copy/Paste --- */}
-              <View style={styles.inputSection}>
-                 <Text style={styles.sectionTitle}>Option 1: Guided Setup (Recommended)</Text>
-                 <Text style={styles.sectionDescription}>
-                   1. Tap below to open Shopify. Log in if needed.{"\\n"} {/* Correct newline syntax */}
-                   2. Copy the URL from your Shopify Admin dashboard address bar.{"\\n"} {/* Correct newline syntax */}
-                   3. Return here and paste the URL below.
-                 </Text>
-                 <Button
-                   title="Open Shopify & Copy URL"
-                   onPress={openShopifyForCopy}
-                   style={styles.modalButton}
-                   // Optional: Add icon
-                 />
-                 <View style={styles.pasteContainer}>
+              <ScrollView style={styles.shopifyModalBody} showsVerticalScrollIndicator={false}>
+                {/* Option 1: Guided Setup */}
+                <View style={styles.shopifyOption}>
+                  <View style={styles.shopifyOptionHeader}>
+                    <View style={[styles.stepNumber, { backgroundColor: theme.colors.primary }]}>
+                      <Text style={styles.stepNumberText}>1</Text>
+                    </View>
+                    <Text style={styles.shopifyOptionTitle}>Guided Setup (Recommended)</Text>
+                  </View>
+                  
+                  <View style={styles.shopifySteps}>
+                    <Text style={styles.shopifyStep}>1. Tap to open your Shopify store</Text>
+                    <Text style={styles.shopifyStep}>2. Copy your admin URL</Text>
+                    <Text style={styles.shopifyStep}>3. Paste it below</Text>
+                  </View>
+
+                  <Button
+                    title="Open Shopify"
+                    icon="open-in-new"
+                    onPress={openShopifyForCopy}
+                    style={styles.shopifyOpenButton}
+                  />
+
+                  <View style={styles.shopifyPasteContainer}>
                     <TextInput
-                      style={styles.pasteInput}
-                      placeholder="Paste full Shopify URL here..."
+                      style={styles.shopifyPasteInput}
+                      placeholder="Paste your Shopify admin URL..."
+                      placeholderTextColor="#bbb"
                       value={pastedShopifyUrl}
-                      onChangeText={(text) => { setPastedShopifyUrl(text); if (text) setManualShopName(''); }} // Clear manual if pasting URL
+                      onChangeText={(text) => { setPastedShopifyUrl(text); if (text) setManualShopName(''); }}
                       autoCapitalize="none"
                       keyboardType="url"
                       selectTextOnFocus
                     />
-                    {/* Replace Text Button with Icon Button */}
                     <TouchableOpacity 
-                      onPress={handlePasteFromClipboard} 
-                      style={styles.pasteButton} // Reuse/adjust style for Touchable area
+                      onPress={handlePasteFromClipboard}
+                      style={styles.shopifyPasteButton}
                     >
-                      <Icon name="content-paste" size={24} color={theme.colors.primary} style={styles.pasteIcon} />
+                      <Icon name="content-paste" size={20} color={theme.colors.primary} />
                     </TouchableOpacity>
-                 </View>
-                 {/* Add clarification text */}
-                 <Text style={styles.pasteHintText}>(Paste URL then tap 'Connect Shopify' below)</Text>
-              </View>
+                  </View>
+                </View>
 
-              {/* --- REVISED Option B: Manual Input (Integrated) --- */}
-              <View style={styles.inputSectionManualOnly}>
-                 <Text style={styles.manualInputLabel}>Or, enter shop name directly:</Text>
-                 {/* <Text style={styles.sectionDescription}>
-                   Enter your shop's unique name (e.g., <Text style={{fontWeight: 'bold'}}>your-store-name</Text> from your *.myshopify.com URL or admin URL).
-                 </Text> */}
-                 <TextInput
-                   style={styles.manualInputSingle} // Use existing style
-                   placeholder="your-shop-name"
-                   value={manualShopName}
-                   onChangeText={(text) => { setManualShopName(text); if (text) setPastedShopifyUrl(''); }} // Clear URL if typing name
-                   autoCapitalize="none"
-                   autoCorrect={false}
-                 />
-              </View>
+                {/* Divider */}
+                <View style={styles.shopifyDivider}>
+                  <View style={styles.dividerLine} />
+                  <Text style={styles.dividerText}>OR</Text>
+                  <View style={styles.dividerLine} />
+                </View>
 
-              {/* --- Action Buttons --- */}
-              <View style={styles.actionButtonContainer}>
-                <Button
-                    title="Cancel"
-                    outlined
-                    onPress={() => {
-                      setShopifyFlowStep('idle');
-                      setPastedShopifyUrl('');
-                      setManualShopName('');
-                    }}
-                    style={{
-                      alignSelf: 'stretch',
-                      marginTop: 10,
-                      flex: 0.48,
-                      backgroundColor: '#f5f5f5'
-                    }}
+                {/* Option 2: Manual Entry */}
+                <View style={styles.shopifyOption}>
+                  <View style={styles.shopifyOptionHeader}>
+                    <View style={[styles.stepNumber, { backgroundColor: '#ccc' }]}>
+                      <Text style={styles.stepNumberText}>2</Text>
+                    </View>
+                    <Text style={styles.shopifyOptionTitle}>Enter Shop Name</Text>
+                  </View>
+
+                  <Text style={styles.shopifyManualDescription}>
+                    Enter your shop's name (e.g., <Text style={{ fontWeight: '600' }}>my-store</Text> from <Text style={{ fontFamily: 'Menlo' }}>my-store.myshopify.com</Text>)
+                  </Text>
+
+                  <TextInput
+                    style={styles.shopifyManualInput}
+                    placeholder="my-store"
+                    placeholderTextColor="#bbb"
+                    value={manualShopName}
+                    onChangeText={(text) => { setManualShopName(text); if (text) setPastedShopifyUrl(''); }}
+                    autoCapitalize="none"
+                    autoCorrect={false}
                   />
-                 <Button
-                   title="Connect Shopify"
-                   onPress={handleConfirmInput} // Use the single confirm handler
-                   // Disable if BOTH URL and manual name are empty or invalid (basic check)
-                   disabled={!pastedShopifyUrl && !manualShopName.trim()}
-                   style={{
-                      alignSelf: 'stretch',
-                      marginTop: 10,
-                      flex: 0.48,
-                      marginLeft: 10
-                    }}
-                 />
-              </View>
+                </View>
 
+                <View style={{ height: 20 }} />
+              </ScrollView>
+
+              {/* Action Buttons */}
+              <View style={styles.shopifyActionButtons}>
+                <Button
+                  title="Cancel"
+                  outlined
+                  onPress={() => {
+                    setShopifyFlowStep('idle');
+                    setPastedShopifyUrl('');
+                    setManualShopName('');
+                  }}
+                  style={styles.shopifyCancelButton}
+                />
+                <Button
+                  title="Connect Shopify"
+                  onPress={handleConfirmInput}
+                  disabled={!pastedShopifyUrl && !manualShopName.trim()}
+                  style={styles.shopifyConnectButton}
+                />
+              </View>
             </Pressable>
           </Pressable>
         </Modal>
       {/* --- END REVISED Guided Shopify Flow UI --- */}
       
       <View style={styles.footer}>
-        <Text style={styles.versionText}>sssync v1.0.0</Text>
+        <Text style={styles.versionText}>Anorha v0.1</Text>
       </View>
 
       {/* Create Location Pool Modal */}
@@ -1849,6 +1865,7 @@ const ProfileScreen = () => {
           }}
         />
       )}
+
     </ScrollView>
   );
 };
@@ -2552,6 +2569,169 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#999',
     textAlign: 'center',
+  },
+  // Beautiful Shopify Modal Styles
+  shopifyModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  shopifyModalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    width: '88%',
+    maxHeight: '85%',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 12,
+  },
+  shopifyModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 24,
+    paddingTop: 20,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  shopifyIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: '#96C740',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  shopifyModalTitle: {
+    flex: 1,
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1a1a1a',
+    marginLeft: 12,
+  },
+  shopifyCloseButton: {
+    padding: 8,
+    marginRight: -8,
+  },
+  shopifyModalBody: {
+    paddingHorizontal: 24,
+    paddingVertical: 16,
+  },
+  shopifyOption: {
+    marginBottom: 24,
+  },
+  shopifyOptionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  stepNumber: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  stepNumberText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  shopifyOptionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  shopifySteps: {
+    marginLeft: 48,
+    marginBottom: 14,
+    gap: 8,
+  },
+  shopifyStep: {
+    fontSize: 14,
+    color: '#555',
+    lineHeight: 20,
+  },
+  shopifyOpenButton: {
+    marginLeft: 48,
+    marginBottom: 12,
+  },
+  shopifyPasteContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 48,
+    marginBottom: 0,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e8e8e8',
+    paddingRight: 4,
+  },
+  shopifyPasteInput: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: '#333',
+  },
+  shopifyPasteButton: {
+    padding: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  shopifyDivider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 20,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#e8e8e8',
+  },
+  dividerText: {
+    marginHorizontal: 12,
+    color: '#999',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  shopifyManualDescription: {
+    fontSize: 13,
+    color: '#666',
+    lineHeight: 18,
+    marginBottom: 12,
+    marginLeft: 48,
+  },
+  shopifyManualInput: {
+    marginLeft: 48,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e8e8e8',
+    fontSize: 14,
+    color: '#333',
+    backgroundColor: '#f8f9fa',
+  },
+  shopifyActionButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+  },
+  shopifyCancelButton: {
+    flex: 1,
+  },
+  shopifyConnectButton: {
+    flex: 1,
   },
 });
 

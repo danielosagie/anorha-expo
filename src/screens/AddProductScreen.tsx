@@ -42,6 +42,7 @@ import { SvgXml } from 'react-native-svg';
 import PhotoStack, { CapturedPhoto } from '../components/camera/PhotoStack';
 import CameraControls from '../components/camera/CameraControls';
 import BusinessTemplateModal, { BusinessTemplate } from '../components/camera/BusinessTemplateModal';
+import QuickProductDetailSheet from '../components/QuickProductDetailSheet';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { File, Directory, Paths } from 'expo-file-system';
 
@@ -224,6 +225,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   
   // Job response state
   const [jobResponse, setJobResponse] = useState<JobResponse | null>(null);
+  const quickScanCancelledRef = useRef(false);
   
   // Notification and progress state
   const [showNotification, setShowNotification] = useState(false);
@@ -839,17 +841,24 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Auto-quick scan when photo is captured
   const performQuickScan = useCallback(async (photo: CapturedPhoto, itemId: string) => {
-    if (!isAutoScanning) {
-      setIsAutoScanning(true);
-      setCurrentInstruction('processing');
-      
-      // Set loading state for this item
-      setItemLoadingStates(prev => ({
-        ...prev,
-        [itemId]: { isLoading: true, stage: 'Quick Scanning...' }
-      }));
-      
-      try {
+    if (isAutoScanning) {
+      console.log('[QUICK SCAN] Another quick scan is already running, skipping');
+      return;
+    }
+
+    // New scan starts – clear any previous cancellation
+    quickScanCancelledRef.current = false;
+
+    setIsAutoScanning(true);
+    setCurrentInstruction('processing');
+    
+    // Set loading state for this item
+    setItemLoadingStates(prev => ({
+      ...prev,
+      [itemId]: { isLoading: true, stage: 'Quick Scanning...' }
+    }));
+    
+    try {
         // Ensure auth bridge is ready and we have a Supabase JWT before any network calls
         const tokenMaybe = await ensureSupabaseJwt();
         if (!tokenMaybe) {
@@ -869,7 +878,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         console.log('[QUICK SCAN] Starting quick scan for photo:', photo.id);
         console.log('[QUICK SCAN] Photo URI:', photo.uri);
         console.log('[QUICK SCAN] Timestamp:', new Date().toISOString());
-
+      
         // Upload image to Supabase Storage first
         console.log('[QUICK SCAN] Uploading image to Supabase...');
         const publicImageUrl = await uploadImageToSupabase(photo.uri, photo.id);
@@ -926,6 +935,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         })();
         
         setTimeout(async () => {
+          if (quickScanCancelledRef.current) {
+            console.log('[QUICK SCAN] Scan was cancelled before displaying results, skipping UI update');
+            setIsAutoScanning(false);
+            stopProgressAnimation();
+            setItemLoadingStates(prev => {
+              const { [itemId]: removed, ...rest } = prev;
+              return rest;
+            });
+            setCurrentInstruction('ready');
+            return;
+          }
           // Show matches for any of these scenarios:
           // 1. Backend explicitly recommends showing matches (high or medium confidence)
           // 2. We have matches even with low confidence (let user decide)
@@ -1004,6 +1024,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         
       } catch (error) {
         console.error('[QUICK SCAN] Quick scan failed:', error);
+
+        if (quickScanCancelledRef.current) {
+          console.log('[QUICK SCAN] Error occurred but scan was cancelled, skipping UI updates');
+          setIsAutoScanning(false);
+          stopProgressAnimation();
+          setItemLoadingStates(prev => {
+            const { [itemId]: removed, ...rest } = prev;
+            return rest;
+          });
+          setCurrentInstruction('ready');
+          return;
+        }
+
         console.log('[QUICK SCAN] Creating item automatically (no fallback to analyze)');
         // NO FALLBACK TO ANALYZE - just create item
         setCurrentInstruction('no_matches');
@@ -1023,8 +1056,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           return rest;
         });
       }
-    }
-  }, [isAutoScanning, sheetTranslateY, stopProgressAnimation, uploadImageToSupabase, candidatesToSerpApiData]);
+  }, [isAutoScanning, sheetTranslateY, stopProgressAnimation, uploadImageToSupabase, candidatesToSerpApiData, quickScanCancelledRef]);
 
   // Open Match Selection screen using quick scan results for a given item
   const openMatchSelectionForItem = useCallback((itemId?: string | null) => {
@@ -1369,6 +1401,34 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   }, [showMatchSheet, showDeepSearchSheet, closeMatchSheet, closeBulkItemsSheet]);
 
+  // When starting a broad search, close any open sheets and cancel quick scan
+  const handleStartBroadSearch = useCallback(() => {
+    console.log('[BROAD SEARCH] Starting broad search: closing sheets and cancelling quick scan');
+    // Cancel any in-progress quick scan so it doesn't reopen sheets
+    quickScanCancelledRef.current = true;
+    setIsAutoScanning(false);
+    stopProgressAnimation();
+    setShowProgressBar(false);
+    setCurrentInstruction('ready');
+
+    if (showMatchSheet) {
+      closeMatchSheet();
+    }
+    if (showDeepSearchSheet) {
+      closeBulkItemsSheet();
+    }
+  }, [
+    closeBulkItemsSheet,
+    closeMatchSheet,
+    showDeepSearchSheet,
+    showMatchSheet,
+    stopProgressAnimation,
+    setCurrentInstruction,
+    setIsAutoScanning,
+    setShowProgressBar,
+    quickScanCancelledRef,
+  ]);
+
   // Animated styles
   const captureButtonAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: captureButtonScale.value }],
@@ -1685,6 +1745,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         return (
           <BulkItemsSheet 
             onClose={closeBulkItemsSheet}
+            onStartBroadSearch={handleStartBroadSearch}
             sheetStyle={sheetAnimatedStyle}
             photos={capturedPhotos}
             isBulkMode={isBulkMode}
@@ -1711,124 +1772,40 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       })()}
       </Modal>
 
-      {/* Barcode Search Result Modal */}
+      {/* Barcode Quick Inventory Editor Modal */}
       <Modal
         visible={showBarcodeResultModal}
         transparent={true}
         animationType="slide"
         onRequestClose={() => setShowBarcodeResultModal(false)}
       >
-        <SafeAreaView style={[styles.container, { backgroundColor: '#f9f9f9' }]}>
-          {/* Header */}
-          <View style={styles.sheetHeader}>
-            <TouchableOpacity 
-              onPress={() => setShowBarcodeResultModal(false)}
-              style={styles.closeButton}
-            >
-              <Icon name="close" size={24} color="#333" />
-            </TouchableOpacity>
-            <Text style={styles.sheetHeaderTitle}>Product Found</Text>
-            <View style={{ width: 24 }} />
-          </View>
-
+        <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background }}>
           {barcodeSearching ? (
             <View style={styles.loadingContainer}>
               <Icon name="loading" size={40} color="#93C822" />
               <Text style={styles.loadingText}>Searching...</Text>
             </View>
           ) : barcodeSearchResult ? (
-            <ScrollView style={styles.barcodeResultContainer}>
-              {/* Product Image */}
-              {barcodeSearchResult.images && barcodeSearchResult.images.length > 0 && (
-                <Image
-                  source={{ uri: barcodeSearchResult.images[0].ImageUrl }}
-                  style={styles.barcodeProductImage}
-                />
-              )}
-
-              {/* Product Details */}
-              <View style={styles.barcodeProductDetails}>
-                <Text style={styles.barcodeProductTitle}>
-                  {barcodeSearchResult.variant.Title}
-                </Text>
-
-                {barcodeSearchResult.variant.Description && (
-                  <Text style={styles.barcodeProductDescription} numberOfLines={3}>
-                    {barcodeSearchResult.variant.Description}
-                  </Text>
-                )}
-
-                <View style={styles.barcodeProductMeta}>
-                  <View style={styles.barcodeMetaItem}>
-                    <Text style={styles.barcodeMetaLabel}>SKU</Text>
-                    <Text style={styles.barcodeMetaValue}>
-                      {barcodeSearchResult.variant.Sku}
-                    </Text>
-                  </View>
-
-                  <View style={styles.barcodeMetaItem}>
-                    <Text style={styles.barcodeMetaLabel}>Barcode</Text>
-                    <Text style={styles.barcodeMetaValue}>
-                      {barcodeSearchResult.variant.Barcode}
-                    </Text>
-                  </View>
-
-                  {barcodeSearchResult.variant.Price && (
-                    <View style={styles.barcodeMetaItem}>
-                      <Text style={styles.barcodeMetaLabel}>Price</Text>
-                      <Text style={[styles.barcodeMetaValue, { color: '#4CAF50', fontWeight: '700' }]}>
-                        ${barcodeSearchResult.variant.Price}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-
-                {/* Platform Indicators */}
-                <View style={styles.barcodePlatformIndicators}>
-                  {barcodeSearchResult.variant.OnShopify && (
-                    <View style={styles.barcodePlatformChip}>
-                      <Icon name="shopify" size={14} color="#96BE1E" />
-                      <Text style={styles.barcodePlatformChipText}>Shopify</Text>
-                    </View>
-                  )}
-                  {barcodeSearchResult.variant.OnSquare && (
-                    <View style={styles.barcodePlatformChip}>
-                      <Icon name="square" size={14} color="#3C3C3C" />
-                      <Text style={styles.barcodePlatformChipText}>Square</Text>
-                    </View>
-                  )}
-                  {barcodeSearchResult.variant.OnClover && (
-                    <View style={styles.barcodePlatformChip}>
-                      <Icon name="clover" size={14} color="#00AA44" />
-                      <Text style={styles.barcodePlatformChipText}>Clover</Text>
-                    </View>
-                  )}
-                </View>
-              </View>
-
-              {/* Actions */}
-              <View style={styles.barcodeActions}>
-                <TouchableOpacity
-                  style={styles.primaryButton}
-                  onPress={() => {
-                    // Navigate to product detail page
-                    (navigation as any).navigate('ProductDetail', {
-                      variantId: barcodeSearchResult.variant.Id,
-                    });
-                    setShowBarcodeResultModal(false);
-                  }}
-                >
-                  <Text style={styles.primaryButtonText}>View Full Details</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.secondaryButton}
-                  onPress={() => setShowBarcodeResultModal(false)}
-                >
-                  <Text style={styles.secondaryButtonText}>Back to Scanning</Text>
-                </TouchableOpacity>
-              </View>
-            </ScrollView>
+            <QuickProductDetailSheet
+              product={barcodeSearchResult}
+              onClose={() => setShowBarcodeResultModal(false)}
+              onSave={async (updates) => {
+                // TODO: Call backend to save inventory updates
+                // For now, just log the updates
+                console.log('[BARCODE SAVE] Updates:', updates);
+                
+                // Example: Post to backend
+                // const token = await ensureSupabaseJwt();
+                // await fetch('https://api.sssync.app/api/inventory/bulk-update', {
+                //   method: 'POST',
+                //   headers: {
+                //     'Authorization': `Bearer ${token}`,
+                //     'Content-Type': 'application/json',
+                //   },
+                //   body: JSON.stringify({ updates }),
+                // });
+              }}
+            />
           ) : null}
         </SafeAreaView>
       </Modal>
@@ -2115,6 +2092,7 @@ const MatchResultsSheet: React.FC<{
 // Bulk Items Sheet Component
 const BulkItemsSheet: React.FC<{
   onClose: () => void;
+  onStartBroadSearch: () => void;
   sheetStyle: any;
   photos: CapturedPhoto[];
   isBulkMode: boolean;
@@ -2136,7 +2114,7 @@ const BulkItemsSheet: React.FC<{
   onOpenQuickMatches?: (itemId: string) => void;
   itemLoadingStates: Record<string, { isLoading: boolean; stage: string; }>;
   setItemLoadingStates: React.Dispatch<React.SetStateAction<Record<string, { isLoading: boolean; stage: string; }>>>;
-}> = ({ onClose, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, itemLoadingStates, setItemLoadingStates }) => {
+}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, itemLoadingStates, setItemLoadingStates }) => {
   
   console.log('[SHEET RENDER] ==================');
   console.log('[SHEET RENDER] BulkItemsSheet RE-RENDERED at:', new Date().toISOString());
@@ -2486,6 +2464,9 @@ const BulkItemsSheet: React.FC<{
                 Alert.alert('No Photos', 'Please take some photos first before searching.');
                 return;
               }
+
+              // Tell parent to close existing sheets and stop any quick scan
+              onStartBroadSearch();
               
               // Set loading state for all items
               const loadingStates: Record<string, { isLoading: boolean; stage: string; }> = {};

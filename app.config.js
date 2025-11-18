@@ -1,19 +1,20 @@
 export default {
-  name: "sssync",
+  name: "Anorha",
   slug: "sssync",
-  scheme: "sssyncapp",
+  owner: "anorha",
+  scheme: "anorhaapp",
   android: {
-    package: "sssync.alpha",
+    package: "anorha.alpha",
     permissions: [
       "android.permission.CAMERA",
       "android.permission.RECORD_AUDIO"
     ]
   },
   ios: {
-    bundleIdentifier: "sssync.alpha",
+    bundleIdentifier: "anorha.alpha",
     supportsTablet: true,
     buildNumber: "1",
-    icon: "./src/assets/high_sssync.png",
+    icon: "./src/assets/anorha_logo.png",
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false
     }
@@ -25,8 +26,8 @@ export default {
     [
       "expo-camera",
       {
-        cameraPermission: "Allow sssync to access your camera",
-        microphonePermission: "Allow sssync to access your microphone",
+        cameraPermission: "Allow Anorha to access your camera",
+        microphonePermission: "Allow Anorha to access your microphone",
         recordAudioAndroid: true
       }
     ],
@@ -44,12 +45,11 @@ export default {
       "expo-splash-screen",
       {
         backgroundColor: "#200030",
-        image: "./src/assets/rounded_sssync.png",
+        image: "./src/assets/anorha_logo.png",
         resizeMode: "contain",
         imageWidth: 200,
         dark: {
-          backgroundColor: "#000000",
-          image: "./assets/splash-icon-dark.png"
+          image: "./src/assets/anorha_logo.png"
         }
       }
     ],
