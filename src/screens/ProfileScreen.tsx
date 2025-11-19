@@ -1,4 +1,4 @@
-import React, { useState, useContext, useEffect, useCallback } from 'react';
+import React, { useState, useContext, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput } from 'react-native';
 import { WebView } from 'react-native-webview';
 import Animated, { FadeInUp } from 'react-native-reanimated';
@@ -580,26 +580,38 @@ const ProfileScreen = () => {
   };
  
   const handleOpenBilling = async () => {
-    let result = await WebBrowser.openBrowserAsync("https://app.anorha.app/billing")
-    {/*
     try {
       const token = await getApiToken();
-      if (!token) throw new Error('Not authenticated');
-      const res = await fetch(`${SSSYNC_API_BASE_URL}/billing/portal`, {
-        method: 'POST',
+      if (!token) {
+        Alert.alert('Error', 'Not authenticated. Please log in again.');
+        return;
+      }
+
+      const response = await fetch(`${SSSYNC_API_BASE_URL}/auth/billing/login-link`, {
+        method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
         },
       });
-      if (!res.ok) throw new Error(`Portal error ${res.status}`);
-      const { url } = await res.json();
-      await WebBrowser.openBrowserAsync(url);
-    } catch (err) {
-      logError('billing_portal_error', 'Failed to open billing portal', { error: String(err) });
-      Alert.alert('Billing', 'Could not open billing portal.');
+
+      if (!response.ok) {
+        throw new Error(`Failed to get login link: ${response.status}`);
+      }
+
+      const { url } = await response.json();
+      if (!url) {
+        throw new Error('No URL received from server');
+      }
+
+      // Open in browser - will deeplink back with checkout_id when done
+      const result = await WebBrowser.openBrowserAsync(url);
+      // Note: When user completes checkout, they'll be deeplinked back via sssync://billing?checkout_id=...
+      // The app should handle this deeplink in the navigator's linking config
+    } catch (error: any) {
+      console.error('Failed to open billing:', error);
+      Alert.alert('Error', `Failed to open billing: ${error.message}`);
     }
-    */}
   };
 
   const handleOpenTeams = async () => {
