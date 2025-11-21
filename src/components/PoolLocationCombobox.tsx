@@ -36,6 +36,7 @@ interface PoolLocationComboboxProps {
   orgId: string;
   selectedItems: string[]; // location IDs
   onSelectionChange: (locationIds: string[]) => void;
+  startOpen?: boolean;
 }
 
 interface PoolWithLocations {
@@ -47,9 +48,10 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
   orgId,
   selectedItems,
   onSelectionChange,
+  startOpen = false,
 }) => {
   const theme = useTheme();
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(startOpen);
   const [pools, setPools] = useState<LocationPool[]>([]);
   const [poolsWithLocations, setPoolsWithLocations] = useState<PoolWithLocations[]>([]);
   const [selectedLocations, setSelectedLocations] = useState<string[]>(selectedItems);
@@ -99,6 +101,13 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (startOpen && !isDropdownOpen) {
+        setIsDropdownOpen(true);
+        loadPoolsWithLocations();
+    }
+  }, [startOpen]);
 
   const handleOpenDropdown = () => {
     if (!isDropdownOpen) {

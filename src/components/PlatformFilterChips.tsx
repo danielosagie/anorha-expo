@@ -24,7 +24,10 @@ interface PlatformFilterChipsProps {
   }>;
   selectedPlatform: string | null;
   onSelectPlatform: (platformType: string | null) => void;
+  activeColor?: string;
 }
+
+const HIGHLIGHT_ORANGE = '#FF9900';
 
 const getPlatformIcon = (platformType: string) => {
   const type = platformType.toLowerCase();
@@ -41,8 +44,10 @@ const PlatformFilterChips: React.FC<PlatformFilterChipsProps> = ({
   platforms,
   selectedPlatform,
   onSelectPlatform,
+  activeColor,
 }) => {
   const theme = useTheme();
+  const activeHighlightColor = activeColor || theme.colors.primary;
 
   return (
     <View style={styles.container}>
@@ -57,8 +62,8 @@ const PlatformFilterChips: React.FC<PlatformFilterChipsProps> = ({
           style={[
             styles.platformFilterChip,
             !selectedPlatform && {
-              backgroundColor: theme.colors.primary,
-              borderColor: theme.colors.primary,
+              backgroundColor: activeHighlightColor,
+              borderColor: activeHighlightColor,
             },
           ]}
           onPress={() => onSelectPlatform(null)}
@@ -92,8 +97,8 @@ const PlatformFilterChips: React.FC<PlatformFilterChipsProps> = ({
                   borderColor: '#E0E0E0',
                 },
                 isSelected && {
-                  backgroundColor: theme.colors.primary,
-                  borderColor: theme.colors.primary,
+                  backgroundColor: activeHighlightColor,
+                  borderColor: activeHighlightColor,
                 },
               ]}
               onPress={() => {
@@ -141,13 +146,13 @@ const PlatformFilterChips: React.FC<PlatformFilterChipsProps> = ({
                   <View
                     style={[
                       styles.connectionCountBadge,
-                      isSelected && { backgroundColor: '#FFFFFF' },
+                      isSelected && { backgroundColor: 'rgba(255,255,255,0.2)' },
                     ]}
                   >
                     <Text
                       style={[
                         styles.connectionCountText,
-                        isSelected && { color: theme.colors.primary },
+                        isSelected && { color: '#FFFFFF' },
                       ]}
                     >
                       {platform.connectionCount}

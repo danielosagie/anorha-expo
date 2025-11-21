@@ -10,6 +10,7 @@ import {
   Platform,
   TextInput,
 } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { useTheme } from '../context/ThemeContext';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -29,6 +30,10 @@ type ActivityFeedScreenNavigationProp = StackNavigationProp<AppStackParamList, '
 interface ActivityEvent {
   id: string;
   timestamp: string;
+  userId?: string | null;
+  orgId?: string | null;
+  entityType?: string | null;
+  entityId?: string | null;
   eventType: string;
   message: string;
   details: Record<string, any>;
@@ -39,6 +44,8 @@ interface ActivityEvent {
   primaryImageUrl?: string;
   status: string;
 }
+
+const HIGHLIGHT_ORANGE = '#FF9900';
 
 const ActivityFeedScreen = observer(() => {
   const theme = useTheme();
@@ -60,11 +67,18 @@ const ActivityFeedScreen = observer(() => {
   const [startDate, setStartDate] = useState<Date | null>(null);
   const [endDate, setEndDate] = useState<Date | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [activeDateField, setActiveDateField] = useState<'start' | 'end' | null>(null);
 
   // Platform data state
   const [platformConnections, setPlatformConnections] = useState<PlatformConnection[]>([]);
   const [platformLocations, setPlatformLocations] = useState<PlatformLocation[]>([]);
   const [isLoadingConnections, setIsLoadingConnections] = useState(true);
+
+  // Legend observables for live product data (titles, SKUs, images)
+  const productVariantsMap = useMemo(
+    () => legendState?.productVariants$?.get?.() || {},
+    [legendState?.productVariants$],
+  );
 
   // Fetch activity feed from backend
   const fetchActivityFeed = useCallback(async (cursor?: string, append = false) => {
@@ -89,18 +103,12 @@ const ActivityFeedScreen = observer(() => {
         queryString += `&cursor=${encodeURIComponent(cursor)}`;
       }
 
-      // Add date filters if set
-      if (startDate) {
-        queryString += `&startDate=${encodeURIComponent(startDate.toISOString())}`;
-      }
-      if (endDate) {
-        queryString += `&endDate=${encodeURIComponent(endDate.toISOString())}`;
-      }
-
-      console.log(`[ActivityFeed] Fetching activity feed: ${queryString}`);
-
+      const base = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+      const fullUrl = `${base}/api/activity?${queryString}`;
+      console.log(`[ActivityFeed] Fetching activity feed from URL: ${fullUrl}`);
+      
       const response = await fetch(
-        `https://api.sssync.app/api/activity?${queryString}`,
+        fullUrl,
         {
           method: 'GET',
           headers: {
@@ -111,7 +119,7 @@ const ActivityFeedScreen = observer(() => {
       );
 
       if (!response.ok) {
-        console.error(`[ActivityFeed] Failed to fetch: ${response.status} ${response.statusText}`);
+        console.error(`[ActivityFeed] Failed to fetch from ${fullUrl}: ${response.status} ${response.statusText}`);
         const errorText = await response.text();
         console.error(`[ActivityFeed] Error response:`, errorText);
         setLoading(false);
@@ -142,6 +150,10 @@ const ActivityFeedScreen = observer(() => {
       const transformedEvents: ActivityEvent[] = data.events.map((event: any) => ({
         id: event.Id,
         timestamp: event.Timestamp,
+        userId: event.UserId ?? null,
+        orgId: event.OrgId ?? null,
+        entityType: event.EntityType ?? null,
+        entityId: event.EntityId ?? null,
         eventType: event.EventType,
         message: event.Message,
         details: event.Details || {},
@@ -258,14 +270,151 @@ const ActivityFeedScreen = observer(() => {
     return '#6b7280';
   };
 
-  // Events are already filtered in fetchActivityFeed, just sort them
+  const platformTypeByConnectionId = useMemo(() => {
+    const map: Record<string, string> = {};
+    platformConnections.forEach((conn: PlatformConnection) => {
+      if (conn.Id && conn.PlatformType) {
+        map[conn.Id] = conn.PlatformType.toLowerCase();
+      }
+    });
+    return map;
+  }, [platformConnections]);
+
+  const getOwnerLabel = useCallback(
+    (event: ActivityEvent): string | null => {
+      const source = (event.details?.source || '').toString().toLowerCase();
+      const explicitPlatform = (event.platformType || event.details?.platformType || event.details?.platform || '').toString();
+
+      // User-originated events
+      if (source === 'user' || (!source && event.userId)) {
+        if (legendState?.userId && event.userId === legendState.userId) {
+          return 'You';
+        }
+        return 'Teammate';
+      }
+
+      // Platform or automated events
+      if (explicitPlatform) {
+        const normalized =
+          explicitPlatform.charAt(0).toUpperCase() + explicitPlatform.slice(1).toLowerCase();
+        if (source) {
+          return `${normalized} · ${source}`;
+        }
+        return normalized;
+      }
+
+      return null;
+    },
+    [legendState?.userId],
+  );
+
+  const getDateRangeLabel = useMemo(() => {
+    if (!startDate && !endDate) return 'Any time';
+    if (startDate && !endDate) return `From ${startDate.toLocaleDateString()}`;
+    if (!startDate && endDate) return `Until ${endDate.toLocaleDateString()}`;
+    if (startDate && endDate) {
+      return `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
+    }
+    return 'Any time';
+  }, [startDate, endDate]);
+
+  // Apply search, platform, location, date filters and sort
   const filteredEvents = useMemo(() => {
     let filtered = [...events];
+
+    // Search filter
+    if (searchQuery.trim().length > 0) {
+      const query = searchQuery.trim().toLowerCase();
+      filtered = filtered.filter(event => {
+        const messageMatch = event.message?.toLowerCase().includes(query);
+        const eventTypeMatch = event.eventType?.toLowerCase().includes(query);
+
+        const details = event.details || {};
+        const detailFields = [
+          details.title,
+          details.sku,
+          details.reason,
+          details.locationName,
+          details.platformName,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+
+        const variant =
+          event.productVariantId && productVariantsMap[event.productVariantId]
+            ? productVariantsMap[event.productVariantId]
+            : undefined;
+        const variantMatch = variant
+          ? `${variant.Title || ''} ${variant.Sku || ''}`.toLowerCase().includes(query)
+          : false;
+
+        return messageMatch || eventTypeMatch || detailFields.includes(query) || variantMatch;
+      });
+    }
+
+    // Platform filter
+    if (selectedPlatformType) {
+      const target = selectedPlatformType.toLowerCase();
+      filtered = filtered.filter(event => {
+        const explicit = event.platformType?.toLowerCase();
+        const detailPlatform =
+          (event.details?.platformType || event.details?.platform || '').toString().toLowerCase();
+        const fromConnection = event.platformConnectionId
+          ? platformTypeByConnectionId[event.platformConnectionId]?.toLowerCase()
+          : undefined;
+
+        return [explicit, detailPlatform, fromConnection].some(
+          value => value && value === target,
+        );
+      });
+    }
+
+    // Location filter
+    if (selectedLocationIds.length > 0) {
+      filtered = filtered.filter(event => {
+        const details = event.details || {};
+        const locationId =
+          details.locationId || details.PlatformLocationId || details.location_id || null;
+        if (!locationId) return false;
+        return selectedLocationIds.includes(String(locationId));
+      });
+    }
+
+    // Date range filter (inclusive)
+    if (startDate || endDate) {
+      const startMs =
+        startDate != null
+          ? new Date(startDate.toDateString()).getTime()
+          : null;
+      const endMs =
+        endDate != null
+          ? new Date(endDate.toDateString()).getTime() + 24 * 60 * 60 * 1000 - 1
+          : null;
+
+      filtered = filtered.filter(event => {
+        const ts = new Date(event.timestamp).getTime();
+        if (Number.isNaN(ts)) return false;
+        if (startMs != null && ts < startMs) return false;
+        if (endMs != null && ts > endMs) return false;
+        return true;
+      });
+    }
 
     // Sort
     switch (sortBy) {
       case 'name':
-        filtered.sort((a, b) => (a.variantTitle || '').localeCompare(b.variantTitle || ''));
+        filtered.sort((a, b) => {
+          const aTitle =
+            (a.productVariantId && productVariantsMap[a.productVariantId]?.Title) ||
+            a.variantTitle ||
+            '';
+          const bTitle =
+            (b.productVariantId && productVariantsMap[b.productVariantId]?.Title) ||
+            b.variantTitle ||
+            '';
+          return aTitle.localeCompare(bTitle);
+        });
         break;
       default:
         // Keep existing order (most recent first)
@@ -273,7 +422,17 @@ const ActivityFeedScreen = observer(() => {
     }
 
     return filtered;
-  }, [events, sortBy]);
+  }, [
+    events,
+    sortBy,
+    searchQuery,
+    selectedPlatformType,
+    selectedLocationIds,
+    startDate,
+    endDate,
+    platformTypeByConnectionId,
+    productVariantsMap,
+  ]);
 
   const platformsForChips = ['shopify', 'square', 'clover', 'amazon', 'ebay', 'facebook']
     .map(platformType => {
@@ -305,62 +464,122 @@ const ActivityFeedScreen = observer(() => {
     return date.toLocaleDateString();
   };
 
-  const renderEvent = ({ item }: { item: ActivityEvent }) => (
-    <Animated.View entering={FadeInUp.delay(100).duration(300)}>
-      <TouchableOpacity
-        style={[styles.eventItem, { backgroundColor: theme.colors.surface }]}
-        onPress={() => {
-          // Navigate to product detail if it's product-related
-          if (item.productVariantId) {
-            navigation.navigate('ProductDetail', { productId: item.productVariantId });
-          }
-        }}
-      >
-        <View style={styles.eventIcon}>
-          <Icon
-            name={getEventIcon(item.eventType)}
-            size={20}
-            color={getEventColor(item.eventType)}
-          />
-        </View>
+  const renderEvent = ({ item }: { item: ActivityEvent }) => {
+    const variant =
+      item.productVariantId && productVariantsMap[item.productVariantId]
+        ? productVariantsMap[item.productVariantId]
+        : undefined;
 
-        <View style={styles.eventContent}>
-          <Text style={[styles.eventMessage, { color: theme.colors.text }]}>
-            {item.message}
-          </Text>
+    const quantityDelta =
+      typeof item.details?.quantityDelta === 'number'
+        ? item.details.quantityDelta
+        : undefined;
+    const reason =
+      typeof item.details?.reason === 'string' ? item.details.reason : undefined;
 
-          <View style={styles.eventMeta}>
-            <Text style={[styles.eventTime, { color: theme.colors.textSecondary }]}>
-              {formatTimestamp(item.timestamp)}
+    const reasonParts: string[] = [];
+    if (typeof quantityDelta === 'number' && quantityDelta !== 0) {
+      const sign = quantityDelta > 0 ? '+' : '';
+      reasonParts.push(`${sign}${quantityDelta} Units`);
+    }
+    if (reason) {
+      reasonParts.push(reason);
+    }
+    const reasonText = reasonParts.length > 0 ? `Reason: ${reasonParts.join(' ')}` : null;
+
+    const ownerLabel = getOwnerLabel(item);
+
+    const platformLabel =
+      item.platformType ||
+      item.details?.platformName ||
+      item.details?.platformType ||
+      item.details?.platform ||
+      null;
+
+    const displayTitle = (() => {
+      if (item.eventType?.includes('INVENTORY')) return 'Inventory Adjustment';
+      if (item.eventType?.includes('ORDER')) {
+        const orderNumber = item.details?.orderNumber || item.details?.order_id;
+        return orderNumber ? `Order #${orderNumber}` : 'Order';
+      }
+      return item.message || item.eventType;
+    })();
+
+    return (
+      <Animated.View entering={FadeInUp.delay(100).duration(300)}>
+        <TouchableOpacity
+          style={[styles.eventItem, { backgroundColor: theme.colors.surface }]}
+          onPress={() => {
+            // Navigate to product detail if it's product-related
+            if (item.productVariantId) {
+              navigation.navigate('ProductDetail', { productId: item.productVariantId });
+            }
+          }}
+        >
+          <View style={styles.eventIcon}>
+            <Icon
+              name={getEventIcon(item.eventType)}
+              size={20}
+              color={getEventColor(item.eventType)}
+            />
+          </View>
+
+          <View style={styles.eventContent}>
+            <Text style={[styles.eventMessage, { color: theme.colors.text }]}>
+              {displayTitle}
             </Text>
 
-            {item.platformType && (
-              <View style={styles.platformBadge}>
-                <Text style={styles.platformText}>
-                  {item.platformType}
-                </Text>
+            {variant && (
+              <Text style={[styles.variantTitle, { color: theme.colors.text }]}>
+                {variant.Title}
+              </Text>
+            )}
+
+            {variant?.Sku && (
+              <Text style={[styles.variantMeta, { color: theme.colors.textSecondary }]}>
+                SKU: {variant.Sku}
+              </Text>
+            )}
+
+            <View style={styles.eventMeta}>
+              <Text style={[styles.eventTime, { color: theme.colors.textSecondary }]}>
+                {formatTimestamp(item.timestamp)}
+              </Text>
+
+              {platformLabel && (
+                <View style={styles.platformBadge}>
+                  <Text style={styles.platformText}>
+                    {platformLabel}
+                  </Text>
+                </View>
+              )}
+
+              {ownerLabel && (
+                <View style={styles.ownerBadge}>
+                  <Text style={styles.ownerText}>{ownerLabel}</Text>
+                </View>
+              )}
+            </View>
+
+            {reasonText && (
+              <View style={styles.reasonPill}>
+                <Text style={styles.reasonText}>{reasonText}</Text>
               </View>
             )}
           </View>
 
-          {item.variantTitle && (
-            <Text style={[styles.variantTitle, { color: theme.colors.primary }]}>
-              {item.variantTitle}
-            </Text>
-          )}
-        </View>
-
-        {item.primaryImageUrl && (
-          <View style={styles.eventImage}>
-            {/* Placeholder for image - you can add Image component here */}
-            <View style={styles.imagePlaceholder}>
-              <Icon name="image" size={16} color={theme.colors.textSecondary} />
+          {item.primaryImageUrl && (
+            <View style={styles.eventImage}>
+              {/* Placeholder for image - you can add Image component here */}
+              <View style={styles.imagePlaceholder}>
+                <Icon name="image" size={16} color={theme.colors.textSecondary} />
+              </View>
             </View>
-          </View>
-        )}
-      </TouchableOpacity>
-    </Animated.View>
-  );
+          )}
+        </TouchableOpacity>
+      </Animated.View>
+    );
+  };
 
   if (loading) {
     return (
@@ -381,8 +600,8 @@ const ActivityFeedScreen = observer(() => {
 
           {/* Search Bar */}
           <View style={{ paddingHorizontal: 16, marginBottom: 8 }}>
-            <View style={[styles.searchBar, { backgroundColor: "#FFF" }]}>
-              <Icon name="magnify" size={20} color="#999" style={styles.searchIcon} />
+            <View style={[styles.searchBar, { backgroundColor: "#FFF", borderColor: HIGHLIGHT_ORANGE }]}>
+              <Icon name="magnify" size={20} color={HIGHLIGHT_ORANGE} style={styles.searchIcon} />
               <TextInput
                 style={[styles.searchInput, { color: theme.colors.text }]}
                 placeholder="Search for orders/changes"
@@ -404,6 +623,7 @@ const ActivityFeedScreen = observer(() => {
               platforms={platformsForChips}
               selectedPlatform={selectedPlatformType}
               onSelectPlatform={setSelectedPlatformType}
+              activeColor={HIGHLIGHT_ORANGE}
             />
           </View>
 
@@ -418,11 +638,14 @@ const ActivityFeedScreen = observer(() => {
             </View>
             <View style={{ marginLeft: 8, marginRight: 0 }}>
               <TouchableOpacity
-                style={[styles.dateFilterButton, { backgroundColor: theme.colors.primary }]}
-                onPress={() => setShowDatePicker(true)}
+                style={[styles.dateFilterButton, { backgroundColor: HIGHLIGHT_ORANGE }]}
+                onPress={() => {
+                  setShowDatePicker(true);
+                  setActiveDateField(null);
+                }}
               >
                 <Icon name="calendar" size={18} color="white" />
-                <Text style={styles.dateFilterButtonText}>Filter</Text>
+                <Text style={styles.dateFilterButtonText}>{getDateRangeLabel}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -479,10 +702,7 @@ const ActivityFeedScreen = observer(() => {
                 <Text style={[styles.dateLabel, { color: theme.colors.text }]}>Start Date</Text>
                 <TouchableOpacity
                   style={[styles.dateInput, { borderColor: theme.colors.primary }]}
-                  onPress={() => {
-                    // TODO: Open native date picker
-                    // For now, show placeholder
-                  }}
+                  onPress={() => setActiveDateField('start')}
                 >
                   <Icon name="calendar" size={18} color={theme.colors.primary} />
                   <Text style={[styles.dateInputText, { color: startDate ? theme.colors.text : '#999' }]}>
@@ -496,10 +716,7 @@ const ActivityFeedScreen = observer(() => {
                 <Text style={[styles.dateLabel, { color: theme.colors.text }]}>End Date</Text>
                 <TouchableOpacity
                   style={[styles.dateInput, { borderColor: theme.colors.primary }]}
-                  onPress={() => {
-                    // TODO: Open native date picker
-                    // For now, show placeholder
-                  }}
+                  onPress={() => setActiveDateField('end')}
                 >
                   <Icon name="calendar" size={18} color={theme.colors.primary} />
                   <Text style={[styles.dateInputText, { color: endDate ? theme.colors.text : '#999' }]}>
@@ -508,6 +725,34 @@ const ActivityFeedScreen = observer(() => {
                 </TouchableOpacity>
               </View>
             </View>
+
+            {activeDateField && (
+              <View style={{ width: '100%', marginTop: 8 }}>
+                <DateTimePicker
+                  value={
+                    (activeDateField === 'start' ? startDate : endDate) || new Date()
+                  }
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                  onChange={(_event, selectedDate) => {
+                    if (!selectedDate) {
+                      if (Platform.OS === 'android') {
+                        setActiveDateField(null);
+                      }
+                      return;
+                    }
+                    if (activeDateField === 'start') {
+                      setStartDate(selectedDate);
+                    } else {
+                      setEndDate(selectedDate);
+                    }
+                    if (Platform.OS === 'android') {
+                      setActiveDateField(null);
+                    }
+                  }}
+                />
+              </View>
+            )}
 
             <View style={styles.modalActions}>
               <TouchableOpacity
@@ -542,7 +787,7 @@ const ActivityFeedScreen = observer(() => {
 const styles = StyleSheet.create({
   background: {
     flex: 1,
-    backgroundColor: "#FDF3D7",
+    backgroundColor: "#FFE9AC",
   },
   container: {
     borderTopRightRadius: 36,
@@ -635,6 +880,35 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
   },
+  variantMeta: {
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  ownerBadge: {
+    backgroundColor: '#FFE4D0',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    marginLeft: 6,
+  },
+  ownerText: {
+    fontSize: 10,
+    fontWeight: '500',
+    color: '#9A3412',
+  },
+  reasonPill: {
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: '#F3F4F6',
+  },
+  reasonText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#374151',
+  },
   eventImage: {
     marginLeft: 12,
   },
@@ -719,7 +993,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
+    paddingVertical: 12,
     paddingHorizontal: 12,
     borderRadius: 12,
     gap: 8,

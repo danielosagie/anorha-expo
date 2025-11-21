@@ -8,7 +8,7 @@ import { mockOrders } from '../data/mockData';
 import { observer } from '@legendapp/state/react';
 import { useLegendState } from '../context/LegendStateContext';
 import { ProductVariant as ProductVariantData, ProductImage, InventoryLevel, PlatformProductMapping, LegendStateObservables, MarketplaceListing, PlatformLocation, PlatformConnection } from '../utils/SupaLegend';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
@@ -46,6 +46,7 @@ interface MockOrderItemData {
 const InventoryOrdersScreen = observer(() => {
   const theme = useTheme();
   const navigation = useNavigation<InventoryOrdersScreenNavigationProp>();
+  const route = useRoute<any>();
   const legendState: LegendStateObservables | null = useLegendState();
 
   // Filter & Search State
@@ -55,10 +56,39 @@ const InventoryOrdersScreen = observer(() => {
   const [filterStatus, setFilterStatus] = useState('all');
   const [selectedPlatformType, setSelectedPlatformType] = useState<string | null>(null);
   const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
+  const [lowStockOnly, setLowStockOnly] = useState(false);
   const [scannedBarcode, setScannedBarcode] = useState<string | null>(null);
   const [barcodeSearchError, setBarcodeSearchError] = useState<string | null>(null);
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [locationPickerOpen, setLocationPickerOpen] = useState(false);
   const scannerResultHandlerRef = useRef<((code: string) => void) | null>(null);
+
+  // Handle route params
+  useEffect(() => {
+    const p = route.params;
+    if (p) {
+        console.log('[InventoryOrdersScreen] applying params:', p);
+        if (typeof p.initialSearch === 'string') setSearchQuery(p.initialSearch);
+        if (p.initialSortBy) setSortBy(p.initialSortBy);
+        if (p.initialLocationIds) setSelectedLocationIds(p.initialLocationIds);
+        if (p.lowStockOnly !== undefined) setLowStockOnly(p.lowStockOnly);
+        
+        if (p.openScannerOnMount) {
+             setTimeout(() => {
+                 setScannerOpen(true);
+                 scannerResultHandlerRef.current = (code: string) => {
+                    handleBarcodeScan(code);
+                    setScannerOpen(false);
+                    scannerResultHandlerRef.current = null;
+                 };
+             }, 100);
+        }
+        
+        if (p.openLocationPicker) {
+             setLocationPickerOpen(true);
+        }
+    }
+  }, [route.params]);
 
   // Loading & Data State
   const [platformConnections, setPlatformConnections] = useState<PlatformConnection[]>([]);
@@ -251,6 +281,13 @@ const InventoryOrdersScreen = observer(() => {
       filtered = filtered.filter((item: EnrichedProductVariant) =>
         item.Title?.toLowerCase().includes(searchQuery.toLowerCase())
       );
+    }
+
+    // Low stock filter
+    if (lowStockOnly && !searchQuery) {
+       filtered = filtered.filter((item: EnrichedProductVariant) => 
+         (item.totalQuantity || 0) <= 5
+       );
     }
 
     // Barcode search
@@ -471,6 +508,7 @@ const InventoryOrdersScreen = observer(() => {
                 platforms={platformsForChips}
                 selectedPlatform={selectedPlatformType}
                 onSelectPlatform={setSelectedPlatformType}
+                activeColor={theme.colors.primary}
               />
             </View>
 
@@ -481,6 +519,7 @@ const InventoryOrdersScreen = observer(() => {
                   orgId={legendState?.userId || ''}
                   selectedItems={selectedLocationIds}
                   onSelectionChange={setSelectedLocationIds}
+                  startOpen={locationPickerOpen}
                 />
               </View>
               <View style={{ marginLeft: 8, marginRight: 0 }}>

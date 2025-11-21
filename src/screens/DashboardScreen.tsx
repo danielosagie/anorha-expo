@@ -1,295 +1,293 @@
-import React, { useMemo, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Dimensions, TouchableOpacity, TextInput } from 'react-native';
-import { LineChart } from 'react-native-chart-kit';
-import Animated, { FadeInUp, FadeInRight } from 'react-native-reanimated';
+import React, { useMemo, useState, useEffect, useContext } from 'react';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import { useNavigation } from '@react-navigation/native';
 import Card from '../components/Card';
-import ChannelSalesBar from '../components/ChannelSalesBar';
-import OrderListItem from '../components/OrderListItem';
-import { mockSalesData, mockOrders, mockChannelData } from '../data/mockData';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LegendStateContext } from '../context/LegendStateContext';
-import { ActivityIndicator } from 'react-native';
+import { supabase } from '../../lib/supabase';
 
 const DashboardScreen = () => {
   const theme = useTheme();
-  const navigation = useNavigation();
-  const legendCtx = React.useContext(LegendStateContext);
-  console.log('[Dashboard] mount, hasLegendCtx =', !!legendCtx);
-  if (!legendCtx) {
-    return <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F8F9FB' }}>
-      <ActivityIndicator />
-    </View>;
-  }
-  const [timeFrame, setTimeFrame] = useState('12 months');
-  const [selectedTab, setSelectedTab] = useState('All');
-  const [selectedPlatform, setSelectedPlatform] = useState('All');
-  const legend = legendCtx;
-
-  const liveCounts = useMemo(() => {
-    const pv = legend?.productVariants$?.get?.() || {};
-    const images = legend?.productImages$?.get?.() || {};
-    const productsCount = Object.keys(pv).length;
-    const imagesCount = Object.keys(images).length;
-    return { productsCount, imagesCount };
-  }, [legend?.productVariants$, legend?.productImages$]);
+  const navigation = useNavigation<any>();
+  const legendCtx = useContext(LegendStateContext);
   
+  const [recentActivity, setRecentActivity] = useState<any[]>([]);
+  const [loadingActivity, setLoadingActivity] = useState(true);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+
+  // 1. Compute Live Inventory Stats (Low Stock, Total)
+  const stats = useMemo(() => {
+    const pv = legendCtx?.productVariants$?.get?.() || {};
+    const levels = legendCtx?.inventoryLevels$?.get?.() || {};
+    
+    let totalInventory = 0;
+    const variantQuantities: Record<string, number> = {};
+    
+    Object.values(levels).forEach((level: any) => {
+        const qty = level.Quantity || 0;
+        totalInventory += qty;
+        const vid = level.ProductVariantId;
+        if (vid) {
+            variantQuantities[vid] = (variantQuantities[vid] || 0) + qty;
+        }
+    });
+
+    const lowStockThreshold = 5;
+    const lowStockItems = Object.keys(variantQuantities)
+        .filter(vid => variantQuantities[vid] <= lowStockThreshold)
+        .map(vid => ({
+            id: vid,
+            title: pv[vid]?.Title || 'Unknown Product',
+            quantity: variantQuantities[vid],
+            sku: pv[vid]?.Sku
+        }))
+        .sort((a, b) => a.quantity - b.quantity)
+        .slice(0, 3); // Top 3
+
+    return { 
+        totalInventory, 
+        lowStockItems,
+        lowStockCount: Object.keys(variantQuantities).filter(vid => variantQuantities[vid] <= lowStockThreshold).length
+    };
+  }, [legendCtx?.productVariants$, legendCtx?.inventoryLevels$]);
+
+  // 2. Fetch Recent Activity
+  useEffect(() => {
+    const fetchActivity = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      try {
+        const response = await fetch('https://api.sssync.app/api/activity?limit=3', {
+          headers: { 'Authorization': `Bearer ${session.access_token}` }
+        });
+        const json = await response.json();
+        if (json.events) {
+          setRecentActivity(json.events);
+        }
+      } catch (e) {
+        console.error('Failed to fetch dashboard activity', e);
+      } finally {
+        setLoadingActivity(false);
+      }
+    };
+    
+    fetchActivity();
+  }, []);
+
+  // 3. Fetch Last Sync Time
+  useEffect(() => {
+    const fetchLastSync = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data } = await supabase
+        .from('PlatformConnections')
+        .select('LastSyncSuccessAt')
+        .eq('UserId', user.id)
+        .order('LastSyncSuccessAt', { ascending: false })
+        .limit(1);
+
+      if (data && data.length > 0 && data[0].LastSyncSuccessAt) {
+        setLastSyncTime(data[0].LastSyncSuccessAt);
+      }
+    };
+    fetchLastSync();
+  }, []);
+
+  const formatTimeAgo = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 60) return `${diffMins} minutes ago`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours} hours ago`;
+    return `${Math.floor(diffHours / 24)} days ago`;
+  };
+
+  if (!legendCtx) {
+    return (
+      <View style={[styles.fullScreenContainer, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={theme.colors.primary} />
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.fullScreenContainer, { paddingTop: 60 }]}>
       <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
         <Animated.View entering={FadeInUp.delay(100).duration(500)}>
+          
+          {/* Search Entry */}
           <View style={styles.searchContainer}>
-            <View style={styles.searchBar}>
+            <TouchableOpacity 
+              style={styles.searchBar}
+              onPress={() => navigation.navigate('Inventory', { initialSearch: '', initialSortBy: 'name' })}
+              activeOpacity={0.9}
+            >
               <Icon name="magnify" size={20} color="#999" style={styles.searchIcon} />
-              <TextInput
-                placeholder="Search inventory, orders, or marketplaces"
-                style={styles.searchInput}
-              />
+              <Text style={[styles.searchInput, { color: '#999' }]}>
+                Search inventory...
+              </Text>
+              <TouchableOpacity 
+                style={styles.scannerButton}
+                onPress={() => navigation.navigate('Inventory', { openScannerOnMount: true })}
+              >
+                <Icon name="qrcode-scan" size={20} color="#fff" />
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </View>
+
+          {/* Low Stock Alert */}
+          <Card style={styles.card}>
+            <View style={styles.cardHeader}>
+              <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                <Icon name="alert-circle-outline" size={20} color="#F59E0B" style={{marginRight: 8}} />
+                <Text style={styles.cardTitle}>
+                  Low Stock ({stats.lowStockCount})
+                </Text>
+              </View>
+            </View>
+
+            {stats.lowStockItems.length === 0 ? (
+               <View style={styles.emptyState}>
+                 <Icon name="check-circle-outline" size={32} color={theme.colors.success} />
+                 <Text style={[styles.emptyStateText, {marginTop: 8}]}>All stocked up!</Text>
+               </View>
+            ) : (
+              stats.lowStockItems.map((item) => (
+                <TouchableOpacity 
+                  key={item.id} 
+                  style={styles.listItem}
+                  onPress={() => navigation.navigate('ProductDetail', { productId: item.id })}
+                >
+                  <View>
+                    <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
+                    <Text style={styles.itemSubtitle}>{item.quantity} units • Reorder soon</Text>
+                  </View>
+                  <Icon name="chevron-right" size={20} color="#CCC" />
+                </TouchableOpacity>
+              ))
+            )}
+
+            <TouchableOpacity 
+              style={styles.viewAllButton}
+              onPress={() => navigation.navigate('Inventory', { initialSortBy: 'stock-low', lowStockOnly: true })}
+            >
+              <Text style={[styles.viewAllText, { color: theme.colors.primary }]}>View all low stock</Text>
+            </TouchableOpacity>
+          </Card>
+
+          {/* Recent Activity */}
+          <Card style={styles.card}>
+            <View style={styles.cardHeader}>
+              <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                <Icon name="history" size={20} color={theme.colors.primary} style={{marginRight: 8}} />
+                <Text style={styles.cardTitle}>Recent Activity</Text>
+              </View>
+            </View>
+
+            {loadingActivity ? (
+              <ActivityIndicator size="small" color={theme.colors.primary} style={{margin: 20}} />
+            ) : recentActivity.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyStateText}>No recent activity</Text>
+              </View>
+            ) : (
+              recentActivity.map((event: any) => (
+                <TouchableOpacity 
+                  key={event.Id} 
+                  style={styles.listItem}
+                  onPress={() => event.ProductVariantId && navigation.navigate('ProductDetail', { productId: event.ProductVariantId })}
+                  disabled={!event.ProductVariantId}
+                >
+                  <View style={{flex: 1}}>
+                    <Text style={styles.itemTitle} numberOfLines={2}>{event.Message}</Text>
+                    <Text style={styles.itemSubtitle}>
+                      {formatTimeAgo(event.Timestamp)} • {event.Details?.platform || 'System'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              ))
+            )}
+
+            <TouchableOpacity 
+              style={styles.viewAllButton}
+              onPress={() => navigation.navigate('ActivityFeed')}
+            >
+              <Text style={[styles.viewAllText, { color: theme.colors.primary }]}>View all activity</Text>
+            </TouchableOpacity>
+          </Card>
+
+          {/* Quick Actions */}
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Quick Actions</Text>
+          </View>
+          
+          <View style={styles.quickActionsGrid}>
+            <TouchableOpacity 
+              style={styles.actionButton}
+              onPress={() => navigation.navigate('Inventory', { openScannerOnMount: true })}
+            >
+              <View style={[styles.actionIcon, { backgroundColor: '#E0F2FE' }]}>
+                <Icon name="camera-outline" size={24} color="#0284C7" />
+              </View>
+              <Text style={styles.actionLabel}>Scan Product</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={styles.actionButton}
+              onPress={() => navigation.navigate('Inventory', { initialSortBy: 'date' })} 
+            >
+              <View style={[styles.actionIcon, { backgroundColor: '#DCFCE7' }]}>
+                <Icon name="plus" size={24} color="#16A34A" />
+              </View>
+              <Text style={styles.actionLabel}>Log Sale</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={styles.actionButton}
+              onPress={() => navigation.navigate('Inventory', { initialSortBy: 'stock-high' })}
+            >
+              <View style={[styles.actionIcon, { backgroundColor: '#F3E8FF' }]}>
+                <Icon name="chart-bar" size={24} color="#9333EA" />
+              </View>
+              <Text style={styles.actionLabel}>View by Pool</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={styles.actionButton}
+              onPress={() => navigation.navigate('Inventory', { openLocationPicker: true })}
+            >
+              <View style={[styles.actionIcon, { backgroundColor: '#FFEDD5' }]}>
+                <Icon name="map-marker-outline" size={24} color="#EA580C" />
+              </View>
+              <Text style={styles.actionLabel}>By Location</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Footer Stats */}
+          <View style={styles.footerStats}>
+            <Text style={styles.footerStatText}>Total Inventory: {stats.totalInventory.toLocaleString()} units</Text>
+            {lastSyncTime && (
+              <Text style={styles.footerStatSubtext}>Last sync: {formatTimeAgo(lastSyncTime)}</Text>
+            )}
+            
+            <View style={styles.footerLinks}>
+              <TouchableOpacity onPress={() => navigation.navigate('Profile')}>
+                <Text style={styles.footerLink}>Settings</Text>
+              </TouchableOpacity>
+              <Text style={styles.footerLinkDivider}>•</Text>
+              <TouchableOpacity onPress={() => navigation.navigate('Profile')}>
+                <Text style={styles.footerLink}>Support</Text>
+              </TouchableOpacity>
             </View>
           </View>
 
-          {/* Alerts Section */}
-          <Card style={styles.alertsCard}>
-            <View style={styles.alertsHeader}>
-              <Text style={styles.alertsTitle}>Alerts</Text>
-              <TouchableOpacity>
-                <Text style={styles.viewAllText}>View All</Text>
-              </TouchableOpacity>
-            </View>
-            
-            <View style={styles.alertItem}>
-              <View style={[styles.alertIcon, { backgroundColor: '#FF9500' + '20' }]}>
-                <Icon name="alert" size={18} color="#FF9500" />
-              </View>
-              <View style={styles.alertContent}>
-                <Text style={styles.alertText}>Inventory active: {liveCounts.productsCount} products, {liveCounts.imagesCount} images</Text>
-                <Text style={styles.alertTime}>2 hours ago</Text>
-              </View>
-              <Icon name="chevron-right" size={20} color="#CCC" />
-            </View>
-            
-            <View style={styles.alertItem}>
-              <View style={[styles.alertIcon, { backgroundColor: '#34C759' + '20' }]}>
-                <Icon name="check-circle" size={18} color="#34C759" />
-              </View>
-              <View style={styles.alertContent}>
-                <Text style={styles.alertText}>5 new orders received</Text>
-                <Text style={styles.alertTime}>Today</Text>
-              </View>
-              <Icon name="chevron-right" size={20} color="#CCC" />
-            </View>
-          </Card>
-
-          {/* Sales Overview Card */}
-          <Card style={styles.salesCard}>
-            <Text style={[styles.totalAmount, {textAlign: 'left'}]}>$47,405.84</Text>
-            <Text style={[styles.subtitle, {textAlign: 'left'}]}>Your total sales from the last {timeFrame}</Text>
-            <View style={[styles.statsRow, {justifyContent: 'flex-start'}]}>
-              <Text style={styles.statsPositive}>+$391.20 vs previous year</Text>
-            </View>
-            
-            <View style={{width: '100%', paddingRight: 30}}>  
-              <LineChart
-                data={{
-                  labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-                  datasets: [{ data: mockSalesData }]
-                }}
-                width={370}
-                height={180}
-                chartConfig={{
-                  backgroundColor: theme.colors.background,
-                  backgroundGradientFrom: theme.colors.background,
-                  backgroundGradientTo: theme.colors.background,
-                  decimalPlaces: 0,
-                  color: () => theme.colors.primary,
-                  labelColor: () => theme.colors.textSecondary,
-                  propsForDots: {
-                    r: '0',
-                  },
-                  propsForBackgroundLines: {
-                    strokeDasharray: '',
-                    stroke: '#e3e3e3',
-                    strokeWidth: 1
-                  },
-                  propsForLabels: {
-                    fontSize: 10,
-                  }
-                }}
-                bezier
-                style={styles.chart}
-              />
-            </View>
-          </Card>
-          
-
-          {/* Order Summary */}
-          <Card style={{}}>
-            <Text style={[styles.sectionTitle, {marginBottom: 16}]}>Order Summary</Text>
-            
-            {/* Platform Filter Tabs */}
-            <View style={styles.filterContainer}>
-              <View style={styles.filterHeader}>
-                <Text style={styles.filterLabel}>Platform:</Text>
-                <TouchableOpacity>
-                  <Text style={styles.dropdownText}>
-                    {selectedPlatform} <Icon name="chevron-down" size={14} color="#777" />
-                  </Text>
-                </TouchableOpacity>
-              </View>
-              
-              <ScrollView 
-                horizontal 
-                showsHorizontalScrollIndicator={false}
-                style={styles.platformTabsContainer}
-              >
-                <TouchableOpacity
-                  style={[
-                    styles.platformTab, 
-                    selectedPlatform === 'All' && 
-                      { backgroundColor: theme.colors.primary + '20' }
-                  ]}
-                  onPress={() => setSelectedPlatform('All')}
-                >
-                  <Text
-                    style={[
-                      styles.platformTabText,
-                      { color: selectedPlatform === 'All' ? theme.colors.primary : theme.colors.text }
-                    ]}
-                  >
-                    All
-                  </Text>
-                </TouchableOpacity>
-                
-                {mockChannelData.map((channel) => (
-                  <TouchableOpacity
-                    key={channel.name}
-                    style={[
-                      styles.platformTab, 
-                      selectedPlatform === channel.name && 
-                        { backgroundColor: theme.colors.primary + '20' }
-                    ]}
-                    onPress={() => setSelectedPlatform(channel.name)}
-                  >
-                    <Text
-                      style={[
-                        styles.platformTabText,
-                        { color: selectedPlatform === channel.name ? theme.colors.primary : theme.colors.text }
-                      ]}
-                    >
-                      {channel.name}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-            
-            {/* Status Filter Tabs */}
-            <View style={styles.filterContainer}>
-              <View style={styles.filterHeader}>
-                <Text style={styles.filterLabel}>Status:</Text>
-                <TouchableOpacity>
-                  <Text style={styles.dropdownText}>
-                    {selectedTab} <Icon name="chevron-down" size={14} color="#777" />
-                  </Text>
-                </TouchableOpacity>
-              </View>
-              
-              <ScrollView 
-                horizontal 
-                showsHorizontalScrollIndicator={false}
-                style={styles.statusTabsContainer}
-              >
-                <TouchableOpacity
-                  style={[
-                    styles.platformTab, 
-                    selectedTab === 'All' && 
-                      { backgroundColor: theme.colors.primary + '20' }
-                  ]}
-                  onPress={() => setSelectedTab('All')}
-                >
-                  <Text
-                    style={[
-                      styles.platformTabText,
-                      { color: selectedTab === 'All' ? theme.colors.primary : theme.colors.text }
-                    ]}
-                  >
-                    All
-                  </Text>
-                </TouchableOpacity>
-                
-                {['Pending', 'Processing', 'In Transit', 'Delivered', 'Completed', 'Returned', 'Offloaded'].map((status) => (
-                  <TouchableOpacity
-                    key={status}
-                    style={[
-                      styles.platformTab, 
-                      selectedTab === status && 
-                        { backgroundColor: theme.colors.primary + '20' }
-                    ]}
-                    onPress={() => setSelectedTab(status)}
-                  >
-                    <Text
-                      style={[
-                        styles.platformTabText,
-                        { color: selectedTab === status ? theme.colors.primary : theme.colors.text }
-                      ]}
-                    >
-                      {status}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-            
-            {/* Order List */}
-            <View style={styles.orderList}>
-              {mockOrders
-                .filter(order => 
-                  (selectedPlatform === 'All' || order.platform === selectedPlatform) &&
-                  (selectedTab === 'All' || order.status.toLowerCase() === selectedTab.toLowerCase())
-                )
-                .slice(0, 5) // Show only first 5 orders
-                .map((order, index) => (
-                  <Animated.View key={order.id} entering={FadeInUp.delay(index * 100).duration(300)}>
-                    <OrderListItem order={order} />
-                  </Animated.View>
-                ))}
-                
-              {mockOrders.filter(order => 
-                (selectedPlatform === 'All' || order.platform === selectedPlatform) &&
-                (selectedTab === 'All' || order.status.toLowerCase() === selectedTab.toLowerCase())
-              ).length === 0 && (
-                <View style={styles.emptyState}>
-                  <Icon name="package-variant" size={40} color="#CCC" />
-                  <Text style={styles.emptyStateText}>No orders found</Text>
-                  <Text style={styles.emptyStateSubtext}>
-                    Try changing your filters to see more orders
-                  </Text>
-                </View>
-              )}
-            </View>
-            
-            {/* Orders list is preview-only for now */}
-          </Card>
-
-          {/* Channel Sales Card */}
-          <Card style={styles.channelSalesCard}>
-            <Text style={styles.sectionTitle}>Total Sales By Channel</Text>
-            <Text style={styles.dateRange}>January - Dec 2024</Text>
-            
-            {mockChannelData.map((channel, index) => (
-              <ChannelSalesBar 
-                key={channel.name}
-                channel={channel}
-                delay={index * 100}
-              />
-            ))}
-            
-            <View style={styles.statsRow}>
-              <Text style={[styles.statsInfo, {flex: 1, flexWrap: 'wrap'}]}>Trending up by 5.2% this year</Text>
-            </View>
-            <Text style={[styles.statsInfo, {flex: 1, flexWrap: 'wrap'}]}>Showing sales by channel for the last 12 months</Text>
-          </Card>
+          <View style={{height: 100}} /> 
         </Animated.View>
       </ScrollView>
     </View>
@@ -303,81 +301,10 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    backgroundColor: '#F8F9FB',
     padding: 16,
   },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    marginVertical: 16,
-  },
-  totalAmount: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 4,
-    textAlign: 'left',
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#777',
-    marginBottom: 8,
-    textAlign: 'left',
-  },
-  statsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 8,
-    justifyContent: 'flex-start',
-  },
-  statsPositive: {
-    color: '#28a745',
-    fontSize: 14,
-  },
-  statsInfo: {
-    color: '#777',
-    fontSize: 12,
-    marginRight: 8,
-    flexWrap: 'wrap',
-    flex: 1,
-  },
-  chart: {
-    marginVertical: 16,
-    borderRadius: 8,
-    alignSelf: 'flex-start',
-    paddingRight: 40,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 4,
-  },
-  dateRange: {
-    fontSize: 14,
-    color: '#777',
-    marginBottom: 16,
-  },
-  tabContainer: {
-    flexDirection: 'row',
-    marginVertical: 16,
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  tab: {
-    marginRight: 16,
-    paddingVertical: 4,
-  },
-  selectedTab: {
-    borderBottomWidth: 2,
-    borderBottomColor: '#0E8F7F',
-  },
-  tabText: {
-    fontSize: 14,
-  },
   searchContainer: {
-    marginBottom: 16,
+    marginBottom: 20,
   },
   searchBar: {
     flexDirection: 'row',
@@ -385,137 +312,149 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     borderRadius: 12,
     paddingHorizontal: 16,
-    height: 48,
+    height: 52,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.05,
     shadowRadius: 4,
     elevation: 2,
   },
   searchIcon: {
-    marginRight: 8,
+    marginRight: 12,
   },
   searchInput: {
     flex: 1,
-    height: 48,
+    fontSize: 16,
+    paddingTop: 0, // Center text vertically
   },
-  alertsCard: {
+  scannerButton: {
+    backgroundColor: '#93C822',
+    padding: 8,
+    borderRadius: 8,
+    marginLeft: 8,
+  },
+  card: {
     marginBottom: 16,
+    padding: 0, // Reset padding for list items
+    overflow: 'hidden',
   },
-  alertsHeader: {
+  cardHeader: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
   },
-  alertsTitle: {
+  cardTitle: {
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  listItem: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  itemTitle: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#1F2937',
+    marginBottom: 4,
+  },
+  itemSubtitle: {
+    fontSize: 13,
+    color: '#6B7280',
+  },
+  viewAllButton: {
+    padding: 12,
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
   },
   viewAllText: {
     fontSize: 14,
-    color: '#0E8F7F',
-  },
-  alertItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  alertIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  alertContent: {
-    flex: 1,
-  },
-  alertText: {
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  alertTime: {
-    fontSize: 12,
-    color: '#999',
-    marginTop: 2,
-  },
-  salesCard: {
-    marginBottom: 16,
-  },
-  channelSalesCard: {
-    marginBottom: 16,
-  },
-  viewAllButton: {
-    alignItems: 'center',
-    padding: 12,
-    marginTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
-  },
-  viewAllButtonText: {
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  platformTabsContainer: {
-    marginBottom: 8,
-  },
-  platformTab: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    marginRight: 8,
-    borderRadius: 16,
-    backgroundColor: '#f0f0f0',
-  },
-  selectedPlatformTab: {
-    backgroundColor: '#0E8F7F20',
-  },
-  platformTabText: {
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  statusTabsContainer: {
-    marginBottom: 0,
-  },
-  orderList: {
-    marginTop: 0,
+    fontWeight: '600',
   },
   emptyState: {
-    alignItems: 'center',
     padding: 24,
+    alignItems: 'center',
   },
   emptyStateText: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#777',
-    marginTop: 12,
-  },
-  emptyStateSubtext: {
+    color: '#6B7280',
     fontSize: 14,
-    color: '#999',
-    marginTop: 4,
-    textAlign: 'center',
   },
-  filterContainer: {
-    marginBottom: 16,
+  sectionHeader: {
+    marginTop: 8,
+    marginBottom: 12,
   },
-  filterHeader: {
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  quickActionsGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
+    marginBottom: 24,
+  },
+  actionButton: {
+    width: '48%',
+    backgroundColor: 'white',
+    padding: 16,
+    borderRadius: 16,
+    marginBottom: 12,
     alignItems: 'center',
-    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
   },
-  filterLabel: {
-    fontSize: 14,
-    fontWeight: 'bold',
+  actionIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
   },
-  dropdownText: {
+  actionLabel: {
     fontSize: 14,
-    color: '#777',
+    fontWeight: '600',
+    color: '#374151',
+  },
+  footerStats: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  footerStatText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6B7280',
+    marginBottom: 4,
+  },
+  footerStatSubtext: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    marginBottom: 12,
+  },
+  footerLinks: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  footerLink: {
+    fontSize: 12,
+    color: '#6B7280',
+    padding: 8,
+  },
+  footerLinkDivider: {
+    fontSize: 12,
+    color: '#D1D5DB',
   },
 });
 
-export default DashboardScreen; 
+export default DashboardScreen;

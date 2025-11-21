@@ -1,5 +1,5 @@
 import React, { useState, useContext, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput, Image } from 'react-native';
 import { WebView } from 'react-native-webview';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
@@ -18,7 +18,7 @@ import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navig
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth, useUser } from '@clerk/clerk-expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CommonActions } from '@react-navigation/native';
 import * as WebBrowser from 'expo-web-browser';
@@ -104,7 +104,10 @@ const SQUARE_SCOPES = [
   'ORDERS_READ', 
   'ORDERS_WRITE',
   'INVENTORY_READ',
-  'INVENTORY_WRITE'
+  'WEBHOOKS_READ',
+  'WEBHOOKS_WRITE',
+  'INVENTORY_WRITE',
+  'DEVELOPER_APPLICATION_WEBHOOKS_WRITE',
 ].join(' '); // Space-separated string
 // --- End Square OAuth Constants ---
 
@@ -190,7 +193,8 @@ const ProfileScreen = () => {
   const route = useRoute<RouteProp<ProfileScreenRouteParams, 'Profile'>>();
   const { resetLegendState } = useLegendStateControl();
   const { toggles } = usePlatformConnections();
-  const { currentOrg } = useOrg();
+  // @ts-ignore - setOrg might not be in the type definition but is likely in the context value
+  const { currentOrg, setOrg } = useOrg();
   
   // For refresh trigger from route params
   const routeRefreshParam = route.params?.refresh || 0;
@@ -235,23 +239,14 @@ const ProfileScreen = () => {
   const [manualShopName, setManualShopName] = useState('');
   // --- END REVISED Guided Shopify Flow State ---
   
-  const [accountName, setAccountName] = useState('');
-  const [accountEmail, setAccountEmail] = useState('');
+  const { user } = useUser();
   const [planName, setPlanName] = useState('');
+  const [stats, setStats] = useState({ products: 0, locations: 0 });
 
   useEffect(() => {
     (async () => {
       try {
-        const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
-        setAccountEmail(user.email ?? '');
-        // Profile name
-        const { data: profile } = await supabase
-          .from('UserProfiles')
-          .select('DisplayName')
-          .eq('UserId', user.id)
-          .maybeSingle();
-        if (profile?.DisplayName) setAccountName(profile.DisplayName);
 
         // Subscription tier (optional)
         const { data: usr } = await supabase
@@ -271,13 +266,56 @@ const ProfileScreen = () => {
         // Entitlements
         const e = await fetchUserEntitlements();
         setEntitlements(e);
-        logInfo('entitlements_loaded', 'Fetched user entitlements', e);
+        
+        // Load Live Stats
+        const { count: prodCount } = await supabase
+            .from('ProductVariants')
+            .select('*', { count: 'exact', head: true })
+            .eq('UserId', user.id);
+            
+        const { count: locCount } = await supabase
+            .from('PlatformLocations')
+            .select('*', { count: 'exact', head: true })
+            .eq('UserId', user.id);
+
+        setStats({ 
+            products: prodCount || 0, 
+            locations: locCount || 0 
+        });
+
       } catch (e) {
-        logError('profile_load_account', 'Failed to load profile/account info', { error: String(e) });
+        logError('profile_load_data', 'Failed to load profile data', { error: String(e) });
       }
     })();
-  }, []);
-  
+  }, [user]);
+
+  // Auto-switch away from auto-created personal workspaces to real organization
+  useEffect(() => {
+    // Small delay to override any initial default set by OrgSwitcher
+    const timer = setTimeout(() => {
+      if (user && currentOrg && (currentOrg.name.includes('Workspace') || currentOrg.name.includes('Personal'))) {
+        // Check Clerk memberships for a "Real" organization
+        const memberships = user.organizationMemberships;
+        const realOrgMem = memberships?.find(m => 
+          !m.organization.name.includes('Workspace') && 
+          !m.organization.name.includes('Personal')
+        );
+
+        if (realOrgMem && setOrg) {
+          console.log('[ProfileScreen] Auto-switching to real org:', realOrgMem.organization.name);
+          // Update the global OrgContext
+          setOrg({
+              id: realOrgMem.organization.id,
+              name: realOrgMem.organization.name,
+              role: realOrgMem.role,
+          });
+        }
+      }
+    }, 500); // 500ms delay
+
+    return () => clearTimeout(timer);
+  }, [user, currentOrg]);
+
   const integrations = [
     {
       id: 'shopify',
@@ -747,14 +785,26 @@ const ProfileScreen = () => {
     } else if (manualShopName) {
       // Basic validation for manual name (e.g., non-empty, maybe no spaces)
       const trimmedName = manualShopName.trim();
-      if (trimmedName && !trimmedName.includes(' ')) { // Example validation
-         shopNameToConnect = trimmedName;
+      
+      // Try to extract shop name from URL if user pasted the full URL
+      let extractedShopName = trimmedName;
+      if (trimmedName.includes('admin.shopify.com')) {
+        const shopNameRegex = /admin\.shopify\.com\/store\/([a-zA-Z0-9\-]+)/;
+        const match = trimmedName.match(shopNameRegex);
+        if (match && match[1]) {
+          extractedShopName = match[1];
+          console.log(`[ProfileScreen] Extracted shop name from manual URL: ${extractedShopName}`);
+        }
+      }
+      
+      if (extractedShopName && !extractedShopName.includes(' ')) { // Example validation
+         shopNameToConnect = extractedShopName;
          isValid = true;
          console.log(`[ProfileScreen] Using manual shop name: ${shopNameToConnect}`);
       } else {
           Alert.alert(
              "Invalid Shop Name",
-             "Please enter a valid shop name (usually contains letters, numbers, hyphens, no spaces)."
+             "Please enter a valid shop name (usually contains letters, numbers, hyphens, no spaces) or a full Shopify admin URL."
            );
           return; // Stop processing if manual name is invalid
       }
@@ -1160,7 +1210,7 @@ const ProfileScreen = () => {
     },
     { 
       icon: 'help-circle', 
-      title: 'Help & Support',
+      title: 'Give Feedback',
       onPress: async () => {
         await WebBrowser.openBrowserAsync('https://anorha.userjot.com/');
       }
@@ -1295,25 +1345,53 @@ const ProfileScreen = () => {
 
   // Add this to ProfileScreen or AppNavigator useEffect on startup
   const syncUserOrgs = async () => {
-    const token = await ensureSupabaseJwt();
-    
-    // Call sync endpoint to create OrgMemberships from Clerk teams
-    const response = await fetch(
-      'https://api.sssync.app/api/organizations/sync-clerk-teams',
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+    try {
+      const token = await ensureSupabaseJwt();
+      
+      // Call sync endpoint to create OrgMemberships from Clerk teams
+      const response = await fetch(
+        'https://api.sssync.app/api/organizations/sync-clerk-teams',
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+      
+      if (response.ok) {
+        console.log('Synced Clerk teams with orgs');
+        
+        // 2. FORCE BACKEND TO FIX ACTIVE ORG & SYNC LOCAL STATE
+        const activeRes = await fetch(`${SSSYNC_API_BASE_URL}/api/organizations/me/active`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
+        if (activeRes.ok) {
+            const activeData = await activeRes.json();
+            // If backend says we should be on a different org than what we have, switch!
+            if (activeData.activeOrg && activeData.activeOrg.Id !== currentOrg?.id && setOrg) {
+                console.log('[ProfileScreen] Backend corrected active org to:', activeData.activeOrg.Name);
+                setOrg({
+                    id: activeData.activeOrg.Id,
+                    name: activeData.activeOrg.Name,
+                    role: activeData.activeOrg.userRole || 'org:admin' 
+                });
+            }
+        }
+
+        // Then reload orgs in OrgSwitcher or trigger refresh
+        setRefreshTrigger(prev => prev + 1);
       }
-    );
-    
-    if (response.ok) {
-      console.log('Synced Clerk teams with orgs');
-      // Then reload orgs in OrgSwitcher
+    } catch (e) {
+      console.error('Error syncing user orgs:', e);
     }
   };
+
+  useEffect(() => {
+    syncUserOrgs();
+  }, []);
 
   // Clean up the subscription when the component unmounts
   useEffect(() => {
@@ -1335,6 +1413,7 @@ const ProfileScreen = () => {
       contentContainerStyle={styles.scrollViewContent}
       showsVerticalScrollIndicator={false}
     >
+      {/*
       <OrgSwitcher 
         onOrgChanged={(orgId, orgName) => {
           // Reload TeamScreen data when org changes
@@ -1342,32 +1421,58 @@ const ProfileScreen = () => {
         }}
         currentOrgId={currentOrg?.id}
       />
+      */}
+      
 
       <Animated.View entering={FadeInUp.delay(100).duration(500)}>
         
         {/* Account Card */}
         <Card style={styles.card}>
           <View style={styles.accountHeader}>
-            <PlaceholderImage 
-              size={64} 
-              borderRadius={32} 
-              color="#6A5ACD"
-              type="gradient"
-              text="AC"
-            />
-      <View style={styles.accountInfo}>
-              <Text style={styles.accountName}>{accountName || 'Your Business'}</Text>
-              <Text style={styles.accountEmail}>{accountEmail || 'you@example.com'}</Text>
-              {planName ? (
-                <View style={[styles.planBadge, { backgroundColor: theme.colors.primary + '20' }]}>
-                  <Text style={[styles.planText, { color: theme.colors.primary }]}>{planName}</Text>
-                </View>
-              ) : null}
+            {user?.imageUrl ? (
+              <Image 
+                source={{ uri: user.imageUrl }} 
+                style={{ width: 64, height: 64, borderRadius: 32 }} 
+              />
+            ) : (
+              <PlaceholderImage 
+                size={64} 
+                borderRadius={32} 
+                color="#6A5ACD"
+                type="gradient"
+                text={user?.firstName?.[0] || 'U'}
+              />
+            )}
+            <View style={styles.accountInfo}>
+              <Text style={styles.accountName}>{user?.fullName || user?.firstName || 'User'}</Text>
+              <Text style={styles.accountEmail}>{user?.primaryEmailAddress?.emailAddress || ''}</Text>
+              
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                <Text style={styles.orgLabel}>Organization: </Text>
+                <Text style={styles.orgName}>
+                  {currentOrg?.name || user?.organizationMemberships?.[0]?.organization?.name || 'No Organization'}
+                </Text>
+              </View>
+
+              {currentOrg?.name?.includes('Workspace') && (
+                 <TouchableOpacity 
+                    onPress={() => {
+                        const real = user?.organizationMemberships?.find(m => !m.organization.name.includes('Workspace'));
+                        if (real && setOrg) setOrg({ id: real.organization.id, name: real.organization.name, role: real.role });
+                    }}
+                    style={{ marginTop: 8 }}
+                 >
+                    <Text style={{ fontSize: 12, color: theme.colors.primary, fontWeight: 'bold', textDecorationLine: 'underline' }}>
+                       Switch to {user?.organizationMemberships?.find(m => !m.organization.name.includes('Workspace'))?.organization?.name || 'Real Org'}
+                    </Text>
+                 </TouchableOpacity>
+              )}
             </View>
-            <TouchableOpacity style={styles.editButton}>
-              <Icon name="pencil" size={20} color={theme.colors.primary} />
-            </TouchableOpacity>
+          
           </View>
+          
+        
+        
           
 
           {/* Seller Stats Section 
@@ -1405,18 +1510,18 @@ const ProfileScreen = () => {
 
           <View style={styles.statsContainer}>
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>45</Text>
+              <Text style={styles.statValue}>{stats.products}</Text>
               <Text style={styles.statLabel}>Products</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>4</Text>
-              <Text style={styles.statLabel}>Integrations</Text>
+              <Text style={styles.statValue}>{platformConnections.length}</Text>
+              <Text style={styles.statLabel}>Platforms</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>$8.5k</Text>
-              <Text style={styles.statLabel}>Revenue</Text>
+              <Text style={styles.statValue}>{stats.locations}</Text>
+              <Text style={styles.statLabel}>Locations</Text>
             </View>
           </View>
         </Card>
@@ -1427,9 +1532,9 @@ const ProfileScreen = () => {
         <Card style={styles.card}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Connected Platforms</Text>
-            <TouchableOpacity onPress={() => setIsEditMode(!isEditMode)}> 
-              <Text style={[styles.sectionAction, { color: theme.colors.primary }]}>
-                {isEditMode ? 'Done' : 'Edit'}
+            <TouchableOpacity style={styles.manageBtn} onPress={() => setIsEditMode(!isEditMode)}> 
+              <Text style={styles.manageBtnText}>
+                {isEditMode ? 'Done' : 'Manage'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -1489,57 +1594,86 @@ const ProfileScreen = () => {
                      const PlatformIconComponent = getPlatformIcon(platformConfig.key);
                      
                      return (
-                       <View key={connection.Id} style={styles.integrationItem}>
-                         {/* Delete Button (Edit Mode) */}
-                         {isEditMode && (
-                           <TouchableOpacity 
-                             style={styles.deleteButton}
-                             onPress={() => handleDisconnectPlatform(connection.Id, platformConfig.name)} 
-                           >
-                             <Icon name="minus-circle-outline" size={24} color={theme.colors.error} />
-                           </TouchableOpacity>
-                         )}
-                         {/* Platform Icon (SVG) */}
-                         <View style={styles.platformIconContainer}>
-                           {PlatformIconComponent ? (
-                             <PlatformIconComponent width={32} height={32} />
-                           ) : (
-                             <Icon name="store" size={32} color="#555" />
-                           )}
-                         </View>
-                         {/* Display Name */}
-                         <Text style={styles.integrationName}>{displayShopName}</Text>
-                          
-                          {/* --- Conditional Right-Side Elements (Not Edit Mode) --- */}
-                          {!isEditMode && connection && (
-            <View style={styles.connectionInfoContainer}>
-                              {/* Status display section */}
+                      <View key={connection.Id} style={styles.integrationItem}>
+                        {/* Delete Button (Edit Mode) */}
+                        {isEditMode && (
+                          <TouchableOpacity 
+                            style={styles.deleteButton}
+                            onPress={() => handleDisconnectPlatform(connection.Id, platformConfig.name)} 
+                          >
+                            <Icon name="minus-circle-outline" size={24} color={theme.colors.error} />
+                          </TouchableOpacity>
+                        )}
+
+                        {/* Left column: icon + name + status/timestamp */}
+                        <View style={styles.integrationLeft}>
+                          {/* Platform Icon (SVG) */}
+                          <View style={styles.platformIconContainer}>
+                            {PlatformIconComponent ? (
+                              <PlatformIconComponent width={32} height={32} />
+                            ) : (
+                              <Icon name="store" size={32} color="#555" />
+                            )}
+                          </View>
+
+                          <View style={styles.integrationMain}>
+                            {/* Display Name */}
+                            <Text
+                              style={styles.integrationName}
+                              numberOfLines={1}
+                              ellipsizeMode="tail"
+                            >
+                              {displayShopName}
+                            </Text>
+
+                            {/* Status + Last Synced under name (non-edit mode only) */}
+                            {!isEditMode && (
                               <View style={styles.statusContainer}>
                                 {(() => {
                                   const statusInfo = getStatusDisplay(connection.Status);
                                   return (
                                     <View style={styles.statusRow}>
-                      {/* Spinner for in-progress states */}
-                      {statusInfo.icon === 'loading' ? (
-                        <ActivityIndicator size="small" color={statusInfo.color} style={styles.statusIcon} />
-                      ) : (
-                        <Icon name={statusInfo.icon} size={18} color={statusInfo.color} style={styles.statusIcon} />
-                      )}
-                                      <Text style={[styles.statusText, { color: statusInfo.color }]}>{statusInfo.label}</Text>
+                                      {statusInfo.icon === 'loading' ? (
+                                        <ActivityIndicator
+                                          size="small"
+                                          color={statusInfo.color}
+                                          style={styles.statusIcon}
+                                        />
+                                      ) : (
+                                        <Icon
+                                          name={statusInfo.icon}
+                                          size={16}
+                                          color={statusInfo.color}
+                                          style={styles.statusIcon}
+                                        />
+                                      )}
+                                      <Text
+                                        style={[
+                                          styles.statusText,
+                                          { color: statusInfo.color },
+                                        ]}
+                                      >
+                                        {statusInfo.label}
+                                      </Text>
                                     </View>
                                   );
                                 })()}
-                                
-                                {/* Last sync time if available */}
+
                                 {connection.LastSyncSuccessAt && (
                                   <Text style={styles.lastSyncText}>
-                                    Last synced: {new Date(connection.LastSyncSuccessAt).toLocaleString()}
+                                    Last synced: {new Date(
+                                      connection.LastSyncSuccessAt
+                                    ).toLocaleString()}
                                   </Text>
                                 )}
                               </View>
-                              
-                              {/* Action buttons based on status */}
-                              <View style={styles.connectionActions}>
+                            )}
+                          </View>
+                        </View>
+
+                        {/* Right column: action buttons (non-edit mode only) */}
+                        {!isEditMode && connection && (
+                          <View style={styles.connectionActions}>
                                 {/* Pending: Start Scan */}
                                 {connection.Status === CONNECTION_STATUS.PENDING && (
                                   <TouchableOpacity 
@@ -1593,29 +1727,26 @@ const ProfileScreen = () => {
                                   </TouchableOpacity>
                                 )}
                                 
-                                {/* Active connections get a manage button and a reconcile button */}
+                                {/* Active connections: single Manage entry point */}
                                 {connection.Status === CONNECTION_STATUS.ACTIVE && (
-                                  <>
-                                    <TouchableOpacity 
-                                      style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
-                                      onPress={() => navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name })}
-                                    >
-                                      <Icon name="cog" size={18} color={theme.colors.primary} />
-                                      <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Manage</Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity 
-                                      style={[styles.actionButton, { backgroundColor: theme.colors.secondary + '15' }]}
-                                      onPress={() => startPlatformScan(connection.Id, platformConfig.name, true)}
-                                    >
-                                      <Icon name="sync" size={18} color={theme.colors.secondary} />
-                                      <Text style={[styles.actionButtonText, { color: theme.colors.secondary }]}>Reconcile</Text>
-                                    </TouchableOpacity>
-                                  </>
+                                  <TouchableOpacity 
+                                    style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
+                                    onPress={() =>
+                                      navigation.navigate('MappingReview', {
+                                        connectionId: connection.Id,
+                                        platformName: platformConfig.name,
+                                      })
+                                    }
+                                  >
+                                    <Icon name="cog" size={18} color={theme.colors.primary} />
+                                    <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>
+                                      Manage
+                                    </Text>
+                                  </TouchableOpacity>
                                 )}
                               </View>
-                            </View>
-                          )}
-                        </View>
+                        )}
+                      </View>
                       );
                    });
                 }
@@ -1649,10 +1780,18 @@ const ProfileScreen = () => {
       {/* Locations & Pools Card (v2) - render unconditionally; component resolves orgId */}
       <Animated.View entering={FadeInUp.delay(250).duration(500)}>
         <Card style={styles.card}>
-          <LocationsManagerV2
-            orgId={currentOrg?.id}
-            platformConnections={platformConnections}
-          />
+          {(currentOrg?.name?.includes('Workspace') || currentOrg?.name?.includes('Personal')) && 
+           user?.organizationMemberships?.some(m => !m.organization.name.includes('Workspace')) ? (
+             <View style={{ padding: 30, alignItems: 'center' }}>
+                <ActivityIndicator size="small" color={theme.colors.primary} />
+                <Text style={{ marginTop: 10, color: '#666', fontSize: 14 }}>Switching to your organization...</Text>
+             </View>
+          ) : (
+            <LocationsManagerV2
+              orgId={currentOrg?.id}
+              platformConnections={platformConnections}
+            />
+          )}
         </Card>
       </Animated.View>
       
@@ -1862,22 +2001,6 @@ const ProfileScreen = () => {
         }}
       />
 
-      {/* Manage Location Pool Modal */}
-      {selectedPoolId && showManagePool && (
-        <LocationPoolManager
-          poolId={selectedPoolId}
-          orgId={currentOrg?.id || ''}
-          onClose={() => {
-            setShowManagePool(false);
-            setSelectedPoolId(null);
-          }}
-          onSave={() => {
-            setRefreshTrigger((prev) => prev + 1);
-            loadPools();
-          }}
-        />
-      )}
-
     </ScrollView>
   );
 };
@@ -1919,12 +2042,31 @@ const styles = StyleSheet.create({
   },
   accountName: {
     fontSize: 18,
-    fontWeight: 'bold',    marginBottom: 4,
+    fontWeight: 'bold',
+    marginBottom: 4,
   },
   accountEmail: {
     fontSize: 14,
     color: '#777',
     marginBottom: 4,
+  },
+  orgBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  orgLabel: {
+    fontSize: 13,
+    color: '#999',
+    fontWeight: '500',
+  },
+  orgName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#333',
   },
   planBadge: {
     alignSelf: 'flex-start',
@@ -1981,11 +2123,22 @@ const styles = StyleSheet.create({
   },
   integrationItem: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
+  },
+  integrationLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: 3,
+  },
+  integrationMain: {
+    flex: 1,
+    flexDirection: "column",
+    alignContent: 'flex-start',
+    gap: 3,
   },
   platformIconContainer: {
     width: 40,
@@ -1999,6 +2152,7 @@ const styles = StyleSheet.create({
   integrationName: {
     fontSize: 16,
     flex: 1,
+    marginRight: 8,
   },
   connectedBadge: {
     paddingHorizontal: 8,
@@ -2444,7 +2598,8 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   statusContainer: {
-    marginBottom: 4,
+    marginTop: -2,
+    marginBottom: 2,
   },
   statusRow: {
     flexDirection: 'row',
@@ -2464,11 +2619,15 @@ const styles = StyleSheet.create({
   },
   connectionActions: {
     flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
     marginTop: 4,
   },
   actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
+    minHeight: 32,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 16,
@@ -2702,17 +2861,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginVertical: 20,
   },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#e8e8e8',
-  },
-  dividerText: {
-    marginHorizontal: 12,
-    color: '#999',
-    fontSize: 12,
-    fontWeight: '500',
-  },
   shopifyManualDescription: {
     fontSize: 13,
     color: '#666',
@@ -2744,6 +2892,19 @@ const styles = StyleSheet.create({
   },
   shopifyConnectButton: {
     flex: 1,
+  },
+  manageBtn: {
+    borderWidth: 1,
+    borderColor: '#d9d9d9',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#f6f6f6',
+    minWidth: 20,
+  },
+  manageBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
   },
 });
 
