@@ -19,11 +19,45 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { observer } from '@legendapp/state/react';
 import { useLegendState } from '../context/LegendStateContext';
-import { supabase } from '../../lib/supabase';
+import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import { useOrg } from '../context/OrgContext';
 import PlatformFilterChips from '../components/PlatformFilterChips';
+import InventoryListCard from '../components/InventoryListCard';
+import ActivityEventCard from '../components/ActivityEventCard';
 import PoolLocationCombobox from '../components/PoolLocationCombobox';
 import SortByDropdown from '../components/SortByDropdown';
 import { PlatformConnection, PlatformLocation } from '../utils/SupaLegend';
+import { useProductVariantRealtime } from '../hooks/useProductVariantRealtime';
+import { useUser } from '@clerk/clerk-expo';
+
+// User-relevant event types - excludes webhook/system events
+// These are the events that matter to users: orders, inventory changes, product updates
+const USER_RELEVANT_EVENT_TYPES = [
+  'ORDER_CREATED',
+  'ORDER_UPDATED',
+  'ORDER_FULFILLED',
+  'ORDER_CANCELLED',
+  'INVENTORY_UPDATED',
+  'INVENTORY_ADJUSTMENT',
+  'INVENTORY_SET',
+  'PRODUCT_CREATED',
+  'PRODUCT_UPDATED',
+  'PRODUCT_DELETED',
+  'PRICE_CHANGE',
+  'LISTING_CREATED',
+  'LISTING_UPDATED',
+];
+
+// System event types to explicitly exclude
+const SYSTEM_EVENT_TYPES = [
+  'WEBHOOK',
+  'SYNC_',
+  'USER_VIEWED',
+  'DASHBOARD',
+  'ACCESS_REQUEST',
+  'SCAN_',
+  'RECONCILE',
+];
 
 type ActivityFeedScreenNavigationProp = StackNavigationProp<AppStackParamList, 'ActivityFeed'>;
 
@@ -45,12 +79,35 @@ interface ActivityEvent {
   status: string;
 }
 
+// Helper to check if an event is user-relevant (not a system event)
+const isUserRelevantEvent = (eventType: string): boolean => {
+  // Check if it matches any user-relevant type
+  const isRelevant = USER_RELEVANT_EVENT_TYPES.some(type => 
+    eventType.toUpperCase().includes(type)
+  );
+  
+  // Check if it's explicitly a system event
+  const isSystemEvent = SYSTEM_EVENT_TYPES.some(type => 
+    eventType.toUpperCase().includes(type)
+  );
+  
+  return isRelevant && !isSystemEvent;
+};
+
 const HIGHLIGHT_ORANGE = '#FF9900';
 
 const ActivityFeedScreen = observer(() => {
   const theme = useTheme();
   const navigation = useNavigation<ActivityFeedScreenNavigationProp>();
   const legendState = useLegendState();
+  const { currentOrg, isLoading: isOrgLoading } = useOrg();
+  const { user: clerkUser } = useUser();
+
+  // Subscribe to real-time product variant changes
+  useProductVariantRealtime();
+
+  // Get current user's profile image for "You" attribution
+  const currentUserImageUrl = clerkUser?.imageUrl;
 
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -82,30 +139,45 @@ const ActivityFeedScreen = observer(() => {
 
   // Fetch activity feed from backend
   const fetchActivityFeed = useCallback(async (cursor?: string, append = false) => {
+    // Wait for org context to be available (like ProfileScreen and DashboardScreen do)
+    if (!currentOrg?.id) {
+      console.log('[ActivityFeed] ⏭️ Skipping fetch: no currentOrg.id yet (waiting for org context to load...)');
+      setLoading(false);
+      return;
+    }
+
     if (!legendState?.userId) {
-      console.log('[ActivityFeed] Skipping fetch: no userId');
+      console.log('[ActivityFeed] Skipping fetch: no userId in legend state');
+      setLoading(false);
       return;
     }
 
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      if (!sessionData?.session) {
-        console.log('[ActivityFeed] No session available');
+      const token = await ensureSupabaseJwt();
+      if (!token) {
+        console.log('[ActivityFeed] ❌ No JWT token available from bridge');
         setLoading(false);
         return;
       }
-
-      const token = sessionData.session.access_token;
       
-      // Build query string with cursor if provided
+      // Build query string with cursor and orgId if provided
       let queryString = `limit=50`;
       if (cursor) {
         queryString += `&cursor=${encodeURIComponent(cursor)}`;
       }
+      // Pass orgId explicitly to ensure backend has it (fallback if JWT doesn't have it)
+      if (currentOrg?.id) {
+        queryString += `&orgId=${encodeURIComponent(currentOrg.id)}`;
+      }
 
       const base = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
       const fullUrl = `${base}/api/activity?${queryString}`;
-      console.log(`[ActivityFeed] Fetching activity feed from URL: ${fullUrl}`);
+      console.log(`[ActivityFeed] 📡 ==========================================`);
+      console.log(`[ActivityFeed] 📡 FETCH REQUEST DETAILS:`);
+      console.log(`[ActivityFeed] 📡   Full URL: ${fullUrl}`);
+      console.log(`[ActivityFeed] 📡   OrgId from currentOrg: ${currentOrg?.id || 'MISSING'}`);
+      console.log(`[ActivityFeed] 📡   UserId: ${legendState.userId}`);
+      console.log(`[ActivityFeed] 📡 ==========================================`);
       
       const response = await fetch(
         fullUrl,
@@ -119,22 +191,29 @@ const ActivityFeedScreen = observer(() => {
       );
 
       if (!response.ok) {
-        console.error(`[ActivityFeed] Failed to fetch from ${fullUrl}: ${response.status} ${response.statusText}`);
+        console.error(`[ActivityFeed] HTTP ${response.status} ${response.statusText}`);
         const errorText = await response.text();
-        console.error(`[ActivityFeed] Error response:`, errorText);
+        console.error(`[ActivityFeed] Error body:`, errorText);
+        setEvents([]);
         setLoading(false);
         return;
       }
 
       const data = await response.json();
-      console.log(`[ActivityFeed] Received response:`, {
+      console.log(`[ActivityFeed] Response:`, {
         eventsCount: data.events?.length || 0,
         hasMore: data.hasMore,
         nextCursor: data.nextCursor ? 'present' : 'null',
+        firstEvent: data.events?.[0] ? {
+          id: data.events[0].Id,
+          timestamp: data.events[0].Timestamp,
+          eventType: data.events[0].EventType,
+          orgId: data.events[0].OrgId,
+        } : 'none',
       });
 
       if (!data.events || data.events.length === 0) {
-        console.log('[ActivityFeed] No events in response');
+        console.log('[ActivityFeed] ✅ No events (DB is empty or OrgId mismatch)');
         if (!append) {
           setEvents([]);
           setNextCursor(null);
@@ -147,7 +226,8 @@ const ActivityFeedScreen = observer(() => {
       }
 
       // Transform backend response to match UI interface
-      const transformedEvents: ActivityEvent[] = data.events.map((event: any) => ({
+      // Filter out obvious system events (webhooks, dashboard views) - prefer user-relevant events
+      const allTransformedEvents: ActivityEvent[] = data.events.map((event: any) => ({
         id: event.Id,
         timestamp: event.Timestamp,
         userId: event.UserId ?? null,
@@ -163,7 +243,21 @@ const ActivityFeedScreen = observer(() => {
         status: event.Status,
       }));
 
-      console.log(`[ActivityFeed] Transformed ${transformedEvents.length} events`);
+      // Filter to show user-relevant events, but fall back to all if none found
+      const userRelevantEvents = allTransformedEvents.filter(event => 
+        isUserRelevantEvent(event.eventType)
+      );
+
+      // Use user-relevant events if available, otherwise show all (excluding pure webhook noise)
+      const transformedEvents = userRelevantEvents.length > 0 
+        ? userRelevantEvents 
+        : allTransformedEvents.filter(event => {
+            const et = (event.eventType || '').toUpperCase();
+            // At minimum, exclude webhook processing noise
+            return !et.includes('WEBHOOK') && !et.includes('USER_VIEWED');
+          });
+
+      console.log(`[ActivityFeed] Transformed ${data.events.length} events → ${userRelevantEvents.length} user-relevant, showing ${transformedEvents.length}`);
 
       if (append) {
         setEvents(prev => [...prev, ...transformedEvents]);
@@ -182,7 +276,7 @@ const ActivityFeedScreen = observer(() => {
       setRefreshing(false);
       setLoadingMore(false);
     }
-  }, [legendState?.userId, startDate, endDate]);
+  }, [legendState?.userId, currentOrg?.id, startDate, endDate]);
 
   // Fetch platform connections and locations
   useEffect(() => {
@@ -279,6 +373,8 @@ const ActivityFeedScreen = observer(() => {
     });
     return map;
   }, [platformConnections]);
+
+
 
   const getOwnerLabel = useCallback(
     (event: ActivityEvent): string | null => {
@@ -473,110 +569,86 @@ const ActivityFeedScreen = observer(() => {
     const quantityDelta =
       typeof item.details?.quantityDelta === 'number'
         ? item.details.quantityDelta
+        : typeof item.details?.quantity_delta === 'number'
+        ? item.details.quantity_delta
         : undefined;
+    
     const reason =
-      typeof item.details?.reason === 'string' ? item.details.reason : undefined;
+      typeof item.details?.reason === 'string' 
+        ? item.details.reason 
+        : typeof item.details?.adjustment_reason === 'string'
+        ? item.details.adjustment_reason
+        : undefined;
 
+    // Build reason text (e.g., "Reason: -5 Units (Damaged)")
     const reasonParts: string[] = [];
     if (typeof quantityDelta === 'number' && quantityDelta !== 0) {
       const sign = quantityDelta > 0 ? '+' : '';
       reasonParts.push(`${sign}${quantityDelta} Units`);
     }
     if (reason) {
-      reasonParts.push(reason);
+      reasonParts.push(`(${reason})`);
     }
     const reasonText = reasonParts.length > 0 ? `Reason: ${reasonParts.join(' ')}` : null;
 
     const ownerLabel = getOwnerLabel(item);
 
-    const platformLabel =
-      item.platformType ||
-      item.details?.platformName ||
-      item.details?.platformType ||
-      item.details?.platform ||
-      null;
+    // Determine if this event was by the current user
+    const isCurrentUser = item.userId && clerkUser?.id && item.userId === clerkUser.id;
+    
+    // Get the profile image URL - use Clerk user image if it's the current user's event
+    const ownerImageUrl = isCurrentUser 
+      ? currentUserImageUrl 
+      : item.details?.userImageUrl || item.details?.actorImageUrl || undefined;
 
+    // Format display title based on event type
     const displayTitle = (() => {
       if (item.eventType?.includes('INVENTORY')) return 'Inventory Adjustment';
       if (item.eventType?.includes('ORDER')) {
-        const orderNumber = item.details?.orderNumber || item.details?.order_id;
+        const orderNumber = item.details?.orderNumber || item.details?.order_id || item.details?.name;
         return orderNumber ? `Order #${orderNumber}` : 'Order';
       }
+      if (item.eventType?.includes('PRODUCT_CREATED')) return 'Product Added';
+      if (item.eventType?.includes('PRODUCT_UPDATED')) return 'Product Updated';
+      if (item.eventType?.includes('PRODUCT_DELETED')) return 'Product Removed';
+      if (item.eventType?.includes('PRICE_CHANGE')) return 'Price Changed';
       return item.message || item.eventType;
     })();
 
+    // Get product image from variant (ImageUrls array) or details
+    const productImageUrl = (variant?.ImageUrls && variant.ImageUrls.length > 0 ? variant.ImageUrls[0] : null)
+      || item.details?.imageUrl 
+      || item.details?.image_url 
+      || item.primaryImageUrl
+      || undefined;
+
+    // Get price from variant or order details
+    const price = variant?.Price 
+      || item.details?.price 
+      || item.details?.total_price 
+      || item.details?.subtotal_price
+      || undefined;
+
     return (
       <Animated.View entering={FadeInUp.delay(100).duration(300)}>
-        <TouchableOpacity
-          style={[styles.eventItem, { backgroundColor: theme.colors.surface }]}
+        <ActivityEventCard
+          id={item.id}
+          title={variant?.Title || item.details?.title || item.variantTitle || item.message || 'Activity'}
+          displayTitle={displayTitle}
+          sku={variant?.Sku || item.details?.sku || item.details?.SKU}
+          imageUrl={productImageUrl}
+          timestamp={item.timestamp}
+          reasonText={reasonText ?? undefined}
+          price={typeof price === 'number' ? price : undefined}
+          ownerLabel={ownerLabel ?? undefined}
+          ownerImageUrl={ownerImageUrl}
+          eventType={item.eventType}
           onPress={() => {
-            // Navigate to product detail if it's product-related
             if (item.productVariantId) {
               navigation.navigate('ProductDetail', { productId: item.productVariantId });
             }
           }}
-        >
-          <View style={styles.eventIcon}>
-            <Icon
-              name={getEventIcon(item.eventType)}
-              size={20}
-              color={getEventColor(item.eventType)}
-            />
-          </View>
-
-          <View style={styles.eventContent}>
-            <Text style={[styles.eventMessage, { color: theme.colors.text }]}>
-              {displayTitle}
-            </Text>
-
-            {variant && (
-              <Text style={[styles.variantTitle, { color: theme.colors.text }]}>
-                {variant.Title}
-              </Text>
-            )}
-
-            {variant?.Sku && (
-              <Text style={[styles.variantMeta, { color: theme.colors.textSecondary }]}>
-                SKU: {variant.Sku}
-              </Text>
-            )}
-
-            <View style={styles.eventMeta}>
-              <Text style={[styles.eventTime, { color: theme.colors.textSecondary }]}>
-                {formatTimestamp(item.timestamp)}
-              </Text>
-
-              {platformLabel && (
-                <View style={styles.platformBadge}>
-                  <Text style={styles.platformText}>
-                    {platformLabel}
-                  </Text>
-                </View>
-              )}
-
-              {ownerLabel && (
-                <View style={styles.ownerBadge}>
-                  <Text style={styles.ownerText}>{ownerLabel}</Text>
-                </View>
-              )}
-            </View>
-
-            {reasonText && (
-              <View style={styles.reasonPill}>
-                <Text style={styles.reasonText}>{reasonText}</Text>
-              </View>
-            )}
-          </View>
-
-          {item.primaryImageUrl && (
-            <View style={styles.eventImage}>
-              {/* Placeholder for image - you can add Image component here */}
-              <View style={styles.imagePlaceholder}>
-                <Icon name="image" size={16} color={theme.colors.textSecondary} />
-              </View>
-            </View>
-          )}
-        </TouchableOpacity>
+        />
       </Animated.View>
     );
   };
@@ -592,6 +664,22 @@ const ActivityFeedScreen = observer(() => {
     );
   }
 
+  // Check if we have a critical auth issue (no orgId)
+  const hasAuthError = !legendState?.userId;
+  if (hasAuthError) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Icon name="alert-circle-outline" size={48} color="#ef4444" />
+        <Text style={[styles.loadingText, { color: '#ef4444', marginTop: 16 }]}>
+          Organization context missing
+        </Text>
+        <Text style={[styles.emptySubtext, { color: theme.colors.textSecondary, marginTop: 8 }]}>
+          Unable to load activity feed. Please try logging in again.
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.background]}>
       <View style={[styles.container, { marginTop: 60, paddingTop: 20 }]}>
@@ -600,8 +688,8 @@ const ActivityFeedScreen = observer(() => {
 
           {/* Search Bar */}
           <View style={{ paddingHorizontal: 16, marginBottom: 8 }}>
-            <View style={[styles.searchBar, { backgroundColor: "#FFF", borderColor: HIGHLIGHT_ORANGE }]}>
-              <Icon name="magnify" size={20} color={HIGHLIGHT_ORANGE} style={styles.searchIcon} />
+            <View style={[styles.searchBar, { backgroundColor: "#FFF"}]}>
+              <Icon name="magnify" size={20} color="#999" style={styles.searchIcon} />
               <TextInput
                 style={[styles.searchInput, { color: theme.colors.text }]}
                 placeholder="Search for orders/changes"
@@ -733,6 +821,9 @@ const ActivityFeedScreen = observer(() => {
                     (activeDateField === 'start' ? startDate : endDate) || new Date()
                   }
                   mode="date"
+                  textColor= "#000"
+                  accentColor= "#D9D9D9"
+                  themeVariant= "light"
                   display={Platform.OS === 'ios' ? 'inline' : 'default'}
                   onChange={(_event, selectedDate) => {
                     if (!selectedDate) {

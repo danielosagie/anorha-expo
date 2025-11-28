@@ -196,6 +196,22 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [barcodeSearchResult, setBarcodeSearchResult] = useState<any | null>(null);
   const [barcodeSearching, setBarcodeSearching] = useState(false);
   const [showBarcodeResultModal, setShowBarcodeResultModal] = useState(false);
+  const [platformLocations, setPlatformLocations] = useState<{ id: string; name: string }[]>([]);
+
+  // Fetch platform locations on mount
+  useEffect(() => {
+    const fetchLocations = async () => {
+      try {
+        const { data, error } = await supabase.from('PlatformLocations').select('Id, Name');
+        if (data) {
+          setPlatformLocations(data.map((l: any) => ({ id: l.Id, name: l.Name })));
+        }
+      } catch (e) {
+        console.error('[AddProduct] Error fetching locations:', e);
+      }
+    };
+    fetchLocations();
+  }, []);
   
   // UI state
   const [currentInstruction, setCurrentInstruction] = useState<CameraInstruction>('ready');
@@ -385,6 +401,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Handle photo capture
   const handleCapture = useCallback(async () => {
+    // BARCODE MODE: Open results sheet if we have a result
+    if (cameraMode === 'barcode') {
+      if (barcodeSearchResult) {
+        setShowBarcodeResultModal(true);
+      } else {
+        Alert.alert('No Result', 'Point the camera at a barcode to scan.');
+      }
+      return;
+    }
+
     if (!cameraRef.current || isCapturing) return;
     
     try {
@@ -543,12 +569,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const searchBarcodeOnBackend = useCallback(async (barcode: string) => {
     try {
       setBarcodeSearching(true);
+      setCurrentInstruction('processing');
       console.log(`[BARCODE] Searching backend for barcode: ${barcode}`);
 
       const token = await ensureSupabaseJwt();
       if (!token) {
         Alert.alert('Authentication Error', 'Please log in again.');
         setBarcodeSearching(false);
+        setCurrentInstruction('ready');
         return;
       }
 
@@ -566,6 +594,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       if (!response.ok) {
         console.log(`[BARCODE] Search returned status ${response.status}`);
         setBarcodeSearching(false);
+        setCurrentInstruction('ready');
         return;
       }
 
@@ -575,6 +604,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         console.log(`[BARCODE] Product not found: ${data.error}`);
         Alert.alert('Product Not Found', data.error);
         setBarcodeSearching(false);
+        setCurrentInstruction('ready');
         return;
       }
 
@@ -582,11 +612,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       setBarcodeSearchResult(data);
       setShowBarcodeResultModal(true);
       setBarcodeSearching(false);
+      setCurrentInstruction('ready');
     } catch (error) {
       console.error(`[BARCODE] Search error:`, error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       Alert.alert('Search Error', `Failed to search: ${errorMessage}`);
       setBarcodeSearching(false);
+      setCurrentInstruction('ready');
     }
   }, []);
 
@@ -623,15 +655,24 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       capturedPhotosCount: capturedPhotos.length,
       isBulkMode,
       bulkItemsCount: bulkItems.length,
-      activeItemId
+      activeItemId,
+      cameraMode,
+      hasBarcodeResult: !!barcodeSearchResult
     });
+    
+    // BARCODE MODE: Open barcode result modal if we have a result
+    if (cameraMode === 'barcode' && barcodeSearchResult) {
+      console.log('[CONTINUE] Barcode mode - opening barcode result modal');
+      setShowBarcodeResultModal(true);
+      return;
+    }
     
     // Always open sheet - it will show empty state if no photos
     setShowMatchSheet(false);
     matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
     setShowDeepSearchSheet(true);
     sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4); // Position for 60% height sheet
-  }, [sheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems.length, activeItemId]); 
+  }, [sheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems.length, activeItemId, cameraMode, barcodeSearchResult]); 
 
   // Handle image picker - SIMPLIFIED: Always add to bulkItems
   const handleImageUpload = useCallback(async () => {
@@ -1391,6 +1432,25 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     });
   }, [matchSheetTranslateY]);
 
+  // Close barcode sheet
+  const closeBarcodeSheet = useCallback(() => {
+    matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, {
+      duration: 200,
+    }, () => {
+      runOnJS(setShowBarcodeResultModal)(false);
+      runOnJS(setScannedBarcode)(null); // Resume scanning
+      runOnJS(setCurrentInstruction)('ready');
+    });
+  }, [matchSheetTranslateY]);
+
+  // Animate barcode sheet open
+  useEffect(() => {
+    if (showBarcodeResultModal) {
+      // Use same height as MatchSheet (taller sheet)
+      matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.12, { damping: 70 });
+    }
+  }, [showBarcodeResultModal, matchSheetTranslateY]);
+
   // Close all sheets (for tap-to-focus)
   const closeAllSheets = useCallback(() => {
     if (showMatchSheet) {
@@ -1399,7 +1459,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     if (showDeepSearchSheet) {
       closeBulkItemsSheet();
     }
-  }, [showMatchSheet, showDeepSearchSheet, closeMatchSheet, closeBulkItemsSheet]);
+    if (showBarcodeResultModal) {
+      closeBarcodeSheet();
+    }
+  }, [showMatchSheet, showDeepSearchSheet, showBarcodeResultModal, closeMatchSheet, closeBulkItemsSheet, closeBarcodeSheet]);
 
   // When starting a broad search, close any open sheets and cancel quick scan
   const handleStartBroadSearch = useCallback(() => {
@@ -1494,7 +1557,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         style={styles.camera}
         facing={facing}
         flash={flash}
-        active={isFocused && !showDeepSearchSheet && !showMatchSheet} // Disable camera when sheets are open
+        active={isFocused && !showDeepSearchSheet && !showMatchSheet && !showBarcodeResultModal} // Disable camera when sheets are open
         onBarcodeScanned={handleBarCodeScanned}
         barcodeScannerSettings={{
           barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
@@ -1504,7 +1567,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       <Animated.View style={[styles.flashOverlay, flashAnimatedStyle]} />
       
       {/* Camera paused overlay */}
-      {(showDeepSearchSheet || showMatchSheet) && (
+      {(showDeepSearchSheet || showMatchSheet || showBarcodeResultModal) && (
         <View style={styles.cameraPausedOverlay}>
           <View style={styles.cameraPausedIndicator}>
             <MaterialIcons name="pause-circle-filled" size={48} color="rgba(255,255,255,0.8)" />
@@ -1519,7 +1582,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           style={styles.tapToFocusOverlay}
           onPress={(event) => {
             // Close sheets if open - instant close
-            if (showMatchSheet || showDeepSearchSheet) {
+            if (showMatchSheet || showDeepSearchSheet || showBarcodeResultModal) {
               closeAllSheets();
               return;
             }
@@ -1528,7 +1591,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           }}
           onLongPress={() => {
             // Open sheet on long press if not already open
-            if (!showDeepSearchSheet && !showMatchSheet) {
+            if (!showDeepSearchSheet && !showMatchSheet && !showBarcodeResultModal) {
               setShowDeepSearchSheet(true);
               sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
             }
@@ -1640,11 +1703,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                Renders: {forceRenderCount}
              </Text>
              <Text style={[styles.debugText, { 
-               backgroundColor: (!showDeepSearchSheet && !showMatchSheet) ? '#4CAF50' : '#FF5722',
+               backgroundColor: (!showDeepSearchSheet && !showMatchSheet && !showBarcodeResultModal) ? '#4CAF50' : '#FF5722',
                borderRadius: 4,
                paddingHorizontal: 4
              }]}>
-               📷 Camera: {(!showDeepSearchSheet && !showMatchSheet) ? 'ACTIVE' : 'PAUSED'}
+               📷 Camera: {(!showDeepSearchSheet && !showMatchSheet && !showBarcodeResultModal) ? 'ACTIVE' : 'PAUSED'}
              </Text>
              <View style={styles.debugButtons}>
                <TouchableOpacity 
@@ -1678,16 +1741,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
          )} */}
         
                  {/* Bottom controls */}
-         <BottomControls 
-           onCapture={handleCapture}
-           isCapturing={isCapturing}
-           captureButtonScale={captureButtonScale}
-           photosCount={bulkItems.reduce((sum, item) => sum + item.photos.length, 0)}
-           cameraMode={cameraMode}
-           onToggleCameraMode={toggleCameraMode}
-           onImageUpload={handleImageUpload}
-           onContinue={handleContinue}
-         />
+        <BottomControls 
+          onCapture={handleCapture}
+          isCapturing={isCapturing}
+          captureButtonScale={captureButtonScale}
+          photosCount={bulkItems.reduce((sum, item) => sum + item.photos.length, 0)}
+          cameraMode={cameraMode}
+          onToggleCameraMode={toggleCameraMode}
+          onImageUpload={handleImageUpload}
+          onContinue={handleContinue}
+          hasBarcodeResult={!!barcodeSearchResult}
+        />
       </CameraView>
 
       {/* Match results sheet (rendered above TabBar via Modal) */}
@@ -1772,42 +1836,68 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       })()}
       </Modal>
 
-      {/* Barcode Quick Inventory Editor Modal */}
+      {/* Barcode Quick Inventory Editor Modal (Reused MatchSheet Style) */}
       <Modal
         visible={showBarcodeResultModal}
         transparent={true}
-        animationType="slide"
-        onRequestClose={() => setShowBarcodeResultModal(false)}
+        animationType="none"
+        statusBarTranslucent
+        onRequestClose={closeBarcodeSheet}
+        presentationStyle="overFullScreen"
       >
-        <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background }}>
-          {barcodeSearching ? (
-            <View style={styles.loadingContainer}>
-              <Icon name="loading" size={40} color="#93C822" />
-              <Text style={styles.loadingText}>Searching...</Text>
-            </View>
-          ) : barcodeSearchResult ? (
-            <QuickProductDetailSheet
-              product={barcodeSearchResult}
-              onClose={() => setShowBarcodeResultModal(false)}
-              onSave={async (updates) => {
-                // TODO: Call backend to save inventory updates
-                // For now, just log the updates
-                console.log('[BARCODE SAVE] Updates:', updates);
-                
-                // Example: Post to backend
-                // const token = await ensureSupabaseJwt();
-                // await fetch('https://api.sssync.app/api/inventory/bulk-update', {
-                //   method: 'POST',
-                //   headers: {
-                //     'Authorization': `Bearer ${token}`,
-                //     'Content-Type': 'application/json',
-                //   },
-                //   body: JSON.stringify({ updates }),
-                // });
-              }}
-            />
-          ) : null}
-        </SafeAreaView>
+        {showBarcodeResultModal && barcodeSearchResult ? (
+            <Animated.View style={[styles.matchSheet, matchSheetAnimatedStyle]}>
+              <QuickProductDetailSheet
+                product={barcodeSearchResult}
+                platformLocations={platformLocations}
+                onClose={closeBarcodeSheet}
+                onOpenDetail={() => {
+                  if (barcodeSearchResult?.variant?.ProductId) {
+                    closeBarcodeSheet();
+                    (navigation as any).navigate('ProductDetail', {
+                      productId: barcodeSearchResult.variant.ProductId,
+                    });
+                  }
+                }}
+                onSave={async (updates) => {
+                  console.log('[BARCODE SAVE] Saving updates:', updates);
+                  try {
+                    // Use Supabase directly to update inventory
+                    // updates = [{ variantId, location, quantity, price }]
+                    const updatePromises = updates.map(async (update) => {
+                      const { variantId, location, quantity, price } = update;
+                      
+                      // Prepare payload
+                      const payload: any = {
+                        Quantity: quantity,
+                        UpdatedAt: new Date().toISOString(),
+                      };
+                      if (price !== undefined) payload.Price = price;
+
+                      // Update inventory level
+                      const { error } = await supabase
+                        .from('InventoryLevels')
+                        .update(payload)
+                        .eq('ProductVariantId', variantId)
+                        .eq('PlatformLocationId', location);
+                        
+                      if (error) throw error;
+                    });
+
+                    await Promise.all(updatePromises);
+                    Alert.alert('Success', 'Inventory updated successfully');
+                    
+                    // Close sheet after save? Or keep open?
+                    // User might want to scan next.
+                    // Let's keep open for verification or manual close.
+                  } catch (e) {
+                    console.error('[BARCODE SAVE] Error:', e);
+                    Alert.alert('Error', 'Failed to save updates');
+                  }
+                }}
+              />
+            </Animated.View>
+        ) : null}
       </Modal>
     </GestureHandlerRootView>
   );
@@ -1907,6 +1997,7 @@ const BottomControls: React.FC<{
   onToggleCameraMode: () => void;
   onImageUpload: () => void;
   onContinue: () => void;
+  hasBarcodeResult?: boolean;
 }> = ({ 
   onCapture, 
   isCapturing, 
@@ -1915,7 +2006,8 @@ const BottomControls: React.FC<{
   cameraMode, 
   onToggleCameraMode, 
   onImageUpload,
-  onContinue 
+  onContinue,
+  hasBarcodeResult
 }) => {
   const captureButtonAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: captureButtonScale.value }],
@@ -1950,9 +2042,11 @@ const BottomControls: React.FC<{
       <Animated.View entering={SlideInDown.delay(700)} style={styles.continueButtonContainer}>
         <TouchableOpacity style={styles.continueButton} onPress={onContinue}>
           <Text style={styles.continueButtonText}>
-            {photosCount > 0 
-              ? `Continue with ${photosCount} photo${photosCount > 1 ? 's' : ''}`
-              : 'Take a photo to get started'
+            {cameraMode === 'barcode' && hasBarcodeResult
+              ? 'Open Update Product'
+              : photosCount > 0 
+                ? `Continue with ${photosCount} photo${photosCount > 1 ? 's' : ''}`
+                : 'Take a photo to get started'
             }
           </Text>
           </TouchableOpacity>

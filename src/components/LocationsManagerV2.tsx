@@ -11,6 +11,7 @@ import {
   Modal,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import DraggableFlatList, { RenderItemParams, ScaleDecorator } from 'react-native-draggable-flatlist';
 import { useTheme } from '../context/ThemeContext';
 import Button from './Button';
 import Card from './Card';
@@ -32,7 +33,13 @@ type ManageTab = 'location' | 'pool';
 
 interface LocationsManagerV2Props {
   orgId?: string;
-  platformConnections: Array<{ Id: string; PlatformType: string; DisplayName: string }>;
+  platformConnections: Array<{ 
+    Id: string; 
+    PlatformType: string; 
+    DisplayName: string;
+    Status?: string;
+    IsEnabled?: boolean;
+  }>;
 }
 
 interface LocationPool {
@@ -85,9 +92,18 @@ interface DbPlatformLocation {
   Name: string | null;
 }
 
+interface LocationMetadata {
+  platformLocationId: string;
+  locationName: string;
+  connectionName: string;
+  platformType: string;
+  timezone?: string;
+}
+
 interface DraftPool {
   name: string;
   locationIds: string[];
+  locationMetadata?: Map<string, LocationMetadata>;
 }
 
 interface DeletePoolState {
@@ -134,6 +150,32 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
     availablePools: [],
     loading: false,
   });
+
+  // State for platform/location selection in create mode (single/pool)
+  const [selectedPlatformForManage, setSelectedPlatformForManage] = useState<{
+    connectionId: string;
+    connectionName: string;
+    platformType: string;
+  } | null>(null);
+
+  // Per-pool platform selection in manage mode
+  const [managePlatformSelectionByPool, setManagePlatformSelectionByPool] = useState<
+    Record<
+      string,
+      {
+        connectionId: string;
+        connectionName: string;
+        platformType: string;
+      } | null
+    >
+  >({});
+
+  // Track drag state for cross-pool dragging
+  const [draggedLocation, setDraggedLocation] = useState<{
+    locationId: string;
+    sourcePoolId: string;
+    metadata: LocationMetadata | null;
+  } | null>(null);
 
   const connectionIds = useMemo(() => platformConnections?.map((c) => c.Id) || [], [platformConnections]);
 
@@ -292,14 +334,16 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
         const pool: LocationPool = j.pool;
         const locations: PoolLocation[] = j.locations || [];
 
-        // Group locations by connection, supporting multiple per connection
-        const locsByConn: Record<string, string[]> = {};
+        // Build location metadata map for quick lookup
+        const locationMetadata = new Map<string, LocationMetadata>();
         for (const loc of locations) {
-          const connId = loc.platformConnection.id;
-          if (!locsByConn[connId]) {
-            locsByConn[connId] = [];
-          }
-          locsByConn[connId].push(loc.platformLocationId);
+          locationMetadata.set(loc.platformLocationId, {
+            platformLocationId: loc.platformLocationId,
+            locationName: loc.locationName || loc.platformLocationId,
+            connectionName: loc.platformConnection.displayName || 'Unknown connection',
+            platformType: loc.platformConnection.platformType?.toLowerCase() || '',
+            timezone: loc.timezone,
+          });
         }
 
         setDraftPools((prev) => ({
@@ -307,6 +351,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
           [poolId]: {
             name: pool.name,
             locationIds: pool.locationIds || [],
+            locationMetadata,
           },
         }));
     } catch (e) {
@@ -338,16 +383,11 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
       const poolList: LocationPool[] = await res.json();
       console.log('[LocationsManagerV2] enterManageMode: found', poolList.length, 'pools');
 
-      // Load each pool's locations
-      const drafts: Record<string, DraftPool> = {};
+      // Load each pool's locations with metadata
+      // loadPoolForEditing will set the drafts with metadata via setDraftPools
       for (const pool of poolList) {
         await loadPoolForEditing(pool.id);
-        drafts[pool.id] = {
-          name: pool.name,
-          locationIds: pool.locationIds || [],
-        };
       }
-      setDraftPools(drafts);
 
       // Reset per-pool platform selection state (all closed by default)
       setManagePlatformSelectionByPool({});
@@ -428,7 +468,47 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
               location_ids: draft.locationIds,
             }),
           });
-          if (!res.ok) throw new Error(`Failed to update pool ${poolId}`);
+          if (!res.ok) {
+            let errorMessage = `Failed to update pool ${poolId}`;
+            try {
+              const errorData = await res.json();
+              // Extract detailed error message
+              if (errorData.message) {
+                errorMessage = errorData.message;
+              } else if (errorData.error) {
+                errorMessage = errorData.error;
+              } else if (typeof errorData === 'string') {
+                errorMessage = errorData;
+              }
+              
+              // Add status code for context
+              errorMessage = `[${res.status}] ${errorMessage}`;
+              
+              // If it's a validation error, add more context
+              if (res.status === 400 && errorData.message?.includes('does not belong')) {
+                errorMessage = `Validation Error: ${errorData.message}\n\nThis usually means a location's connection doesn't belong to your organization. Please check your platform connections and ensure they're properly linked to your organization.`;
+              } else if (res.status === 400 && (errorData.message?.includes('duplicate') || errorData.message?.includes('unique') || errorData.message?.includes('constraint') || errorData.message?.includes('INSERT'))) {
+                errorMessage = `Database Constraint Error: ${errorData.message}\n\nThis usually means:\n• A location already exists in the database\n• There's a conflict with location IDs\n\nTry refreshing the page and ensuring all locations belong to your organization's connections.`;
+              } else if (res.status === 400) {
+                errorMessage = `Bad Request: ${errorData.message}\n\nPlease verify that:\n• All locations belong to your organization\n• Platform connections are properly configured\n• No duplicate locations are selected`;
+              } else if (res.status === 500) {
+                errorMessage = `Server Error: ${errorData.message || 'An unexpected error occurred on the server'}\n\nPlease try again. If the issue persists, contact support with the error details.`;
+              } else if (res.status === 401 || res.status === 403) {
+                errorMessage = `Authentication Error: ${errorData.message || 'You may not have permission to update this pool'}\n\nPlease check your login status and try again.`;
+              }
+            } catch (parseError) {
+              // If JSON parsing fails, try to get text
+              try {
+                const errorText = await res.text();
+                if (errorText) {
+                  errorMessage = `[${res.status}] ${errorText}`;
+                }
+              } catch {
+                // Fall back to default message
+              }
+            }
+            throw new Error(errorMessage);
+          }
         }
       }
 
@@ -438,7 +518,12 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
       setDraftPools({});
     } catch (e) {
       console.error('[LocationsManagerV2] confirmManageChanges error', e);
-      Alert.alert('Error', e instanceof Error ? e.message : 'Failed to save changes');
+      const errorMessage = e instanceof Error ? e.message : 'Failed to save changes';
+      Alert.alert(
+        'Failed to Save Changes',
+        errorMessage,
+        [{ text: 'OK' }]
+      );
     } finally {
       setSaving(false);
     }
@@ -555,7 +640,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
     }
   };
 
-  // NEW: Open delete confirmation for a pool
+  // NEW: Open delete confirmation for a pool (modal only, no Alert)
   const openDeletePool = async (poolId: string, poolName: string) => {
     const availablePools = await loadAvailablePoolsForDelete(poolId);
     const defaultMergeTarget = availablePools.length > 0 ? availablePools[0].id : 'none';
@@ -567,14 +652,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
       availablePools,
       loading: false,
     });
-    Alert.alert(
-      'Delete Pool',
-      `Are you sure you want to delete "${poolName}"? This will move its locations to another pool.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', onPress: () => {} }, // Modal will handle
-      ]
-    );
+    // Modal handles confirmation - no Alert.alert needed
   };
 
   const renderListItemRight = (platformType?: string) => {
@@ -630,6 +708,30 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
 
     return map;
   }, [available]);
+
+  // Get all currently selected location IDs across all pools (for filtering)
+  const allSelectedLocationIds = useMemo(() => {
+    const selected = new Set<string>();
+    for (const draft of Object.values(draftPools)) {
+      for (const locId of draft.locationIds || []) {
+        selected.add(locId);
+      }
+    }
+    return selected;
+  }, [draftPools]);
+
+  // Filter available locations to exclude already-selected ones
+  const getFilteredAvailableLocations = useCallback((connectionId: string) => {
+    const connection = available
+      .flatMap((p) => p.connections)
+      .find((c) => c.connectionId === connectionId);
+    
+    if (!connection) return [];
+    
+    return connection.locations.filter(
+      (loc) => !allSelectedLocationIds.has(loc.platformLocationId)
+    );
+  }, [available, allSelectedLocationIds]);
 
   // Render the appropriate view based on viewMode
   const renderView = () => {
@@ -773,64 +875,161 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                     </TouchableOpacity>
                   </View>
 
-                  {/* Selected locations in this pool */}
+                  {/* Selected locations in this pool - draggable */}
                   <View style={styles.poolLocations}>
                     {draft.locationIds.length > 0 && (
                       <>
                         <Text style={styles.label}>Selected Locations</Text>
-                        {draft.locationIds.map((locId) => {
-                          const meta = availableLocationById.get(locId);
-                          const connName = meta?.connectionName || 'Unknown connection';
-                          const locName = meta?.locationName || locId;
-                          const platformType = meta?.platformType;
-                          const Logo =
-                            platformType &&
-                            PLATFORM_LOGOS[platformType as keyof typeof PLATFORM_LOGOS];
+                        <DraggableFlatList
+                          data={draft.locationIds.map((locId) => ({ key: locId, id: locId }))}
+                          onDragBegin={(params: any) => {
+                            const item = params.item;
+                            const metaFromDraft = draft.locationMetadata?.get(item.id);
+                            const metaFromAvailable = availableLocationById.get(item.id);
+                            const meta = metaFromDraft || metaFromAvailable;
+                            setDraggedLocation({
+                              locationId: item.id,
+                              sourcePoolId: poolId,
+                              metadata: meta ? {
+                                platformLocationId: item.id,
+                                locationName: meta.locationName || item.id,
+                                connectionName: meta.connectionName || 'Unknown connection',
+                                platformType: meta.platformType || '',
+                                timezone: meta.timezone,
+                              } : null,
+                            });
+                          }}
+                          onDragEnd={({ data }) => {
+                            // If dragged to a different pool, handle cross-pool move
+                            if (draggedLocation && draggedLocation.sourcePoolId !== poolId) {
+                              // This is handled by the drop zone, reset drag state
+                              setDraggedLocation(null);
+                              return;
+                            }
+                            
+                            // Same pool reordering
+                            const newLocationIds = data.map((item) => item.id);
+                            setDraftPools((prev) => ({
+                              ...prev,
+                              [poolId]: {
+                                ...prev[poolId],
+                                locationIds: newLocationIds,
+                              },
+                            }));
+                            setDraggedLocation(null);
+                          }}
+                          keyExtractor={(item) => item.id}
+                          renderItem={({ item: { id: locId }, drag, isActive }: RenderItemParams<{ key: string; id: string }>) => {
+                            // Try to get metadata from draft first, then fallback to availableLocationById
+                            const metaFromDraft = draft.locationMetadata?.get(locId);
+                            const metaFromAvailable = availableLocationById.get(locId);
+                            const meta = metaFromDraft || metaFromAvailable;
+                            
+                            const connName = meta?.connectionName || 'Unknown connection';
+                            const locName = meta?.locationName || locId;
+                            const platformType = meta?.platformType || '';
+                            const Logo = platformType && PLATFORM_LOGOS[platformType as keyof typeof PLATFORM_LOGOS];
 
-                          return (
-                            <View
-                              key={`${poolId}-${locId}`}
-                              style={styles.selectedLocationRow}
-                            >
-                              <View style={{ flex: 1 }}>
-                                <View
-                                  style={{
-                                    flexDirection: 'row',
-                                    alignItems: 'center',
-                                    marginBottom: 2,
-                                  }}
+                            return (
+                              <ScaleDecorator>
+                                <TouchableOpacity
+                                  activeOpacity={0.7}
+                                  onLongPress={drag}
+                                  disabled={isActive}
+                                  style={[
+                                    styles.selectedLocationRow,
+                                    isActive && styles.selectedLocationRowActive,
+                                  ]}
                                 >
-                                  {Logo ? <Logo width={18} height={18} /> : null}
-                                  <Text
-                                    style={[
-                                      styles.selectedLocationText,
-                                      Logo ? { marginLeft: 8 } : null,
-                                    ]}
+                                  <View style={styles.selectedLocationLeft}>
+                                    <Icon name="drag-horizontal" size={20} color="#999" style={{ marginRight: 8 }} />
+                                    {Logo ? <Logo width={20} height={20} /> : null}
+                                  </View>
+                                  <View style={{ flex: 1, minWidth: 0 }}>
+                                    <Text
+                                      style={styles.selectedLocationText}
+                                      numberOfLines={1}
+                                      ellipsizeMode="tail"
+                                    >
+                                      {locName}
+                                    </Text>
+                                    <Text 
+                                      style={styles.selectedLocationSubText}
+                                      numberOfLines={1}
+                                      ellipsizeMode="tail"
+                                    >
+                                      {connName}
+                                    </Text>
+                                  </View>
+                                  <TouchableOpacity
+                                    onPress={() => {
+                                      setDraftPools((prev) => ({
+                                        ...prev,
+                                        [poolId]: {
+                                          ...prev[poolId],
+                                          locationIds: prev[poolId].locationIds.filter(
+                                            (id) => id !== locId
+                                          ),
+                                        },
+                                      }));
+                                    }}
+                                    style={{ padding: 4 }}
                                   >
-                                    {connName}
-                                  </Text>
-                                </View>
-                                <Text style={styles.selectedLocationSubText}>{locName}</Text>
-                              </View>
-                              <TouchableOpacity
-                                onPress={() => {
-                                  setDraftPools((prev) => ({
-                                    ...prev,
-                                    [poolId]: {
-                                      ...prev[poolId],
-                                      locationIds: prev[poolId].locationIds.filter(
-                                        (id) => id !== locId
-                                      ),
-                                    },
-                                  }));
-                                }}
-                              >
-                                <Icon name="close" size={16} color="#ff4444" />
-                              </TouchableOpacity>
-                            </View>
-                          );
-                        })}
+                                    <Icon name="close" size={18} color="#ff4444" />
+                                  </TouchableOpacity>
+                                </TouchableOpacity>
+                              </ScaleDecorator>
+                            );
+                          }}
+                        />
                       </>
+                    )}
+                    
+                    {/* Drop zone for cross-pool dragging */}
+                    {draggedLocation && draggedLocation.sourcePoolId !== poolId && (
+                      <TouchableOpacity
+                        style={styles.dropZone}
+                        onPress={() => {
+                          // Move location from source pool to this pool
+                          const { locationId, metadata } = draggedLocation;
+                          setDraftPools((prev) => {
+                            const sourcePool = prev[draggedLocation.sourcePoolId];
+                            const targetPool = prev[poolId];
+                            
+                            if (!sourcePool || !targetPool) return prev;
+                            
+                            // Remove from source
+                            const newSourceLocationIds = sourcePool.locationIds.filter(id => id !== locationId);
+                            const newSourceMetadata = new Map(sourcePool.locationMetadata || new Map());
+                            newSourceMetadata.delete(locationId);
+                            
+                            // Add to target
+                            const newTargetLocationIds = [...targetPool.locationIds, locationId];
+                            const newTargetMetadata = new Map(targetPool.locationMetadata || new Map());
+                            if (metadata) {
+                              newTargetMetadata.set(locationId, metadata);
+                            }
+                            
+                            return {
+                              ...prev,
+                              [draggedLocation.sourcePoolId]: {
+                                ...sourcePool,
+                                locationIds: newSourceLocationIds,
+                                locationMetadata: newSourceMetadata,
+                              },
+                              [poolId]: {
+                                ...targetPool,
+                                locationIds: newTargetLocationIds,
+                                locationMetadata: newTargetMetadata,
+                              },
+                            };
+                          });
+                          setDraggedLocation(null);
+                        }}
+                      >
+                        <Icon name="arrow-down" size={20} color="#8BC34A" />
+                        <Text style={styles.dropZoneText}>Drop here to move location</Text>
+                      </TouchableOpacity>
                     )}
                   </View>
 
@@ -860,27 +1059,62 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                             PLATFORM_LOGOS[platform.platformType as keyof typeof PLATFORM_LOGOS];
                           return (
                             <View key={platform.platformType}>
-                              {platform.connections.map((conn) => (
-                                <TouchableOpacity
-                                  key={conn.connectionId}
-                                  style={styles.platformSelectButton}
-                                  onPress={() =>
-                                    setManagePlatformSelectionByPool((prev) => ({
-                                      ...prev,
-                                      [poolId]: {
-                                        connectionId: conn.connectionId,
-                                        connectionName: conn.connectionName,
-                                        platformType: platform.platformType,
-                                      },
-                                    }))
-                                  }
-                                >
-                                  {Logo ? <Logo width={20} height={20} /> : null}
-                                  <Text style={styles.platformSelectText}>
-                                    {conn.connectionName}
-                                  </Text>
-                                </TouchableOpacity>
-                              ))}
+                              {platform.connections.map((conn) => {
+                                const connection = platformConnections.find(c => c.Id === conn.connectionId);
+                                const needsReauth = connection && (
+                                  connection.Status === 'error' || 
+                                  connection.Status === 'disconnected' ||
+                                  !connection.IsEnabled
+                                );
+                                
+                                return (
+                                  <View key={conn.connectionId} style={{ marginBottom: 6 }}>
+                                    <TouchableOpacity
+                                      style={styles.platformSelectButton}
+                                      onPress={() =>
+                                        setManagePlatformSelectionByPool((prev) => ({
+                                          ...prev,
+                                          [poolId]: {
+                                            connectionId: conn.connectionId,
+                                            connectionName: conn.connectionName,
+                                            platformType: platform.platformType,
+                                          },
+                                        }))
+                                      }
+                                    >
+                                      {Logo ? <Logo width={20} height={20} /> : null}
+                                      <Text style={styles.platformSelectText}>
+                                        {conn.connectionName}
+                                      </Text>
+                                    </TouchableOpacity>
+                                    {needsReauth && (
+                                      <TouchableOpacity
+                                        style={styles.reauthButton}
+                                        onPress={async () => {
+                                          try {
+                                            const token = await ensureSupabaseJwt();
+                                            const res = await fetch(`${API_BASE_URL}/api/sync/connection/${conn.connectionId}/reconcile`, {
+                                              method: 'POST',
+                                              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                                            });
+                                            if (!res.ok) {
+                                              const error = await res.json().catch(() => ({ message: 'Reconnection failed' }));
+                                              throw new Error(error.message || 'Reconnection failed');
+                                            }
+                                            Alert.alert('Success', 'Reconnection initiated. Please wait a moment and refresh.');
+                                            await loadAvailableLocations();
+                                          } catch (e) {
+                                            Alert.alert('Error', e instanceof Error ? e.message : 'Failed to reconnect');
+                                          }
+                                        }}
+                                      >
+                                        <Icon name="refresh" size={14} color="#8BC34A" />
+                                        <Text style={styles.reauthButtonText}>Reconnect</Text>
+                                      </TouchableOpacity>
+                                    )}
+                                  </View>
+                                );
+                              })}
                             </View>
                           );
                         })
@@ -914,23 +1148,42 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
 
                       <View style={styles.dropdownContainer}>
                         <ScrollView style={{ maxHeight: 200 }}>
-                          {available
-                            .flatMap((p) => p.connections)
-                            .find((c) => c.connectionId === selection.connectionId)
-                            ?.locations.map((loc) => (
+                          {getFilteredAvailableLocations(selection.connectionId).length === 0 ? (
+                            <View style={{ padding: 16, alignItems: 'center' }}>
+                              <Text style={{ fontSize: 13, color: '#999' }}>
+                                All locations from this platform are already selected
+                              </Text>
+                            </View>
+                          ) : (
+                            getFilteredAvailableLocations(selection.connectionId).map((loc) => (
                               <TouchableOpacity
                                 key={loc.platformLocationId}
                                 style={styles.dropdownItem}
                                 onPress={() => {
                                   const locationId = loc.platformLocationId;
+                                  const meta = availableLocationById.get(locationId);
                                   setDraftPools((prev) => {
                                     const current = prev[poolId]?.locationIds || [];
+                                    const currentMetadata = prev[poolId]?.locationMetadata || new Map();
                                     if (current.includes(locationId)) return prev;
+                                    
+                                    // Add location metadata if available
+                                    if (meta) {
+                                      currentMetadata.set(locationId, {
+                                        platformLocationId: locationId,
+                                        locationName: meta.locationName || locationId,
+                                        connectionName: meta.connectionName || 'Unknown connection',
+                                        platformType: meta.platformType || '',
+                                        timezone: meta.timezone,
+                                      });
+                                    }
+                                    
                                     return {
                                       ...prev,
                                       [poolId]: {
                                         ...prev[poolId],
                                         locationIds: [...current, locationId],
+                                        locationMetadata: currentMetadata,
                                       },
                                     };
                                   });
@@ -941,15 +1194,28 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                                   });
                                 }}
                               >
-                                <View style={{ flex: 1 }}>
-                                  <Text style={styles.dropdownItemText}>{loc.locationName}</Text>
+                                <View style={{ flex: 1, minWidth: 0 }}>
+                                  <Text 
+                                    style={styles.dropdownItemText}
+                                    numberOfLines={1}
+                                    ellipsizeMode="tail"
+                                  >
+                                    {loc.locationName}
+                                  </Text>
                                   {loc.timezone ? (
-                                    <Text style={styles.dropdownItemTimezone}>{loc.timezone}</Text>
+                                    <Text 
+                                      style={styles.dropdownItemTimezone}
+                                      numberOfLines={1}
+                                      ellipsizeMode="tail"
+                                    >
+                                      {loc.timezone}
+                                    </Text>
                                   ) : null}
                                 </View>
-                                <Icon name="chevron-right" size={16} color="#ccc" />
+                                <Icon name="chevron-right" size={18} color="#ccc" />
                               </TouchableOpacity>
-                            ))}
+                            ))
+                          )}
                         </ScrollView>
                       </View>
                     </View>
@@ -968,24 +1234,6 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
     </View>
   );
 
-  // State for platform/location selection in create mode (single/pool)
-  const [selectedPlatformForManage, setSelectedPlatformForManage] = useState<{
-    connectionId: string;
-    connectionName: string;
-    platformType: string;
-  } | null>(null);
-
-  // Per-pool platform selection in manage mode
-  const [managePlatformSelectionByPool, setManagePlatformSelectionByPool] = useState<
-    Record<
-      string,
-      {
-        connectionId: string;
-        connectionName: string;
-        platformType: string;
-      } | null
-    >
-  >({});
 
   // Create-mode helpers
   const [createAddPlatformMode, setCreateAddPlatformMode] = useState(false);
@@ -1101,39 +1349,60 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                         </TouchableOpacity>
 
                         {/* Inline dropdown for this platform */}
-                        {activeCreateDropdownConnId === connId && (
-                          <View style={[styles.dropdownContainer, { marginTop: 6 }]}>
-                            <ScrollView style={{ maxHeight: 200 }}>
-                              {platformGroup
-                                ?.connections.find((c) => c.connectionId === connId)
-                                ?.locations.map((loc) => (
-                                  <TouchableOpacity
-                                    key={loc.platformLocationId}
-                                    style={styles.dropdownItem}
-                                    onPress={() => {
-                                      setNewPoolLocations((prev) => ({
-                                        ...prev,
-                                        [connId]: [loc.platformLocationId],
-                                      }));
-                                      setActiveCreateDropdownConnId(null);
-                                    }}
-                                  >
-                                    <View style={{ flex: 1 }}>
-                                      <Text style={styles.dropdownItemText}>
-                                        {loc.locationName}
-                                      </Text>
-                                      {loc.timezone ? (
-                                        <Text style={styles.dropdownItemTimezone}>
-                                          {loc.timezone}
+                        {activeCreateDropdownConnId === connId && (() => {
+                          const allSelectedInCreate = new Set(Object.values(newPoolLocations).flat());
+                          const filteredLocs = platformGroup
+                            ?.connections.find((c) => c.connectionId === connId)
+                            ?.locations.filter(loc => !allSelectedInCreate.has(loc.platformLocationId)) || [];
+                          
+                          return (
+                            <View style={[styles.dropdownContainer, { marginTop: 6 }]}>
+                              <ScrollView style={{ maxHeight: 200 }}>
+                                {filteredLocs.length === 0 ? (
+                                  <View style={{ padding: 16, alignItems: 'center' }}>
+                                    <Text style={{ fontSize: 13, color: '#999' }}>
+                                      All locations from this platform are already selected
+                                    </Text>
+                                  </View>
+                                ) : (
+                                  filteredLocs.map((loc) => (
+                                    <TouchableOpacity
+                                      key={loc.platformLocationId}
+                                      style={styles.dropdownItem}
+                                      onPress={() => {
+                                        setNewPoolLocations((prev) => ({
+                                          ...prev,
+                                          [connId]: [loc.platformLocationId],
+                                        }));
+                                        setActiveCreateDropdownConnId(null);
+                                      }}
+                                    >
+                                      <View style={{ flex: 1, minWidth: 0 }}>
+                                        <Text 
+                                          style={styles.dropdownItemText}
+                                          numberOfLines={1}
+                                          ellipsizeMode="tail"
+                                        >
+                                          {loc.locationName}
                                         </Text>
-                                      ) : null}
-                                    </View>
-                                    <Icon name="chevron-right" size={16} color="#ccc" />
-                                  </TouchableOpacity>
-                                ))}
-                            </ScrollView>
-                          </View>
-                        )}
+                                        {loc.timezone ? (
+                                          <Text 
+                                            style={styles.dropdownItemTimezone}
+                                            numberOfLines={1}
+                                            ellipsizeMode="tail"
+                                          >
+                                            {loc.timezone}
+                                          </Text>
+                                        ) : null}
+                                      </View>
+                                      <Icon name="chevron-right" size={18} color="#ccc" />
+                                    </TouchableOpacity>
+                                  ))
+                                )}
+                              </ScrollView>
+                            </View>
+                          );
+                        })()}
                       </View>
                     );
                   })}
@@ -1221,33 +1490,60 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                   {/* Dropdown picker */}
                   <View style={styles.dropdownContainer}>
                     <ScrollView style={{ maxHeight: 200 }}>
-                      {available
-                        .flatMap((p) => p.connections)
-                        .find((c) => c.connectionId === selectedPlatformForManage.connectionId)
-                        ?.locations.map((loc) => (
-                          <TouchableOpacity
-                            key={loc.platformLocationId}
-                            style={styles.dropdownItem}
-                            onPress={() => {
-                              setNewPoolLocations((prev) => ({
-                                ...prev,
-                                [selectedPlatformForManage.connectionId]: [
-                                  loc.platformLocationId,
-                                ],
-                              }));
-                              setSelectedPlatformForManage(null);
-                              setCreateAddPlatformMode(false);
-                            }}
-                          >
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.dropdownItemText}>{loc.locationName}</Text>
-                              {loc.timezone ? (
-                                <Text style={styles.dropdownItemTimezone}>{loc.timezone}</Text>
-                              ) : null}
-                            </View>
-                            <Icon name="chevron-right" size={16} color="#ccc" />
-                          </TouchableOpacity>
-                        ))}
+                      {(() => {
+                        const allSelectedInCreate = new Set(Object.values(newPoolLocations).flat());
+                        const connection = available
+                          .flatMap((p) => p.connections)
+                          .find((c) => c.connectionId === selectedPlatformForManage.connectionId);
+                        const filteredLocs = connection?.locations.filter(
+                          loc => !allSelectedInCreate.has(loc.platformLocationId)
+                        ) || [];
+                        
+                        return filteredLocs.length === 0 ? (
+                          <View style={{ padding: 16, alignItems: 'center' }}>
+                            <Text style={{ fontSize: 13, color: '#999' }}>
+                              All locations from this platform are already selected
+                            </Text>
+                          </View>
+                        ) : (
+                          filteredLocs.map((loc) => (
+                            <TouchableOpacity
+                              key={loc.platformLocationId}
+                              style={styles.dropdownItem}
+                              onPress={() => {
+                                setNewPoolLocations((prev) => ({
+                                  ...prev,
+                                  [selectedPlatformForManage.connectionId]: [
+                                    loc.platformLocationId,
+                                  ],
+                                }));
+                                setSelectedPlatformForManage(null);
+                                setCreateAddPlatformMode(false);
+                              }}
+                            >
+                              <View style={{ flex: 1, minWidth: 0 }}>
+                                <Text 
+                                  style={styles.dropdownItemText}
+                                  numberOfLines={1}
+                                  ellipsizeMode="tail"
+                                >
+                                  {loc.locationName}
+                                </Text>
+                                {loc.timezone ? (
+                                  <Text 
+                                    style={styles.dropdownItemTimezone}
+                                    numberOfLines={1}
+                                    ellipsizeMode="tail"
+                                  >
+                                    {loc.timezone}
+                                  </Text>
+                                ) : null}
+                              </View>
+                              <Icon name="chevron-right" size={18} color="#ccc" />
+                            </TouchableOpacity>
+                          ))
+                        );
+                      })()}
                     </ScrollView>
                   </View>
                 </View>
@@ -1329,26 +1625,23 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                         key={`${connId}-${loc.platformLocationId}`}
                         style={styles.selectedLocationRow}
                       >
-                        <View style={{ flex: 1 }}>
-                          <View
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              marginBottom: 2,
-                            }}
+                        <View style={styles.selectedLocationLeft}>
+                          {Logo ? <Logo width={20} height={20} /> : null}
+                        </View>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text
+                            style={styles.selectedLocationText}
+                            numberOfLines={1}
+                            ellipsizeMode="tail"
                           >
-                            {Logo ? <Logo width={18} height={18} /> : null}
-                            <Text
-                              style={[
-                                styles.selectedLocationText,
-                                Logo ? { marginLeft: 8 } : null,
-                              ]}
-                            >
-                              {conn?.connectionName || 'Unknown connection'}
-                            </Text>
-                          </View>
-                          <Text style={styles.selectedLocationSubText}>
                             {loc.locationName}
+                          </Text>
+                          <Text 
+                            style={styles.selectedLocationSubText}
+                            numberOfLines={1}
+                            ellipsizeMode="tail"
+                          >
+                            {conn?.connectionName || 'Unknown connection'}
                           </Text>
                         </View>
                         <TouchableOpacity
@@ -1360,8 +1653,9 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                               ),
                             }));
                           }}
+                          style={{ padding: 4 }}
                         >
-                          <Icon name="close" size={16} color="#ff4444" />
+                          <Icon name="close" size={18} color="#ff4444" />
                         </TouchableOpacity>
                       </View>
                     ));
@@ -1431,32 +1725,59 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                   {/* Dropdown picker */}
                   <View style={styles.dropdownContainer}>
                     <ScrollView style={{ maxHeight: 200 }}>
-                      {available
-                        .flatMap((p) => p.connections)
-                        .find((c) => c.connectionId === selectedPlatformForManage.connectionId)
-                        ?.locations.map((loc) => (
-                          <TouchableOpacity
-                            key={loc.platformLocationId}
-                            style={styles.dropdownItem}
-                            onPress={() => {
-                              toggleLocationSelection(
-                                'create',
-                                selectedPlatformForManage.connectionId,
-                                loc.platformLocationId
-                              );
-                              setSelectedPlatformForManage(null);
-                              setCreateAddPlatformMode(false);
-                            }}
-                          >
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.dropdownItemText}>{loc.locationName}</Text>
-                              {loc.timezone ? (
-                                <Text style={styles.dropdownItemTimezone}>{loc.timezone}</Text>
-                              ) : null}
-                            </View>
-                            <Icon name="chevron-right" size={16} color="#ccc" />
-                          </TouchableOpacity>
-                        ))}
+                      {(() => {
+                        const allSelectedInCreate = new Set(Object.values(newPoolLocations).flat());
+                        const connection = available
+                          .flatMap((p) => p.connections)
+                          .find((c) => c.connectionId === selectedPlatformForManage.connectionId);
+                        const filteredLocs = connection?.locations.filter(
+                          loc => !allSelectedInCreate.has(loc.platformLocationId)
+                        ) || [];
+                        
+                        return filteredLocs.length === 0 ? (
+                          <View style={{ padding: 16, alignItems: 'center' }}>
+                            <Text style={{ fontSize: 13, color: '#999' }}>
+                              All locations from this platform are already selected
+                            </Text>
+                          </View>
+                        ) : (
+                          filteredLocs.map((loc) => (
+                            <TouchableOpacity
+                              key={loc.platformLocationId}
+                              style={styles.dropdownItem}
+                              onPress={() => {
+                                toggleLocationSelection(
+                                  'create',
+                                  selectedPlatformForManage.connectionId,
+                                  loc.platformLocationId
+                                );
+                                setSelectedPlatformForManage(null);
+                                setCreateAddPlatformMode(false);
+                              }}
+                            >
+                              <View style={{ flex: 1, minWidth: 0 }}>
+                                <Text 
+                                  style={styles.dropdownItemText}
+                                  numberOfLines={1}
+                                  ellipsizeMode="tail"
+                                >
+                                  {loc.locationName}
+                                </Text>
+                                {loc.timezone ? (
+                                  <Text 
+                                    style={styles.dropdownItemTimezone}
+                                    numberOfLines={1}
+                                    ellipsizeMode="tail"
+                                  >
+                                    {loc.timezone}
+                                  </Text>
+                                ) : null}
+                              </View>
+                              <Icon name="chevron-right" size={18} color="#ccc" />
+                            </TouchableOpacity>
+                          ))
+                        );
+                      })()}
                     </ScrollView>
                   </View>
                 </View>
@@ -1499,8 +1820,8 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
               </TouchableOpacity>
             </View>
 
-            <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
-              <Text style={styles.label}>Select merge target for locations:</Text>
+            <View style={{ paddingHorizontal: 16, paddingBottom: 16, alignContent: 'center', justifyContent: 'center' }}>
+               <Text style={styles.label}>Where will this Pool's locations go?:</Text>
               <View style={{ marginTop: 8 }}>
                 <TouchableOpacity
                   style={[
@@ -1527,7 +1848,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                       style={[
                         styles.chip, 
                         deleteState.mergeTarget === pool.id && styles.chipSelected,
-                          { marginBottom: 4, alignSelf: 'flex-start' },
+                          { marginBottom: 4, paddingHorizontal: 6, alignSelf: 'flex-start', minHeight: `10%`, minWidth: `100%`},
                       ]}
                         onPress={() => setDeleteState((prev) => ({ ...prev, mergeTarget: pool.id }))}
                     >
@@ -1553,18 +1874,16 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
 
             <View style={styles.footerRow}>
               <Button 
-                title="Cancel" 
-                outlined 
-                  onPress={() => setDeleteState((prev) => ({ ...prev, visible: false }))}
-                style={{ flex: 1 }} 
-              />
+                 
+                onPress={() => setDeleteState((prev) => ({ ...prev, visible: false }))}
+                style={{ flex: 1  }} 
+              ><Text style={{color: "white"}}>Cancel</Text></Button>
               <Button
-                  title={deleteState.loading ? 'Deleting...' : 'Delete Pool'}
                 onPress={confirmDeletePool}
                 loading={deleteState.loading}
                 disabled={deleteState.loading || deleteState.mergeTarget === null}
-                style={{ flex: 1 }}
-              />
+                style={{ flex: 1}}
+              ><Text style={{color: "white"}}>Delete Pool</Text></Button>
             </View>
           </View>
         </View>
@@ -1581,7 +1900,7 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: '#fff',
     borderRadius: 12,
-    padding: 8,
+    padding: 10,
   },
   headerRow: {
     flexDirection: 'row',
@@ -1590,7 +1909,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   headerTitle: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: 'bold',
   },
   manageBtn: {
@@ -1606,11 +1925,11 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   sectionTitle: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700',
     color: '#666',
-    marginBottom: 8,
-    marginTop: 12,
+    marginBottom: 10,
+    marginTop: 14,
     textTransform: 'uppercase',
   },
   listItem: {
@@ -1621,8 +1940,9 @@ const styles = StyleSheet.create({
     borderColor: '#e5e5e5',
     borderRadius: 8,
     paddingHorizontal: 12,
-    paddingVertical: 12,
-    marginBottom: 8,
+    paddingVertical: 14,
+    marginBottom: 10,
+    minHeight: 52,
   },
   listItemPoolActive: {
     backgroundColor: '#fffaef',
@@ -1633,8 +1953,10 @@ const styles = StyleSheet.create({
     borderColor: '#d0e2ff',
   },
   listItemText: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
+    flex: 1,
+    marginRight: 8,
   },
   confirmBtn: {
     marginTop: 12,
@@ -1674,10 +1996,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#ddd',
     borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    fontSize: 13,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    fontSize: 15,
     fontWeight: '600',
+    minHeight: 44,
   },
   poolLocations: {
     marginBottom: 8,
@@ -1692,11 +2015,12 @@ const styles = StyleSheet.create({
   addMoreRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 6,
-    gap: 6,
+    paddingVertical: 10,
+    gap: 8,
+    minHeight: 44,
   },
   addMoreText: {
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '600',
     color: '#666',
   },
@@ -1707,21 +2031,31 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f8ff',
     borderLeftWidth: 3,
     borderLeftColor: '#d0e2ff',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginBottom: 6,
-    borderRadius: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    marginBottom: 8,
+    borderRadius: 6,
+    minHeight: 56,
+  },
+  selectedLocationRowActive: {
+    backgroundColor: '#e0f0ff',
+    borderLeftColor: '#8BC34A',
+  },
+  selectedLocationLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 8,
   },
   selectedLocationText: {
-    fontSize: 12,
-    fontWeight: '500',
+    fontSize: 14,
+    fontWeight: '600',
     color: '#333',
     flex: 1,
   },
   selectedLocationSubText: {
-    fontSize: 12,
-    color: '#555',
-    marginTop: 2,
+    fontSize: 13,
+    color: '#666',
+    marginTop: 3,
   },
   platformCard: {
     backgroundColor: '#fff',
@@ -1744,9 +2078,11 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   platformCardHeaderText: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
     color: '#333',
+    flex: 1,
+    marginRight: 8,
   },
   platformLocationSelectRow: {
     flexDirection: 'row',
@@ -1760,24 +2096,28 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   platformLocationSelectText: {
-    fontSize: 13,
+    fontSize: 14,
     color: '#333',
+    flex: 1,
+    marginRight: 8,
   },
   platformSelectButton: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderWidth: 1,
     borderColor: '#ddd',
     borderRadius: 6,
-    marginBottom: 6,
-    gap: 8,
+    marginBottom: 8,
+    gap: 10,
+    minHeight: 48,
   },
   platformSelectText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '500',
     color: '#333',
+    flex: 1,
   },
   dropdownContainer: {
     borderWidth: 1,
@@ -1791,19 +2131,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 12,
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
+    minHeight: 52,
   },
   dropdownItemText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '500',
     color: '#333',
+    flex: 1,
+    marginRight: 8,
   },
   dropdownItemTimezone: {
-    fontSize: 11,
+    fontSize: 12,
     color: '#999',
-    marginTop: 3,
+    marginTop: 4,
   },
   modalOverlay: {
     flex: 1,
@@ -1863,17 +2206,18 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   label: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '600',
-    marginBottom: 6,
+    marginBottom: 8,
     color: '#333',
   },
   textInput: {
     borderWidth: 1,
     borderColor: '#ddd',
     borderRadius: 8,
-    padding: 10,
-    fontSize: 14,
+    padding: 12,
+    fontSize: 15,
+    minHeight: 48,
   },
   connRow: {
     flexDirection: 'row',
@@ -1937,14 +2281,50 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   addAnotherText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '600',
     color: '#666',
   },
   footerRow: {
     flexDirection: 'column',
     gap: 12,
-    paddingTop: 8,
+    paddingTop: 12,
+    marginTop: 8,
+    color: 'white',
+  },
+  dropZone: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f0f8f0',
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: '#8BC34A',
+    borderRadius: 8,
+    padding: 16,
+    marginTop: 8,
+    gap: 8,
+  },
+  dropZoneText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#8BC34A',
+  },
+  reauthButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: '#f0f8f0',
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+  },
+  reauthButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#8BC34A',
   },
 });
 

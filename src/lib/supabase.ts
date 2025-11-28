@@ -56,6 +56,11 @@ export function getCurrentSupabaseJwt(): string | null {
   return currentSupabaseJwt;
 }
 
+async function refreshSupabaseToken(): Promise<boolean> {
+  // Reuse the same exchange flow
+  return exchangeClerkForSupabase();
+}
+
 export async function ensureSupabaseJwt(): Promise<string | null> {
   if (currentSupabaseJwt) return currentSupabaseJwt;
   const ok = await refreshSupabaseToken();
@@ -71,30 +76,32 @@ async function exchangeClerkForSupabase(): Promise<boolean> {
     if (!clerkToken) return false;
     const base = apiBaseUrl.endsWith('/api') ? apiBaseUrl : `${apiBaseUrl}/api`;
     const url = `${base}/auth/exchange`;
+    console.log('[supabase.ts] Exchanging Clerk token for Supabase JWT at', url);
     console.log('[supabase.ts] EXCHANGE URL =', url);
     const resp = await realFetch(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${clerkToken}` },
     });
-    console.log('[supabase.ts] exchange response status =', resp.status);
+    console.log('[supabase.ts] Exchange response status:', resp.status, resp.ok);
     if (!resp.ok) {
       const text = await resp.text().catch(() => '<no body>');
-      console.warn('[supabase.ts] exchange failed. status:', resp.status, 'body:', text);
+      console.log('[supabase.ts] Exchange error body:', text);
       return false;
     }
     const body = await resp.json();
+    console.log('[supabase.ts] Exchange body:', body);
     currentSupabaseJwt = body.supabase_token as string;
+    if (currentSupabaseJwt) {
+      console.log('[supabase.ts] Supabase JWT set, length:', currentSupabaseJwt.length);
+    } else {
+      console.log('[supabase.ts] No supabase_token in response');
+    }
     console.log('[supabase.ts] received supabase_token length =', currentSupabaseJwt ? currentSupabaseJwt.length : 0);
     return !!currentSupabaseJwt;
   } catch (e) {
     console.error('[supabase.ts] exchangeClerkForSupabase error:', e);
     return false;
   }
-}
-
-async function refreshSupabaseToken(): Promise<boolean> {
-  // Reuse the same exchange flow
-  return exchangeClerkForSupabase();
 }
 
 export async function configureClerkSupabaseBridge(options: {

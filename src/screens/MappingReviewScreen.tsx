@@ -230,6 +230,17 @@ const MappingReviewScreen = () => {
   const [isLoadingPools, setIsLoadingPools] = useState(false);
   const [isCreatingPool, setIsCreatingPool] = useState(false);
   const [poolNameInput, setPoolNameInput] = useState('');
+  
+  // Location Assignment State (for mapping locations to pools)
+  interface ConnectionLocation {
+    platformLocationId: string;
+    locationName: string;
+    timezone?: string;
+  }
+  const [connectionLocations, setConnectionLocations] = useState<ConnectionLocation[]>([]);
+  const [isLoadingLocations, setIsLoadingLocations] = useState(false);
+  // Maps locationId -> poolId (which pool each location is assigned to)
+  const [locationPoolAssignments, setLocationPoolAssignments] = useState<Record<string, string>>({});
 
 
   // Sync Settings
@@ -376,6 +387,55 @@ const MappingReviewScreen = () => {
     fetchPools();
   }, [connectionId]); // Only depend on connectionId
 
+  // Load locations for this connection (for pool assignment)
+  useEffect(() => {
+    const fetchConnectionLocations = async () => {
+      if (!connectionId) return;
+      
+      try {
+        setIsLoadingLocations(true);
+        const token = await ensureSupabaseJwt();
+        
+        // Fetch locations from PlatformLocations table for this connection
+        const { data: locations, error } = await supabase
+          .from('PlatformLocations')
+          .select('PlatformLocationId, Name, Timezone')
+          .eq('PlatformConnectionId', connectionId);
+        
+        if (error) {
+          console.error('[MappingReviewScreen] Error fetching locations:', error);
+          setConnectionLocations([]);
+          return;
+        }
+        
+        const formattedLocations: ConnectionLocation[] = (locations || []).map(loc => ({
+          platformLocationId: loc.PlatformLocationId,
+          locationName: loc.Name || 'Unnamed Location',
+          timezone: loc.Timezone || undefined,
+        }));
+        
+        setConnectionLocations(formattedLocations);
+        console.log('[MappingReviewScreen] ✅ Loaded connection locations:', formattedLocations.length);
+        
+        // Initialize all locations to the selected pool (if any)
+        if (selectedPool && formattedLocations.length > 0) {
+          const initialAssignments: Record<string, string> = {};
+          formattedLocations.forEach(loc => {
+            initialAssignments[loc.platformLocationId] = selectedPool;
+          });
+          setLocationPoolAssignments(initialAssignments);
+        }
+      } catch (error) {
+        console.error('[MappingReviewScreen] Error loading locations:', error);
+        setConnectionLocations([]);
+      } finally {
+        setIsLoadingLocations(false);
+      }
+    };
+    
+    fetchConnectionLocations();
+  }, [connectionId, selectedPool]);
+
   // Load existing quick settings on mount (for wizard pre-population)
   useEffect(() => {
     const loadExistingSettings = async () => {
@@ -445,6 +505,19 @@ const MappingReviewScreen = () => {
         }
       }
 
+      // Get location IDs that should be assigned to this new pool
+      // If user has specifically assigned locations to this pool, use those
+      // Otherwise, use all connection locations
+      const locationIdsForNewPool = connectionLocations
+        .filter(loc => {
+          const assignedPoolId = locationPoolAssignments[loc.platformLocationId];
+          // Include if explicitly assigned to 'create-new' or not assigned at all (default to new pool)
+          return assignedPoolId === 'create-new' || !assignedPoolId;
+        })
+        .map(loc => loc.platformLocationId);
+
+      console.log('[MappingReviewScreen] Creating pool with locations:', locationIdsForNewPool);
+
       const response = await fetch('https://api.sssync.app/api/pools', {
         method: 'POST',
         headers: {
@@ -456,7 +529,8 @@ const MappingReviewScreen = () => {
           name: poolNameInput.trim(),
           description: `Pool for ${connection?.DisplayName || 'new connection'}`,
           syncInventory: true,
-          syncPricing: true
+          syncPricing: true,
+          location_ids: locationIdsForNewPool, // Include locations when creating
         })
       });
 
@@ -3549,167 +3623,170 @@ const MappingReviewScreen = () => {
                     {wizardStep === 0 && (
                       <View style={{ paddingHorizontal: 0, paddingTop: 20 }}>
                         <Text style={{ color: theme.colors.textSecondary, marginBottom: 16, textAlign: 'center' }}>
-                          Select which inventory pool to use for this connection
+                          Assign each location to an inventory pool
                         </Text>
 
-                        {isLoadingPools ? (
+                        {(isLoadingPools || isLoadingLocations) ? (
                           <View style={{ padding: 40, alignItems: 'center' }}>
                             <ActivityIndicator size="large" color={theme.colors.primary} />
+                            <Text style={{ marginTop: 12, color: theme.colors.textSecondary }}>
+                              Loading locations and pools...
+                            </Text>
+                          </View>
+                        ) : connectionLocations.length === 0 ? (
+                          <View style={{ padding: 20, alignItems: 'center' }}>
+                            <Icon name="map-marker-off" size={48} color={theme.colors.textSecondary} />
+                            <Text style={{ marginTop: 12, color: theme.colors.textSecondary, textAlign: 'center' }}>
+                              No locations found for this connection.{'\n'}Sync will use default location.
+                            </Text>
+                            {/* Show simple pool selection fallback */}
+                            <View style={{ width: '100%', marginTop: 20 }}>
+                              {pools.length > 0 && pools.map((pool) => (
+                                <TouchableOpacity
+                                  key={pool.id}
+                                  style={{
+                                    borderWidth: 1,
+                                    borderColor: selectedPool === pool.id ? theme.colors.primary : '#E5E7EB',
+                                    borderRadius: 12,
+                                    padding: 16,
+                                    marginBottom: 8,
+                                    backgroundColor: selectedPool === pool.id ? theme.colors.primary + '10' : '#fff',
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                  }}
+                                  onPress={() => setSelectedPool(pool.id)}
+                                >
+                                  <Text style={{ flex: 1, fontWeight: '600', color: theme.colors.text }}>{pool.name}</Text>
+                                  <View style={{
+                                    width: 20, height: 20, borderRadius: 10, borderWidth: 2,
+                                    borderColor: selectedPool === pool.id ? theme.colors.primary : '#E5E7EB',
+                                    backgroundColor: selectedPool === pool.id ? theme.colors.primary : 'transparent',
+                                    alignItems: 'center', justifyContent: 'center'
+                                  }}>
+                                    {selectedPool === pool.id && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#fff' }} />}
+                                  </View>
+                                </TouchableOpacity>
+                              ))}
+                            </View>
                           </View>
                         ) : (
                           <>
-                            {/* Existing Pools */}
-                            {pools.length > 0 && (
-                              <View style={{ marginBottom: 20 }}>
-                                {pools.map((pool) => (
-                                  <TouchableOpacity
-                                    key={pool.id}
+                            {/* Location-to-Pool Assignment Section */}
+                            <View style={{ marginBottom: 20 }}>
+                              <Text style={{ fontWeight: '700', fontSize: 14, color: theme.colors.text, marginBottom: 12, textTransform: 'uppercase' }}>
+                                {connection?.DisplayName || platformName} Locations ({connectionLocations.length})
+                              </Text>
+                              
+                              {connectionLocations.map((location) => {
+                                const assignedPoolId = locationPoolAssignments[location.platformLocationId] || selectedPool;
+                                const assignedPool = pools.find(p => p.id === assignedPoolId);
+                                
+                                return (
+                                  <View 
+                                    key={location.platformLocationId}
                                     style={{
                                       borderWidth: 1,
-                                      borderColor: selectedPool === pool.id ? theme.colors.primary : '#E5E7EB',
+                                      borderColor: '#E5E7EB',
                                       borderRadius: 12,
-                                      padding: 20,
-                                      marginBottom: 12,
-                                      backgroundColor: selectedPool === pool.id ? theme.colors.primary + '10' : '#fff',
-                                      flexDirection: 'row',
-                                      alignItems: 'center',
-                                      shadowColor: '#000',
-                                      shadowOffset: { width: 0, height: 1 },
-                                      shadowOpacity: 0.05,
-                                      shadowRadius: 2,
-                                      elevation: 1,
+                                      padding: 16,
+                                      marginBottom: 10,
+                                      backgroundColor: '#fff',
                                     }}
-                                    onPress={() => setSelectedPool(pool.id)}
                                   >
-                                    <View style={{
-                                      width: 48,
-                                      height: 48,
-                                      borderRadius: 8,
-                                      backgroundColor: '#96C93F',
-                                      alignItems: 'center',
-                                      justifyContent: 'center',
-                                      marginRight: 16,
-                                      position: 'relative'
-                                    }}>
-                                      <ShopifySvg width={24} height={24} />
-                                      {/* Add platform icons overlay */}
-                                      <View style={{
-                                        position: 'absolute',
-                                        bottom: -4,
-                                        right: -4,
-                                        flexDirection: 'row',
-                                        backgroundColor: '#fff',
-                                        borderRadius: 8,
-                                        padding: 2,
-                                        shadowColor: '#000',
-                                        shadowOffset: { width: 0, height: 1 },
-                                        shadowOpacity: 0.1,
-                                        shadowRadius: 2,
-                                        elevation: 2,
-                                      }}>
-                                        <SquareSvg width={12} height={12} />
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                                      <Icon name="map-marker" size={20} color={theme.colors.primary} style={{ marginRight: 8 }} />
+                                      <View style={{ flex: 1 }}>
+                                        <Text style={{ fontWeight: '600', fontSize: 15, color: theme.colors.text }}>
+                                          {location.locationName}
+                                        </Text>
+                                        {location.timezone && (
+                                          <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 2 }}>
+                                            {location.timezone}
+                                          </Text>
+                                        )}
                                       </View>
                                     </View>
-                                    <View style={{ flex: 1 }}>
-                                      <Text style={{ fontWeight: '600', fontSize: 16, color: theme.colors.text }}>
-                                        {pool.name}
-                                      </Text>
-                                      {pool.description && (
-                                        <Text style={{ color: theme.colors.textSecondary, fontSize: 14, marginTop: 2 }}>
-                                          {pool.description}
+                                    
+                                    {/* Pool selector for this location */}
+                                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                                      {pools.map((pool) => (
+                                        <TouchableOpacity
+                                          key={pool.id}
+                                          style={{
+                                            paddingHorizontal: 12,
+                                            paddingVertical: 8,
+                                            borderRadius: 20,
+                                            borderWidth: 1,
+                                            borderColor: assignedPoolId === pool.id ? theme.colors.primary : '#D1D5DB',
+                                            backgroundColor: assignedPoolId === pool.id ? theme.colors.primary + '15' : '#F9FAFB',
+                                          }}
+                                          onPress={() => {
+                                            setLocationPoolAssignments(prev => ({
+                                              ...prev,
+                                              [location.platformLocationId]: pool.id,
+                                            }));
+                                          }}
+                                        >
+                                          <Text style={{ 
+                                            fontSize: 13, 
+                                            fontWeight: '600',
+                                            color: assignedPoolId === pool.id ? theme.colors.primary : theme.colors.textSecondary 
+                                          }}>
+                                            {pool.name}
+                                          </Text>
+                                        </TouchableOpacity>
+                                      ))}
+                                      
+                                      {/* Create New Pool option */}
+                                      <TouchableOpacity
+                                        style={{
+                                          paddingHorizontal: 12,
+                                          paddingVertical: 8,
+                                          borderRadius: 20,
+                                          borderWidth: 1,
+                                          borderStyle: 'dashed',
+                                          borderColor: assignedPoolId === 'create-new' ? theme.colors.primary : '#D1D5DB',
+                                          backgroundColor: assignedPoolId === 'create-new' ? theme.colors.primary + '15' : 'transparent',
+                                          flexDirection: 'row',
+                                          alignItems: 'center',
+                                          gap: 4,
+                                        }}
+                                        onPress={() => {
+                                          setLocationPoolAssignments(prev => ({
+                                            ...prev,
+                                            [location.platformLocationId]: 'create-new',
+                                          }));
+                                          setSelectedPool('create-new');
+                                        }}
+                                      >
+                                        <Icon name="plus" size={14} color={assignedPoolId === 'create-new' ? theme.colors.primary : theme.colors.textSecondary} />
+                                        <Text style={{ 
+                                          fontSize: 13, 
+                                          fontWeight: '600',
+                                          color: assignedPoolId === 'create-new' ? theme.colors.primary : theme.colors.textSecondary 
+                                        }}>
+                                          New Pool
                                         </Text>
-                                      )}
+                                      </TouchableOpacity>
                                     </View>
-                                    <View style={{
-                                      width: 24,
-                                      height: 24,
-                                      borderRadius: 12,
-                                      borderWidth: 2,
-                                      borderColor: selectedPool === pool.id ? theme.colors.primary : '#E5E7EB',
-                                      backgroundColor: selectedPool === pool.id ? theme.colors.primary : 'transparent',
-                                      alignItems: 'center',
-                                      justifyContent: 'center'
-                                    }}>
-                                      {selectedPool === pool.id && (
-                                        <View style={{
-                                          width: 8,
-                                          height: 8,
-                                          borderRadius: 4,
-                                          backgroundColor: '#fff'
-                                        }} />
-                                      )}
-                                    </View>
-                                  </TouchableOpacity>
-                                ))}
-                              </View>
-                            )}
+                                  </View>
+                                );
+                              })}
+                            </View>
 
-                            {/* Create New Pool */}
-                            <TouchableOpacity
-                              style={{
-                                borderWidth: 2,
-                                borderColor: selectedPool === 'create-new' ? theme.colors.primary : '#D1D5DB',
-                                borderStyle: selectedPool === 'create-new' ? 'solid' : 'dashed',
+                            {/* Create New Pool Name Input - Show when any location assigned to create-new */}
+                            {(selectedPool === 'create-new' || Object.values(locationPoolAssignments).includes('create-new')) && (
+                              <View style={{ 
+                                marginBottom: 16, 
+                                padding: 16, 
+                                backgroundColor: theme.colors.primary + '10', 
                                 borderRadius: 12,
-                                padding: 20,
-                                marginBottom: 16,
-                                backgroundColor: selectedPool === 'create-new' ? theme.colors.primary + '10' : '#F9FAFB',
-                                flexDirection: 'row',
-                                alignItems: 'center',
-                                shadowColor: '#000',
-                                shadowOffset: { width: 0, height: 1 },
-                                shadowOpacity: 0.05,
-                                shadowRadius: 2,
-                                elevation: 1,
-                              }}
-                              onPress={() => setSelectedPool('create-new')}
-                            >
-                              <View style={{
-                                width: 48,
-                                height: 48,
-                                borderRadius: 8,
-                                backgroundColor: selectedPool === 'create-new' ? theme.colors.primary + '20' : '#F3F4F6',
-                                borderWidth: 2,
-                                borderColor: selectedPool === 'create-new' ? theme.colors.primary : '#D1D5DB',
-                                borderStyle: 'dashed',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                marginRight: 16
+                                borderWidth: 1,
+                                borderColor: theme.colors.primary + '30',
                               }}>
-                                <Icon name="plus" size={24} color={selectedPool === 'create-new' ? theme.colors.primary : theme.colors.textSecondary} />
-                              </View>
-                              <View style={{ flex: 1 }}>
-                                <Text style={{ fontWeight: '600', fontSize: 16, color: theme.colors.text }}>
-                                  Create New Pool
+                                <Text style={{ fontWeight: '600', color: theme.colors.text, marginBottom: 8 }}>
+                                  New Pool Name
                                 </Text>
-                                <Text style={{ color: theme.colors.textSecondary, fontSize: 14, marginTop: 2 }}>
-                                  Set up a new inventory pool
-                                </Text>
-                              </View>
-                              <View style={{
-                                width: 24,
-                                height: 24,
-                                borderRadius: 12,
-                                borderWidth: 2,
-                                borderColor: selectedPool === 'create-new' ? theme.colors.primary : '#E5E7EB',
-                                backgroundColor: selectedPool === 'create-new' ? theme.colors.primary : 'transparent',
-                                alignItems: 'center',
-                                justifyContent: 'center'
-                              }}>
-                                {selectedPool === 'create-new' && (
-                                  <View style={{
-                                    width: 8,
-                                    height: 8,
-                                    borderRadius: 4,
-                                    backgroundColor: '#fff'
-                                  }} />
-                                )}
-                              </View>
-                            </TouchableOpacity>
-
-                            {/* Pool Name Input - Show when create new is selected */}
-                            {selectedPool === 'create-new' && (
-                              <View style={{ marginBottom: 16 }}>
                                 <TextInput
                                   style={{
                                     borderWidth: 1,
@@ -3721,24 +3798,93 @@ const MappingReviewScreen = () => {
                                     fontSize: 16,
                                     backgroundColor: '#fff'
                                   }}
-                                  placeholder="Enter pool name (e.g., 'Main', 'Wholesale')"
+                                  placeholder="e.g., 'Main Retail', 'Wholesale', 'Markets'"
                                   placeholderTextColor={theme.colors.textSecondary}
                                   value={poolNameInput}
                                   onChangeText={setPoolNameInput}
                                   editable={!isCreatingPool}
-                                  autoFocus={true}
                                 />
+                                <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 8 }}>
+                                  {Object.values(locationPoolAssignments).filter(p => p === 'create-new').length} location(s) will be added to this new pool
+                                </Text>
+                              </View>
+                            )}
+
+                            {/* Quick assign all to one pool */}
+                            {connectionLocations.length > 1 && pools.length > 0 && (
+                              <View style={{ marginBottom: 16 }}>
+                                <Text style={{ fontSize: 13, color: theme.colors.textSecondary, marginBottom: 8 }}>
+                                  Quick assign all locations:
+                                </Text>
+                                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                                  <View style={{ flexDirection: 'row', gap: 8 }}>
+                                    {pools.map((pool) => (
+                                      <TouchableOpacity
+                                        key={`quick-${pool.id}`}
+                                        style={{
+                                          paddingHorizontal: 16,
+                                          paddingVertical: 10,
+                                          borderRadius: 8,
+                                          backgroundColor: '#F3F4F6',
+                                          borderWidth: 1,
+                                          borderColor: '#E5E7EB',
+                                        }}
+                                        onPress={() => {
+                                          const newAssignments: Record<string, string> = {};
+                                          connectionLocations.forEach(loc => {
+                                            newAssignments[loc.platformLocationId] = pool.id;
+                                          });
+                                          setLocationPoolAssignments(newAssignments);
+                                          setSelectedPool(pool.id);
+                                        }}
+                                      >
+                                        <Text style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text }}>
+                                          All → {pool.name}
+                                        </Text>
+                                      </TouchableOpacity>
+                                    ))}
+                                  </View>
+                                </ScrollView>
                               </View>
                             )}
 
                             {/* Continue button */}
                             <View style={{ marginTop: 20 }}>
                               <Button
-                                title="Continue"
-                                onPress={() => {
-                                  if (selectedPool === 'create-new') {
-                                    handleCreatePool();
+                                title={Object.values(locationPoolAssignments).includes('create-new') ? "Create Pool & Continue" : "Continue"}
+                                onPress={async () => {
+                                  // If any locations assigned to create-new, create the pool first
+                                  if (Object.values(locationPoolAssignments).includes('create-new')) {
+                                    if (!poolNameInput.trim()) {
+                                      Alert.alert('Error', 'Please enter a name for the new pool');
+                                      return;
+                                    }
+                                    await handleCreatePool();
                                   } else {
+                                    // Add locations to selected existing pool(s)
+                                    const poolLocationMap: Record<string, string[]> = {};
+                                    Object.entries(locationPoolAssignments).forEach(([locId, poolId]) => {
+                                      if (!poolLocationMap[poolId]) poolLocationMap[poolId] = [];
+                                      poolLocationMap[poolId].push(locId);
+                                    });
+                                    
+                                    // Update each pool with its assigned locations
+                                    const token = await ensureSupabaseJwt();
+                                    for (const [poolId, locationIds] of Object.entries(poolLocationMap)) {
+                                      try {
+                                        await fetch(`https://api.sssync.app/api/pools/${poolId}/locations`, {
+                                          method: 'POST',
+                                          headers: {
+                                            'Authorization': `Bearer ${token}`,
+                                            'Content-Type': 'application/json',
+                                          },
+                                          body: JSON.stringify({ location_ids: locationIds }),
+                                        });
+                                        console.log(`[MappingReviewScreen] Added ${locationIds.length} locations to pool ${poolId}`);
+                                      } catch (e) {
+                                        console.error(`[MappingReviewScreen] Failed to add locations to pool ${poolId}:`, e);
+                                      }
+                                    }
                                     setWizardStep(1);
                                   }
                                 }}

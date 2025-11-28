@@ -18,6 +18,7 @@ import PoolLocationCombobox from '../components/PoolLocationCombobox';
 import InventoryListCard from '../components/InventoryListCard';
 import SortByDropdown from '../components/SortByDropdown';
 import { CameraView } from 'expo-camera';
+import { useProductVariantRealtime } from '../hooks/useProductVariantRealtime';
 
 type InventoryOrdersScreenNavigationProp = StackNavigationProp<AppStackParamList, 'TabNavigator'>;
 
@@ -48,6 +49,9 @@ const InventoryOrdersScreen = observer(() => {
   const navigation = useNavigation<InventoryOrdersScreenNavigationProp>();
   const route = useRoute<any>();
   const legendState: LegendStateObservables | null = useLegendState();
+
+  // Subscribe to real-time product variant changes
+  useProductVariantRealtime();
 
   // Filter & Search State
   const [activeTab, setActiveTab] = useState('inventory');

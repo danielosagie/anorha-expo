@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, Switch, FlatList } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, Switch, FlatList, Animated } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import Button from '../components/Button';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -17,6 +17,7 @@ import Card from '../components/Card';
 import PlaceholderImage from '../components/PlaceholderImage';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { createCanonicalBase } from '../utils/platformDataHydration';
+import { hasPlatformPrice } from '../utils/platformRequirements';
 import {
   ProductVariant,
   PlatformProductMapping,
@@ -156,6 +157,39 @@ const ProductDetailScreen = observer(
     const [lastSaveTime, setLastSaveTime] = useState<number>(0);
     const [isUploadingImages, setIsUploadingImages] = useState(false);
     const listingEditorRef = useRef<ListingEditorFormRef | null>(null);
+    
+    // Non-blocking notification banner
+    const [bannerMessage, setBannerMessage] = useState<string | null>(null);
+    const bannerOpacity = useRef(new Animated.Value(0)).current;
+    const bannerTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+    
+    // Show banner notification (auto-hides after 3 seconds)
+    const showBanner = useCallback((message: string) => {
+      // Clear any existing timeout
+      if (bannerTimeout.current) {
+        clearTimeout(bannerTimeout.current);
+      }
+      
+      setBannerMessage(message);
+      
+      // Fade in
+      Animated.timing(bannerOpacity, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: true,
+      }).start();
+      
+      // Auto-hide after 3 seconds
+      bannerTimeout.current = setTimeout(() => {
+        Animated.timing(bannerOpacity, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }).start(() => {
+          setBannerMessage(null);
+        });
+      }, 3000);
+    }, [bannerOpacity]);
 
     // Add state after existing states (around line 160, after const [isUploadingImages, setIsUploadingImages] = useState(false);)
     const [variantPricing, setVariantPricing] = useState<any[]>([]);
@@ -409,74 +443,90 @@ const ProductDetailScreen = observer(
       if (!detailedItem) return;
 
       try {
-        console.log('[ProductDetail] Loading consolidated product details for:', detailedItem.Id);
+        console.log('[ProductDetail] Loading consolidated product details for variant:', detailedItem.Id);
 
-        // Load full product with variants and images like PastScansScreen does
+        // Load full product with all variants, tags, and images
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
-        const { data: products, error: productsError } = await supabase
-          .from('Products')
+        // First, load the current variant and its related product
+        const { data: variantData, error: variantError } = await supabase
+          .from('ProductVariants')
           .select(`
             Id,
-            UserId,
-            IsArchived,
+            ProductId,
+            Title,
+            Description,
+            Price,
+            CompareAtPrice,
+            Sku,
+            Barcode,
+            Weight,
+            WeightUnit,
+            Options,
+            Metadata,
+            IsTaxable,
+            RequiresShipping,
+            TaxCode,
+            Tags,
+            OnShopify,
+            OnSquare,
+            OnClover,
+            OnAmazon,
+            OnEbay,
+            OnFacebook,
+            PrimaryImageUrl,
             CreatedAt,
             UpdatedAt,
-            OrgId,
-            ProductVariants!inner (
+            ProductImages!ProductImages_ProductVariantId_fkey (
               Id,
-              ProductId,
-              Title,
-              Description,
-              Price,
-              CompareAtPrice,
-              Sku,
-              Barcode,
-              Weight,
-              WeightUnit,
-              Options,
-              Metadata,
-              IsTaxable,
-              RequiresShipping,
-              TaxCode,
-              OnShopify,
-              OnSquare,
-              OnClover,
-              OnAmazon,
-              OnEbay,
-              OnFacebook,
-              PrimaryImageUrl,
-              CreatedAt,
-              UpdatedAt,
-              ProductImages!ProductImages_ProductVariantId_fkey (
-                Id,
-                ImageUrl,
-                AltText,
-                Position
-              )
+              ImageUrl,
+              AltText,
+              Position
             )
           `)
-          .eq('Id', detailedItem.ProductId)
-          .eq('UserId', user.id)
+          .eq('Id', detailedItem.Id)
           .single();
 
-        if (productsError) {
-          console.error('[ProductDetail] Error loading product details:', productsError);
+        if (variantError) {
+          console.error('[ProductDetail] Error loading variant details:', variantError);
           return;
         }
 
-        if (!products?.ProductVariants?.[0]) {
-          console.warn('[ProductDetail] No variant found for product');
+        if (!variantData) {
+          console.warn('[ProductDetail] No variant data found');
           return;
         }
 
-        const variant = products.ProductVariants[0];
+        const variant = variantData;
         const sortedImages = variant.ProductImages
           ?.sort((a: any, b: any) => (a.Position || 0) - (b.Position || 0))
           ?.map((img: any) => img.ImageUrl) || [];
 
-        console.log('[ProductDetail] Loaded variant with', sortedImages.length, 'images and options:', variant.Options);
+        console.log('[ProductDetail] Loaded variant with', sortedImages.length, 'images, options:', variant.Options, 'tags:', variant.Tags);
+
+        // Now load ALL variants for this product
+        const { data: allVariants, error: allVariantsError } = await supabase
+          .from('ProductVariants')
+          .select(`
+            Id,
+            Sku,
+            Title,
+            Price,
+            Options,
+            ProductImages!ProductImages_ProductVariantId_fkey (
+              ImageUrl,
+              Position
+            )
+          `)
+          .eq('ProductId', variant.ProductId)
+          .order('CreatedAt', { ascending: true });
+
+        if (allVariantsError) {
+          console.warn('[ProductDetail] Error loading all variants:', allVariantsError);
+        } else {
+          console.log('[ProductDetail] Loaded all variants for product:', allVariants?.length || 0);
+        }
 
         // Load VariantPricing for this variant (ONLY active records, not soft-deleted)
         const { data: variantPricingData, error: variantPricingError } = await supabase
@@ -492,8 +542,7 @@ const ProductDetailScreen = observer(
           setVariantPricing(variantPricingData || []);
         }
 
-        // Update detailedItem with full data - DO NOT call setEditPlatforms here
-        // The hydration useEffect will handle populating editPlatforms when detailedItem changes
+        // Update detailedItem with full data
         const enrichedItem = {
           ...detailedItem,
           ...variant,
@@ -501,6 +550,7 @@ const ProductDetailScreen = observer(
           // Include all the fields we need
           Options: variant.Options || {},
           Metadata: variant.Metadata || {},
+          Tags: variant.Tags || [],
           IsTaxable: variant.IsTaxable,
           RequiresShipping: variant.RequiresShipping,
           TaxCode: variant.TaxCode,
@@ -523,6 +573,18 @@ const ProductDetailScreen = observer(
           IsTaxable: enrichedItem.IsTaxable !== false,
           TaxCode: enrichedItem.TaxCode || '',
         });
+
+        // Build variants array for display (includes all variants from product)
+        const displayVariants = (allVariants || []).map((v: any) => ({
+          id: v.Id,
+          sku: v.Sku,
+          title: v.Title,
+          price: v.Price,
+          optionValues: v.Options || {},
+          inventoryByLocation: {} // Will be populated by inventory loading
+        }));
+
+        console.log('[ProductDetail] Built display variants:', displayVariants.length);
 
       } catch (error) {
         console.error('[ProductDetail] Error in loadProductDetails:', error);
@@ -560,6 +622,8 @@ const ProductDetailScreen = observer(
     }, [groupedInventory]);
 
     // Auto-save function with proper API call
+    // Note: Pricing validation is flexible - either flat price OR all variants have prices
+    // This allows: Shopify with variants at different prices, Square with flat price, etc.
     const performAutoSave = useCallback(async () => {
       if (!detailedItem || !hasUnsavedChanges) {
         console.log('[ProductDetail] Skipping auto-save: no item or no changes');
@@ -940,16 +1004,37 @@ const ProductDetailScreen = observer(
           TaxCode: itemData.TaxCode || '',
         });
         setIsLoading(false);
-      } else if (!passedItem) {
+      } else if (!passedItem && productId) {
+        // Fallback: Fetch from Supabase if not in local state
         setIsLoading(true);
-        const timeoutId = setTimeout(() => {
-          if (!productVariants$[productId].get()) {
-            console.warn(`Product with ID ${productId} not found after timeout.`);
-            setDetailedItem(null);
+        supabase
+          .from('ProductVariants')
+          .select('*')
+          .eq('Id', productId)
+          .single()
+          .then(({ data, error }) => {
+            if (data) {
+              console.log('[ProductDetail] Fetched item from Supabase:', data.Id);
+              setDetailedItem(data);
+              setFormData({
+                Title: data.Title || '',
+                Description: data.Description || '',
+                Price: data.Price || 0,
+                CompareAtPrice: data.CompareAtPrice || 0,
+                Sku: data.Sku || '',
+                Barcode: data.Barcode || '',
+                Weight: data.Weight || 0,
+                WeightUnit: data.WeightUnit || 'kg',
+                RequiresShipping: data.RequiresShipping !== false,
+                IsTaxable: data.IsTaxable !== false,
+                TaxCode: data.TaxCode || '',
+              });
+            } else {
+              console.error('[ProductDetail] Failed to fetch item:', error);
+              setDetailedItem(null);
+            }
             setIsLoading(false);
-          }
-        }, 3000);
-        return () => clearTimeout(timeoutId);
+          });
       }
     }, [productId, passedItem]);
 
@@ -961,6 +1046,36 @@ const ProductDetailScreen = observer(
         loadProductDetails(); // Load additional product data
       }
     }, [detailedItem?.Id]); // Only depend on item ID to prevent loops
+
+    // Helper: Hydrate inventory data from InventoryLevels into variant structure
+    const hydrateInventoryFromDB = useCallback((variantsPricing: any[], invLevels: InventoryLevel[]): any[] => {
+      if (!variantsPricing || variantsPricing.length === 0) return [];
+      
+      return variantsPricing.map((v: any) => {
+        const inventoryByLocation: Record<string, any> = v.InventoryByLocation || {};
+        
+        // Map InventoryLevels to inventoryByLocation format
+        invLevels.forEach((level: InventoryLevel) => {
+          const locId = level.PlatformLocationId || 'default';
+          inventoryByLocation[locId] = {
+            quantity: level.Quantity || 0,
+            price: level.Price || undefined,
+            compareAtPrice: level.CompareAtPrice || undefined,
+          };
+        });
+        
+        console.log('[ProductDetail] Hydrated variant with inventory from DB:', v.Sku, 'locations:', Object.keys(inventoryByLocation).length);
+        
+        return {
+          optionValues: v.OptionValues,
+          price: v.Price,
+          compareAtPrice: v.CompareAtPrice,
+          sku: v.Sku,
+          barcode: v.Barcode,
+          inventoryByLocation,
+        };
+      });
+    }, []);
 
     // Populate form fields from detailedItem when it loads
     useEffect(() => {
@@ -982,7 +1097,11 @@ const ProductDetailScreen = observer(
         TaxCode: (detailedItem as any).TaxCode || '',
       }));
 
-      // Also populate displayedPlatforms with base canonical data
+      // Also populate displayedPlatforms with base canonical data + variants
+      // Extract additional generated fields from Metadata (cast to any for JSONB field)
+      const metadata = ((detailedItem as any).Metadata as Record<string, any>) || {};
+      const tags = ((detailedItem as any).Tags as string[]) || [];
+      
       const canonicalBase = {
         title: detailedItem.Title || '',
         sku: detailedItem.Sku || '',
@@ -993,26 +1112,50 @@ const ProductDetailScreen = observer(
         description: detailedItem.Description || '',
         requiresShipping: detailedItem.RequiresShipping !== false,
         isTaxable: detailedItem.IsTaxable !== false,
+        tags: Array.isArray(tags) ? tags : [],
+        // Add AI recommended price from metadata if available
+        aiRecommendedPrice: metadata.aiRecommendedPrice,
+        // Additional generated fields from Metadata
+        vendor: metadata.vendor || '',
+        productType: metadata.productType || '',
+        brand: metadata.brand || '',
+        condition: metadata.condition || '',
+        categorySuggestion: metadata.categorySuggestion || '',
+        // SEO fields
+        seoTitle: metadata.seoTitle || '',
+        seoDescription: metadata.seoDescription || '',
+        // Platform-specific data for detailed editing
+        ...(metadata.platformSpecificData?.shopify || {}),
       };
+
+      console.log('[ProductDetail] Setting displayedPlatforms with tags:', canonicalBase.tags, 'variantPricing:', variantPricing?.length, 'aiPrice:', canonicalBase.aiRecommendedPrice);
+
+      // Get inventory levels for hydration - query synchronously from already-loaded data
+      const inventoryLevels: InventoryLevel[] = (groupedInventory && Object.values(groupedInventory).length > 0) 
+        ? Object.values(groupedInventory).flatMap(pg => pg.locations.map(loc => ({
+            Id: loc.id,
+            ProductVariantId: detailedItem.Id,
+            PlatformConnectionId: loc.platformConnectionId,
+            PlatformLocationId: loc.locationId,
+            Quantity: loc.quantity,
+          } as InventoryLevel)))
+        : [];
+
+      // Hydrate variants with inventory data
+      const hydratedVariants = hydrateInventoryFromDB(variantPricing || [], inventoryLevels);
 
       setDisplayedPlatforms({ 
         shopify: { 
           ...canonicalBase, 
-          variants: variantPricing.map((v: any) => ({
-            optionValues: v.OptionValues,
-            price: v.Price,
-            compareAtPrice: v.CompareAtPrice,
-            sku: v.Sku,
-            barcode: v.Barcode,
-            inventoryByLocation: v.InventoryByLocation || {}
-          }))
+          options: detailedItem.Options && typeof detailedItem.Options === 'object' ? Object.entries(detailedItem.Options).map(([name, values]) => ({ name, values: Array.isArray(values) ? values : [values] })) : [],
+          variants: hydratedVariants && hydratedVariants.length > 0 ? hydratedVariants : []
         } 
       });
-    }, [detailedItem?.Id]); // Only run when product changes
+    }, [detailedItem?.Id, variantPricing, groupedInventory, hydrateInventoryFromDB]); // Depend on inventory data
 
     // Phase 2: Load drafts from backend (after hydration)
     useEffect(() => {
-      if (!detailedItem || !Object.keys(displayedPlatforms).length === 0) return;
+      if (!detailedItem || Object.keys(displayedPlatforms).length === 0) return;
 
       let canceled = false;
       setIsLoadingDraft(true);
@@ -1038,16 +1181,16 @@ const ProductDetailScreen = observer(
           if (response.ok) {
             const data = await response.json();
             if (!canceled) {
-              console.log('[ProductDetail] ✅ Loaded draft data');
-              setDraftData(data.currentDraft?.draftData || null);
+              console.log('[ProductDetail] ✅ Loaded draft data:', data);
+              setDraftData(data.currentDraft?.DraftData || null);
               setDraftVersions(data.versions || []);
 
               // Only use draft data if it enhances the published data (has more fields)
-              if (data.currentDraft?.draftData) {
-                console.log('[ProductDetail] Evaluating draft data:', Object.keys(data.currentDraft.draftData));
+              if (data.currentDraft?.DraftData) {
+                console.log('[ProductDetail] Evaluating draft data:', Object.keys(data.currentDraft.DraftData));
 
                 // Check if draft data is actually more complete than published data
-                const draftHasMoreData = Object.values(data.currentDraft.draftData).some((platformData: any) =>
+                const draftHasMoreData = Object.values(data.currentDraft.DraftData).some((platformData: any) =>
                   platformData && (
                     platformData.title ||
                     platformData.price ||
@@ -1061,7 +1204,7 @@ const ProductDetailScreen = observer(
 
                   // Deep merge draft changes onto existing published data
                   const mergedPlatforms = { ...displayedPlatforms };
-                  for (const [platformKey, draftPlatformData] of Object.entries(data.currentDraft.draftData)) {
+                  for (const [platformKey, draftPlatformData] of Object.entries(data.currentDraft.DraftData)) {
                     if (mergedPlatforms[platformKey]) {
                       // Merge platform data
                       mergedPlatforms[platformKey] = {
@@ -1227,11 +1370,8 @@ const ProductDetailScreen = observer(
           }
         }
 
-        Alert.alert(
-          'Product Updated',
-          'A teammate just updated this product. Your view has been refreshed.',
-          [{ text: 'OK' }]
-        );
+        // Show non-blocking banner instead of Alert
+        showBanner('🔄 A teammate updated this product. View refreshed.');
       });
 
       // Listen for edit started events
@@ -1281,6 +1421,21 @@ const ProductDetailScreen = observer(
 
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+        {/* Non-blocking notification banner */}
+        {bannerMessage && (
+          <Animated.View 
+            style={[
+              styles.notificationBanner,
+              { 
+                opacity: bannerOpacity,
+                backgroundColor: theme.colors.primary + 'E6', // 90% opacity
+              }
+            ]}
+          >
+            <Text style={styles.notificationBannerText}>{bannerMessage}</Text>
+          </Animated.View>
+        )}
+        
         <ScrollView contentContainerStyle={styles.scrollContent}>
           {/* Header with auto-save indicator */}
           <View style={[styles.header, { backgroundColor: theme.colors.surface }]}>
@@ -1295,6 +1450,8 @@ const ProductDetailScreen = observer(
                   <Text style={[styles.savingText, { color: theme.colors.primary }]}>Saving...</Text>
                 </View>
               )}
+              {draftData && <Text style={{ color: 'orange' }}>Draft Mode - Changes not published</Text>}
+              
               {!isSaving && lastSaveTime > 0 && (
                 <Text style={[styles.savedText, { color: theme.colors.success }]}>
                   Saved {new Date(lastSaveTime).toLocaleTimeString()}
@@ -1308,7 +1465,7 @@ const ProductDetailScreen = observer(
             </View>
           </View>
 
-          {draftData && <Text style={{ color: 'orange' }}>Draft Mode - Changes not published</Text>}
+          
 
           {/* Listing editor (edit mode) */}
           <Card style={styles.basicSection}>
@@ -1320,7 +1477,41 @@ const ProductDetailScreen = observer(
               onChangePlatforms={(next) => {
                 console.log('[ProductDetail] ListingEditorForm onChange:', Object.keys(next));
                 setDisplayedPlatforms(next);
-                setHasUnsavedChanges(true);
+                setHasUnsavedChanges(true)
+                console.log('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
+                // DEEP merge: preserve all existing fields while updating changed ones
+                // This preserves user edits AND keeps all loaded backend data
+                updatePlatforms(prev => {
+                  const merged = { ...prev };
+                  for (const [platformKey, platformData] of Object.entries(next)) {
+                    const prevPlatform = prev[platformKey] || {};
+                    
+                    // Deep merge platform data
+                    merged[platformKey] = {
+                      ...prevPlatform,
+                      ...platformData
+                    };
+
+                    // CRITICAL: Preserve variant inventoryByLocation when merging variants array
+                    if (Array.isArray(platformData?.variants) && Array.isArray(prevPlatform.variants)) {
+                      merged[platformKey].variants = platformData.variants.map((newVariant: any) => {
+                        const prevVariant = prevPlatform.variants?.find((v: any) => v.id === newVariant.id);
+                        if (prevVariant?.inventoryByLocation) {
+                          return {
+                            ...newVariant,
+                            inventoryByLocation: {
+                              ...prevVariant.inventoryByLocation,
+                              ...(newVariant.inventoryByLocation || {})
+                            }
+                          };
+                        }
+                        return newVariant;
+                      });
+                    }
+                  }
+                  console.log('[GEN-DETAILS] Deep merged platforms, keys:', Object.keys(merged));
+                  return merged;
+                });
               }}
               onChangeImages={(next) => { reorderImages(next); }}
               onOpenFieldPanel={undefined}
@@ -1515,6 +1706,27 @@ const ProductDetailScreen = observer(
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  notificationBanner: {
+    position: 'absolute',
+    top: 50,
+    left: 16,
+    right: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    zIndex: 9999,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  notificationBannerText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   scannerDock: { position: 'absolute', top: 6, left: 56, right: 56, zIndex: 5000 },
   scannerCard: { backgroundColor: '#000', borderRadius: 18, borderWidth: 2, borderColor: '#111', overflow: 'hidden' },

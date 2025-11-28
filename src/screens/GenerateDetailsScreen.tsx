@@ -12,11 +12,12 @@ import BottomActionBar from '../components/BottomActionBar';
 import ListingEditorForm from '../components/ListingEditorForm';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { hydratePlatformsFromBackend, normalizeForListingEditor, isEmpty } from '../utils/platformDataHydration';
+import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
 import { Paths, Directory, File } from 'expo-file-system/next';
 import * as ImagePicker from 'expo-image-picker';
 
 // Feature flag to hide AI refill functionality
-const ENABLE_AI_REFILL_FEATURES = true;
+const ENABLE_AI_REFILL_FEATURES = false;
 
 // Platform metadata for UI display
 const PLATFORM_META: Record<string, { label: string; icon: string }> = {
@@ -826,21 +827,32 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }
     return out;
   }, [platformsToPublish, displayedPlatforms]);
-  // Update checklist when displayed platforms change
+  // Update checklist when displayed platforms change (using flexible pricing)
   useEffect(() => {
-    const requiredByPlatform = getPlatformRequirements();
     const next: Record<string, { missing: string[]; ready: boolean }> = {};
     
     for (const key of Object.keys(displayedPlatforms)) {
       const data = displayedPlatforms[key] || {};
-      const req = requiredByPlatform[key] || [];
-      const missing = req.filter(f => {
-        if (f === 'images') {
-          const imgs = data.images || data.imageUris || data.files || [];
-          return !Array.isArray(imgs) || imgs.length < 1;
-        }
-        return isEmpty(data[f]);
-      });
+      const missing: string[] = [];
+      
+      // Title is required
+      if (isEmpty(data.title)) {
+        missing.push('title');
+      }
+      
+      // SKU is required
+      if (isEmpty(data.sku)) {
+        missing.push('sku');
+      }
+      
+      // Price: flexible (flat OR all variants)
+      if (!hasPlatformPrice(data)) {
+        missing.push('price');
+      }
+      
+      // Images (optional but good practice)
+      // Not blocking, just informational
+      
       next[key] = { missing, ready: missing.length === 0 };
     }
     
@@ -959,28 +971,13 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     return () => { canceled = true };
   }, []);
 
-  // Helper: compute overall readiness
+  // Helper: compute overall readiness with flexible pricing
   // Compute which platforms are ready to publish
   const readyPlatforms = useMemo(() => {
-    const canonical = displayedPlatforms?.[platformKeys.includes('shopify') ? 'shopify' : platformKeys[0]] || {};
-    const hasVal = (k: string) => {
-      const v = (canonical as any)[k];
-      if (k === 'price') {
-        const num = Number(v);
-        return !isNaN(num) && num > 0;
-      }
-      return v != null && String(v).trim().length > 0;
-    };
-    
-    const ready: string[] = [];
-    for (const platformKey of platformKeys) {
-      const required = ['title', 'sku', 'price'];
-      const allFilled = required.every(f => hasVal(f));
-      if (allFilled && !ignoredPlatforms.includes(platformKey)) {
-        ready.push(platformKey);
-      }
-    }
-    return ready;
+    return platformKeys.filter(platformKey => {
+      const platformData = (displayedPlatforms as any)?.[platformKey] || {};
+      return isPlatformReady(platformData, platformKey, ignoredPlatforms);
+    });
   }, [displayedPlatforms, platformKeys, ignoredPlatforms]);
   
   const canPublish = useMemo(() => readyPlatforms.length > 0, [readyPlatforms]);
@@ -1535,33 +1532,20 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const canonical = payload.platformDetails?.canonical || {};
       console.log('doPublish - Canonical payload:', canonical);
 
-      // Validate readiness
+      // Validate readiness with flexible pricing
       const missingByPlatform: Record<string, string[]> = {};
-      const required: Record<string, string[]> = {
-        shopify: ['title','sku','price'],
-        square: ['title','sku','price'],
-        clover: ['title','sku','price'],
-        amazon: ['title','sku','price'],
-        ebay: ['title','sku','price'],
-        facebook: ['title','sku','price'],
-      };
-      const hasVal = (k: string) => {
-        const v = (canonical as any)[k];
-        if (k === 'price') {
-          const num = Number(v);
-          const valid = !isNaN(num) && num > 0;
-          console.log(`doPublish - Validating price: ${v} -> ${num} -> valid: ${valid}`);
-          return valid;
+      
+      for (const platform of readyPlatforms) {
+        const platformKey = String(platform).toLowerCase();
+        const platformData = (payload.platformDetails as any)?.[platformKey] || {};
+        const missing = getMissingPlatformFields(platformData, platformKey);
+        
+        if (missing.length > 0) {
+          console.log(`doPublish - ${platformKey} missing fields:`, missing);
+          missingByPlatform[platformKey] = missing;
+        } else {
+          console.log(`doPublish - ${platformKey} is ready to publish`);
         }
-        const valid = v != null && String(v).trim().length > 0;
-        console.log(`doPublish - Validating ${k}: ${v} -> valid: ${valid}`);
-        return valid;
-      };
-      for (const p of readyPlatforms) {
-        const key = String(p).toLowerCase();
-        const reqs = required[key] || ['title','sku','price'];
-        const miss = reqs.filter(f => !hasVal(f));
-        if (miss.length) missingByPlatform[key] = miss;
       }
       console.log('doPublish - Missing by platform:', missingByPlatform);
       
@@ -1753,7 +1737,20 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (!publishRes.ok) {
         const errorText = await publishRes.text();
         console.error('Publish failed:', errorText);
-        alert(`Failed to publish: ${errorText}`);
+        
+        // Parse error for better user messaging
+        try {
+          const errorJson = JSON.parse(errorText);
+          if (errorJson.statusCode === 409 && errorJson.details?.sku) {
+            alert(`SKU "${errorJson.details.sku}" is already in use by another product. Please change the SKU and try again.`);
+          } else {
+            alert(`Failed to publish: ${errorJson.message || errorText}`);
+          }
+        } catch {
+          alert(`Failed to publish: ${errorText}`);
+        }
+        
+        // Don't clear data on error - user can fix and retry
         return;
       }
 
@@ -2041,12 +2038,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   useEffect(() => {
     const variantId = (route.params as any)?.variantId;
     const hasResults = Array.isArray(results) && results.length > 0;
+    const hasPlatformData = Object.keys(platformsRef.current).length > 0;
     
     // Only load draft if:
     // 1. We have a variantId
-    // 2. We don't already have results (new session or reopening)
-    // 3. platformsRef is still empty (not already hydrated)
-    if (!variantId || hasResults || Object.keys(platformsRef.current).length > 0) {
+    // 2. platformsRef is still empty (not already hydrated from results or previous load)
+    // NOTE: We now load draft even if results exist, because user might have edited after generation
+    if (!variantId || hasPlatformData) {
+      console.log('[GEN-DETAILS DraftLoad] Skipping - variantId:', !!variantId, 'hasPlatformData:', hasPlatformData);
       return;
     }
 
@@ -2078,16 +2077,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         const draftResponse = await response.json();
         const currentDraft = draftResponse?.currentDraft;
         
-        if (!currentDraft || !currentDraft.draftData) {
+        if (!currentDraft || !currentDraft.DraftData) {
           console.log('[GEN-DETAILS DraftLoad] No draft data found');
           return;
         }
 
         if (!canceled) {
-          console.log('[GEN-DETAILS DraftLoad] ✅ Loaded draft:', currentDraft.draftData);
+          console.log('[GEN-DETAILS DraftLoad] ✅ Loaded draft:', currentDraft.DraftData);
           // Restore the draft data into platformsRef
-          platformsRef.current = currentDraft.draftData;
-          lastSavedRef.current = JSON.stringify(currentDraft.draftData);
+          platformsRef.current = currentDraft.DraftData;
+          lastSavedRef.current = JSON.stringify(currentDraft.DraftData);
           forceUpdate({}); // Trigger re-render with restored data
         }
       } catch (error) {

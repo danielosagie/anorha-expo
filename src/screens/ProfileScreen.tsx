@@ -653,7 +653,7 @@ const ProfileScreen = () => {
   };
 
   const handleOpenTeams = async () => {
-    let result = await WebBrowser.openBrowserAsync("https://app.anorha.app/teams")
+    let result = await WebBrowser.openBrowserAsync("https://app.anorha.app")
     {/*
     try {
       const token = await getApiToken();
@@ -908,7 +908,9 @@ const ProfileScreen = () => {
 
       // 5. Handle Callback from finalRedirectUri
       if (result.type === 'success' && result.url) {
-        const urlParams = new URLSearchParams(result.url.split('?')[1]);
+        // Remove hash fragment if present (e.g., #_=_) before parsing
+        const urlWithoutHash = result.url.split('#')[0];
+        const urlParams = new URLSearchParams(urlWithoutHash.split('?')[1]);
         const status = urlParams.get('status');
         const message = urlParams.get('message');
         const connectionId = urlParams.get('connectionId'); // Assuming backend might send this
@@ -988,7 +990,9 @@ const ProfileScreen = () => {
 
       // 5. Handle Callback from finalRedirectUri
       if (result.type === 'success' && result.url) {
-        const urlParams = new URLSearchParams(result.url.split('?')[1]);
+        // Remove hash fragment if present (e.g., #_=_) before parsing
+        const urlWithoutHash = result.url.split('#')[0];
+        const urlParams = new URLSearchParams(urlWithoutHash.split('?')[1]);
         const status = urlParams.get('status');
         const message = urlParams.get('message');
         const connectionId = urlParams.get('connectionId'); // Assuming backend might send this
@@ -1062,7 +1066,9 @@ const ProfileScreen = () => {
       console.log("[ProfileScreen] Facebook Connect: WebBrowser result:", result);
 
       if (result.type === 'success' && result.url) {
-        const urlParams = new URLSearchParams(result.url.split('?')[1]);
+        // Remove hash fragment if present (e.g., #_=_) before parsing
+        const urlWithoutHash = result.url.split('#')[0];
+        const urlParams = new URLSearchParams(urlWithoutHash.split('?')[1]);
         const status = urlParams.get('status');
         const message = urlParams.get('message');
         const connectionId = urlParams.get('connectionId');
@@ -2017,6 +2023,7 @@ const styles = StyleSheet.create({
   scrollViewContent: {
     padding: 16,
     paddingTop: 60,
+    paddingBottom: 50,
   },
   card: {
     marginBottom: 16,

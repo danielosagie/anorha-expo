@@ -13,6 +13,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import PlatformAvatar from './PlatformAvatar';
+import { useOrg } from '../context/OrgContext'; // Moved to correct import order
 
 const API_BASE_URL = 'https://api.sssync.app';
 
@@ -33,7 +34,7 @@ interface PlatformLocation {
 }
 
 interface PoolLocationComboboxProps {
-  orgId: string;
+  orgId?: string; // Optional now, as we can use context
   selectedItems: string[]; // location IDs
   onSelectionChange: (locationIds: string[]) => void;
   startOpen?: boolean;
@@ -45,12 +46,17 @@ interface PoolWithLocations {
 }
 
 const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
-  orgId,
+  orgId: propOrgId,
   selectedItems,
   onSelectionChange,
   startOpen = false,
 }) => {
   const theme = useTheme();
+  const { currentOrg } = useOrg();
+  
+  // Use prop orgId if provided (legacy support), otherwise fall back to context
+  const effectiveOrgId = propOrgId || currentOrg?.id;
+
   const [isDropdownOpen, setIsDropdownOpen] = useState(startOpen);
   const [pools, setPools] = useState<LocationPool[]>([]);
   const [poolsWithLocations, setPoolsWithLocations] = useState<PoolWithLocations[]>([]);
@@ -63,12 +69,17 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
   }, [selectedItems]);
 
   const loadPoolsWithLocations = async () => {
+    if (!effectiveOrgId) {
+        console.log('[PoolLocationCombobox] No org ID available');
+        return;
+    }
+
     try {
       setLoading(true);
       const token = await ensureSupabaseJwt();
 
       // Fetch all pools
-      const poolsRes = await fetch(`${API_BASE_URL}/api/pools/org/${orgId}`, {
+      const poolsRes = await fetch(`${API_BASE_URL}/api/pools/org/${effectiveOrgId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!poolsRes.ok) throw new Error('Failed to fetch pools');
@@ -195,7 +206,7 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
         activeOpacity={0.7}
       >
         <View style={styles.dropdownContent}>
-          <Icon name="map-marker-outline" size={18} color={theme.colors.textSecondary} />
+          {/* <Icon name="map-marker-outline" size={18} color={theme.colors.textSecondary} /> */} 
           <Text style={[styles.dropdownText, { color: theme.colors.text }]}>
             {getDisplayText()}
           </Text>
@@ -209,7 +220,7 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
 
       {/* Absolute Positioned Inline Dropdown */}
       {isDropdownOpen && (
-        <View style={[styles.dropdownPanel, { backgroundColor: theme.colors.surface }]}>
+        <View style={[styles.dropdownPanel, { backgroundColor: '#fff' }]}>
           <View style={styles.searchContainer}>
             <Icon name="magnify" size={18} color="#999" />
             <TextInput
@@ -239,29 +250,7 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
                       style={styles.poolHeader}
                       onPress={() => toggleAllLocationsInPool(item.pool.id)}
                     >
-                      <Icon
-                        name={
-                          item.locations.every((loc) =>
-                            selectedLocations.includes(loc.Id)
-                          )
-                            ? 'checkbox-marked-outline'
-                            : item.locations.some((loc) =>
-                                selectedLocations.includes(loc.Id)
-                              )
-                            ? 'minus-box-outline'
-                            : 'checkbox-blank-outline'
-                        }
-                        size={24}
-                        color={
-                          item.locations.some((loc) =>
-                            selectedLocations.includes(loc.Id)
-                          )
-                            ? theme.colors.primary
-                            : theme.colors.textSecondary
-                        }
-                        style={styles.checkboxIcon}
-                      />
-                      <Text style={[styles.poolNameText, { color: theme.colors.text }]}>
+                      <Text style={[styles.poolNameText, { color: '#333' }]}>
                         {item.pool.name}
                       </Text>
                     </TouchableOpacity>
@@ -283,33 +272,25 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
                         });
                       }}
                     >
-                      <Icon
-                        name={
-                          item.locations.every((loc) =>
-                            selectedLocations.includes(loc.Id)
-                          )
-                            ? 'checkbox-marked-outline'
-                            : 'checkbox-blank-outline'
-                        }
-                        size={22}
-                        color={
-                          item.locations.some((loc) =>
-                            selectedLocations.includes(loc.Id)
-                          )
-                            ? theme.colors.primary
-                            : theme.colors.textSecondary
-                        }
-                        style={styles.checkboxIcon}
-                      />
+                      <View style={{ width: 24, alignItems: 'center' }}>
+                        {item.locations.every((loc) => selectedLocations.includes(loc.Id)) && (
+                            <Icon name="check" size={18} color="#333" />
+                        )}
+                      </View>
                       <Text
                         style={[
                           styles.locationNameText,
-                          styles.allLocationText,
-                          { color: theme.colors.text },
+                          { color: '#333', flex: 1 },
                         ]}
                       >
                         All Locations
                       </Text>
+                      <View style={{ flexDirection: 'row', gap: 4 }}>
+                         {/* Show distinct platform icons available in this pool */}
+                         {Array.from(new Set(item.locations.map(l => l.PlatformConnections?.PlatformType))).map(pt => (
+                             pt ? <PlatformAvatar key={pt} platformType={pt} size="small" /> : null
+                         ))}
+                      </View>
                     </TouchableOpacity>
 
                     {/* Individual Locations */}
@@ -319,32 +300,16 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
                         style={styles.locationSelectItem}
                         onPress={() => toggleLocationSelection(location.Id)}
                       >
-                        <Icon
-                          name={
-                            selectedLocations.includes(location.Id)
-                              ? 'checkbox-marked-outline'
-                              : 'checkbox-blank-outline'
-                          }
-                          size={22}
-                          color={
-                            selectedLocations.includes(location.Id)
-                              ? theme.colors.primary
-                              : theme.colors.textSecondary
-                          }
-                          style={styles.checkboxIcon}
-                        />
-                        <View style={styles.locationInfo}>
-                          <View style={styles.locationHeader}>
-                            <Text style={[styles.locationNameText, { color: theme.colors.text }]}>
-                              {location.Name}
-                            </Text>
-                            {location.IsPOS && (
-                              <Text style={[styles.locationBadge, { color: theme.colors.primary }]}>
-                                POS
-                              </Text>
+                        <View style={{ width: 24, alignItems: 'center' }}>
+                            {selectedLocations.includes(location.Id) && (
+                                <Icon name="check" size={18} color="#333" />
                             )}
-                          </View>
                         </View>
+                        
+                        <Text style={[styles.locationNameText, { color: '#333', flex: 1 }]}>
+                            {location.Name}
+                        </Text>
+                        
                         {location.PlatformConnections && (
                           <PlatformAvatar
                             platformType={location.PlatformConnections.PlatformType}
@@ -383,64 +348,47 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
-    borderRadius: 10,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
     backgroundColor: '#FFFFFF',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.1,
-        shadowRadius: 2,
-      },
-      android: {
-        elevation: 1,
-      },
-    }),
+    // No shadow for cleaner look
   },
   dropdownContent: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   dropdownText: {
-    marginLeft: 8,
-    fontSize: 15,
-    fontWeight: '500',
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111',
   },
   dropdownPanel: {
     position: 'absolute',
-    top: 56,
+    top: 48,
     left: 0,
     right: 0,
-    borderRadius: 12,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#E0E0E0',
-    maxHeight: 350,
+    borderColor: '#E5E7EB',
+    maxHeight: 400,
     overflow: 'hidden',
-    zIndex: 100,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.15,
-        shadowRadius: 8,
-      },
-      android: {
-        elevation: 8,
-      },
-    }),
+    zIndex: 1000, // Ensure high z-index
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 8,
   },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F5F5F5',
+    padding: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
-    paddingHorizontal: 12,
-    height: 40,
+    borderBottomColor: '#F3F4F6',
   },
   searchInput: {
     flex: 1,
@@ -448,7 +396,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   locationListScrollView: {
-    maxHeight: 260,
+    maxHeight: 300,
   },
   loadingText: {
     textAlign: 'center',
@@ -459,27 +407,24 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
   },
   poolHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    backgroundColor: '#F9F9F9',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: '#F9FAFB', // Light gray background for headers
   },
   poolNameText: {
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '600',
+    color: '#6B7280',
   },
   poolDivider: {
     height: 1,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: '#F3F4F6',
   },
   locationSelectItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
+    paddingVertical: 10,
     paddingHorizontal: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
   },
   checkboxIcon: {
     marginRight: 12,
@@ -493,7 +438,8 @@ const styles = StyleSheet.create({
   },
   locationNameText: {
     fontSize: 14,
-    fontWeight: '500',
+    fontWeight: '400',
+    marginLeft: 8,
   },
   allLocationText: {
     fontWeight: '600',
@@ -504,19 +450,18 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   dropdownFooter: {
-    paddingHorizontal: 12,
-    paddingVertical: 12,
+    padding: 12,
     borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
+    borderTopColor: '#F3F4F6',
   },
   applyButton: {
-    paddingVertical: 12,
-    borderRadius: 8,
+    paddingVertical: 10,
+    borderRadius: 6,
     alignItems: 'center',
   },
   applyButtonText: {
     color: 'white',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
   },
 });

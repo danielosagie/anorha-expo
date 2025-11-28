@@ -87,7 +87,8 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         throw new Error('Failed to fetch orgs');
       }
 
-      const orgsData = await orgsResponse.json();
+      let orgsData = await orgsResponse.json();
+      console.log('[OrgContext] Orgs data:', orgsData);
       
       // Parse response format: [{ Role, Organizations: { Id, Name, ... } }, ...]
       const formattedOrgs: UserOrgAccess[] = (orgsData || []).map((membership: any) => ({
@@ -97,6 +98,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         assignedPoolIds: membership.assigned_pool_ids || [],
         isActive: false,
       }));
+      console.log('[OrgContext] Formatted orgs:', formattedOrgs);
 
       // Fetch active organization
       const activeResponse = await fetch(`${API_BASE}/api/organizations/me/active`, {
@@ -107,6 +109,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (activeResponse.ok) {
         const activeData = await activeResponse.json();
         activeOrgId = activeData.orgId;
+        console.log('[OrgContext] Active data:', activeData);
       }
 
       // Mark active org
@@ -114,24 +117,27 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ...org,
         isActive: org.id === activeOrgId,
       }));
+      console.log('[OrgContext] Set available orgs, count:', orgsWithActive.length);
 
       setAvailableOrgs(orgsWithActive);
       
       // Set current org
       const active = orgsWithActive.find((org) => org.id === activeOrgId);
       if (active) {
-        console.log('[OrgContext] Setting current org to:', active.name);
+        console.log('[OrgContext] Set current org:', active);
         setCurrentOrg(active);
       } else if (orgsWithActive.length > 0) {
-        console.log('[OrgContext] Using first org:', orgsWithActive[0].name);
+        console.log('[OrgContext] Set current org to first:', orgsWithActive[0]);
         setCurrentOrg(orgsWithActive[0]);
       }
 
       setError(null);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Failed to load orgs';
-      console.error('[OrgContext] Load orgs error:', errMsg);
-      setError(errMsg);
+      console.error('[OrgContext] Load orgs error:', err);
+      if (err instanceof Error && err.message.includes('Failed to fetch')) {
+        console.log('[OrgContext] Fetch failed, possible auth issue');
+      }
     }
   }, [isSignedIn]);
 
@@ -185,9 +191,13 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const refreshOrgs = useCallback(async () => {
     setIsLoading(true);
     try {
-      // First sync Clerk (in case new teams were added in Clerk)
-      await syncClerkTeams();
-      // Then reload available orgs
+      // Syncing Clerk teams is best-effort; backend webhooks already do this.
+      try {
+        await syncClerkTeams();
+      } catch (syncErr) {
+        console.warn('[OrgContext] Clerk sync is optional, continuing:', syncErr);
+      }
+      // Always reload orgs even if sync failed
       await loadAvailableOrgs();
     } catch (err) {
       console.error('[OrgContext] Refresh error:', err);

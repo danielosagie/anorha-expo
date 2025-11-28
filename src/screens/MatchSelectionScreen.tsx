@@ -766,11 +766,24 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
     return (
         <View style={styles.container}>
             
-            {/* Tiny bulk button top-left */}
-            <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ position: 'absolute', top: 64, left: 32, zIndex: 4000, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)',minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center', gap: 6 as any }}>
-                <Boxes size={18} color="#000" />
-                <Text style={{ color: '#000', fontWeight: '600' }}>Current Jobs</Text>
-            </TouchableOpacity>
+            <View style={{ flex: 1, position: 'absolute', top: 70, left: 16, zIndex: 1, flexDirection: 'row', gap: 8, minWidth: 100, minHeight: 34, alignContent: "flex-end"}}>
+                <TouchableOpacity 
+                    onPress={() => {
+                        // Navigate back to past scans page
+                        navigation.goBack();
+                    }} 
+                    style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, maxHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}
+                    >
+                    <Icon name="arrow-left" size={18} color={'#000'} />
+                    <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Back</Text>
+                </TouchableOpacity>
+
+                {/* Tiny bulk button top-left */}
+                <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center'  as any }}>
+                    <Boxes size={18} color="#000" />
+                    <Text style={{ color: '#000', fontWeight: '600' }}>Current Jobs</Text>
+                </TouchableOpacity>
+            </View>
 
             <FlashList
                 data={serpApiData}

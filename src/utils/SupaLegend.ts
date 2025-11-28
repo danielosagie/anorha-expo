@@ -119,12 +119,12 @@ export async function initializeLegendState(
     const productVariants$ = observable<Record<string, ProductVariant>>(
         customSynced({
             collection: 'ProductVariants',
-            select: (from: any) => from.select('*, id:Id, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook'),
+            select: (from: any) => from.select('*, id:Id, Options, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook'),
             filter: (query: any) => query.eq('UserId', currentUserId),
             actions: ['read', 'create', 'update', 'delete'],
             realtime: { filter: `UserId=eq.${currentUserId}` },
             persist: {
-                name: `productVariants_user_${currentUserId}_v3`, // Updated version to clear cache
+                name: `productVariants_user_${currentUserId}_v4`, // Updated version to clear cache
                 retrySync: true,
             },
         })
@@ -195,7 +195,7 @@ export async function initializeLegendState(
             actions: ['read', 'create', 'update', 'delete'],
             realtime: true, 
             persist: {
-                name: `inventoryLevels_user_${currentUserId}_v2`,
+                name: `inventoryLevels_user_${currentUserId}_v3`,
                 retrySync: true,
             },
         })
@@ -383,6 +383,12 @@ export interface InventoryLevel {
     PlatformConnectionId: string; // uuid
     PlatformLocationId?: string | null;
     Quantity: number; // default 0
+    Price?: number | null; // decimal
+    CompareAtPrice?: number | null; // decimal
+    Currency?: string | null;
+    Reason?: string | null;
+    SourceId?: string | null;
+    LastDeltaAt?: string | null; // timestamptz
     UpdatedAt: string; // timestamptz
 }
 

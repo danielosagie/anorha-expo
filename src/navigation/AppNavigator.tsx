@@ -410,7 +410,7 @@ const AppNavigator = () => {
   const [initialAppScreen, setInitialAppScreen] = useState<'CreateAccountScreen' | 'TabNavigator' | null>(null);
   
   // Dev tools to test onboarding flow
-  const [devForceOnboarding] = useState(false); // Set this to true only when testing onboarding
+  const [devForceOnboarding] = useState(true); // Set this to true only when testing onboarding - FTUX
   const [devExpireSession, setDevExpireSession] = useState(false); // Set true to make you have to login new each time you leave/after session expires
 
   const [fontsLoaded] = useFonts({
