@@ -1271,12 +1271,22 @@ const MappingReviewScreen = () => {
       console.log('[MappingReviewScreen] Mappings confirmed successfully.');
 
       // Step 2: Update quick settings (settings already configured during wizard)
+      // CRITICAL: Include propagateCreates and propagateChanges to enable cross-platform sync
       const quickSettings = {
         poolId: selectedPool || undefined,
         autoSyncMode: syncMode === 'auto',
         autoDelist: delistMode === 'auto',
         priceAdjustment: priceBuffer,
-        inventoryBuffer: inventoryBuffer
+        inventoryBuffer: inventoryBuffer,
+        // Enable cross-platform product propagation by default
+        syncRules: {
+          propagateCreates: true,  // Sync new products to other platforms
+          propagateUpdates: true,  // Sync updates to other platforms
+          propagateDeletes: false, // Don't auto-delete (safer default)
+          propagateInventory: true, // Sync inventory changes
+          syncInventory: true,
+          syncPricing: true,
+        }
       };
 
       const settingsResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/connections/${connectionId}/quick-settings`, {
@@ -4085,12 +4095,22 @@ const MappingReviewScreen = () => {
                                 console.log('[MappingReview] Mappings confirmed, updating quick settings...');
 
                                 // Step 2: Update quick settings with wizard selections
+                                // CRITICAL: Include propagateCreates and propagateChanges to enable cross-platform sync
                                 const quickSettings = {
                                   poolId: selectedPool || undefined,
                                   autoSyncMode: syncMode === 'auto',
                                   autoDelist: delistMode === 'auto',
                                   priceAdjustment: priceBuffer,
-                                  inventoryBuffer: inventoryBuffer
+                                  inventoryBuffer: inventoryBuffer,
+                                  // Enable cross-platform product propagation by default
+                                  syncRules: {
+                                    propagateCreates: true,  // Sync new products to other platforms
+                                    propagateUpdates: true,  // Sync updates to other platforms
+                                    propagateDeletes: false, // Don't auto-delete (safer default)
+                                    propagateInventory: true, // Sync inventory changes
+                                    syncInventory: true,
+                                    syncPricing: true,
+                                  }
                                 };
 
                                 const settingsResponse = await fetch(`https://api.sssync.app/api/connections/${connectionId}/quick-settings`, {

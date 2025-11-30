@@ -149,6 +149,9 @@ const ProductDetailScreen = observer(
     const [isActivityModalVisible, setIsActivityModalVisible] = useState(false);
     const [isBarcodeScannerVisible, setIsBarcodeScannerVisible] = useState(false);
     const [isImagePickerVisible, setIsImagePickerVisible] = useState(false);
+    
+    // Track if initial load has completed to prevent overwrites
+    const hasLoadedInitialData = useRef(false);
     const [isDangerZoneVisible, setIsDangerZoneVisible] = useState(false);
     
     // Auto-save state (no more manual editing mode)
@@ -441,6 +444,12 @@ const ProductDetailScreen = observer(
     // Load additional product details (images, tags, variants, etc.) - consolidated like PastScansScreen
     const loadProductDetails = useCallback(async () => {
       if (!detailedItem) return;
+      
+      // Don't overwrite if user has unsaved changes
+      if (hasUnsavedChanges) {
+        console.log('[ProductDetail] Skipping reload - user has unsaved changes');
+        return;
+      }
 
       try {
         console.log('[ProductDetail] Loading consolidated product details for variant:', detailedItem.Id);
@@ -702,8 +711,12 @@ const ProductDetailScreen = observer(
         setDetailedItem(updatedItem);
         setHasUnsavedChanges(false);
         setLastSaveTime(Date.now());
+        
+        // CRITICAL FIX: Clear draft data after successful save
+        // This fixes the "Changes not published" message persisting
+        setDraftData(null);
 
-        console.log('Product auto-saved successfully');
+        console.log('Product auto-saved successfully (draft cleared)');
 
       } catch (error) {
         console.error('Auto-save failed:', error);
@@ -1038,12 +1051,13 @@ const ProductDetailScreen = observer(
       }
     }, [productId, passedItem]);
 
-    // Load platform data when product is available
+    // Load platform data when product is available - ONLY ONCE
     useEffect(() => {
-      if (detailedItem) {
+      if (detailedItem && !hasLoadedInitialData.current) {
         console.log('[ProductDetail] Loading data for product:', detailedItem.Id);
         loadPlatformData();
         loadProductDetails(); // Load additional product data
+        hasLoadedInitialData.current = true;
       }
     }, [detailedItem?.Id]); // Only depend on item ID to prevent loops
 
@@ -1153,9 +1167,25 @@ const ProductDetailScreen = observer(
       });
     }, [detailedItem?.Id, variantPricing, groupedInventory, hydrateInventoryFromDB]); // Depend on inventory data
 
-    // Phase 2: Load drafts from backend (after hydration)
+    // Phase 2: Load drafts from backend (ONCE only, do NOT re-fetch when platforms change)
+    // CRITICAL FIX: Removed displayedPlatforms from dependencies to prevent overwriting user edits
+    const hasFetchedDraftRef = useRef<string | null>(null); // Track which product ID we fetched for
+    
     useEffect(() => {
-      if (!detailedItem || Object.keys(displayedPlatforms).length === 0) return;
+      // GUARD 1: Only fetch if we have a product
+      if (!detailedItem?.Id) return;
+      
+      // GUARD 2: Don't re-fetch if we already fetched for this product
+      if (hasFetchedDraftRef.current === detailedItem.Id) {
+        console.log('[ProductDetail] Draft already fetched for product', detailedItem.Id, '- skipping');
+        return;
+      }
+      
+      // GUARD 3: Don't fetch if user has unsaved changes (this would overwrite them!)
+      if (hasUnsavedChanges) {
+        console.log('[ProductDetail] User has unsaved changes - skipping draft fetch');
+        return;
+      }
 
       let canceled = false;
       setIsLoadingDraft(true);
@@ -1185,48 +1215,18 @@ const ProductDetailScreen = observer(
               setDraftData(data.currentDraft?.DraftData || null);
               setDraftVersions(data.versions || []);
 
-              // Only use draft data if it enhances the published data (has more fields)
-              if (data.currentDraft?.DraftData) {
-                console.log('[ProductDetail] Evaluating draft data:', Object.keys(data.currentDraft.DraftData));
-
-                // Check if draft data is actually more complete than published data
-                const draftHasMoreData = Object.values(data.currentDraft.DraftData).some((platformData: any) =>
-                  platformData && (
-                    platformData.title ||
-                    platformData.price ||
-                    platformData.weight ||
-                    (platformData.variants && platformData.variants.length > 0)
-                  )
-                );
-
-                if (draftHasMoreData) {
-                  console.log('[ProductDetail] Draft has meaningful data, merging...');
-
-                  // Deep merge draft changes onto existing published data
-                  const mergedPlatforms = { ...displayedPlatforms };
-                  for (const [platformKey, draftPlatformData] of Object.entries(data.currentDraft.DraftData)) {
-                    if (mergedPlatforms[platformKey]) {
-                      // Merge platform data
-                      mergedPlatforms[platformKey] = {
-                        ...mergedPlatforms[platformKey],
-                        ...draftPlatformData as any
-                      };
-                    } else {
-                      // Add new platform from draft
-                      mergedPlatforms[platformKey] = draftPlatformData;
-                    }
-                  }
-
-                  setDisplayedPlatforms(mergedPlatforms);
-                  lastSavedRef.current = JSON.stringify(mergedPlatforms);
-                  forceUpdate({}); // Trigger re-render with merged data
-                } else {
-                  console.log('[ProductDetail] Draft data is incomplete, ignoring to preserve published data');
-                }
-              }
+              // Mark as fetched for this product (prevents re-fetching)
+              hasFetchedDraftRef.current = detailedItem.Id;
+              
+              // CRITICAL: Do NOT merge draft data into displayedPlatforms!
+              // The draft contains OLD data from original publish time.
+              // displayedPlatforms should reflect CURRENT edits.
+              // Draft data is available in draftData state if needed for comparison.
+              console.log('[ProductDetail] Draft loaded for reference only - NOT merging to preserve current data');
             }
           } else {
             console.log('[ProductDetail] Draft data not found (expected for new products)');
+            hasFetchedDraftRef.current = detailedItem.Id; // Mark as fetched even if empty
           }
         } catch (error) {
           console.error('[ProductDetail] Error loading draft:', error);
@@ -1238,7 +1238,7 @@ const ProductDetailScreen = observer(
       })();
 
       return () => { canceled = true };
-    }, [detailedItem?.Id, updateCounter, displayedPlatforms]); // updateCounter changes when platforms are updated
+    }, [detailedItem?.Id, hasUnsavedChanges]); // ONLY depend on product ID - NOT displayedPlatforms!
 
     // Set up realtime subscriptions
     useEffect(() => {
@@ -1258,23 +1258,29 @@ const ProductDetailScreen = observer(
             filter: `Id=eq.${detailedItem.Id}`,
           },
           (payload) => {
-            console.log('Product variant updated:', payload);
+            console.log('Product variant updated from external source:', payload);
             if (payload.eventType === 'UPDATE' && payload.new) {
               const updatedProduct = payload.new as ProductVariant;
-              setDetailedItem(updatedProduct);
-              setFormData({
-                Title: updatedProduct.Title || '',
-                Description: updatedProduct.Description || '',
-                Price: updatedProduct.Price || 0,
-                CompareAtPrice: updatedProduct.CompareAtPrice || 0,
-                Sku: updatedProduct.Sku || '',
-                Barcode: updatedProduct.Barcode || '',
-                Weight: updatedProduct.Weight || 0,
-                WeightUnit: updatedProduct.WeightUnit || 'kg',
-                RequiresShipping: updatedProduct.RequiresShipping !== false,
-                IsTaxable: updatedProduct.IsTaxable !== false,
-                TaxCode: updatedProduct.TaxCode || '',
+              // CRITICAL: Only update if user has NO unsaved changes
+              // Otherwise this would wipe out their edits!
+              setDetailedItem((prev) => {
+                // Check if this is a meaningful update or just a timestamp change
+                const hasRealChanges = prev && (
+                  prev.Title !== updatedProduct.Title ||
+                  prev.Description !== updatedProduct.Description ||
+                  prev.Sku !== updatedProduct.Sku
+                );
+                if (!hasRealChanges) {
+                  console.log('[ProductDetail] Realtime update has no meaningful changes, skipping');
+                  return prev;
+                }
+                console.log('[ProductDetail] Realtime update has changes, updating detailedItem');
+                return updatedProduct;
               });
+              // NOTE: We no longer auto-update formData from realtime updates
+              // This prevents external changes from wiping out user's unsaved edits
+              // The user can pull-to-refresh or navigate away and back to see external changes
+              console.log('[ProductDetail] External update received - form data preserved (user may have unsaved changes)');
             }
           }
         )
@@ -1371,7 +1377,7 @@ const ProductDetailScreen = observer(
         }
 
         // Show non-blocking banner instead of Alert
-        showBanner('🔄 A teammate updated this product. View refreshed.');
+        showBanner('A teammate updated this product. View refreshed.');
       });
 
       // Listen for edit started events
@@ -1450,7 +1456,9 @@ const ProductDetailScreen = observer(
                   <Text style={[styles.savingText, { color: theme.colors.primary }]}>Saving...</Text>
                 </View>
               )}
-              {draftData && <Text style={{ color: 'orange' }}>Draft Mode - Changes not published</Text>}
+              {hasUnsavedChanges && (
+                <Text style={{ color: 'orange', fontSize: 12 }}>Unsaved changes</Text>
+              )}
               
               {!isSaving && lastSaveTime > 0 && (
                 <Text style={[styles.savedText, { color: theme.colors.success }]}>

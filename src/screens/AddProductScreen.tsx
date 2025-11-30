@@ -998,8 +998,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           
           if (shouldShowMatches) {
             const confidenceMessage = quickScanResult.overallConfidence === 'high' ? 'High confidence matches found!' :
-                                     quickScanResult.overallConfidence === 'medium' ? 'Good matches found!' :
-                                     'Possible matches found (low confidence)';
+           quickScanResult.overallConfidence === 'medium' ? 'Good matches found!' :
+             'Possible matches found (low confidence)';
             console.log(`[QUICK SCAN] ${confidenceMessage} - showing match sheet`);
             console.log(`[QUICK SCAN] Recommended action: ${quickScanResult.recommendedAction}, confidence: ${quickScanResult.overallConfidence}, matches: ${allMatches.length}`);
             
@@ -1014,7 +1014,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 description: match.description || '',
                 price: match.price || 0,
                 imageUrl: match.imageUrl || '',
-                matchPercentage: Math.round((match.combinedScore || 0) * 100),
+                // matchPercentage: Math.round((match.combinedScore || 0) * 100),
                 sourceUrl: match.productUrl || match.link || '',
               }))
             };
@@ -2055,6 +2055,15 @@ const BottomControls: React.FC<{
   );
 };
 
+// Helper to clean up match text
+const cleanMatchText = (text: string) => {
+  if (!text) return '';
+  return text
+    .replace(/^(scanned product|scanned item|product scan)[:\s-]*/i, '')
+    .replace(/\s*\((quick_scan|.*dataset|custom_.*)\)/gi, '')
+    .trim();
+};
+
 // Match Results Sheet Component
 const MatchResultsSheet: React.FC<{
   matchData: MatchResponse;
@@ -2099,12 +2108,15 @@ const MatchResultsSheet: React.FC<{
           ]}
         >
         <View style={styles.sheetHeader}>
+          <TouchableOpacity>
+            <Icon name="close" size={24} color="#FFF" />
+          </TouchableOpacity>
           <Text style={styles.sheetTitle}>
             {matchData.totalMatches} Match{matchData.totalMatches > 1 ? 'es' : ''} Found
           </Text>
           <TouchableOpacity onPress={onClose}>
             <Icon name="close" size={24} color="#333" />
-            </TouchableOpacity>
+          </TouchableOpacity>
         </View>
         
         <Text style={styles.selectionHint}>
@@ -2127,9 +2139,9 @@ const MatchResultsSheet: React.FC<{
               >
                 <Image source={{ uri: candidate.imageUrl }} style={styles.matchImage} />
                 <View style={styles.matchInfo}>
-                  <Text style={styles.matchTitle}>{candidate.title}</Text>
+                  <Text style={styles.matchTitle} numberOfLines={2}>{cleanMatchText(candidate.title) || 'Unknown Product'}</Text>
                   <Text style={styles.matchDescription} numberOfLines={2}>
-                    {candidate.description}
+                    {cleanMatchText(candidate.description)}
                   </Text>
                   <Text style={styles.matchPrice}>${candidate.price}</Text>
                   {candidate.sourceUrl && (
@@ -2169,6 +2181,7 @@ const MatchResultsSheet: React.FC<{
             </Text>
           </TouchableOpacity>
           
+          {/*
           <View style={styles.secondaryActions}>
             <TouchableOpacity style={styles.secondaryButton}>
               <Text style={styles.secondaryButtonText}>Show More</Text>
@@ -2177,6 +2190,7 @@ const MatchResultsSheet: React.FC<{
               <Text style={styles.secondaryButtonText}>Not My Product</Text>
             </TouchableOpacity>
           </View>
+          */}
         </View>
       </ScrollView>
     </Animated.View>
@@ -2894,7 +2908,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingTop: 20,
-    paddingBottom: 44,
+    paddingBottom: 60,
     marginBottom: 30,
     minHeight: SCREEN_HEIGHT * 0.9,
     maxHeight: SCREEN_HEIGHT * 0.9,
@@ -2942,6 +2956,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: 'transparent',
     position: 'relative',
+    minHeight: 120,
   },
   matchCardSelected: {
     borderColor: '#93C822',

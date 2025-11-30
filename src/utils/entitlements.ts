@@ -5,7 +5,16 @@ export type UserEntitlements = {
   maxConnections: number;
   aiScanLimit: number | null;
   isPaid: boolean;
+  // Trial and subscription status
+  inTrial: boolean;
+  trialEndsAt: string | null;
+  trialDaysLeft: number;
+  subscriptionStatus: 'active' | 'trialing' | 'expired' | 'none';
+  hasAccess: boolean; // True if user has valid subscription OR is in trial
 };
+
+// Free trial duration in days
+export const FREE_TRIAL_DAYS = 14;
 
 // Simple client-side mapping for connection limits per plan
 const CONNECTION_LIMITS: Record<string, number> = {
@@ -18,29 +27,139 @@ const CONNECTION_LIMITS: Record<string, number> = {
 
 export async function fetchUserEntitlements(): Promise<UserEntitlements> {
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { planName: null, maxConnections: CONNECTION_LIMITS.free, aiScanLimit: null, isPaid: false };
+  const defaultEntitlements: UserEntitlements = {
+    planName: null,
+    maxConnections: CONNECTION_LIMITS.free,
+    aiScanLimit: null,
+    isPaid: false,
+    inTrial: false,
+    trialEndsAt: null,
+    trialDaysLeft: 0,
+    subscriptionStatus: 'none',
+    hasAccess: false,
+  };
 
+  if (!user) return defaultEntitlements;
+
+  // Fetch user with subscription in one query
   const { data: usr } = await supabase
     .from('Users')
-    .select('SubscriptionTierId')
+    .select('Id, SubscriptionTierId, created_at')
     .eq('Id', user.id)
     .maybeSingle();
 
-  if (!usr?.SubscriptionTierId) {
-    return { planName: null, maxConnections: CONNECTION_LIMITS.free, aiScanLimit: null, isPaid: false };
-  }
+  if (!usr) return defaultEntitlements;
 
-  const { data: tier } = await supabase
-    .from('SubscriptionTiers')
-    .select('Name, AiScans')
-    .eq('Id', usr.SubscriptionTierId)
+  // Fetch subscription status
+  const { data: subscription } = await supabase
+    .from('Subscriptions')
+    .select('Status, CurrentPlan, CurrentPeriodEnd, TrialEndsAt, CanceledAt')
+    .eq('UserId', user.id)
     .maybeSingle();
 
-  const planName = tier?.Name ?? null;
-  const aiScanLimit = tier?.AiScans ?? null;
+  // Calculate trial status based on user creation date if no subscription
+  const userCreatedAt = usr.created_at ? new Date(usr.created_at) : new Date();
+  const trialEndDate = new Date(userCreatedAt);
+  trialEndDate.setDate(trialEndDate.getDate() + FREE_TRIAL_DAYS);
+  
+  const now = new Date();
+  const isInAutoTrial = now < trialEndDate && !subscription;
+  const autoTrialDaysLeft = isInAutoTrial 
+    ? Math.ceil((trialEndDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+    : 0;
+
+  // Check explicit trial from subscription
+  const explicitTrialEnd = subscription?.TrialEndsAt ? new Date(subscription.TrialEndsAt) : null;
+  const isInExplicitTrial = explicitTrialEnd && now < explicitTrialEnd;
+  const explicitTrialDaysLeft = isInExplicitTrial
+    ? Math.ceil((explicitTrialEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+    : 0;
+
+  // Combine trial status (auto trial for new users OR explicit trial from subscription)
+  const inTrial = isInAutoTrial || isInExplicitTrial;
+  const trialDaysLeft = isInExplicitTrial ? explicitTrialDaysLeft : autoTrialDaysLeft;
+  const trialEndsAt = isInExplicitTrial 
+    ? subscription?.TrialEndsAt 
+    : (isInAutoTrial ? trialEndDate.toISOString() : null);
+
+  // Determine subscription status
+  let subscriptionStatus: UserEntitlements['subscriptionStatus'] = 'none';
+  const isSubscriptionActive = subscription?.Status === 'active' && !subscription?.CanceledAt;
+  
+  if (isSubscriptionActive) {
+    subscriptionStatus = 'active';
+  } else if (inTrial) {
+    subscriptionStatus = 'trialing';
+  } else if (subscription && !isSubscriptionActive) {
+    subscriptionStatus = 'expired';
+  }
+
+  // User has access if they have active subscription OR are in trial
+  const hasAccess = isSubscriptionActive || inTrial;
+
+  // Fetch tier data if subscription exists
+  let planName: string | null = subscription?.CurrentPlan || null;
+  let aiScanLimit: number | null = null;
+  
+  if (planName || usr.SubscriptionTierId) {
+    const tierId = usr.SubscriptionTierId;
+    const tierQuery = planName 
+      ? supabase.from('SubscriptionTiers').select('Name, AiScans').eq('Name', planName).maybeSingle()
+      : tierId 
+        ? supabase.from('SubscriptionTiers').select('Name, AiScans').eq('Id', tierId).maybeSingle()
+        : null;
+    
+    if (tierQuery) {
+      const { data: tier } = await tierQuery;
+      planName = tier?.Name ?? planName;
+      aiScanLimit = tier?.AiScans ?? null;
+    }
+  }
+
   const maxConnections = planName && CONNECTION_LIMITS[planName] ? CONNECTION_LIMITS[planName] : CONNECTION_LIMITS.free;
-  const isPaid = planName !== null; // naive: any assigned tier considered paid
-  return { planName, maxConnections, aiScanLimit, isPaid };
+  const isPaid = isSubscriptionActive;
+
+  return { 
+    planName, 
+    maxConnections, 
+    aiScanLimit, 
+    isPaid,
+    inTrial,
+    trialEndsAt,
+    trialDaysLeft,
+    subscriptionStatus,
+    hasAccess,
+  };
+}
+
+/**
+ * Check if a specific feature is available based on entitlements
+ */
+export function isFeatureAvailable(
+  entitlements: UserEntitlements | null, 
+  feature: 'ai_scan' | 'multi_platform' | 'team_members' | 'advanced_sync'
+): boolean {
+  if (!entitlements) return false;
+  
+  // If user has no access (no subscription and trial expired), only basic features
+  if (!entitlements.hasAccess) {
+    return false;
+  }
+
+  // During trial or with active subscription, most features are available
+  switch (feature) {
+    case 'ai_scan':
+      // AI scan depends on limit, not just access
+      return entitlements.aiScanLimit === null || entitlements.aiScanLimit > 0;
+    case 'multi_platform':
+      return entitlements.maxConnections > 1;
+    case 'team_members':
+      return entitlements.isPaid; // Only paid plans get team features
+    case 'advanced_sync':
+      return entitlements.hasAccess;
+    default:
+      return entitlements.hasAccess;
+  }
 }
 
 

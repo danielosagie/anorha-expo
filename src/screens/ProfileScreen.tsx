@@ -652,27 +652,9 @@ const ProfileScreen = () => {
     }
   };
 
-  const handleOpenTeams = async () => {
-    let result = await WebBrowser.openBrowserAsync("https://app.anorha.app")
-    {/*
-    try {
-      const token = await getApiToken();
-      if (!token) throw new Error('Not authenticated');
-      const res = await fetch(`${SSSYNC_API_BASE_URL}/billing/portal`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-      });
-      if (!res.ok) throw new Error(`Portal error ${res.status}`);
-      const { url } = await res.json();
-      await WebBrowser.openBrowserAsync(url);
-    } catch (err) {
-      logError('billing_portal_error', 'Failed to open billing portal', { error: String(err) });
-      Alert.alert('Billing', 'Could not open billing portal.');
-    }
-    */}
+  const handleOpenTeams = () => {
+    // Navigate to the Team screen for managing team members and invites
+    (navigation as any).navigate('Team');
   };
 
   // --- NEW: Logic for Guided Shopify Flow Step 4 (Open Browser) ---

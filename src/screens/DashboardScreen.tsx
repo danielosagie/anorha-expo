@@ -8,6 +8,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LegendStateContext } from '../context/LegendStateContext';
 import { supabase } from '../../lib/supabase';
 import InventoryListCard from '../components/InventoryListCard';
+import ActivityEventCard from '../components/ActivityEventCard';
 import SearchBarWithScanner from '../components/SearchBarWithScanner';
 import { useOrg } from '../context/OrgContext';
 import { ensureSupabaseJwt } from '../../lib/supabase';
@@ -33,7 +34,11 @@ interface PoolPerformance {
   barLength: number; // 0-10 bars
 }
 
-const PoolPerformanceHeatmap: React.FC<{ pools: PoolPerformance[]; timeframe: 'Last 7d' | '30d' | '90d' | 'YTD' | '1Y' }> = ({ pools, timeframe }) => {
+const PoolPerformanceHeatmap: React.FC<{ 
+  pools: PoolPerformance[]; 
+  timeframe: 'Last 7d' | '30d' | '90d' | 'YTD' | '1Y';
+  onTimeframeChange: (tf: 'Last 7d' | '30d' | '90d' | 'YTD' | '1Y') => void;
+}> = ({ pools, timeframe, onTimeframeChange }) => {
   const maxBars = 10;
   
   // Show empty state if no data
@@ -45,16 +50,24 @@ const PoolPerformanceHeatmap: React.FC<{ pools: PoolPerformance[]; timeframe: 'L
         </View>
         {/* Timeframe Toggle */}
         <View style={styles.timeframeToggle}>
-          {['Last 7d', '30d', '90d', 'YTD', '1Y'].map((tf) => (
-            <Text 
-              key={tf} 
+          {(['Last 7d', '30d', '90d', 'YTD', '1Y'] as const).map((tf) => (
+            <TouchableOpacity
+              key={tf}
+              onPress={() => onTimeframeChange(tf)}
               style={[
-                styles.timeframeLabel,
-                tf === timeframe && styles.timeframeActive,
+                styles.timeframeBtn,
+                tf === timeframe && styles.timeframeBtnActive,
               ]}
             >
-              {tf}
-            </Text>
+              <Text 
+                style={[
+                  styles.timeframeLabel,
+                  tf === timeframe && styles.timeframeActive,
+                ]}
+              >
+                {tf}
+              </Text>
+            </TouchableOpacity>
           ))}
         </View>
       </View>
@@ -73,7 +86,8 @@ const PoolPerformanceHeatmap: React.FC<{ pools: PoolPerformance[]; timeframe: 'L
                 style={[
                   styles.poolBar,
                   {
-                    backgroundColor: idx < pool.barLength ? 'rgb(147, 200, 34)' : '#E5E7EB',
+                    backgroundColor: idx < pool.barLength ? 'rgb(147, 200, 34)' : '#F3F4F6',
+                    opacity: idx < pool.barLength ? 1 : 0.5,
                   },
                 ]}
               />
@@ -85,16 +99,24 @@ const PoolPerformanceHeatmap: React.FC<{ pools: PoolPerformance[]; timeframe: 'L
       
       {/* Timeframe Toggle */}
       <View style={styles.timeframeToggle}>
-        {['Last 7d', '30d', '90d', 'YTD', '1Y'].map((tf) => (
-          <Text 
-            key={tf} 
+        {(['Last 7d', '30d', '90d', 'YTD', '1Y'] as const).map((tf) => (
+          <TouchableOpacity
+            key={tf}
+            onPress={() => onTimeframeChange(tf)}
             style={[
-              styles.timeframeLabel,
-              tf === timeframe && styles.timeframeActive,
+              styles.timeframeBtn,
+              tf === timeframe && styles.timeframeBtnActive,
             ]}
           >
-            {tf}
-          </Text>
+            <Text 
+              style={[
+                styles.timeframeLabel,
+                tf === timeframe && styles.timeframeActive,
+              ]}
+            >
+              {tf}
+            </Text>
+          </TouchableOpacity>
         ))}
       </View>
     </View>
@@ -195,7 +217,7 @@ const DashboardScreen = () => {
       const token = await ensureSupabaseJwt();
       
       // Fetch platform locations for this org
-      const locationsRes = await fetch(`https://api.sssync.app/api/pools/locations/org/${currentOrg.id}`, {
+      const locationsRes = await fetch(`https://api.sssync.app/api/pools/locations/available?orgId=${currentOrg.id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       
@@ -556,15 +578,9 @@ const DashboardScreen = () => {
                           </View>
                         ) : insight ? (
                           <>
-                            <Text style={[
-                              styles.quickStatusHeadline,
-                              insight.severity === 'critical' && styles.insightCritical,
-                              insight.severity === 'warning' && styles.insightWarning,
-                              insight.severity === 'good' && styles.insightGood,
-                            ]}>
-                              {insight.title}
-                            </Text>
+                            
                             <Text style={styles.quickStatusSubtext}>
+                              {insight.title}- 
                               {insight.description}
                             </Text>
                             <View style={styles.insightActions}>
@@ -605,6 +621,7 @@ const DashboardScreen = () => {
                           <PoolPerformanceHeatmap 
                             pools={showPoolsMode ? poolPerformance : locationPerformance} 
                             timeframe={activeTimeframe}
+                            onTimeframeChange={setActiveTimeframe}
                           />
                         )}
                         <View style={styles.poolToggle}>
@@ -629,45 +646,47 @@ const DashboardScreen = () => {
         {/* Needs Attention */}
         <View style={styles.sectionContainer}>
             <Text style={styles.sectionTitle}>Needs Attention</Text>
-            
-            <View style={styles.tabsContainer}>
-                <TouchableOpacity 
-                    style={[styles.tab, activeTab === 'low_stock' && styles.activeTab]}
-                    onPress={() => setActiveTab('low_stock')}
-                >
-                    <Icon name="package-variant" size={16} color={activeTab === 'low_stock' ? '#1F2937' : '#6B7280'} style={{marginRight: 6}} />
-                    <Text style={[styles.tabText, activeTab === 'low_stock' && styles.activeTabText]}>Low Stock</Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                    style={[styles.tab, activeTab === 'pending_orders' && styles.activeTab]}
-                    onPress={() => setActiveTab('pending_orders')}
-                >
-                    <Icon name="cube-send" size={16} color={activeTab === 'pending_orders' ? '#1F2937' : '#6B7280'} style={{marginRight: 6}} />
-                    <Text style={[styles.tabText, activeTab === 'pending_orders' && styles.activeTabText]}>Pending Orders</Text>
-                </TouchableOpacity>
-            </View>
 
-            {activeTab === 'low_stock' && (
-                <View style={styles.listContainer}>
-                    {lowStockItems.map((item) => (
-                        <InventoryListCard
-                            key={item.id}
-                            id={item.id}
-                            title={item.title}
-                            sku={item.sku}
-                            price={item.price}
-                            totalQuantity={item.quantity}
-                            imageUrl={item.imageUrl}
-                            platformNames={item.platformNames}
-                            onPress={() => navigation.navigate('ProductDetail', { productId: item.id })}
-                        />
-                    ))}
-                    {lowStockItems.length === 0 && (
-                        <View style={styles.emptyState}>
-                            <Icon name="check-circle" size={32} color="rgb(208, 255, 170)" />
-                            <Text style={styles.emptyText}>Everything is stocked!</Text>
-                        </View>
-                    )}
+            <View style={[styles.todayCard, {padding: 0}]}>
+            
+              <View style={[styles.tabsContainer, {margin: 8 }]}>
+                  <TouchableOpacity 
+                      style={[styles.tab, activeTab === 'low_stock' && styles.activeTab]}
+                      onPress={() => setActiveTab('low_stock')}
+                  >
+                      <Icon name="package-variant" size={16} color={activeTab === 'low_stock' ? '#1F2937' : '#6B7280'} style={{marginRight: 6}} />
+                      <Text style={[styles.tabText, activeTab === 'low_stock' && styles.activeTabText]}>Low Stock</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                      style={[styles.tab, activeTab === 'pending_orders' && styles.activeTab]}
+                      onPress={() => setActiveTab('pending_orders')}
+                  >
+                      <Icon name="cube-send" size={16} color={activeTab === 'pending_orders' ? '#1F2937' : '#6B7280'} style={{marginRight: 6}} />
+                      <Text style={[styles.tabText, activeTab === 'pending_orders' && styles.activeTabText]}>Pending Orders</Text>
+                  </TouchableOpacity>
+              </View>
+
+              {activeTab === 'low_stock' && (
+                  <View style={styles.listContainer}>
+                      {lowStockItems.map((item) => (
+                          <InventoryListCard
+                              key={item.id}
+                              id={item.id}
+                              title={item.title}
+                              sku={item.sku}
+                              price={item.price}
+                              totalQuantity={item.quantity}
+                              imageUrl={item.imageUrl}
+                              platformNames={item.platformNames}
+                              onPress={() => navigation.navigate('ProductDetail', { productId: item.id })}
+                          />
+                      ))}
+                      {lowStockItems.length === 0 && (
+                          <View style={styles.emptyState}>
+                              <Icon name="check-circle" size={32} color="rgb(208, 255, 170)" />
+                              <Text style={styles.emptyText}>Everything is stocked!</Text>
+                          </View>
+                      )}
                 </View>
             )}
 
@@ -678,56 +697,50 @@ const DashboardScreen = () => {
                     </View>
                 </View>
             )}
+            </View>
         </View>
 
         {/* Recent Activity */}
         <View style={styles.sectionContainer}>
             <Text style={styles.sectionTitle}>Recent Activity</Text>
             
-            <View style={styles.activityList}>
-                {recentActivity.slice(0, 3).map((event, idx) => (
-                    <TouchableOpacity 
-                        key={event.Id || idx} 
-                        style={styles.activityItem}
-                        onPress={() => event.ProductVariantId && navigation.navigate('ProductDetail', { productId: event.ProductVariantId })}
-                    >
-                        {/* Avatar/Icon Placeholder */}
-                        <View style={styles.activityIconContainer}>
-                            <Image 
-                                source={{ uri: 'https://ui-avatars.com/api/?name=User&background=random' }} 
-                                style={styles.activityAvatar} 
-                            />
-                            <View style={styles.activityTypeIcon}>
-                                <Icon 
-                                    name={event.EventType?.includes('INVENTORY') ? 'package-variant' : 'file-document'} 
-                                    size={10} 
-                                    color="#fff" 
-                                />
-                            </View>
-                        </View>
+            <View style={[styles.todayCard, {padding: 0}]}>
+                {recentActivity.slice(0, 3).map((event, idx) => {
+                    // Look up image and details if ProductVariantId exists
+                    let imageUrl = undefined;
+                    let productTitle = event.Details?.productTitle || event.Message;
+                    let sku = event.Details?.sku;
+                    
+                    if (event.ProductVariantId) {
+                        const images = legendCtx?.productImages$?.get?.() || {};
+                        const variants = legendCtx?.productVariants$?.get?.() || {};
+                        
+                        const img = Object.values(images).find((i: any) => i.ProductVariantId === event.ProductVariantId);
+                        imageUrl = img?.ImageUrl;
+                        
+                        const variant = variants[event.ProductVariantId];
+                        if (variant) {
+                             if (!event.Details?.productTitle) productTitle = variant.Title;
+                             if (!sku) sku = variant.Sku;
+                        }
+                    }
 
-                        <View style={styles.activityContent}>
-                            <View style={styles.activityHeader}>
-                                <Text style={styles.activityTitle}>
-                                    {event.EventType === 'INVENTORY_UPDATE' ? 'Inventory Adjustment' : 'System Update'}
-                                </Text>
-                                <Text style={styles.activityTime}>{formatActivityTime(event.Timestamp)}</Text>
-                            </View>
-                            <Text style={styles.activitySubtitle} numberOfLines={1}>
-                                {event.Message}
-                            </Text>
-                            <Text style={styles.activitySku} numberOfLines={1}>
-                                {event.Details?.platform ? `via ${event.Details.platform}` : 'Manual update'}
-                            </Text>
-                            
-                            {event.Details?.reason && (
-                                <View style={styles.reasonBadge}>
-                                    <Text style={styles.reasonText}>{event.Details.reason}</Text>
-                                </View>
-                            )}
-                        </View>
-                    </TouchableOpacity>
-                ))}
+                    return (
+                        <ActivityEventCard 
+                            key={event.Id || idx} 
+                            id={event.Id || `activity-${idx}`}
+                            title={productTitle}
+                            displayTitle={event.EventType === 'INVENTORY_UPDATE' ? 'Inventory Adjustment' : 'System Update'}
+                            sku={sku}
+                            timestamp={event.Timestamp}
+                            imageUrl={imageUrl}
+                            reasonText={event.Details?.reason}
+                            eventType={event.EventType}
+                            ownerLabel={event.Details?.platform}
+                            onPress={() => event.ProductVariantId && navigation.navigate('ProductDetail', { productId: event.ProductVariantId })}
+                        />
+                    );
+                })}
             </View>
         </View>
 
@@ -753,13 +766,12 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 30,
+    paddingHorizontal: 20,
+    paddingTop: 24,
     marginTop: 60,
-    borderTopRightRadius: 36,
-    borderTopLeftRadius: 36,
-    padding: 8,
-    backgroundColor: '#FFF', 
+    borderTopRightRadius: 32,
+    borderTopLeftRadius: 32,
+    backgroundColor: '#FAFAFA', // Slightly off-white for better card contrast
   },
   loadingContainer: {
     justifyContent: 'center',
@@ -774,6 +786,9 @@ const styles = StyleSheet.create({
   // Today Card
   todayCardContainer: {
     marginBottom: 24,
+
+    backgroundColor: "transparent",
+    minWidth: "100%",
   },
   sectionTitle: {
     fontSize: 18,
@@ -795,14 +810,16 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 10,
     elevation: 2,
+
   },
   todayCardContent: {
     flexDirection: 'row',
     gap: 16,
+    justifyContent: 'space-between',
   },
   todayLeft: {
     flex: 1,
-    paddingRight: 8,
+    justifyContent: 'flex-start',
   },
   quickStatusTitle: {
     fontSize: 14,
@@ -898,22 +915,19 @@ const styles = StyleSheet.create({
   },
   todayRight: {
     width: 220,
-    alignItems: 'stretch',
-
+    justifyContent: 'space-between',
   },
   chartTitle: {
     fontSize: 12,
     fontWeight: '600',
     color: '#111',
     marginBottom: 8,
-    alignSelf: 'flex-start',
   },
   // Pool Performance Heatmap Styles
   poolHeatmapContainer: {
-    minHeight: '100%',
-    alignContent: 'space-between',
+    flex: 1,
+    justifyContent: 'flex-start',
     width: '100%',
-    marginBottom: 12,
   },
   poolRow: {
     flexDirection: 'row',
@@ -930,15 +944,15 @@ const styles = StyleSheet.create({
   poolBarsContainer: {
     flex: 1,
     flexDirection: 'row',
-    gap: 2,
+    gap: 4,
   },
   poolBar: {
     flex: 1,
     height: 8,
-    borderRadius: 1,
+    borderRadius: 4,
   },
   poolPercentage: {
-    fontSize: 11,
+    fontSize: 9,
     fontWeight: '600',
     color: '#111827',
     width: 30,
@@ -946,11 +960,22 @@ const styles = StyleSheet.create({
   },
   timeframeToggle: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginTop: 4,
+    justifyContent: 'space-between',
+    marginTop: 8,
+    gap: 6,
+  },
+  timeframeBtn: {
+    flex: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    borderRadius: 6,
+  },
+  timeframeBtnActive: {
+    backgroundColor: '#F3F4F6',
   },
   timeframeLabel: {
-    fontSize: 8,
+    fontSize: 10,
     color: '#9CA3AF',
     fontWeight: '500',
   },
@@ -1007,10 +1032,13 @@ const styles = StyleSheet.create({
   // Section Container
   sectionContainer: {
     marginBottom: 24,
+
+    gap: 8,
+
   },
   tabsContainer: {
     flexDirection: 'row',
-    backgroundColor: '#E5E7EB',
+    backgroundColor: '#F3F4F6',
     borderRadius: 12,
     padding: 4,
     marginBottom: 16,
@@ -1056,81 +1084,7 @@ const styles = StyleSheet.create({
 
   // Activity List
   activityList: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    elevation: 2,
-  },
-  activityItem: {
-    flexDirection: 'row',
-    marginBottom: 20,
-  },
-  activityIconContainer: {
-    position: 'relative',
-    marginRight: 12,
-  },
-  activityAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#E5E7EB',
-  },
-  activityTypeIcon: {
-    position: 'absolute',
-    bottom: 0,
-    right: -2,
-    backgroundColor: '#111',
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#fff',
-  },
-  activityContent: {
-    flex: 1,
-  },
-  activityHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 2,
-  },
-  activityTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#111',
-  },
-  activityTime: {
-    fontSize: 12,
-    color: '#111',
-    fontWeight: '600',
-  },
-  activitySubtitle: {
-    fontSize: 13,
-    color: '#4B5563',
-    marginBottom: 2,
-  },
-  activitySku: {
-    fontSize: 12,
-    color: '#9CA3AF',
-    marginBottom: 6,
-  },
-  reasonBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#F3F4F6',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  reasonText: {
-    fontSize: 11,
-    color: '#374151',
-    fontWeight: '500',
+    marginHorizontal: -8, // Compensate for card margin
   },
 });
 

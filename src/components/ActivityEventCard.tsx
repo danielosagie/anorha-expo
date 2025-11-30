@@ -9,7 +9,12 @@ import {
 } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import PlaceholderImage from './PlaceholderImage';
+import PlatformAvatar from './PlatformAvatar';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+
+/*
+  ActivityEventCard - Matches Figma design
+*/
 
 interface ActivityEventCardProps {
   id: string;
@@ -20,8 +25,8 @@ interface ActivityEventCardProps {
   timestamp: string;
   reasonText?: string; // e.g., "Reason: -5 Units (Damaged)"
   price?: number;
-  ownerLabel?: string; // "You", "Teammate", "Shopify", etc.
-  ownerImageUrl?: string; // Avatar for the owner
+  ownerLabel?: string; // e.g. "Shopify" (used for platform logic if ownerImageUrl not present)
+  ownerImageUrl?: string; // User avatar URL
   eventType?: string;
   onPress: () => void;
 }
@@ -42,49 +47,12 @@ const ActivityEventCard: React.FC<ActivityEventCardProps> = ({
 }) => {
   const theme = useTheme();
 
-  const getRandomColor = (seed: string | number): string => {
-    const colors = ['#4B0082', '#1E90FF', '#32CD32', '#FF8C00', '#8A2BE2', '#20B2AA'];
-    const numId = typeof seed === 'string'
-      ? seed.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)
-      : seed;
-    return colors[numId % colors.length];
-  };
-
-  const getEventIcon = (type?: string): string => {
-    if (type?.includes('ORDER')) return 'shopping-outline';
-    if (type?.includes('INVENTORY')) return 'package-variant';
-    if (type?.includes('PRICE')) return 'tag-outline';
-    if (type?.includes('LISTING')) return 'store-outline';
-    if (type?.includes('SYNC')) return 'sync';
-    return 'information-outline';
-  };
-
-  const getEventColor = (type?: string): string => {
-    if (type?.includes('ERROR') || type?.includes('FAILED')) return '#ef4444';
-    if (type?.includes('ORDER')) return '#10b981';
-    if (type?.includes('INVENTORY')) return '#3b82f6';
-    if (type?.includes('PRICE')) return '#f59e0b';
-    if (type?.includes('SYNC')) return '#8b5cf6';
-    return '#6b7280';
-  };
-
   const formatTime = (isoString: string): string => {
     try {
       const date = new Date(isoString);
-      const now = new Date();
-      const diffMs = now.getTime() - date.getTime();
-      const diffMins = Math.floor(diffMs / 60000);
-      const diffHours = Math.floor(diffMs / 3600000);
-      const diffDays = Math.floor(diffMs / 86400000);
-
-      if (diffMins < 1) return 'Just now';
-      if (diffMins < 60) return `${diffMins}m ago`;
-      if (diffHours < 24) return `${diffHours}h ago`;
-      if (diffDays < 7) return `${diffDays}d ago`;
-
-      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
     } catch {
-      return timestamp;
+      return '';
     }
   };
 
@@ -95,7 +63,7 @@ const ActivityEventCard: React.FC<ActivityEventCardProps> = ({
       activeOpacity={0.7}
     >
       <View style={[styles.card, { backgroundColor: theme.colors.surface }]}>
-        {/* Left side - Image + Event Icon Overlay */}
+        {/* Left side - Product Image */}
         <View style={styles.imageContainer}>
           {imageUrl ? (
             <Image
@@ -105,99 +73,73 @@ const ActivityEventCard: React.FC<ActivityEventCardProps> = ({
             />
           ) : (
             <PlaceholderImage
-              size={100}
-              borderRadius={8}
+              size={80}
+              borderRadius={12}
               type="gradient"
-              icon={getEventIcon(eventType)}
-              color={getEventColor(eventType)}
+              icon="package-variant"
+              color="#93C822"
             />
           )}
-          {/* Event icon overlay on bottom right of image */}
-          <View
-            style={[
-              styles.eventIconOverlay,
-              { backgroundColor: getEventColor(eventType) },
-            ]}
-          >
-            <Icon
-              name={getEventIcon(eventType)}
-              size={16}
-              color="white"
-            />
+          
+          {/* Overlay: Avatar OR Platform Icon (Top Right) */}
+          <View style={styles.overlayContainer}>
+            {ownerImageUrl ? (
+              <Image
+                source={{ uri: ownerImageUrl }}
+                style={styles.overlayImage}
+              />
+            ) : (
+              // Use PlatformAvatar if no user image, fallback to generic
+              <View style={styles.overlayPlatform}>
+                 <PlatformAvatar 
+                    platformType={ownerLabel || 'system'} 
+                    size="medium" 
+                 />
+              </View>
+            )}
           </View>
         </View>
 
         {/* Right side - Event Info */}
         <View style={styles.infoContainer}>
-          {/* Top row: Display Title + Owner Avatar + Time */}
-          <View style={styles.topRow}>
-            <View style={styles.titleTimeWrapper}>
-              <Text style={[styles.displayTitle, { color: theme.colors.text }]}>
-                {displayTitle}
-              </Text>
-              <Text style={[styles.timestamp, { color: theme.colors.textSecondary }]}>
-                {formatTime(timestamp)}
-              </Text>
-            </View>
-
-            {/* Owner Avatar - Top Right */}
-            <View style={styles.ownerAvatarWrapper}>
-              {ownerImageUrl ? (
-                <Image
-                  source={{ uri: ownerImageUrl }}
-                  style={styles.ownerAvatar}
-                />
-              ) : ownerLabel ? (
-                <View
-                  style={[
-                    styles.ownerAvatarPlaceholder,
-                    { backgroundColor: getRandomColor(ownerLabel) },
-                  ]}
-                >
-                  <Text style={styles.ownerAvatarText}>
-                    {ownerLabel.charAt(0).toUpperCase()}
-                  </Text>
-                </View>
-              ) : null}
+          {/* Header Row: Title + Time/Price */}
+          <View style={styles.headerRow}>
+            <Text style={[styles.displayTitle, { color: theme.colors.text }]}>
+              {displayTitle}
+            </Text>
+            <View style={styles.headerRight}>
+               {price !== undefined && price > 0 && (
+                 <Text style={[styles.headerPrice, { color: theme.colors.text }]}>
+                   ${price.toFixed(2)}
+                 </Text>
+               )}
+               {price !== undefined && price > 0 && <Text style={styles.headerDot}>•</Text>}
+               <Text style={[styles.headerTime, { color: theme.colors.text }]}>
+                 {formatTime(timestamp)}
+               </Text>
             </View>
           </View>
 
-          {/* Product Title and SKU */}
-          <Text
-            style={[styles.productTitle, { color: theme.colors.text }]}
-            numberOfLines={2}
-          >
+          {/* Product Title */}
+          <Text style={[styles.productTitle, { color: '#6B7280' }]} numberOfLines={1}>
             {title}
           </Text>
 
+          {/* SKU */}
           {sku && (
-            <Text style={[styles.sku, { color: theme.colors.textSecondary }]}>
+            <Text style={[styles.sku, { color: '#9CA3AF' }]}>
               SKU: {sku}
             </Text>
           )}
 
-          {/* Reason/Details Pill */}
+          {/* Reason Pill */}
           {reasonText && (
-            <View style={[styles.reasonPill, { backgroundColor: theme.colors.background }]}>
-              <Text style={[styles.reasonText, { color: theme.colors.textSecondary }]}>
+            <View style={styles.reasonPill}>
+              <Text style={styles.reasonText} numberOfLines={1}>
                 {reasonText}
               </Text>
             </View>
           )}
-
-          {/* Bottom row: Price + Owner Label */}
-          <View style={styles.bottomRow}>
-            {price !== undefined && price > 0 && (
-              <Text style={[styles.price, { color: theme.colors.textSecondary }]}>
-                ${price.toFixed(2)}
-              </Text>
-            )}
-            {ownerLabel && (
-              <Text style={[styles.ownerLabel, { color: theme.colors.textSecondary }]}>
-                {ownerLabel}
-              </Text>
-            )}
-          </View>
         </View>
       </View>
     </TouchableOpacity>
@@ -206,136 +148,118 @@ const ActivityEventCard: React.FC<ActivityEventCardProps> = ({
 
 const styles = StyleSheet.create({
   cardContainer: {
-    marginBottom: 12,
-    marginHorizontal: 8,
+    marginBottom: 16,
+    marginHorizontal: 0,
   },
   card: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    borderRadius: 12,
-    overflow: 'hidden',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.08,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 2,
-      },
-    }),
+    backgroundColor: '#fff',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
   },
   imageContainer: {
-    paddingLeft: 8,
-    width: '25%',
-    height: 110,
-    backgroundColor: '#F5F5F5',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: 12,
+    width: 80,
+    height: 100,
+    marginRight: 12,
     position: 'relative',
+    borderRadius: 8,
+    overflow: 'hidden',
   },
   productImage: {
-    borderRadius: 12,
-    width: '100%',
-    height: '100%',
+    width: 80,
+    height: 100,
+    borderRadius: 8,
+    backgroundColor: '#F5F5F5',
   },
-  eventIconOverlay: {
+  overlayContainer: {
     position: 'absolute',
-    bottom: 4,
+    top: 4,
     right: 4,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    zIndex: 10,
+  },
+  overlayImage: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 2.5,
+    borderColor: '#fff',
+  },
+  overlayPlatform: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#fff',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#FFF',
+    borderWidth: 2.5,
+    borderColor: '#fff',
+    overflow: 'hidden',
   },
   infoContainer: {
     flex: 1,
-    padding: 12,
     justifyContent: 'flex-start',
+    paddingRight: 0,
   },
-  topRow: {
+  headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     marginBottom: 4,
   },
-  titleTimeWrapper: {
+  displayTitle: {
+    fontSize: 15,
+    fontWeight: '600',
     flex: 1,
     marginRight: 8,
+    color: '#111',
   },
-  displayTitle: {
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  headerPrice: {
     fontSize: 14,
     fontWeight: '700',
-    marginBottom: 2,
+    color: '#111',
   },
-  timestamp: {
-    fontSize: 12,
-    fontWeight: '500',
+  headerDot: {
+    marginHorizontal: 4,
+    color: '#9CA3AF',
+    fontSize: 10,
   },
-  ownerAvatarWrapper: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  ownerAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: '#FFF',
-  },
-  ownerAvatarPlaceholder: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#FFF',
-  },
-  ownerAvatarText: {
-    color: '#FFF',
-    fontWeight: '700',
+  headerTime: {
     fontSize: 14,
+    fontWeight: '700',
+    color: '#111',
   },
   productTitle: {
     fontSize: 13,
-    fontWeight: '600',
-    marginBottom: 3,
+    marginBottom: 2,
+    color: '#6B7280',
+    lineHeight: 18,
   },
   sku: {
-    fontSize: 11,
+    fontSize: 12,
     marginBottom: 6,
+    color: '#9CA3AF',
   },
   reasonPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    marginBottom: 6,
     alignSelf: 'flex-start',
+    backgroundColor: '#FAFAFA',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
   },
   reasonText: {
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  bottomRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  price: {
     fontSize: 12,
-    fontWeight: '600',
-  },
-  ownerLabel: {
-    fontSize: 11,
     fontWeight: '500',
+    color: '#374151',
   },
 });
 
 export default ActivityEventCard;
-

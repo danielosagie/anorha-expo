@@ -83,7 +83,7 @@ const styles = StyleSheet.create({
         gap: 24,
     },
   container: {
-    backgroundColor: '#5c9c00',
+    backgroundColor: '#93C822',
     flex: 1,
     justifyContent: 'space-between',
     alignItems: 'center',

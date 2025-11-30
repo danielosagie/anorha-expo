@@ -30,22 +30,21 @@ import { PlatformConnection, PlatformLocation } from '../utils/SupaLegend';
 import { useProductVariantRealtime } from '../hooks/useProductVariantRealtime';
 import { useUser } from '@clerk/clerk-expo';
 
-// User-relevant event types - excludes webhook/system events
-// These are the events that matter to users: orders, inventory changes, product updates
+// User-relevant event types - ONLY show orders, inventory updates, and product updates/publishes
+// Filtered per user request: inventory updates, product updates/publish, and orders
 const USER_RELEVANT_EVENT_TYPES = [
+  'INVENTORY_ADJUSTMENT',
+  'INVENTORY_UPDATED',
+  'INVENTORY_SET',
+  'PRODUCT_PUBLISH_COMPLETED',
+  'PRODUCT_PUBLISH_STARTED',
+  'PRODUCT_PUBLISHED',
+  'PRODUCT_UPDATED',
+  'UPDATE_CANONICAL_DRAFT',
+  'PRODUCT_CREATED',
   'ORDER_CREATED',
   'ORDER_UPDATED',
   'ORDER_FULFILLED',
-  'ORDER_CANCELLED',
-  'INVENTORY_UPDATED',
-  'INVENTORY_ADJUSTMENT',
-  'INVENTORY_SET',
-  'PRODUCT_CREATED',
-  'PRODUCT_UPDATED',
-  'PRODUCT_DELETED',
-  'PRICE_CHANGE',
-  'LISTING_CREATED',
-  'LISTING_UPDATED',
 ];
 
 // System event types to explicitly exclude
@@ -79,19 +78,84 @@ interface ActivityEvent {
   status: string;
 }
 
-// Helper to check if an event is user-relevant (not a system event)
+interface ActivityListItem {
+  type: 'header' | 'event';
+  dateLabel?: string; // for headers
+  event?: ActivityEvent; // for event items
+  key: string;
+}
+
+// Helper to check if an event is user-relevant (ONLY orders, inventory, product updates/publishes)
 const isUserRelevantEvent = (eventType: string): boolean => {
-  // Check if it matches any user-relevant type
-  const isRelevant = USER_RELEVANT_EVENT_TYPES.some(type => 
-    eventType.toUpperCase().includes(type)
-  );
+  const et = (eventType || '').toUpperCase();
   
-  // Check if it's explicitly a system event
-  const isSystemEvent = SYSTEM_EVENT_TYPES.some(type => 
-    eventType.toUpperCase().includes(type)
-  );
+  const isInventory = et.includes('INVENTORY_ADJUSTMENT') || et.includes('INVENTORY_UPDATED') || et.includes('INVENTORY_SET');
+  const isProductPublish = et.includes('PRODUCT_PUBLISH') || et.includes('PRODUCT_PUBLISHED');
+  const isProductUpdate = et.includes('PRODUCT_UPDATED') || et.includes('UPDATE_CANONICAL_DRAFT') || et.includes('PRODUCT_CREATED');
+  const isOrder = et.includes('ORDER_CREATED') || et.includes('ORDER_UPDATED') || et.includes('ORDER_FULFILLED');
   
-  return isRelevant && !isSystemEvent;
+  return isInventory || isProductPublish || isProductUpdate || isOrder;
+};
+
+// Helper to get relative date label
+const getDateLabel = (isoTimestamp: string): string => {
+  try {
+    const eventDate = new Date(isoTimestamp);
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    
+    const eventDateStr = eventDate.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
+    const todayStr = today.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
+    const yesterdayStr = yesterday.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
+    
+    if (eventDateStr === todayStr) return 'Today';
+    if (eventDateStr === yesterdayStr) return 'Yesterday';
+    return eventDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  } catch {
+    return '';
+  }
+};
+
+// Helper to group events by date
+const getEventsByDate = (events: ActivityEvent[]): Map<string, ActivityEvent[]> => {
+  const grouped = new Map<string, ActivityEvent[]>();
+  
+  events.forEach(event => {
+    const dateLabel = getDateLabel(event.timestamp);
+    if (!grouped.has(dateLabel)) {
+      grouped.set(dateLabel, []);
+    }
+    grouped.get(dateLabel)?.push(event);
+  });
+  
+  return grouped;
+};
+
+// Helper to create activity list with date headers
+const createActivityListWithHeaders = (events: ActivityEvent[]): ActivityListItem[] => {
+  const grouped = getEventsByDate(events);
+  const listItems: ActivityListItem[] = [];
+  
+  grouped.forEach((groupEvents, dateLabel) => {
+    // Add date header
+    listItems.push({
+      type: 'header',
+      dateLabel,
+      key: `header-${dateLabel}`,
+    });
+    
+    // Add events for this date
+    groupEvents.forEach(event => {
+      listItems.push({
+        type: 'event',
+        event,
+        key: `event-${event.id}`,
+      });
+    });
+  });
+  
+  return listItems;
 };
 
 const HIGHLIGHT_ORANGE = '#FF9900';
@@ -131,11 +195,55 @@ const ActivityFeedScreen = observer(() => {
   const [platformLocations, setPlatformLocations] = useState<PlatformLocation[]>([]);
   const [isLoadingConnections, setIsLoadingConnections] = useState(true);
 
+  // User profile images cache - maps userId to Clerk image URL
+  const [userImageMap, setUserImageMap] = useState<Record<string, string>>({});
+
   // Legend observables for live product data (titles, SKUs, images)
   const productVariantsMap = useMemo(
     () => legendState?.productVariants$?.get?.() || {},
     [legendState?.productVariants$],
   );
+
+  // Fetch org members and build user image map
+  const fetchOrgMembersWithImages = useCallback(async () => {
+    if (!currentOrg?.id) return;
+    
+    try {
+      const token = await ensureSupabaseJwt();
+      
+      // Fetch org members from backend (should include Clerk data)
+      const membersRes = await fetch(`https://api.sssync.app/api/organizations/${currentOrg.id}/members`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      
+      if (membersRes.ok) {
+        const members = await membersRes.json();
+        const newUserImageMap: Record<string, string> = {};
+        
+        // Build map of userId -> image URL
+        (Array.isArray(members) ? members : members.members || []).forEach((member: any) => {
+          if (member.UserId && member.ClerkImageUrl) {
+            newUserImageMap[member.UserId] = member.ClerkImageUrl;
+          } else if (member.Id && member.ImageUrl) {
+            newUserImageMap[member.Id] = member.ImageUrl;
+          }
+        });
+        
+        // Add current user
+        if (clerkUser?.id && clerkUser?.imageUrl) {
+          newUserImageMap[clerkUser.id] = clerkUser.imageUrl;
+        }
+        
+        setUserImageMap(newUserImageMap);
+      }
+    } catch (e) {
+      console.warn('[ActivityFeed] Failed to fetch org members:', e);
+      // Fallback: at least have current user
+      if (clerkUser?.id && clerkUser?.imageUrl) {
+        setUserImageMap({ [clerkUser.id]: clerkUser.imageUrl });
+      }
+    }
+  }, [currentOrg?.id, clerkUser?.id, clerkUser?.imageUrl]);
 
   // Fetch activity feed from backend
   const fetchActivityFeed = useCallback(async (cursor?: string, append = false) => {
@@ -323,11 +431,14 @@ const ActivityFeedScreen = observer(() => {
   useEffect(() => {
     const loadInitial = async () => {
       setLoading(true);
-      await fetchActivityFeed();
+      await Promise.all([
+        fetchActivityFeed(),
+        fetchOrgMembersWithImages(),
+      ]);
       setLoading(false);
     };
     loadInitial();
-  }, [fetchActivityFeed]);
+  }, [fetchActivityFeed, fetchOrgMembersWithImages]);
 
   // TODO: Add realtime subscription when backend is ready
   // For now, we'll rely on pull-to-refresh for updates
@@ -593,26 +704,30 @@ const ActivityFeedScreen = observer(() => {
 
     const ownerLabel = getOwnerLabel(item);
 
-    // Determine if this event was by the current user
-    const isCurrentUser = item.userId && clerkUser?.id && item.userId === clerkUser.id;
-    
-    // Get the profile image URL - use Clerk user image if it's the current user's event
-    const ownerImageUrl = isCurrentUser 
-      ? currentUserImageUrl 
+    // Get the profile image URL from our user image map (works for any org member)
+    const ownerImageUrl = item.userId 
+      ? userImageMap[item.userId] 
       : item.details?.userImageUrl || item.details?.actorImageUrl || undefined;
 
     // Format display title based on event type
     const displayTitle = (() => {
-      if (item.eventType?.includes('INVENTORY')) return 'Inventory Adjustment';
-      if (item.eventType?.includes('ORDER')) {
-        const orderNumber = item.details?.orderNumber || item.details?.order_id || item.details?.name;
+      const et = (item.eventType || '').toUpperCase();
+      if (et.includes('INVENTORY_ADJUSTMENT')) return 'Inventory Adjustment';
+      if (et.includes('INVENTORY')) return 'Inventory Update';
+      if (et.includes('PRODUCT_PUBLISH_COMPLETED')) return 'Product Published';
+      if (et.includes('PRODUCT_PUBLISH')) return 'Publishing Product';
+      if (et.includes('UPDATE_CANONICAL_DRAFT')) return 'Product Updated';
+      if (et.includes('PRODUCT_UPDATED')) return 'Product Updated';
+      if (et.includes('PRODUCT_CREATED')) return 'Product Created';
+      if (et.includes('ORDER_CREATED')) {
+        const orderNumber = item.details?.orderNumber || item.details?.order_id || item.details?.name || item.details?.Order;
+        return orderNumber ? `Order #${orderNumber}` : 'Order Created';
+      }
+      if (et.includes('ORDER')) {
+        const orderNumber = item.details?.orderNumber || item.details?.order_id || item.details?.name || item.details?.Order;
         return orderNumber ? `Order #${orderNumber}` : 'Order';
       }
-      if (item.eventType?.includes('PRODUCT_CREATED')) return 'Product Added';
-      if (item.eventType?.includes('PRODUCT_UPDATED')) return 'Product Updated';
-      if (item.eventType?.includes('PRODUCT_DELETED')) return 'Product Removed';
-      if (item.eventType?.includes('PRICE_CHANGE')) return 'Price Changed';
-      return item.message || item.eventType;
+      return 'Activity';
     })();
 
     // Get product image from variant (ImageUrls array) or details
@@ -635,7 +750,7 @@ const ActivityFeedScreen = observer(() => {
           id={item.id}
           title={variant?.Title || item.details?.title || item.variantTitle || item.message || 'Activity'}
           displayTitle={displayTitle}
-          sku={variant?.Sku || item.details?.sku || item.details?.SKU}
+          sku={variant?.Sku || item.details?.sku || item.details?.SKU || undefined}
           imageUrl={productImageUrl}
           timestamp={item.timestamp}
           reasonText={reasonText ?? undefined}
@@ -739,9 +854,19 @@ const ActivityFeedScreen = observer(() => {
           </View>
 
           <FlatList
-            data={filteredEvents}
-            renderItem={renderEvent}
-            keyExtractor={(item) => item.id}
+            data={createActivityListWithHeaders(filteredEvents)}
+            renderItem={({ item }: { item: ActivityListItem }) => 
+              item.type === 'header' ? (
+                <View style={styles.dateHeader}>
+                  <Text style={[styles.dateHeaderText, { color: theme.colors.textSecondary }]}>
+                    {item.dateLabel}
+                  </Text>
+                </View>
+              ) : (
+                renderEvent({ item: item.event! })
+              )
+            }
+            keyExtractor={(item) => item.key}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
             }
@@ -911,6 +1036,18 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingBottom: 16,
+  },
+  dateHeader: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  dateHeaderText: {
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   eventItem: {
     flexDirection: 'row',

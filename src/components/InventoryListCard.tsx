@@ -10,25 +10,10 @@ import {
 import { useTheme } from '../context/ThemeContext';
 import PlaceholderImage from './PlaceholderImage';
 import PlatformAvatar from './PlatformAvatar';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 /*
-  Why are platform avatars not showing anymore after refreshing?
-  It's likely that after refresh (hot reload/fast refresh/expo refresh), the SVG imports
-  such as ShopifySvg, AmazonSvg, etc., are being invalidated or not re-imported correctly.
-
-  PlatformAvatar uses dynamic .svg imports and selects the component
-  at runtime. If there is a metro bundler cache or hot reload issue, those
-  icon component references may be missing or stale.
-
-  - Ensure the SVG files are correctly imported.
-  - Ensure any remote data source for `platformNames` is not returning unexpected values.
-  - If you see the `store` icon fallback, it means `getPlatformIcon` is returning null.
-  - A common cause is inconsistent or unexpected string casing/whitespace or platformName value in your platformNames array.
-
-  QUICK DIAGNOSTIC:
-  - Try console.log(platformNames) right here.
-  - Confirm `platformNames` is non-empty and strings match those expected by PlatformAvatar.
-  - Try lowercasing your platform strings explicitly before passing to PlatformAvatar for safety.
+  InventoryListCard - Matches "Needs Attention" design
 */
 
 interface InventoryListCardProps {
@@ -67,6 +52,9 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
     typeof name === 'string' ? name.trim().toLowerCase() : ''
   );
 
+  const isLowStock = (totalQuantity ?? 0) <= 5;
+  const isOutOfStock = (totalQuantity ?? 0) === 0;
+
   return (
     <TouchableOpacity
       style={styles.cardContainer}
@@ -84,7 +72,8 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
             />
           ) : (
             <PlaceholderImage
-              size={100}
+              size={90}
+              height={120}
               borderRadius={8}
               type="gradient"
               icon="cube"
@@ -95,26 +84,27 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
 
         {/* Right side - Product Info */}
         <View style={styles.infoContainer}>
-          <Text style={[styles.title, { color: theme.colors.text }]} numberOfLines={2}>
-            {title}
-          </Text>
-
-          <Text style={[styles.price, { color: theme.colors.textSecondary }]}>
-            ${price?.toFixed(2) ?? '0.00'}
-          </Text>
-
-          {sku && (
-            <Text style={[styles.sku, { color: theme.colors.textSecondary }]}>
-              SKU: {sku}
+          <View>
+            <Text style={[styles.title, { color: theme.colors.text }]} numberOfLines={2}>
+              {title}
             </Text>
-          )}
+
+            <Text style={[styles.price, { color: theme.colors.textSecondary }]}>
+              ${price?.toFixed(2) ?? '0.00'}
+            </Text>
+
+            {sku && (
+              <Text style={[styles.sku, { color: theme.colors.textSecondary }]}>
+                SKU: {sku}
+              </Text>
+            )}
+          </View>
 
           {/* Stock and Platform Avatars */}
           <View style={styles.bottomRow}>
-
             {/* Platform Avatars */}
             <View style={styles.platformAvatars}>
-              <View style={{ marginLeft: 6, flexDirection: 'row', alignItems: 'center' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 {normalizedPlatformNames.map((platformName: string, index: number) => (
                   <View
                     key={`${platformName}-${index}`}
@@ -129,19 +119,28 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
               </View>
             </View>
 
+            {/* Stock Badge */}
             <View
               style={[
                 styles.stockBadge,
-                { backgroundColor: '#FFF' },
+                { 
+                    borderColor: isOutOfStock ? '#9CA3AF' : isLowStock ? '#EF4444' : '#E5E7EB',
+                },
               ]}
             >
+              {isLowStock && !isOutOfStock && (
+                 <Icon name="alert-outline" size={14} color="#EF4444" style={{marginRight: 4}} />
+              )}
+              {isOutOfStock && (
+                 <Icon name="refresh" size={14} color="#6B7280" style={{marginRight: 4}} />
+              )}
               <Text
                 style={[
                   styles.stockText,
-                  { color: "#000" },
+                  { color: isOutOfStock ? '#6B7280' : isLowStock ? '#EF4444' : '#374151' },
                 ]}
               >
-                {totalQuantity ?? 0} in stock
+                {totalQuantity ?? 0} Units Left
               </Text>
             </View>
           </View>
@@ -155,32 +154,29 @@ const styles = StyleSheet.create({
   cardContainer: {
     marginBottom: 12,
     marginHorizontal: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+    borderRadius: 16,
   },
   card: {
     flexDirection: 'row',
-    alignItems: "center",
-    borderRadius: 12,
+    borderRadius: 16,
     overflow: 'hidden',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.08,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 2,
-      },
-    }),
+    padding: 12,
+    backgroundColor: '#fff',
   },
   imageContainer: {
-    paddingLeft: 8,
     width: "25%",
-    height: 110,
+    height: 120,
     backgroundColor: '#F5F5F5',
     justifyContent: 'center',
     borderRadius: 12,
     alignItems: 'center',
+    marginRight: 12,
+    
   },
   productImage: {
     borderRadius: 12,
@@ -189,35 +185,40 @@ const styles = StyleSheet.create({
   },
   infoContainer: {
     flex: 1,
-    padding: 12,
     justifyContent: 'space-between',
   },
   title: {
     fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 4,
+    fontWeight: '700',
+    marginBottom: 2,
+    lineHeight: 20,
   },
   price: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '500',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   sku: {
-    fontSize: 12,
+    fontSize: 11,
     marginBottom: 8,
   },
   bottomRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginTop: 4,
   },
   stockBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FAFAFA',
   },
   stockText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
   },
   platformAvatars: {
@@ -225,7 +226,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   avatarWrapper: {
-    marginLeft: -8,
+    marginLeft: -4,
+    marginRight: -2,
+
   },
 });
 

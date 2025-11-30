@@ -954,6 +954,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
             <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-end' }}>
               <View style={{ flex: 1, flexDirection: "row", gap: 8, alignItems: "flex-end" }}>
                 <View style={{ flex: 1 }}>
+                
                   <Field
                     label={hasVariantsWithOptions ? "Base Price (optional with variants)" : "Price"}
                     required={!hasVariantsWithOptions}
@@ -965,11 +966,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                     error={priceError}
                     keyboardType={"decimal-pad"}
                   />
-                  {hasVariantsWithOptions && !allVariantsHavePrice && (
-                    <Text style={{ color: '#F59E0B', fontSize: 11, marginTop: 4 }}>
-                      ⚠️ Set prices on variants below, or enter a base price here
-                    </Text>
-                  )}
+                  
                 </View>
                 <View style={{ width: "25%", marginBottom: 12 }}>
                   <Dropdown
@@ -2134,13 +2131,13 @@ function ChipsField({ label, valueArray, onChangeArray, onInfo, onRegenerate, re
 function Dropdown({ label, options, value, onChange }: { label: string; options: string[]; value: string; onChange: (v: string) => void }) {
   const [open, setOpen] = useState(false);
   return (
-    <View>
+    <View style={{ position: 'relative', zIndex: open ? 1000 : 1 }}>
       <TouchableOpacity style={styles.dropdown} onPress={() => setOpen(o => !o)}>
         <Text style={{ color: '#000' }}>{value || label}</Text>
         <Icon name="chevron-down" size={18} color="#000" />
       </TouchableOpacity>
       {open && (
-        <View style={styles.dropdownMenu}>
+        <View style={[styles.dropdownMenu, { position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 1000, marginTop: 0 }]}>
           {options.map(opt => (
             <TouchableOpacity key={opt} style={styles.dropdownItem} onPress={() => { onChange(opt); setOpen(false); }}>
               <Text style={{ color: '#000' }}>{opt}</Text>
@@ -2173,8 +2170,8 @@ const styles = StyleSheet.create({
   tagChip: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
   optionChip: { backgroundColor: '#E5E5E5', borderRadius: 6, paddingVertical: 6, paddingHorizontal: 10 },
   dropdown: { backgroundColor: 'white', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  dropdownMenu: { backgroundColor: 'white', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, marginTop: 6 },
-  dropdownItem: { padding: 10 },
+  dropdownMenu: { backgroundColor: 'white', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, marginTop: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 3 },
+  dropdownItem: { padding: 10, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
   scanBtn: { backgroundColor: '#93C822', width: 38, height: 38, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: -18 },
   sectionTitle: { color: '#000', fontWeight: '700' },
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14 },

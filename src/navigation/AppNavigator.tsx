@@ -48,6 +48,7 @@ import VerifyCodeScreen from '../screens/VerifyCodeScreen';
 import MarketplaceChatScreen from '../screens/MarketplaceChatScreen';
 import ActivityFeedScreen from '../screens/ActivityFeedScreen';
 import PublishConfirmationScreen from '../screens/PublishConfirmationScreen';
+import PartnerAcceptScreen from '../screens/PartnerAcceptScreen';
 import { isFeatureEnabled } from '../config/features';
 import { SessionContext } from '../context/SessionContext';
 
@@ -234,6 +235,10 @@ export type AppStackParamList = {
 
   };
   ActivityFeed: undefined;
+  PartnerAccept: {
+    inviteCode?: string;
+    inviteId?: string;
+  };
 };
 
 type RootStackParamList = {
@@ -393,6 +398,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="GenerateDetailsScreen" component={GenerateDetailsScreen} />
     <AppStackNav.Screen name="PublishConfirmation" component={PublishConfirmationScreen} />
     <AppStackNav.Screen name="OnboardConnectionScreen" component={OnboardConnectionScreen} />
+    <AppStackNav.Screen name="PartnerAccept" component={PartnerAcceptScreen} />
   </AppStackNav.Navigator>
 );
 
