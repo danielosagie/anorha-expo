@@ -153,6 +153,8 @@ const ProductDetailScreen = observer(
     // Track if initial load has completed to prevent overwrites
     const hasLoadedInitialData = useRef(false);
     const [isDangerZoneVisible, setIsDangerZoneVisible] = useState(false);
+    // Track when we just saved to prevent useEffect from wiping state
+    const justSavedRef = useRef(false);
     
     // Auto-save state (no more manual editing mode)
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -291,7 +293,7 @@ const ProductDetailScreen = observer(
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
-        console.log('Loading platform data for product:', detailedItem.Id);
+        console.log('[ProductDetail] Loading platform data for variant:', detailedItem.Id, 'ProductId:', detailedItem.ProductId);
 
         // Load all platform connections for the user
         const { data: connectionsData, error: connectionsError } = await supabase
@@ -306,28 +308,39 @@ const ProductDetailScreen = observer(
         }
 
         const platformConnections = connectionsData as PlatformConnection[];
-        console.log('Loaded platform connections:', platformConnections.length);
-
-        // NOTE: Location syncing is handled elsewhere (e.g., when connections are created)
-        // to avoid excessive API calls. We rely on cached location data in PlatformSpecificData.
+        console.log('[ProductDetail] Loaded platform connections:', platformConnections.length);
 
         setConnections(platformConnections);
 
-        // Load inventory levels for this product
+        // ⚡ CRITICAL FIX: Load ALL variants for this product to aggregate inventory
+        // If viewing a base variant, inventory is stored against option variants
+        const { data: allProductVariants, error: variantsError } = await supabase
+          .from('ProductVariants')
+          .select('Id, Sku, VariantType')
+          .eq('ProductId', detailedItem.ProductId);
+
+        if (variantsError) {
+          console.error('[ProductDetail] Error loading product variants:', variantsError);
+        }
+
+        const allVariantIds = allProductVariants?.map(v => v.Id) || [detailedItem.Id];
+        console.log('[ProductDetail] Found', allVariantIds.length, 'variants for product');
+
+        // Load inventory levels for ALL variants of this product (base + options)
         const { data: inventoryData, error: inventoryError } = await supabase
           .from('InventoryLevels')
           .select('*')
-          .eq('ProductVariantId', detailedItem.Id);
+          .in('ProductVariantId', allVariantIds);
 
         if (inventoryError) {
           console.error('Error loading inventory levels:', inventoryError);
         } else {
-          console.log('Loaded inventory levels:', inventoryData?.length || 0);
+          console.log('[ProductDetail] Loaded inventory levels:', inventoryData?.length || 0, 'for', allVariantIds.length, 'variants');
         }
 
-        // ⚡ OPTIMIZED: Load locations from PlatformLocations table instead of PlatformSpecificData
+        // ⚡ Load locations from PlatformLocations table - build a lookup map for fast access
         const connectionIds = platformConnections.map(c => c.Id);
-        const locations: Array<{ id: string; name: string; connectionId: string; connectionName: string }> = [];
+        const locationNameMap = new Map<string, string>(); // locationId -> name
         
         if (connectionIds.length > 0) {
           const { data: platformLocs, error: locError } = await supabase
@@ -339,53 +352,62 @@ const ProductDetailScreen = observer(
             console.error('Error loading platform locations:', locError);
           } else {
             platformLocs?.forEach(loc => {
-              const conn = platformConnections.find(c => c.Id === loc.PlatformConnectionId);
-              if (conn) {
-                locations.push({
-                  id: loc.PlatformLocationId,
-                  name: loc.Name || 'Unnamed Location',
-                  connectionId: loc.PlatformConnectionId,
-                  connectionName: conn.DisplayName || conn.PlatformType
-                });
-              }
+              // Store by both full ID and just the location ID for flexible lookup
+              locationNameMap.set(loc.PlatformLocationId, loc.Name || 'Unnamed Location');
+              locationNameMap.set(`${loc.PlatformConnectionId}-${loc.PlatformLocationId}`, loc.Name || 'Unnamed Location');
             });
-            console.log('[ProductDetail] ✅ Loaded', locations.length, 'locations from DB in <1s');
+            console.log('[ProductDetail] ✅ Loaded', platformLocs?.length || 0, 'location names from DB');
           }
         }
 
-        console.log('Built locations:', locations.length);
-
-        // Load platform mappings to get the correct platform data
+        // Load platform mappings for ALL variants
         const { data: mappingsData, error: mappingsError } = await supabase
           .from('PlatformProductMappings')
           .select('*')
-          .eq('ProductVariantId', detailedItem.Id);
+          .in('ProductVariantId', allVariantIds);
 
         if (mappingsError) {
           console.error('Error loading platform mappings:', mappingsError);
         } else {
-          console.log('Loaded platform mappings:', mappingsData?.length || 0);
+          console.log('[ProductDetail] Loaded platform mappings:', mappingsData?.length || 0);
         }
 
         setMappings(mappingsData as PlatformProductMapping[] || []);
 
-        // Group inventory by platform with proper names
+        // Group inventory by platform with proper names from DB
         const grouped: GroupedInventoryLocations = {};
         
+        // Helper to get location name - use DB lookup first
+        const getLocationNameFromDB = (locationId: string, connectionId: string): string => {
+          // Try full key first
+          const fullKey = `${connectionId}-${locationId}`;
+          if (locationNameMap.has(fullKey)) {
+            return locationNameMap.get(fullKey)!;
+          }
+          // Try just location ID
+          if (locationNameMap.has(locationId)) {
+            return locationNameMap.get(locationId)!;
+          }
+          // Fallback to formatted ID
+          if (locationId?.includes('gid://shopify/Location/')) {
+            return `Location ${locationId.split('/').pop()}`;
+          }
+          return locationId || 'Main Location';
+        };
+
         // If we have inventory data, group it
         if (inventoryData && inventoryData.length > 0) {
           inventoryData.forEach((level: InventoryLevel) => {
             const connection = platformConnections.find(conn => conn.Id === level.PlatformConnectionId);
             if (!connection) {
-              console.warn('No connection found for inventory level:', level.PlatformConnectionId);
+              console.warn('[ProductDetail] No connection found for inventory level:', level.PlatformConnectionId);
               return;
             }
 
-            const mapping = mappingsData?.find(m => m.PlatformConnectionId === level.PlatformConnectionId);
-            
             // Use DisplayName first, then fall back to a constructed name
             const platformName = connection.DisplayName || `${connection.PlatformType} Account`;
-            const locationName = getLocationName(level, connection, mapping);
+            // Use DB lookup for location name
+            const locationName = getLocationNameFromDB(level.PlatformLocationId || 'default', level.PlatformConnectionId);
 
             if (!grouped[platformName]) {
               grouped[platformName] = {
@@ -396,15 +418,26 @@ const ProductDetailScreen = observer(
               };
             }
 
-            grouped[platformName].locations.push({
-              id: level.Id || `${level.PlatformConnectionId}-${level.PlatformLocationId}`,
-              locationId: level.PlatformLocationId || 'default',
-              locationName,
-              platformConnectionId: level.PlatformConnectionId,
-              platformName,
-              platformType: connection.PlatformType,
-              quantity: level.Quantity || 0
-            });
+            // Check if this location already exists (aggregate quantities)
+            const existingLocation = grouped[platformName].locations.find(
+              loc => loc.locationId === level.PlatformLocationId
+            );
+
+            if (existingLocation) {
+              // Aggregate quantity for same location (from different option variants)
+              existingLocation.quantity += (level.Quantity || 0);
+              console.log(`[ProductDetail] Aggregated inventory for ${locationName}: now ${existingLocation.quantity}`);
+            } else {
+              grouped[platformName].locations.push({
+                id: level.Id || `${level.PlatformConnectionId}-${level.PlatformLocationId}`,
+                locationId: level.PlatformLocationId || 'default',
+                locationName,
+                platformConnectionId: level.PlatformConnectionId,
+                platformName,
+                platformType: connection.PlatformType,
+                quantity: level.Quantity || 0
+              });
+            }
           });
         } else {
           // If no inventory data, still show connected platforms with zero inventory
@@ -430,7 +463,10 @@ const ProductDetailScreen = observer(
           });
         }
 
-        console.log('Grouped inventory:', Object.keys(grouped).length, 'platforms');
+        console.log('[ProductDetail] Grouped inventory:', Object.keys(grouped).length, 'platforms');
+        Object.entries(grouped).forEach(([platform, data]) => {
+          console.log(`[ProductDetail]   ${platform}: ${data.locations.length} locations, total qty: ${data.locations.reduce((sum, l) => sum + l.quantity, 0)}`);
+        });
         setGroupedInventory(grouped);
 
         // Store mappings for hydration useEffect
@@ -439,7 +475,7 @@ const ProductDetailScreen = observer(
       } catch (error) {
         console.error('Error loading platform data:', error);
       }
-    }, [detailedItem, getLocationName]);
+    }, [detailedItem]);
 
     // Load additional product details (images, tags, variants, etc.) - consolidated like PastScansScreen
     const loadProductDetails = useCallback(async () => {
@@ -707,6 +743,9 @@ const ProductDetailScreen = observer(
         }
 
         // Update local state
+        // CRITICAL: Set justSavedRef BEFORE state updates to prevent useEffect from wiping displayedPlatforms
+        justSavedRef.current = true;
+        
         const updatedItem = { ...detailedItem, ...updateData };
         setDetailedItem(updatedItem);
         setHasUnsavedChanges(false);
@@ -716,7 +755,7 @@ const ProductDetailScreen = observer(
         // This fixes the "Changes not published" message persisting
         setDraftData(null);
 
-        console.log('Product auto-saved successfully (draft cleared)');
+        console.log('Product auto-saved successfully (draft cleared, justSavedRef set)');
 
       } catch (error) {
         console.error('Auto-save failed:', error);
@@ -1095,6 +1134,14 @@ const ProductDetailScreen = observer(
     useEffect(() => {
       if (!detailedItem) return;
 
+      // CRITICAL: Skip this effect if we just saved - prevents wiping displayedPlatforms
+      // The save already updated displayedPlatforms correctly, no need to re-derive from metadata
+      if (justSavedRef.current) {
+        console.log('[ProductDetail] Skipping useEffect - just saved, preserving displayedPlatforms');
+        justSavedRef.current = false; // Reset for next time
+        return;
+      }
+
       // Populate formData
       setFormData(prev => ({
         ...prev,
@@ -1158,14 +1205,48 @@ const ProductDetailScreen = observer(
       // Hydrate variants with inventory data
       const hydratedVariants = hydrateInventoryFromDB(variantPricing || [], inventoryLevels);
 
-      setDisplayedPlatforms({ 
-        shopify: { 
+      // FIX: Populate ALL platforms from metadata.platformSpecificData, not just shopify
+      // This ensures all platform data is displayed, not wiped out
+      const platformSpecificData = metadata.platformSpecificData || {};
+      const allPlatforms: Record<string, any> = {};
+      
+      // Build platform data for each platform in platformSpecificData
+      const platformKeys = Object.keys(platformSpecificData);
+      if (platformKeys.length > 0) {
+        platformKeys.forEach(platformKey => {
+          const platformData = platformSpecificData[platformKey] || {};
+          allPlatforms[platformKey] = {
+            ...canonicalBase,
+            ...platformData,
+            options: platformData.options || (detailedItem.Options && typeof detailedItem.Options === 'object' 
+              ? Object.entries(detailedItem.Options).map(([name, values]) => ({ name, values: Array.isArray(values) ? values : [values] })) 
+              : []),
+            variants: platformData.variants || (hydratedVariants && hydratedVariants.length > 0 ? hydratedVariants : [])
+          };
+        });
+        console.log('[ProductDetail] Built platforms from metadata:', platformKeys);
+      } else {
+        // Fallback: If no platformSpecificData, use shopify as default
+        allPlatforms.shopify = { 
           ...canonicalBase, 
-          options: detailedItem.Options && typeof detailedItem.Options === 'object' ? Object.entries(detailedItem.Options).map(([name, values]) => ({ name, values: Array.isArray(values) ? values : [values] })) : [],
+          options: detailedItem.Options && typeof detailedItem.Options === 'object' 
+            ? Object.entries(detailedItem.Options).map(([name, values]) => ({ name, values: Array.isArray(values) ? values : [values] })) 
+            : [],
           variants: hydratedVariants && hydratedVariants.length > 0 ? hydratedVariants : []
-        } 
+        };
+        console.log('[ProductDetail] No platformSpecificData, using shopify as default');
+      }
+
+      // FIX: Merge with existing displayedPlatforms to preserve user edits
+      setDisplayedPlatforms(prev => {
+        // If user has made changes (hasUnsavedChanges), preserve their edits
+        if (hasUnsavedChanges && Object.keys(prev).length > 0) {
+          console.log('[ProductDetail] Preserving user edits, not overwriting displayedPlatforms');
+          return prev;
+        }
+        return allPlatforms;
       });
-    }, [detailedItem?.Id, variantPricing, groupedInventory, hydrateInventoryFromDB]); // Depend on inventory data
+    }, [detailedItem?.Id, variantPricing, groupedInventory, hydrateInventoryFromDB, hasUnsavedChanges]); // Depend on inventory data
 
     // Phase 2: Load drafts from backend (ONCE only, do NOT re-fetch when platforms change)
     // CRITICAL FIX: Removed displayedPlatforms from dependencies to prevent overwriting user edits
@@ -1241,10 +1322,16 @@ const ProductDetailScreen = observer(
     }, [detailedItem?.Id, hasUnsavedChanges]); // ONLY depend on product ID - NOT displayedPlatforms!
 
     // Set up realtime subscriptions
+    // Use a ref to track unsaved changes to avoid stale closure issues
+    const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
+    useEffect(() => {
+      hasUnsavedChangesRef.current = hasUnsavedChanges;
+    }, [hasUnsavedChanges]);
+    
     useEffect(() => {
       if (!detailedItem) return;
 
-      console.log('Setting up realtime subscriptions for product:', detailedItem.Id);
+      console.log('[ProductDetail] Setting up realtime subscriptions for product:', detailedItem.Id);
 
       // Subscribe to product variant changes
       const productSubscription = supabase
@@ -1258,35 +1345,42 @@ const ProductDetailScreen = observer(
             filter: `Id=eq.${detailedItem.Id}`,
           },
           (payload) => {
-            console.log('Product variant updated from external source:', payload);
+            console.log('[ProductDetail] Product variant updated from external source:', payload.eventType);
+            
+            // CRITICAL: Never update if user has unsaved changes
+            if (hasUnsavedChangesRef.current) {
+              console.log('[ProductDetail] ⚠️ Skipping realtime update - user has unsaved changes');
+              showBanner('External update available. Save your changes first.');
+              return;
+            }
+            
             if (payload.eventType === 'UPDATE' && payload.new) {
               const updatedProduct = payload.new as ProductVariant;
-              // CRITICAL: Only update if user has NO unsaved changes
-              // Otherwise this would wipe out their edits!
+              
               setDetailedItem((prev) => {
                 // Check if this is a meaningful update or just a timestamp change
                 const hasRealChanges = prev && (
                   prev.Title !== updatedProduct.Title ||
                   prev.Description !== updatedProduct.Description ||
-                  prev.Sku !== updatedProduct.Sku
+                  prev.Sku !== updatedProduct.Sku ||
+                  prev.Price !== updatedProduct.Price
                 );
                 if (!hasRealChanges) {
                   console.log('[ProductDetail] Realtime update has no meaningful changes, skipping');
                   return prev;
                 }
-                console.log('[ProductDetail] Realtime update has changes, updating detailedItem');
+                console.log('[ProductDetail] ✅ Realtime update applied:', updatedProduct.Title);
                 return updatedProduct;
               });
-              // NOTE: We no longer auto-update formData from realtime updates
-              // This prevents external changes from wiping out user's unsaved edits
-              // The user can pull-to-refresh or navigate away and back to see external changes
-              console.log('[ProductDetail] External update received - form data preserved (user may have unsaved changes)');
+              
+              // Show non-blocking notification
+              showBanner('Product updated from external source');
             }
           }
         )
         .subscribe();
 
-      // Subscribe to inventory level changes
+      // Subscribe to inventory level changes - but DON'T trigger full reload if user is editing
       const inventorySubscription = supabase
         .channel(`inventory-${detailedItem.Id}`)
         .on(
@@ -1298,8 +1392,35 @@ const ProductDetailScreen = observer(
             filter: `ProductVariantId=eq.${detailedItem.Id}`,
           },
           (payload) => {
-            console.log('Inventory level updated:', payload);
-            loadPlatformData(); // Reload inventory data
+            console.log('[ProductDetail] Inventory level updated:', payload.eventType);
+            
+            // CRITICAL: Don't reload if user has unsaved changes - it will overwrite their edits
+            if (hasUnsavedChangesRef.current) {
+              console.log('[ProductDetail] ⚠️ Skipping inventory reload - user has unsaved changes');
+              showBanner('Inventory changed externally. Save your changes first.');
+              return;
+            }
+            
+            // Update inventory in place without full page reload
+            if (payload.eventType === 'UPDATE' && payload.new) {
+              const updatedLevel = payload.new as InventoryLevel;
+              setGroupedInventory(prev => {
+                const updated = { ...prev };
+                Object.keys(updated).forEach(platformName => {
+                  const platform = updated[platformName];
+                  platform.locations = platform.locations.map(loc => 
+                    loc.id === updatedLevel.Id 
+                      ? { ...loc, quantity: updatedLevel.Quantity }
+                      : loc
+                  );
+                });
+                return updated;
+              });
+              console.log('[ProductDetail] ✅ Inventory updated in place');
+            } else {
+              // For INSERT/DELETE, do a full reload
+              loadPlatformData();
+            }
           }
         )
         .subscribe();
@@ -1316,19 +1437,25 @@ const ProductDetailScreen = observer(
             filter: `ProductVariantId=eq.${detailedItem.Id}`,
           },
           (payload) => {
-            console.log('Platform mapping updated:', payload);
-            loadPlatformData(); // Reload mapping data
+            console.log('[ProductDetail] Platform mapping updated:', payload.eventType);
+            
+            // Mapping changes are less disruptive - always reload
+            if (!hasUnsavedChangesRef.current) {
+              loadPlatformData();
+            } else {
+              showBanner('Platform mapping changed. Save your changes first.');
+            }
           }
         )
         .subscribe();
 
       return () => {
-        console.log('Cleaning up realtime subscriptions');
+        console.log('[ProductDetail] Cleaning up realtime subscriptions');
         productSubscription.unsubscribe();
         inventorySubscription.unsubscribe();
         mappingSubscription.unsubscribe();
       };
-    }, [detailedItem, loadPlatformData]);
+    }, [detailedItem?.Id, loadPlatformData, showBanner]);
 
     // Collaboration: Request edit lock and listen for team updates
     useEffect(() => {

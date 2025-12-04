@@ -18,7 +18,7 @@ import PoolLocationCombobox from '../components/PoolLocationCombobox';
 import InventoryListCard from '../components/InventoryListCard';
 import SortByDropdown from '../components/SortByDropdown';
 import { CameraView } from 'expo-camera';
-import { useProductVariantRealtime } from '../hooks/useProductVariantRealtime';
+import { useProductVariantRealtime, useInventoryLevelsRealtime } from '../hooks/useProductVariantRealtime';
 
 type InventoryOrdersScreenNavigationProp = StackNavigationProp<AppStackParamList, 'TabNavigator'>;
 
@@ -32,6 +32,9 @@ type EnrichedProductVariant = ProductVariantData & {
   OnAmazon?: boolean;
   OnEbay?: boolean;
   OnFacebook?: boolean;
+  VariantType?: 'flat' | 'base' | 'option' | null;
+  IsArchived?: boolean;
+  optionVariantCount?: number; // Count of option variants for this product
 };
 
 interface MockOrderItemData {
@@ -50,8 +53,9 @@ const InventoryOrdersScreen = observer(() => {
   const route = useRoute<any>();
   const legendState: LegendStateObservables | null = useLegendState();
 
-  // Subscribe to real-time product variant changes
+  // Subscribe to real-time product variant and inventory changes
   useProductVariantRealtime();
+  useInventoryLevelsRealtime();
 
   // Filter & Search State
   const [activeTab, setActiveTab] = useState('inventory');
@@ -185,7 +189,52 @@ const InventoryOrdersScreen = observer(() => {
 
     if (Object.keys(variants).length === 0 || platformConnections.length === 0) return [];
 
-    let productVariantIdsToDisplay = Array.from(new Set(Object.keys(variants)));
+    // CRITICAL FIX: Group variants by ProductId to properly handle base/option architecture
+    // Build a map of ProductId -> option variants for inventory aggregation
+    const optionVariantsByProduct = new Map<string, Array<{ id: string; variant: any }>>();
+    const allVariantIds = Object.keys(variants);
+    
+    allVariantIds.forEach(variantId => {
+      const variant = variants[variantId];
+      if (!variant) return;
+      
+      // Cast to access VariantType which may not be on the base interface yet
+      const variantWithType = variant as any;
+      
+      // Only track option variants for aggregation
+      if (variantWithType.VariantType === 'option') {
+        const productId = variant.ProductId;
+        if (!optionVariantsByProduct.has(productId)) {
+          optionVariantsByProduct.set(productId, []);
+        }
+        optionVariantsByProduct.get(productId)!.push({ id: variantId, variant });
+      }
+    });
+
+    // FILTER 1: Only show 'flat' or 'base' variants (not 'option' variants)
+    // Option variants are sub-items that belong to a base variant and shouldn't appear separately
+    // Also filter out archived variants
+    let productVariantIdsToDisplay = allVariantIds.filter(variantId => {
+      const variant = variants[variantId];
+      if (!variant) return false;
+      
+      const variantWithType = variant as any;
+      
+      // Filter out archived variants (soft delete)
+      if (variantWithType.IsArchived === true) {
+        console.log(`[InventoryScreen] Filtering out archived variant: ${variant.Title} (${variantId})`);
+        return false;
+      }
+      
+      // Filter out 'option' variants - these should not appear as separate list items
+      // They are aggregated into their base variant
+      if (variantWithType.VariantType === 'option') {
+        console.log(`[InventoryScreen] Filtering out option variant: ${variant.Sku} (parent: ${variant.ProductId})`);
+        return false;
+      }
+      
+      return true; // Show 'flat', 'base', or null/undefined VariantType
+    });
 
     // Filter by platform
     if (selectedPlatformType) {
@@ -230,23 +279,63 @@ const InventoryOrdersScreen = observer(() => {
       });
     }
 
-    // Filter by location
+    // Filter by location - check both base variant AND its option variants
     if (selectedLocationIds.length > 0) {
       productVariantIdsToDisplay = productVariantIdsToDisplay.filter(variantId => {
-        return Object.values(levels).some((level: InventoryLevel) =>
+        const variant = variants[variantId];
+        if (!variant) return false;
+        
+        // Check if base variant has inventory at selected locations
+        const baseHasInventory = Object.values(levels).some((level: InventoryLevel) =>
           level.ProductVariantId === variantId &&
           selectedLocationIds.includes(level.PlatformLocationId || 'unknown')
         );
+        
+        if (baseHasInventory) return true;
+        
+        // Also check option variants for inventory
+        const optionVariants = optionVariantsByProduct.get(variant.ProductId) || [];
+        const optionHasInventory = optionVariants.some(ov => 
+          Object.values(levels).some((level: InventoryLevel) =>
+            level.ProductVariantId === ov.id &&
+            selectedLocationIds.includes(level.PlatformLocationId || 'unknown')
+          )
+        );
+        
+        return optionHasInventory;
       });
     }
 
     const enrichedVariants: EnrichedProductVariant[] = productVariantIdsToDisplay.map(variantId => {
       const variant = variants[variantId];
+      const variantWithType = variant as any;
+      
+      // Get images - check variant first, then product-level images
       const variantImages = Object.values(images).filter((img: ProductImage) => img.ProductVariantId === variantId);
-      const imageUrl = variantImages.length > 0 ? variantImages[0].ImageUrl : undefined;
+      const imageUrl = variantImages.length > 0 
+        ? variantImages[0].ImageUrl 
+        : (variantWithType.PrimaryImageUrl || undefined);
 
-      const variantLevels = Object.values(levels).filter((level: InventoryLevel) => level.ProductVariantId === variantId);
-      const totalQuantity = variantLevels.reduce((sum, level) => sum + level.Quantity, 0);
+      // CRITICAL: Aggregate inventory from OPTION variants when this is a 'base' variant
+      let totalQuantity = 0;
+      const optionVariants = optionVariantsByProduct.get(variant.ProductId) || [];
+      
+      if (variantWithType.VariantType === 'base' && optionVariants.length > 0) {
+        // For base variants, aggregate inventory from all option variants
+        optionVariants.forEach(ov => {
+          const optionLevels = Object.values(levels).filter((level: InventoryLevel) => 
+            level.ProductVariantId === ov.id
+          );
+          totalQuantity += optionLevels.reduce((sum, level) => sum + level.Quantity, 0);
+        });
+        console.log(`[InventoryScreen] Base variant ${variant.Sku}: aggregated ${totalQuantity} from ${optionVariants.length} option variants`);
+      } else {
+        // For flat variants (no options), use direct inventory
+        const variantLevels = Object.values(levels).filter((level: InventoryLevel) => 
+          level.ProductVariantId === variantId
+        );
+        totalQuantity = variantLevels.reduce((sum, level) => sum + level.Quantity, 0);
+      }
 
       // Use the actual boolean flags from ProductVariants to determine platform status
       const platformNames: string[] = [];
@@ -262,6 +351,9 @@ const InventoryOrdersScreen = observer(() => {
         imageUrl,
         totalQuantity,
         platformNames,
+        VariantType: variantWithType.VariantType,
+        IsArchived: variantWithType.IsArchived,
+        optionVariantCount: optionVariants.length,
       };
     });
 

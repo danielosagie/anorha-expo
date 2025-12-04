@@ -35,6 +35,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
   const { jobId, firstPhotos, bulkItems } = payload;
 
   const [currentStageIndex, setCurrentStageIndex] = useState(0);
+  const [backendStageIndex, setBackendStageIndex] = useState(0); // Track what backend has actually reported
   const [jobStatus, setJobStatus] = useState('queued');
   const [jobsModalVisible, setJobsModalVisible] = useState(false);
   const [lastStage, setLastStage] = useState<string | null>(null); // Track last stage to prevent animation replay
@@ -117,7 +118,8 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
           if (stageIndex >= 0 && mappedStage !== lastStage) {
             console.log('[ANIMATION] Stage changed from', lastStage, 'to', mappedStage, '- triggering animation');
             setLastStage(mappedStage);
-            setCurrentStageIndex(stageIndex);
+            setBackendStageIndex(stageIndex); // Track what backend reported
+            setCurrentStageIndex(stageIndex); // Set display to backend's actual stage
           } else if (mappedStage === lastStage) {
             console.log('[ANIMATION] Stage unchanged:', mappedStage, '- skipping animation');
           }
@@ -163,7 +165,8 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
           if (stageIndex >= 0 && status.currentStage !== lastStage) {
             console.log('[ANIMATION] Stage changed from', lastStage, 'to', status.currentStage, '- triggering animation');
             setLastStage(status.currentStage);
-            setCurrentStageIndex(stageIndex);
+            setBackendStageIndex(stageIndex); // Track what backend reported
+            setCurrentStageIndex(stageIndex); // Set display to backend's actual stage
           } else if (status.currentStage === lastStage) {
             console.log('[ANIMATION] Stage unchanged:', status.currentStage, '- skipping animation');
           }
@@ -234,16 +237,34 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
   }, [jobId, processType, navigation, onCompleteRoute, activeStages]);
 
   // Fallback timer for advancing stages if polling fails
+  // FIX: Only advance at most 1 stage ahead of what backend reported to prevent jumping ahead then snapping back
   useEffect(() => {
     if (jobStatus !== 'queued' && jobStatus !== 'processing') return;
     if (currentStageIndex >= activeStages.length - 1) return;
+    
+    // FIX: Don't advance more than 1 stage ahead of backend's reported stage
+    // This prevents the "1,2,3,4,5,6...snap back to 4" issue
+    const maxAllowedIndex = Math.min(backendStageIndex + 1, activeStages.length - 1);
+    if (currentStageIndex >= maxAllowedIndex) {
+      console.log('[FALLBACK] Already at max allowed stage:', currentStageIndex, '(backend:', backendStageIndex, ')');
+      return;
+    }
 
     const stageTimer = setTimeout(() => {
-      setCurrentStageIndex(prevIndex => prevIndex + 1);
+      setCurrentStageIndex(prevIndex => {
+        const nextIndex = prevIndex + 1;
+        // Double-check we don't go too far ahead
+        if (nextIndex > backendStageIndex + 1) {
+          console.log('[FALLBACK] Blocked advancing beyond backend+1:', nextIndex, '(backend:', backendStageIndex, ')');
+          return prevIndex;
+        }
+        console.log('[FALLBACK] Advancing to stage:', nextIndex);
+        return nextIndex;
+      });
     }, 3000); // Slower fallback
 
     return () => clearTimeout(stageTimer);
-  }, [currentStageIndex, activeStages.length, jobStatus]);
+  }, [currentStageIndex, activeStages.length, jobStatus, backendStageIndex]);
 
   console.log(`[LOADING] Starting process: "${processType}"`);
   console.log('[LOADING] Payload photos:', firstPhotos);

@@ -2634,7 +2634,7 @@ const BulkItemsSheet: React.FC<{
               Search For Product (Broad)
             </Text>
           </TouchableOpacity>
-    </View>
+      </View>
     </View>
     </Animated.View>
   );
@@ -3384,6 +3384,7 @@ const styles = StyleSheet.create({
     borderTopColor: '#eee',
     paddingTop: 16,
     marginTop: 16,
+    marginBottom: 16,
   },
   
   // Progress Bar Styles

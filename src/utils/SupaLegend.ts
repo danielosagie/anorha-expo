@@ -43,6 +43,12 @@ export interface ProductVariant {
     OnAmazon?: boolean;
     OnEbay?: boolean;
     OnFacebook?: boolean;
+    // Variant architecture fields
+    VariantType?: 'flat' | 'base' | 'option' | null; // 'flat' = single/no-option, 'base' = parent with options, 'option' = child variant
+    IsArchived?: boolean; // Soft delete flag
+    Tags?: string[]; // Product tags
+    Metadata?: Record<string, any> | null; // jsonb for AI data, platform-specific data, etc.
+    PrimaryImageUrl?: string | null; // Primary image URL
 }
 
 // Function to generate IDs locally (can remain at top level)
@@ -119,12 +125,12 @@ export async function initializeLegendState(
     const productVariants$ = observable<Record<string, ProductVariant>>(
         customSynced({
             collection: 'ProductVariants',
-            select: (from: any) => from.select('*, id:Id, Options, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook'),
+            select: (from: any) => from.select('*, id:Id, Options, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, Tags, Metadata, PrimaryImageUrl'),
             filter: (query: any) => query.eq('UserId', currentUserId),
             actions: ['read', 'create', 'update', 'delete'],
             realtime: { filter: `UserId=eq.${currentUserId}` },
             persist: {
-                name: `productVariants_user_${currentUserId}_v4`, // Updated version to clear cache
+                name: `productVariants_user_${currentUserId}_v5`, // Updated version to clear cache with new fields
                 retrySync: true,
             },
         })

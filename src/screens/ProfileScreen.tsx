@@ -146,7 +146,7 @@ const CONNECTION_STATUS = {
 const getStatusDisplay = (status: string): { label: string, color: string, icon: string } => {
   switch (status?.toLowerCase()) {
     case CONNECTION_STATUS.ACTIVE:
-      return { label: 'Connected', color: '#34C759', icon: 'check-circle' };
+      return { label: 'Connected', color: '#93C822', icon: 'check-circle' };
     case CONNECTION_STATUS.INACTIVE:
       return { label: 'Inactive', color: '#8E8E93', icon: 'pause-circle' };
     case CONNECTION_STATUS.PENDING:
@@ -616,6 +616,70 @@ const ProfileScreen = () => {
       Alert.alert('Resume Failed', err instanceof Error ? err.message : String(err));
     }
   };
+
+  // --- NEW: Reconnect Platform (for credential refresh) ---
+  const handleReconnectPlatform = async (connectionId: string, platformType: string, platformName: string) => {
+    Alert.alert(
+      `Reconnect ${platformName}`,
+      `This will refresh your ${platformName} credentials. You'll be redirected to ${platformName} to re-authorize the connection.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Reconnect",
+          style: "default",
+          onPress: async () => {
+            console.log(`[ProfileScreen] Initiating reconnect for ${platformName} (connection ID: ${connectionId})`);
+            try {
+              // Step 1: Delete the existing connection
+              const token = await getApiToken();
+              if (!token) {
+                throw new Error("Authentication token not found.");
+              }
+
+              const response = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections/${connectionId}`, {
+                method: 'DELETE',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                },
+              });
+
+              if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
+                throw new Error(errorData.message || `Failed to disconnect. Status: ${response.status}`);
+              }
+
+              console.log(`[ProfileScreen] Successfully disconnected old connection ${connectionId}`);
+              
+              // Reset Legend State to clear out old data
+              await resetLegendState();
+              
+              // Step 2: Immediately initiate new OAuth connection based on platform type
+              if (platformType === 'square') {
+                // Call Square OAuth flow
+                await handleSquareConnect();
+              } else if (platformType === 'shopify') {
+                // For Shopify, show the add connection overlay
+                overlay.show();
+              } else {
+                // For other platforms, just show the add connection overlay
+                Alert.alert('Success', `${platformName} disconnected. Please add a new connection.`);
+                overlay.show();
+              }
+              
+              // Refresh the connections list
+              fetchConnections();
+
+            } catch (error: unknown) {
+              console.error("[ProfileScreen] Error reconnecting platform:", error);
+              const message = error instanceof Error ? error.message : String(error);
+              Alert.alert('Reconnect Failed', `Failed to reconnect ${platformName}: ${message}`);
+            }
+          },
+        },
+      ]
+    );
+  };
+  // --- END Reconnect Platform Logic ---
  
   const handleOpenBilling = async () => {
     try {
@@ -1590,6 +1654,7 @@ const ProfileScreen = () => {
                             onPress={() => handleDisconnectPlatform(connection.Id, platformConfig.name)} 
                           >
                             <Icon name="minus-circle-outline" size={24} color={theme.colors.error} />
+                            <Text style={{color: "red", fontSize: 14}}>Disconnect</Text>
                           </TouchableOpacity>
                         )}
 
@@ -1704,33 +1769,57 @@ const ProfileScreen = () => {
                                   </TouchableOpacity>
                                 )}
 
-                                {/* For error state, show a single Fix & Resume action */}
+                                {/* For error state, show Reconnect (credentials) or Fix & Resume (general) */}
                                 {connection.Status === CONNECTION_STATUS.ERROR && (
-                                  <TouchableOpacity 
-                                    style={[styles.actionButton, { backgroundColor: theme.colors.warning + '15' }]}
-                                    onPress={() => fixAndResumeConnection(connection.Id, platformConfig.name)}
-                                  >
-                                    <Icon name="refresh" size={18} color={theme.colors.warning} />
-                                    <Text style={[styles.actionButtonText, { color: theme.colors.warning }]}>Fix & Resume</Text>
-                                  </TouchableOpacity>
+                                  <View style={{ flexDirection: 'row', gap: 8 }}>
+                                    {/* Reconnect button for credential issues */}
+                                    {(platformConfig.key === 'square' || platformConfig.key === 'shopify') && (
+                                      <TouchableOpacity 
+                                        style={[styles.actionButton, { backgroundColor: theme.colors.error + '15' }]}
+                                        onPress={() => handleReconnectPlatform(connection.Id, platformConfig.key, platformConfig.name)}
+                                      >
+                                        <Icon name="link-variant" size={18} color={theme.colors.error} />
+                                        <Text style={[styles.actionButtonText, { color: theme.colors.error }]}>Reconnect</Text>
+                                      </TouchableOpacity>
+                                    )}
+                                    {/* General Fix & Resume for other issues */}
+                                    <TouchableOpacity 
+                                      style={[styles.actionButton, { backgroundColor: theme.colors.warning + '15' }]}
+                                      onPress={() => fixAndResumeConnection(connection.Id, platformConfig.name)}
+                                    >
+                                      <Icon name="refresh" size={18} color={theme.colors.warning} />
+                                      <Text style={[styles.actionButtonText, { color: theme.colors.warning }]}>Fix & Resume</Text>
+                                    </TouchableOpacity>
+                                  </View>
                                 )}
                                 
-                                {/* Active connections: single Manage entry point */}
+                                {/* Active connections: Manage + Reconnect option for Square/Shopify */}
                                 {connection.Status === CONNECTION_STATUS.ACTIVE && (
-                                  <TouchableOpacity 
-                                    style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
-                                    onPress={() =>
-                                      navigation.navigate('MappingReview', {
-                                        connectionId: connection.Id,
-                                        platformName: platformConfig.name,
-                                      })
-                                    }
-                                  >
-                                    <Icon name="cog" size={18} color={theme.colors.primary} />
-                                    <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>
-                                      Manage
-                                    </Text>
-                                  </TouchableOpacity>
+                                  <View style={{ flexDirection: 'row', gap: 8 }}>
+                                    <TouchableOpacity 
+                                      style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
+                                      onPress={() =>
+                                        navigation.navigate('MappingReview', {
+                                          connectionId: connection.Id,
+                                          platformName: platformConfig.name,
+                                        })
+                                      }
+                                    >
+                                      <Icon name="cog" size={18} color={theme.colors.primary} />
+                                      <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>
+                                        Manage
+                                      </Text>
+                                    </TouchableOpacity>
+                                    {/* Reconnect option for Square/Shopify to refresh credentials */}
+                                    {(platformConfig.key === 'square' || platformConfig.key === 'shopify') && (
+                                      <TouchableOpacity 
+                                        style={[styles.actionButton, { backgroundColor: '#6B7280' + '15' }]}
+                                        onPress={() => handleReconnectPlatform(connection.Id, platformConfig.key, platformConfig.name)}
+                                      >
+                                        <Icon name="link-variant" size={18} color="#6B7280" />
+                                      </TouchableOpacity>
+                                    )}
+                                  </View>
                                 )}
                               </View>
                         )}
@@ -2112,7 +2201,7 @@ const styles = StyleSheet.create({
   },
   integrationItem: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
@@ -2562,6 +2651,11 @@ const styles = StyleSheet.create({
     marginRight: 8, // Add some space between delete button and platform icon
     justifyContent: 'center',
     alignItems: 'center',
+    flexDirection: "row",
+    gap: 4,
+    backgroundColor: "rgb(255, 226, 226)",
+    paddingVertical: 6,
+    borderRadius: 4,
   },
   // --- END Style ---
   devModeContainer: {

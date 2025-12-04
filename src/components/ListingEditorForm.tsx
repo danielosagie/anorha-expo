@@ -742,7 +742,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
     <View style={{ paddingBottom: 120 }}>
       {/* Media with Remove & Add Photo Management */}
       <View style={styles.mediaRow}>
-        <ScrollView style={{paddingVertical: 10}} horizontal showsHorizontalScrollIndicator={false}>
+        <ScrollView style={{paddingVertical: 10}} horizontal={true} showsHorizontalScrollIndicator={false}>
           {(images || []).map((uri, i) => (
             <View key={`${uri}-${i}`} style={{ position: 'relative', marginRight: 8}}>
               <TouchableOpacity
@@ -789,7 +789,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
           ))}
 
           {/* Add Photo Slots (max 6 total) */}
-          console.log(images?.length)
           {Array.from({ length: Math.max(0, Math.min(6 - (images?.length || 0), 1)) }).map((_, slotIdx) => (
             <TouchableOpacity
               key={`add-slot-${slotIdx}`}
@@ -808,7 +807,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
       </View>
 
       {/* Platform filter pills */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 8 }}>
+      <ScrollView horizontal={true} showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 8 }}>
         {pills.map((key) => (
           key === 'all' ? (
             <TouchableOpacity key={key} onPress={() => setActiveTab(key)} style={[styles.pill, activeTab === key && styles.pillActive]}>

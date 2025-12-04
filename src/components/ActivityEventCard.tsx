@@ -148,8 +148,10 @@ const ActivityEventCard: React.FC<ActivityEventCardProps> = ({
 
 const styles = StyleSheet.create({
   cardContainer: {
-    marginBottom: 16,
-    marginHorizontal: 0,
+    gap: 12,
+    borderRadius: 12,
+    marginHorizontal: 12,
+    marginTop: 12,
   },
   card: {
     flexDirection: 'row',
@@ -158,6 +160,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#F3F4F6',
+    borderRadius: 12,
   },
   imageContainer: {
     width: 80,
