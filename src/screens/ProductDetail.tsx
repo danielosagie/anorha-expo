@@ -198,6 +198,10 @@ const ProductDetailScreen = observer(
 
     // Add state after existing states (around line 160, after const [isUploadingImages, setIsUploadingImages] = useState(false);)
     const [variantPricing, setVariantPricing] = useState<any[]>([]);
+    // ⚡ CRITICAL: Store raw inventory levels directly from DB for hydration
+    const [rawInventoryLevels, setRawInventoryLevels] = useState<InventoryLevel[]>([]);
+    // ⚡ Store all variants for this product
+    const [allProductVariants, setAllProductVariants] = useState<any[]>([]);
 
     // ========== CRITICAL FIX: useRef for data persistence + auto-save ==========
     const [updateCounter, setUpdateCounter] = useState(0);
@@ -314,16 +318,17 @@ const ProductDetailScreen = observer(
 
         // ⚡ CRITICAL FIX: Load ALL variants for this product to aggregate inventory
         // If viewing a base variant, inventory is stored against option variants
-        const { data: allProductVariants, error: variantsError } = await supabase
+        // Include Price, Options, Title for proper variant hydration
+        const { data: allProductVariantsData, error: variantsError } = await supabase
           .from('ProductVariants')
-          .select('Id, Sku, VariantType')
+          .select('Id, Sku, VariantType, Price, CompareAtPrice, Options, Title, Barcode')
           .eq('ProductId', detailedItem.ProductId);
 
         if (variantsError) {
           console.error('[ProductDetail] Error loading product variants:', variantsError);
         }
 
-        const allVariantIds = allProductVariants?.map(v => v.Id) || [detailedItem.Id];
+        const allVariantIds = allProductVariantsData?.map(v => v.Id) || [detailedItem.Id];
         console.log('[ProductDetail] Found', allVariantIds.length, 'variants for product');
 
         // Load inventory levels for ALL variants of this product (base + options)
@@ -336,6 +341,14 @@ const ProductDetailScreen = observer(
           console.error('Error loading inventory levels:', inventoryError);
         } else {
           console.log('[ProductDetail] Loaded inventory levels:', inventoryData?.length || 0, 'for', allVariantIds.length, 'variants');
+          // ⚡ CRITICAL: Store raw inventory levels for displayedPlatforms hydration
+          setRawInventoryLevels((inventoryData as InventoryLevel[]) || []);
+        }
+        
+        // ⚡ Store all variants for hydration
+        if (allProductVariantsData) {
+          console.log('[ProductDetail] Storing', allProductVariantsData.length, 'variants in state for hydration');
+          setAllProductVariants(allProductVariantsData);
         }
 
         // ⚡ Load locations from PlatformLocations table - build a lookup map for fast access
@@ -573,19 +586,9 @@ const ProductDetailScreen = observer(
           console.log('[ProductDetail] Loaded all variants for product:', allVariants?.length || 0);
         }
 
-        // Load VariantPricing for this variant (ONLY active records, not soft-deleted)
-        const { data: variantPricingData, error: variantPricingError } = await supabase
-          .from('VariantPricing')
-          .select('*')
-          .eq('ProductVariantId', variant.Id)
-          .eq('IsDeleted', false); // Filter out soft-deleted variants
-
-        if (variantPricingError) {
-          console.warn('[ProductDetail] Error loading VariantPricing:', variantPricingError);
-        } else {
-          console.log('[ProductDetail] Loaded', variantPricingData?.length || 0, 'active variant pricing records');
-          setVariantPricing(variantPricingData || []);
-        }
+        // ⚡ NOTE: VariantPricing table no longer exists - pricing is stored in InventoryLevels.Price
+        // Variants and inventory are loaded in loadPlatformData() instead
+        console.log('[ProductDetail] Variants loaded via loadPlatformData, not VariantPricing table');
 
         // Update detailedItem with full data
         const enrichedItem = {
@@ -1101,14 +1104,26 @@ const ProductDetailScreen = observer(
     }, [detailedItem?.Id]); // Only depend on item ID to prevent loops
 
     // Helper: Hydrate inventory data from InventoryLevels into variant structure
-    const hydrateInventoryFromDB = useCallback((variantsPricing: any[], invLevels: InventoryLevel[]): any[] => {
-      if (!variantsPricing || variantsPricing.length === 0) return [];
+    // ⚡ CRITICAL FIX: Use ProductVariants directly, not VariantPricing (which doesn't exist)
+    const hydrateInventoryFromDB = useCallback((variants: any[], invLevels: InventoryLevel[]): any[] => {
+      if (!variants || variants.length === 0) {
+        console.log('[ProductDetail] hydrateInventoryFromDB: No variants to hydrate');
+        return [];
+      }
+      if (!invLevels || invLevels.length === 0) {
+        console.log('[ProductDetail] hydrateInventoryFromDB: No inventory levels, returning variants without inventory');
+      }
       
-      return variantsPricing.map((v: any) => {
-        const inventoryByLocation: Record<string, any> = v.InventoryByLocation || {};
+      console.log('[ProductDetail] hydrateInventoryFromDB: Hydrating', variants.length, 'variants with', invLevels?.length || 0, 'inventory levels');
+      
+      return variants.map((v: any) => {
+        const inventoryByLocation: Record<string, any> = {};
+        
+        // Find inventory levels for THIS variant specifically
+        const variantInventory = invLevels?.filter(level => level.ProductVariantId === v.Id) || [];
         
         // Map InventoryLevels to inventoryByLocation format
-        invLevels.forEach((level: InventoryLevel) => {
+        variantInventory.forEach((level: InventoryLevel) => {
           const locId = level.PlatformLocationId || 'default';
           inventoryByLocation[locId] = {
             quantity: level.Quantity || 0,
@@ -1117,14 +1132,20 @@ const ProductDetailScreen = observer(
           };
         });
         
-        console.log('[ProductDetail] Hydrated variant with inventory from DB:', v.Sku, 'locations:', Object.keys(inventoryByLocation).length);
+        console.log('[ProductDetail] Hydrated variant', v.Sku || v.Id, 'with', Object.keys(inventoryByLocation).length, 'locations, total qty:', 
+          Object.values(inventoryByLocation).reduce((sum: number, loc: any) => sum + (loc.quantity || 0), 0));
+        
+        // Build optionValues from Options object
+        const optionValues = v.Options && typeof v.Options === 'object' ? v.Options : {};
         
         return {
-          optionValues: v.OptionValues,
+          id: v.Id,
+          optionValues,
           price: v.Price,
           compareAtPrice: v.CompareAtPrice,
           sku: v.Sku,
           barcode: v.Barcode,
+          title: v.Title,
           inventoryByLocation,
         };
       });
@@ -1189,21 +1210,20 @@ const ProductDetailScreen = observer(
         ...(metadata.platformSpecificData?.shopify || {}),
       };
 
-      console.log('[ProductDetail] Setting displayedPlatforms with tags:', canonicalBase.tags, 'variantPricing:', variantPricing?.length, 'aiPrice:', canonicalBase.aiRecommendedPrice);
+      console.log('[ProductDetail] Setting displayedPlatforms with tags:', canonicalBase.tags, 
+        'allProductVariants:', allProductVariants?.length, 
+        'rawInventoryLevels:', rawInventoryLevels?.length,
+        'aiPrice:', canonicalBase.aiRecommendedPrice);
 
-      // Get inventory levels for hydration - query synchronously from already-loaded data
-      const inventoryLevels: InventoryLevel[] = (groupedInventory && Object.values(groupedInventory).length > 0) 
-        ? Object.values(groupedInventory).flatMap(pg => pg.locations.map(loc => ({
-            Id: loc.id,
-            ProductVariantId: detailedItem.Id,
-            PlatformConnectionId: loc.platformConnectionId,
-            PlatformLocationId: loc.locationId,
-            Quantity: loc.quantity,
-          } as InventoryLevel)))
-        : [];
-
-      // Hydrate variants with inventory data
-      const hydratedVariants = hydrateInventoryFromDB(variantPricing || [], inventoryLevels);
+      // ⚡ CRITICAL FIX: Use rawInventoryLevels directly (loaded from InventoryLevels table)
+      // and allProductVariants (loaded from ProductVariants table)
+      // NOT variantPricing which comes from non-existent VariantPricing table
+      
+      // Hydrate variants with inventory data from REAL database data
+      const hydratedVariants = hydrateInventoryFromDB(allProductVariants || [], rawInventoryLevels || []);
+      
+      console.log('[ProductDetail] Hydrated variants:', hydratedVariants.length, 
+        'with inventory:', hydratedVariants.map(v => `${v.sku || v.id}: ${Object.keys(v.inventoryByLocation || {}).length} locs`).join(', '));
 
       // FIX: Populate ALL platforms from metadata.platformSpecificData, not just shopify
       // This ensures all platform data is displayed, not wiped out
@@ -1246,7 +1266,7 @@ const ProductDetailScreen = observer(
         }
         return allPlatforms;
       });
-    }, [detailedItem?.Id, variantPricing, groupedInventory, hydrateInventoryFromDB, hasUnsavedChanges]); // Depend on inventory data
+    }, [detailedItem?.Id, allProductVariants, rawInventoryLevels, hydrateInventoryFromDB, hasUnsavedChanges]); // Depend on real inventory data from DB
 
     // Phase 2: Load drafts from backend (ONCE only, do NOT re-fetch when platforms change)
     // CRITICAL FIX: Removed displayedPlatforms from dependencies to prevent overwriting user edits
