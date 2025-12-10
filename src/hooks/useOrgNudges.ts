@@ -2,16 +2,40 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 
+export type InsightUrgency = 'now' | 'today' | 'this-week';
+
+export interface DashboardInsightMetric {
+  label: string;
+  value: string;
+  status?: 'good' | 'warning' | 'critical' | 'info';
+}
+
+export interface DashboardInsightChart {
+  type: 'line' | 'bar' | 'forecast';
+  dataPoints: Array<{ x: string | number; y: number; type?: 'actual' | 'forecast'; annotation?: string }>;
+  config?: Record<string, any>;
+}
+
 export interface DashboardInsight {
-  severity: 'good' | 'neutral' | 'warning' | 'critical';
-  title: string;
-  description: string;
-  action?: {
-    label: string;
-    link: string;
-    count?: number;
+  topDIN: {
+    category: string;
+    headline: string;
   };
-  icon?: string;
+  bottomDIN: {
+    title: string;
+    description: string;
+    metrics?: DashboardInsightMetric[];
+    chartData?: DashboardInsightChart;
+    footer?: string;
+    action?: {
+      label: string;
+      link: string;
+      count?: number;
+    };
+  };
+  severity: 'good' | 'neutral' | 'warning' | 'critical';
+  urgency?: InsightUrgency;
+  timestamp?: string;
 }
 
 export interface NudgesResponse {

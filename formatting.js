@@ -325,3 +325,245 @@
         ]
     }
 }
+
+
+[Nest] 12  - 12/09/2025, 7:46:17 AM     LOG [RequestLogger] [u6rkft] [GET] /api/billing/summary - Status: 200 - Duration: 495ms
+Response: {
+    "subscription": {
+        "CurrentPlan": "Growth",
+        "Status": "active",
+        "CurrentPeriodEnd": "2025-12-21T05:35:30.835+00:00",
+        "StripeSubscriptionId": null,
+        "StripeCustomerId": null,
+        "PolarCustomerId": "a18a2faa-6222-452c-8499-362eace5e1df",
+        "PolarSubscriptionId": "454028d9-09fe-4fd3-b2aa-54f0a3a6eaee",
+        "UserId": "003204d6-4da7-4666-9470-2c55b8d4d1df",
+        "CanceledAt": null
+    },
+    "usage": {
+        "sync": {
+            "count": 98,
+            "totalCost": 0,
+            "totalQuantity": 114
+        },
+        "ai_generate_groq": {
+            "count": 2,
+            "totalCost": 6,
+            "totalQuantity": 2
+        },
+        "ai_recognize_match": {
+            "count": 2,
+            "totalCost": 16,
+            "totalQuantity": 2
+        },
+        "ai_quick_scan": {
+            "count": 2,
+            "totalCost": 4,
+            "totalQuantity": 2
+        }
+    },
+    "ai_credits_used": 0.26,
+    "ai_credits_limit": 6.6,
+    "ai_scans_used": 6,
+    "ai_scans_limit": 33,
+    "on_demand_usage_this_month": 114,
+    "on_demand_limit": 999999,
+    "total": 40.26,
+    "payment_provider": "polar",
+    "total_cost_cents": 4026,
+    "tier_name": "Growth",
+    "team_members_count": 4,
+    "team_members_included": 2,
+    "team_members_extra": 2,
+    "team_members_cost": 20
+}
+[Nest] 12  - 12/09/2025, 7:46:17 AM     LOG [RequestLogger] [7g747] [GET] /api/billing/invoices?limit=12 - Status: 200 - Duration: 687ms
+Response: {
+    "invoices": [
+        {
+            "id": "4023b689-6e8f-476e-b6a4-78e4014be2f3",
+            "number": "4023B689",
+            "status": "paid",
+            "total": 0,
+            "currency": "usd",
+            "created": 1763703331,
+            "hosted_invoice_url": null,
+            "product_name": "Growth",
+            "created_at": "2025-11-21T05:35:31.247594Z",
+            "modified_at": "2025-11-21T05:35:44.951267Z",
+            "paid": true,
+            "subtotal_amount": 2000,
+            "discount_amount": 2000,
+            "net_amount": 0,
+            "tax_amount": 0,
+            "total_amount": 0,
+            "applied_balance_amount": 0,
+            "due_amount": 0,
+            "refunded_amount": 0,
+            "refunded_tax_amount": 0,
+            "billing_reason": "subscription_create",
+            "billing_name": "Daniel Osagie",
+            "billing_address": {
+                "line1": "4725 Bradford Lane",
+                "line2": null,
+                "postal_code": "30127",
+                "city": "Powder Springs",
+                "state": "US-GA",
+                "country": "US"
+            },
+            "invoice_number": "INIRHA-0006",
+            "is_invoice_generated": true,
+            "seats": null,
+            "customer_id": "a18a2faa-6222-452c-8499-362eace5e1df",
+            "product_id": "116402ad-3ea6-4fae-904d-483afdfee9a6",
+            "product_price_id": "64efd8ec-e450-4968-97df-cae124f7dbde",
+            "discount_id": "481ea71d-5a5d-4327-9c4a-a6600a70fcbb",
+            "subscription_id": "454028d9-09fe-4fd3-b2aa-54f0a3a6eaee",
+            "checkout_id": "53389654-d864-4e25-8ec3-732299e37e5a",
+            "metadata": {},
+            "custom_field_data": {},
+            "platform_fee_amount": 0,
+            "platform_fee_currency": null,
+            "customer": {
+                "id": "a18a2faa-6222-452c-8499-362eace5e1df",
+                "created_at": "2025-11-21T05:35:30.182327Z",
+                "modified_at": "2025-11-21T05:35:51.626812Z",
+                "metadata": {},
+                "external_id": null,
+                "email": "danielosagie0@gmail.com",
+                "email_verified": false,
+                "name": "Daniel Osagie",
+                "billing_address": {
+                    "line1": "4725 Bradford Lane",
+                    "line2": null,
+                    "postal_code": "30127",
+                    "city": "Powder Springs",
+                    "state": "US-GA",
+                    "country": "US"
+                },
+                "tax_id": null,
+                "organization_id": "07d722d3-9026-45af-b00d-1e6e83473583",
+                "deleted_at": null,
+                "avatar_url": "https://www.gravatar.com/avatar/aecd599debfc05e25e79cbcb2783a4fca3165b031fa8f0cfbbef1a23b5e1a4a7?d=404"
+            },
+            "user_id": "a18a2faa-6222-452c-8499-362eace5e1df",
+            "user": {
+                "id": "a18a2faa-6222-452c-8499-362eace5e1df",
+                "email": "danielosagie0@gmail.com",
+                "public_name": "D",
+                "avatar_url": null,
+                "github_username": null
+            },
+            "product": {
+                "metadata": {},
+                "id": "116402ad-3ea6-4fae-904d-483afdfee9a6",
+                "created_at": "2025-10-19T17:10:23.964001Z",
+                "modified_at": "2025-10-19T17:10:24.781337Z",
+                "trial_interval": null,
+                "trial_interval_count": null,
+                "name": "Growth",
+                "description": "Growth plan for Anorha",
+                "recurring_interval": "month",
+                "recurring_interval_count": 1,
+                "is_recurring": true,
+                "is_archived": false,
+                "organization_id": "07d722d3-9026-45af-b00d-1e6e83473583"
+            },
+            "product_price": {
+                "created_at": "2025-11-18T18:15:09.252656Z",
+                "modified_at": null,
+                "id": "64efd8ec-e450-4968-97df-cae124f7dbde",
+                "source": "catalog",
+                "amount_type": "fixed",
+                "is_archived": false,
+                "product_id": "116402ad-3ea6-4fae-904d-483afdfee9a6",
+                "type": "recurring",
+                "recurring_interval": "month",
+                "price_currency": "usd",
+                "price_amount": 2000
+            },
+            "discount": {
+                "duration": "once",
+                "type": "percentage",
+                "basis_points": 10000,
+                "created_at": "2025-11-19T06:31:18.030753Z",
+                "modified_at": null,
+                "id": "481ea71d-5a5d-4327-9c4a-a6600a70fcbb",
+                "metadata": {},
+                "name": "dev",
+                "code": "VJUM2XMH",
+                "starts_at": null,
+                "ends_at": null,
+                "max_redemptions": null,
+                "redemptions_count": 5,
+                "organization_id": "07d722d3-9026-45af-b00d-1e6e83473583"
+            },
+            "subscription": {
+                "metadata": {},
+                "created_at": "2025-11-21T05:35:30.843595Z",
+                "modified_at": null,
+                "id": "454028d9-09fe-4fd3-b2aa-54f0a3a6eaee",
+                "amount": 0,
+                "currency": "usd",
+                "recurring_interval": "month",
+                "recurring_interval_count": 1,
+                "status": "active",
+                "current_period_start": "2025-11-21T05:35:30.835988Z",
+                "current_period_end": "2025-12-21T05:35:30.835988Z",
+                "trial_start": null,
+                "trial_end": null,
+                "cancel_at_period_end": false,
+                "canceled_at": null,
+                "started_at": "2025-11-21T05:35:30.835988Z",
+                "ends_at": null,
+                "ended_at": null,
+                "customer_id": "a18a2faa-6222-452c-8499-362eace5e1df",
+                "product_id": "116402ad-3ea6-4fae-904d-483afdfee9a6",
+                "discount_id": "481ea71d-5a5d-4327-9c4a-a6600a70fcbb",
+                "checkout_id": "53389654-d864-4e25-8ec3-732299e37e5a",
+                "seats": null,
+                "customer_cancellation_reason": null,
+                "customer_cancellation_comment": null,
+                "price_id": "64efd8ec-e450-4968-97df-cae124f7dbde",
+                "user_id": "a18a2faa-6222-452c-8499-362eace5e1df"
+            },
+            "items": [
+                {
+                    "created_at": "2025-11-21T05:35:31.258586Z",
+                    "modified_at": null,
+                    "id": "c27adc7d-84d6-4410-8697-45d81dc9cff8",
+                    "label": "Growth",
+                    "amount": 2000,
+                    "tax_amount": 0,
+                    "proration": false,
+                    "product_price_id": "64efd8ec-e450-4968-97df-cae124f7dbde"
+                }
+            ],
+            "description": "Growth",
+            "amount": 0,
+            "from_balance_amount": 0
+        }
+    ]
+}
+[Nest] 12  - 12/09/2025, 7:46:17 AM     LOG [RequestLogger] [uy5vto] [GET] /api/billing/upcoming - Status: 200 - Duration: 774ms
+Response: {
+    "upcoming": {
+        "id": "upcoming-454028d9-09fe-4fd3-b2aa-54f0a3a6eaee",
+        "total": {
+            "created_at": "2025-11-18T18:15:09.252656Z",
+            "modified_at": null,
+            "id": "64efd8ec-e450-4968-97df-cae124f7dbde",
+            "source": "catalog",
+            "amount_type": "fixed",
+            "is_archived": false,
+            "product_id": "116402ad-3ea6-4fae-904d-483afdfee9a6",
+            "type": "recurring",
+            "recurring_interval": "month",
+            "price_currency": "usd",
+            "price_amount": 2000
+        },
+        "due_date": "2025-12-21T05:35:30.835988Z",
+        "currency": "USD",
+        "description": "Growth renewal"
+    }
+}

@@ -136,8 +136,8 @@ const DashboardScreen = () => {
   const [loadingActivity, setLoadingActivity] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   
-  // Tab state for "Needs Attention"
-  const [activeTab, setActiveTab] = useState<'low_stock' | 'pending_orders'>('low_stock');
+  // Tab state for Overview
+  const [activeTab, setActiveTab] = useState<'low_stock' | 'recent_activity'>('low_stock');
 
   // Track if initial data has loaded
   const [initialDataLoaded, setInitialDataLoaded] = useState(false);
@@ -152,6 +152,44 @@ const DashboardScreen = () => {
 
   // AI-generated insights
   const { insight, loading: loadingInsight, error: insightError, refetch: refetchInsight, forceRefresh: forceRefreshInsight } = useOrgNudges(currentOrg?.id);
+
+  // Guard against legacy insight shape without DIN fields
+  const safeInsight = useMemo(() => {
+    if (!insight) return null;
+    if ((insight as any).topDIN && (insight as any).bottomDIN) {
+      return insight as any;
+    }
+    // Legacy fallback mapping
+    const legacy: any = insight;
+    return {
+      topDIN: {
+        category: 'Priority',
+        headline: legacy.title || 'Status',
+      },
+      bottomDIN: {
+        title: legacy.title || 'Details',
+        description: legacy.description || 'Review your metrics.',
+        metrics: legacy.metrics,
+        action: legacy.action,
+      },
+      severity: legacy.severity || 'neutral',
+      urgency: legacy.urgency,
+      timestamp: legacy.timestamp,
+    };
+  }, [insight]);
+
+  const formatImpactHeadline = (impact?: { value: number; unit: string; context?: string; headline?: string }) => {
+    if (!impact) return '';
+    if (impact.headline) return impact.headline;
+    const value = Math.round(impact.value).toLocaleString();
+    if (impact.unit === 'dollars') {
+      return `$${value}${impact.context ? ` ${impact.context}` : ''}`;
+    }
+    if (impact.unit === 'days') {
+      return `${value} days ${impact.context || ''}`.trim();
+    }
+    return `${value} ${impact.context || ''}`.trim();
+  };
 
   // Fetch pool performance data from DB
   const fetchPoolPerformance = async () => {
@@ -553,103 +591,136 @@ const DashboardScreen = () => {
         <View style={styles.todayCardContainer}>
             
             <View style={styles.todayCard}>
-                <View style={styles.todayCardContent}>
-                    <View style={styles.todayLeft}>
-                        <Text style={styles.sectionTitle}>Today</Text>
-                        <Text style={styles.lastUpdated}>Updated at {new Date().toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})}</Text>
-                        
-                        <Text style={styles.quickStatusTitle}>Quick Status:</Text>
-                        {loadingInsight ? (
-                          <View style={styles.insightLoading}>
-                            <ActivityIndicator size="small" color="#93C822" />
-                            <Text style={styles.insightLoadingText}>Loading insights...</Text>
-                          </View>
-                        ) : insightError ? (
-                          <View style={styles.insightError}>
-                            <Text style={styles.insightErrorText}>Unable to load insights</Text>
-                            <View style={styles.insightErrorActions}>
-                              <TouchableOpacity onPress={refetchInsight}>
-                                <Text style={styles.insightRetryText}>Retry</Text>
-                              </TouchableOpacity>
-                              <TouchableOpacity onPress={forceRefreshInsight} style={styles.forceRefreshBtn}>
-                                <Text style={styles.forceRefreshText}>Force Refresh</Text>
-                              </TouchableOpacity>
-                            </View>
-                          </View>
-                        ) : insight ? (
-                          <>
-                            
-                            <Text style={styles.quickStatusSubtext}>
-                              {insight.title}- 
-                              {insight.description}
-                            </Text>
-                            <View style={styles.insightActions}>
-                              {insight.action && (
-                                <TouchableOpacity 
-                                  onPress={() => handleInsightAction(insight.action!.link, insight.title)}
-                                >
-                                  <Text style={styles.quickStatusLink}>
-                                    {insight.action.label}
-                                    {insight.action.count !== undefined && ` (${insight.action.count})`}
-                                  </Text>
-                                </TouchableOpacity>
-                              )}
-                              <TouchableOpacity 
-                                onPress={forceRefreshInsight}
-                                style={styles.refreshIconBtn}
-                              >
-                                <Icon name="refresh" size={16} color="#6B7280" />
-                              </TouchableOpacity>
-                            </View>
-                          </>
-                        ) : (
-                          <View style={styles.noInsightContainer}>
-                            <Text style={styles.quickStatusSubtext}>
-                              No insights available at this time.
-                            </Text>
-                            <TouchableOpacity onPress={forceRefreshInsight} style={styles.forceRefreshBtn}>
-                              <Text style={styles.forceRefreshText}>Generate Insight</Text>
-                            </TouchableOpacity>
-                          </View>
-                        )}
+                {loadingInsight ? (
+                  <View style={styles.insightLoading}>
+                    <ActivityIndicator size="small" color="#111827" />
+                    <Text style={styles.insightLoadingText}>Loading insights...</Text>
+                  </View>
+                ) : insightError ? (
+                  <View style={styles.insightError}>
+                    <Text style={styles.insightErrorText}>Unable to load insights</Text>
+                    <View style={styles.insightErrorActions}>
+                      <TouchableOpacity onPress={refetchInsight}>
+                        <Text style={styles.insightRetryText}>Retry</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={forceRefreshInsight} style={styles.forceRefreshBtn}>
+                        <Text style={styles.forceRefreshText}>Force Refresh</Text>
+                      </TouchableOpacity>
                     </View>
-                    <View style={styles.todayRight}>
-                        <Text style={styles.chartTitle}>Most Active {showPoolsMode ? 'Pools' : 'Locations'}</Text>
-                        {(showPoolsMode ? loadingPools : loadingLocations) ? (
-                          <ActivityIndicator size="small" color="#93C822" style={styles.poolLoader} />
-                        ) : (
-                          <PoolPerformanceHeatmap 
-                            pools={showPoolsMode ? poolPerformance : locationPerformance} 
-                            timeframe={activeTimeframe}
-                            onTimeframeChange={setActiveTimeframe}
-                          />
-                        )}
-                        <View style={styles.poolToggle}>
-                            <TouchableOpacity
-                              onPress={() => setShowPoolsMode(true)}
-                              style={[styles.poolToggleBtn, showPoolsMode && styles.poolToggleActive]}
-                            >
-                              <Text style={[styles.poolToggleText, showPoolsMode && styles.poolToggleTextActive]}>Pools</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              onPress={() => setShowPoolsMode(false)}
-                              style={[styles.poolToggleBtn, !showPoolsMode && styles.poolToggleActive]}
-                            >
-                              <Text style={[styles.poolToggleText, !showPoolsMode && styles.poolToggleTextActive]}>Locations</Text>
-                            </TouchableOpacity>
+                  </View>
+                ) : safeInsight && safeInsight.topDIN && safeInsight.bottomDIN ? (
+                  <TouchableOpacity
+                    activeOpacity={0.95}
+                    style={styles.insightCardGreen}
+                    onPress={() => safeInsight.bottomDIN.action ? handleInsightAction(safeInsight.bottomDIN.action.link, safeInsight.bottomDIN.title) : undefined}
+                  >
+                    <View style={styles.insightGreenHeader}>
+                      
+                      <Text style={styles.todayTitle}>Sprout's Insight</Text>
+                      <Text style={styles.todayMeta}>
+                        Updated {safeInsight.timestamp ? new Date(safeInsight.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '2m ago'}
+                      </Text>
+                    </View>
+                    <View style={styles.insideContainer}>
+                      
+                      {/* Outcome Headline */}
+                      <Text style={styles.insightGreenHeadline}>
+                        {safeInsight.topDIN.headline || 'Recover value today'}
+                      </Text>
+
+                      {/* Description */}
+                      <Text style={styles.insightGreenDesc} numberOfLines={4}>
+                        {safeInsight.bottomDIN.description}
+                      </Text>
+
+                      {/* Metrics: Two-column layout */}
+                      {safeInsight.bottomDIN.metrics && safeInsight.bottomDIN.metrics.length >= 2 && (
+                        <View style={styles.insightGreenMetrics}>
+                          {safeInsight.bottomDIN.metrics[0] ? (
+                            <View style={styles.insightGreenMetricCol}>
+                              <Text style={styles.insightGreenMetricLabel}>{safeInsight.bottomDIN.metrics[0].label}</Text>
+                              <Text style={styles.insightGreenMetricValue}>{safeInsight.bottomDIN.metrics[0].value}</Text>
+                            </View>
+                          ) : null}
+                          {safeInsight.bottomDIN.metrics[1] ? (
+                            <View style={styles.insightGreenMetricCol}>
+                              <Text style={styles.insightGreenMetricLabel}>{safeInsight.bottomDIN.metrics[1].label}</Text>
+                              <Text style={[styles.insightGreenMetricValue, styles.insightGreenMetricPositive]}>
+                                {safeInsight.bottomDIN.metrics[1].value}
+                              </Text>
+                            </View>
+                          ) : null}
                         </View>
+                      )}
+
+                      {/* Primary Action Button */}
+                      {safeInsight.bottomDIN.action && (
+                        <TouchableOpacity
+                          onPress={() =>
+                            handleInsightAction(
+                              safeInsight.bottomDIN.action!.link,
+                              safeInsight.bottomDIN.title,
+                            )
+                          }
+                          style={styles.insightGreenBtn}
+                        >
+                          <Text style={styles.insightGreenBtnText}>
+                            {safeInsight.bottomDIN.action.label || 'Take action'}
+                          </Text>
+                          <Icon name="arrow-right" size={20} color="#fff" />
+                        </TouchableOpacity>
+                      )}
+
+                      {/* Footer: Meta actions + Sources */}
+                      <View style={styles.insightGreenFooter}>
+                        <View style={styles.insightGreenMetaLeft}>
+                          <TouchableOpacity style={styles.insightGreenIconBtn}>
+                            <Icon name="content-copy" size={16} color="#6B7280" />
+                          </TouchableOpacity>
+                          <TouchableOpacity style={styles.insightGreenIconBtn}>
+                            <Icon name="thumb-up-outline" size={16} color="#6B7280" />
+                          </TouchableOpacity>
+                          <TouchableOpacity style={styles.insightGreenIconBtn}>
+                            <Icon name="thumb-down-outline" size={16} color="#6B7280" />
+                          </TouchableOpacity>
+                          <TouchableOpacity onPress={forceRefreshInsight} style={styles.insightGreenIconBtn}>
+                            <Icon name="refresh" size={16} color="#6B7280" />
+            
+                          </TouchableOpacity>
+                        </View>
+                        <TouchableOpacity style={styles.insightGreenSources}>
+                          <View style={styles.insightGreenAvatars}>
+                            <View style={[styles.avatar, { backgroundColor: '#A78BFA', marginRight: -8 }]} />
+                            <View style={[styles.avatar, { backgroundColor: '#60A5FA', marginRight: -8 }]} />
+                            <View style={[styles.avatar, { backgroundColor: '#F87171', marginRight: -8 }]} />
+                            <View style={[styles.avatar, { backgroundColor: '#FBBF24' }]} />
+                          </View>
+                          <Text style={styles.insightGreenSourcesText}>Sources</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
-                </View>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={styles.noInsightContainer}>
+                    <Text style={styles.quickStatusSubtext}>
+                      No insights available at this time.
+                    </Text>
+                    <TouchableOpacity onPress={forceRefreshInsight} style={styles.forceRefreshBtn}>
+                      <Text style={styles.forceRefreshText}>Generate Insight</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
             </View>
         </View>
 
-        {/* Needs Attention */}
+        {/* Overview */}
         <View style={styles.sectionContainer}>
-            <Text style={styles.sectionTitle}>Needs Attention</Text>
-
             <View style={[styles.todayCard, {padding: 0}]}>
+              <View style={[styles.tabsContainer, {margin: 8, marginTop: 7, backgroundColor: "#fff", justifyContent: 'space-between'}]}>
+                <Text style={[styles.sectionTitle, {marginBottom: 0}]}>Overview</Text>
+              </View>
             
-              <View style={[styles.tabsContainer, {margin: 8 }]}>
+              <View style={[styles.tabsContainer, {marginHorizontal: 8, marginTop: 0}]}>
                   <TouchableOpacity 
                       style={[styles.tab, activeTab === 'low_stock' && styles.activeTab]}
                       onPress={() => setActiveTab('low_stock')}
@@ -658,11 +729,11 @@ const DashboardScreen = () => {
                       <Text style={[styles.tabText, activeTab === 'low_stock' && styles.activeTabText]}>Low Stock</Text>
                   </TouchableOpacity>
                   <TouchableOpacity 
-                      style={[styles.tab, activeTab === 'pending_orders' && styles.activeTab]}
-                      onPress={() => setActiveTab('pending_orders')}
+                      style={[styles.tab, activeTab === 'recent_activity' && styles.activeTab]}
+                      onPress={() => setActiveTab('recent_activity')}
                   >
-                      <Icon name="cube-send" size={16} color={activeTab === 'pending_orders' ? '#1F2937' : '#6B7280'} style={{marginRight: 6}} />
-                      <Text style={[styles.tabText, activeTab === 'pending_orders' && styles.activeTabText]}>Pending Orders</Text>
+                      <Icon name="clock-outline" size={16} color={activeTab === 'recent_activity' ? '#1F2937' : '#6B7280'} style={{marginRight: 6}} />
+                      <Text style={[styles.tabText, activeTab === 'recent_activity' && styles.activeTabText]}>Recent Activity</Text>
                   </TouchableOpacity>
               </View>
 
@@ -690,57 +761,50 @@ const DashboardScreen = () => {
                 </View>
             )}
 
-            {activeTab === 'pending_orders' && (
+            {activeTab === 'recent_activity' && (
                 <View style={styles.listContainer}>
-                    <View style={styles.emptyState}>
-                        <Text style={styles.emptyText}>No pending orders</Text>
-                    </View>
+                    {recentActivity.slice(0, 3).map((event, idx) => {
+                        let imageUrl = undefined;
+                        let productTitle = event.Details?.productTitle || event.Message;
+                        let sku = event.Details?.sku;
+                        
+                        if (event.ProductVariantId) {
+                            const images = legendCtx?.productImages$?.get?.() || {};
+                            const variants = legendCtx?.productVariants$?.get?.() || {};
+                            
+                            const img = Object.values(images).find((i: any) => i.ProductVariantId === event.ProductVariantId);
+                            imageUrl = img?.ImageUrl;
+                            
+                            const variant = variants[event.ProductVariantId];
+                            if (variant) {
+                                 if (!event.Details?.productTitle) productTitle = variant.Title;
+                                 if (!sku) sku = variant.Sku;
+                            }
+                        }
+
+                        return (
+                            <ActivityEventCard 
+                                key={event.Id || idx} 
+                                id={event.Id || `activity-${idx}`}
+                                title={productTitle}
+                                displayTitle={event.EventType === 'INVENTORY_UPDATE' ? 'Inventory Adjustment' : 'System Update'}
+                                sku={sku}
+                                timestamp={event.Timestamp}
+                                imageUrl={imageUrl}
+                                reasonText={event.Details?.reason}
+                                eventType={event.EventType}
+                                ownerLabel={event.Details?.platform}
+                                onPress={() => event.ProductVariantId && navigation.navigate('ProductDetail', { productId: event.ProductVariantId })}
+                            />
+                        );
+                    })}
+                    {recentActivity.length === 0 && (
+                      <View style={styles.emptyState}>
+                        <Text style={styles.emptyText}>No recent activity</Text>
+                      </View>
+                    )}
                 </View>
             )}
-            </View>
-        </View>
-
-        {/* Recent Activity */}
-        <View style={styles.sectionContainer}>
-            <Text style={styles.sectionTitle}>Recent Activity</Text>
-            
-            <View style={[styles.todayCard, {padding: 0}]}>
-                {recentActivity.slice(0, 3).map((event, idx) => {
-                    // Look up image and details if ProductVariantId exists
-                    let imageUrl = undefined;
-                    let productTitle = event.Details?.productTitle || event.Message;
-                    let sku = event.Details?.sku;
-                    
-                    if (event.ProductVariantId) {
-                        const images = legendCtx?.productImages$?.get?.() || {};
-                        const variants = legendCtx?.productVariants$?.get?.() || {};
-                        
-                        const img = Object.values(images).find((i: any) => i.ProductVariantId === event.ProductVariantId);
-                        imageUrl = img?.ImageUrl;
-                        
-                        const variant = variants[event.ProductVariantId];
-                        if (variant) {
-                             if (!event.Details?.productTitle) productTitle = variant.Title;
-                             if (!sku) sku = variant.Sku;
-                        }
-                    }
-
-                    return (
-                        <ActivityEventCard 
-                            key={event.Id || idx} 
-                            id={event.Id || `activity-${idx}`}
-                            title={productTitle}
-                            displayTitle={event.EventType === 'INVENTORY_UPDATE' ? 'Inventory Adjustment' : 'System Update'}
-                            sku={sku}
-                            timestamp={event.Timestamp}
-                            imageUrl={imageUrl}
-                            reasonText={event.Details?.reason}
-                            eventType={event.EventType}
-                            ownerLabel={event.Details?.platform}
-                            onPress={() => event.ProductVariantId && navigation.navigate('ProductDetail', { productId: event.ProductVariantId })}
-                        />
-                    );
-                })}
             </View>
         </View>
 
@@ -762,7 +826,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 60,
-    backgroundColor: 'rgb(208, 255, 170)', // Match InventoryOrdersScreen
+    backgroundColor: 'rgb(208, 255, 170)',
   },
   container: {
     flex: 1,
@@ -771,7 +835,7 @@ const styles = StyleSheet.create({
     marginTop: 60,
     borderTopRightRadius: 32,
     borderTopLeftRadius: 32,
-    backgroundColor: '#FAFAFA', // Slightly off-white for better card contrast
+    backgroundColor: '#FAFAFA',
   },
   loadingContainer: {
     justifyContent: 'center',
@@ -786,9 +850,20 @@ const styles = StyleSheet.create({
   // Today Card
   todayCardContainer: {
     marginBottom: 24,
-
     backgroundColor: "transparent",
-    minWidth: "100%",
+  },
+  todayHeader: {
+    marginBottom: 12,
+  },
+  todayTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  todayMeta: {
+    fontSize: 13,
+    color: '#6B7280',
   },
   sectionTitle: {
     fontSize: 18,
@@ -804,47 +879,148 @@ const styles = StyleSheet.create({
   todayCard: {
     backgroundColor: '#fff',
     borderRadius: 20,
-    padding: 16,
+    padding: 0,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 10,
     elevation: 2,
-
   },
-  todayCardContent: {
+
+  insideContainer: {
+    backgroundColor: 'rgb(255, 255, 255)',
+    borderRadius: 20,
+    padding: 20,
+    gap: 14,
+    borderWidth: 2,
+    borderColor: 'rgba(153, 153, 153, 0.4)',
+    
+  },
+  // Green Card Insight
+  insightCardGreen: {
+    backgroundColor: 'rgb(208, 255, 170)',
+    borderRadius: 20,
+    padding: 20,
+    gap: 14,
+    borderWidth: 2,
+    borderColor: 'rgb(180, 230, 50)',
+  },
+  insightGreenHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  insightBranding: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  insightBrandIcon: {
+    fontSize: 18,
+  },
+  insightBrandName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  insightGreenTimestamp: {
+    fontSize: 12,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  insightGreenHeadline: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#111827',
+    lineHeight: 32,
+  },
+  insightGreenDesc: {
+    fontSize: 14,
+    color: '#4B5563',
+    lineHeight: 20,
+  },
+  insightGreenMetrics: {
     flexDirection: 'row',
     gap: 16,
-    justifyContent: 'space-between',
+    backgroundColor: 'rgba(255, 255, 255, 0.5)',
+    borderRadius: 12,
+    padding: 12,
   },
-  todayLeft: {
+  insightGreenMetricCol: {
     flex: 1,
-    justifyContent: 'flex-start',
   },
-  quickStatusTitle: {
-    fontSize: 14,
-    fontWeight: '600',
+  insightGreenMetricLabel: {
+    fontSize: 12,
     color: '#6B7280',
     marginBottom: 4,
   },
-  quickStatusHeadline: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#4B5563',
-    lineHeight: 18,
+  insightGreenMetricValue: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
   },
+  insightGreenMetricPositive: {
+    color: '#059669',
+  },
+  insightGreenBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgb(147, 200, 34)',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  insightGreenBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  insightGreenFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0, 0, 0, 0.1)',
+  },
+  insightGreenMetaLeft: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  insightGreenIconBtn: {
+    padding: 6,
+  },
+  insightGreenSources: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  insightGreenAvatars: {
+    flexDirection: 'row',
+  },
+  avatar: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: 'rgba(182, 182, 182, 0.86)',
+  },
+  insightGreenSourcesText: {
+    fontSize: 12,
+    color: '#6B7280',
+    fontWeight: '600',
+  },
+
   quickStatusSubtext: {
     fontSize: 13,
     color: '#4B5563',
     marginBottom: 12,
     lineHeight: 18,
   },
-  quickStatusLink: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#2563EB',
-    textDecorationLine: 'underline',
-  },
+
   // Insight states
   insightLoading: {
     flexDirection: 'row',
@@ -876,15 +1052,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     marginBottom: 4,
   },
-  insightCritical: {
-    color: '#DC2626',
-  },
-  insightWarning: {
-    color: '#F59E0B',
-  },
-  insightGood: {
-    color: '#10B981',
-  },
   noInsightContainer: {
     marginTop: 8,
   },
@@ -904,25 +1071,7 @@ const styles = StyleSheet.create({
     color: '#2563EB',
     fontWeight: '600',
   },
-  insightActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginTop: 4,
-  },
-  refreshIconBtn: {
-    padding: 4,
-  },
-  todayRight: {
-    width: 220,
-    justifyContent: 'space-between',
-  },
-  chartTitle: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#111',
-    marginBottom: 8,
-  },
+
   // Pool Performance Heatmap Styles
   poolHeatmapContainer: {
     flex: 1,
@@ -997,7 +1146,6 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
     fontStyle: 'italic',
   },
-  // Pool Toggle
   poolToggle: {
     flexDirection: 'row',
     backgroundColor: '#F3F4F6',
@@ -1032,9 +1180,7 @@ const styles = StyleSheet.create({
   // Section Container
   sectionContainer: {
     marginBottom: 24,
-
     gap: 8,
-
   },
   tabsContainer: {
     flexDirection: 'row',
@@ -1080,11 +1226,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
     color: '#6B7280',
     fontSize: 14,
-  },
-
-  // Activity List
-  activityList: {
-    marginHorizontal: -8, // Compensate for card margin
   },
 });
 

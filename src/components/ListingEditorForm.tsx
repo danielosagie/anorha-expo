@@ -179,7 +179,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
       const platformData = platforms[platformKey] as PlatformState;
       const locs = platformData?.locations || [];
       for (const loc of locs) {
-        allLocs.push({ ...loc, platformKey });
+        // Use the raw location id for lookup so it matches variant.inventoryByLocation keys
+        allLocs.push({ ...loc, platformKey, id: loc.id });
       }
     }
     return allLocs;
@@ -193,7 +194,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
       const locs = platformData?.locations || [];
       const locQty = platformData?.locationQuantities || {};
       for (const loc of locs) {
-        const key = `${platformKey}:${loc.id}`;
+        // Use raw loc.id so it matches inventoryByLocation keys
+        const key = loc.id;
         agg[key] = { platformKey, quantity: locQty[loc.id] || 0 };
       }
     }
