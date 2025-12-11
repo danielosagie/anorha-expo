@@ -359,6 +359,15 @@ const DashboardScreen = () => {
 
   // 1. Compute Live Inventory Stats & Low Stock Items
   const { lowStockItems, lowStockCount, totalInventory } = useMemo(() => {
+    // SECURITY: Guard against showing data when no org is active
+    if (!currentOrg?.id) {
+      return {
+        totalInventory: 0,
+        lowStockItems: [],
+        lowStockCount: 0
+      };
+    }
+
     const pv = legendCtx?.productVariants$?.get?.() || {};
     const levels = legendCtx?.inventoryLevels$?.get?.() || {};
     const images = legendCtx?.productImages$?.get?.() || {};
@@ -407,7 +416,7 @@ const DashboardScreen = () => {
       lowStockItems: items,
       lowStockCount: Object.keys(variantQuantities).filter(vid => variantQuantities[vid] <= threshold).length
     };
-  }, [legendCtx?.productVariants$, legendCtx?.inventoryLevels$, legendCtx?.productImages$]);
+  }, [legendCtx?.productVariants$, legendCtx?.inventoryLevels$, legendCtx?.productImages$, currentOrg?.id]);
 
   // 2. Fetch Recent Activity (filtered to user-relevant events only)
   const fetchActivity = async () => {
@@ -681,8 +690,10 @@ const DashboardScreen = () => {
                 onPress={forceRefreshInsight}
               >
                 <View style={styles.insightGreenHeader}>
-                  <Icon name="sprout-outline" size={20} color="#647653" />
-                  <Text style={[styles.todayTitle, { color: '#647653' }]}>Sprout's Insight</Text>
+                  <View>
+                    <Icon name="sprout-outline" size={20} color="#647653" />
+                    <Text style={[styles.todayTitle, { color: '#647653' }]}>Sprout's Insight</Text>
+                  </View>
                   <Text style={[styles.todayMeta, { color: '#647653' }]}>Ready to analyze</Text>
                 </View>
                 <View style={styles.insideContainer}>
@@ -722,14 +733,16 @@ const DashboardScreen = () => {
                     <Text style={styles.insightGreenBtnText}>
                       {loadingInsight ? 'Analyzing...' : 'Generate Insight'}
                     </Text>
-                    <Icon name={loadingInsight ? "loading" : "auto-fix"} size={20} color="#fff" />
+                    <Icon name={loadingInsight ? "loading" : "Sparkles"} size={20} color="#fff" />
                   </TouchableOpacity>
 
                   {/* Footer */}
                   <View style={styles.insightGreenFooter}>
                     <View style={styles.insightGreenMetaLeft}>
-                      <Icon name="robot-outline" size={16} color="#6B7280" style={{ marginRight: 4 }} />
-                      <Text style={styles.insightGreenSourcesText}>Powered by AI</Text>
+                      {/* 
+                        <Icon name="robot-outline" size={16} color="#6B7280" style={{ marginRight: 4 }} />
+                        <Text style={styles.insightGreenSourcesText}>Powered by AI</Text> 
+                      */}
                     </View>
                   </View>
                 </View>
@@ -779,8 +792,9 @@ const DashboardScreen = () => {
                 ))}
                 {lowStockItems.length === 0 && (
                   <View style={styles.emptyState}>
-                    <Icon name="check-circle" size={32} color="rgb(208, 255, 170)" />
-                    <Text style={styles.emptyText}>Everything is stocked!</Text>
+                    <Icon name="check-circle-outline" size={32} color="#10B981" />
+                    <Text style={[styles.emptyText, { color: '#374151', marginTop: 8 }]}>Inventory levels are healthy.</Text>
+                    <Text style={{ fontSize: 13, color: '#6B7280', marginTop: 4 }}>No low stock items detected.</Text>
                   </View>
                 )}
               </View>

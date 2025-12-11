@@ -1,16 +1,13 @@
-import React, { useState, useContext, useCallback } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert, Image } from 'react-native';
+import React, { useState, useContext, useCallback, useRef, useEffect } from 'react';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert, Image, Animated as RNAnimated, Dimensions } from 'react-native';
 import AnimatedGradientBackground from '../components/AnimatedGradientBackground';
 import Button from '../components/Button';
-import Animated, { FadeInDown } from 'react-native-reanimated';
+import Animated, { FadeInDown, FadeIn, FadeOut } from 'react-native-reanimated';
 import { AuthContext } from '../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { LinearGradient } from 'expo-linear-gradient';
-// import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
-// Import Phone Number Input (Commented out for now)
-// import PhoneInput from 'react-native-phone-number-input';
-// import { useRef } from 'react';
-import { useSignIn, useSignUp, useAuth, getClerkInstance, useOAuth } from '@clerk/clerk-expo';
+import { useSignIn, useSignUp } from '@clerk/clerk-expo';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 // Flag to use static gradient for better performance
 const USE_STATIC_GRADIENT = true;
@@ -32,29 +29,33 @@ interface FormContentProps {
   loading: boolean;
   handleForgotPassword: () => Promise<void>;
   setIsLogin: (value: boolean) => void;
+  showPassword: boolean;
+  setShowPassword: (value: boolean) => void;
 }
 
 // Memoize form component for better performance
-const FormContent = React.memo(({ 
-  isLogin, 
-  firstName, 
-  setFirstName, 
-  lastName, 
-  setLastName, 
-  email, 
-  setEmail, 
-  password, 
-  setPassword, 
-  handleAuth, 
-  loading, 
-  handleForgotPassword, 
-  setIsLogin 
+const FormContent = React.memo(({
+  isLogin,
+  firstName,
+  setFirstName,
+  lastName,
+  setLastName,
+  email,
+  setEmail,
+  password,
+  setPassword,
+  handleAuth,
+  loading,
+  handleForgotPassword,
+  setIsLogin,
+  showPassword,
+  setShowPassword
 }: FormContentProps) => (
   <>
     <Text style={styles.headerText}>
       {isLogin ? 'Log Back In' : 'Create Account'}
     </Text>
-    
+
     {!isLogin && (
       <TextInput
         style={styles.input}
@@ -74,7 +75,7 @@ const FormContent = React.memo(({
         onChangeText={setLastName}
       />
     )}
-    
+
     <TextInput
       style={styles.input}
       placeholder="Email"
@@ -84,31 +85,44 @@ const FormContent = React.memo(({
       value={email}
       onChangeText={setEmail}
     />
-    
-    <TextInput
-      style={styles.input}
-      placeholder="Password"
-      placeholderTextColor="#aaa"
-      secureTextEntry
-      value={password}
-      onChangeText={setPassword}
-    />
-    
-    <Button 
-      title={isLogin ? "Log In" : "Sign Up"} 
-      onPress={handleAuth} 
+
+    <View style={styles.passwordContainer}>
+      <TextInput
+        style={styles.passwordInput}
+        placeholder="Password"
+        placeholderTextColor="#aaa"
+        secureTextEntry={!showPassword}
+        value={password}
+        onChangeText={setPassword}
+      />
+      <TouchableOpacity
+        onPress={() => setShowPassword(!showPassword)}
+        style={styles.eyeIcon}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      >
+        <Icon
+          name={showPassword ? "eye" : "eye-off"}
+          size={20}
+          color="#aaa"
+        />
+      </TouchableOpacity>
+    </View>
+
+    <Button
+      title={isLogin ? "Log In" : "Sign Up"}
+      onPress={handleAuth}
       style={styles.button}
       loading={loading}
       icon={isLogin ? "login" : "account-plus"}
       textStyle={styles.buttonText}
     />
-    
+
     {isLogin && (
       <TouchableOpacity onPress={handleForgotPassword}>
         <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
       </TouchableOpacity>
     )}
-    
+
     <View style={styles.switchContainer}>
       <Text style={styles.switchText}>
         {isLogin ? "Don't have an account?" : "Already have an account?"}
@@ -130,46 +144,55 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
-  // Comment out phone state for now
-  // const [phoneNumber, setPhoneNumber] = useState('');
-  // const [formattedPhoneNumber, setFormattedPhoneNumber] = useState('');
-  // const [countryCode, setCountryCode] = useState('US');
-  
+
+  // Notification state
+  const [notification, setNotification] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
+  const notificationAnim = useRef(new RNAnimated.Value(-100)).current;
+
+  const showNotification = useCallback((message: string, type: 'error' | 'success' = 'error') => {
+    setNotification({ message, type });
+    RNAnimated.sequence([
+      RNAnimated.timing(notificationAnim, {
+        toValue: 20, // Top margin
+        duration: 300,
+        useNativeDriver: true,
+      }),
+      RNAnimated.delay(3000),
+      RNAnimated.timing(notificationAnim, {
+        toValue: -100,
+        duration: 300,
+        useNativeDriver: true,
+      })
+    ]).start(() => setNotification(null));
+  }, [notificationAnim]);
+
   const authContext = useContext(AuthContext);
   const { signIn, isLoaded: isSignInLoaded, setActive: signInSetActive } = useSignIn();
   const { signUp, isLoaded: isSignUpLoaded, setActive: signUpSetActive } = useSignUp();
-  const { startOAuthFlow: startGoogleOAuth } = useOAuth({ strategy: 'oauth_google' });
-  // Comment out phone ref for now
-  // const phoneInputRef = useRef<PhoneInput>(null);
-  
-  // REMOVED: waitForClerkReady was checking clerk?.client which doesn't exist on React Native
-  // On React Native, setActive from useAuth() hook is always available and ready to use
 
-  // Use useCallback for event handlers to prevent unnecessary re-renders
   const handleAuth = useCallback(async () => {
     if (!authContext) {
       console.error("Auth context is not available");
       return;
     }
-    
+
     setLoading(true);
-    
+
     try {
       if (isLogin) {
         if (!isSignInLoaded || !signIn) return;
         console.log('[AuthScreen] Attempting signIn.create with email:', email);
         const res = await signIn.create({ identifier: email, password });
-        console.log('[AuthScreen] signIn.create result:', res.status, res.createdSessionId ? 'has session' : 'no session');
+
         if (res.status === 'complete' && res.createdSessionId) {
-          // Use setActive from useSignIn hook
           console.log('[AuthScreen] Calling setActive with session:', res.createdSessionId);
           await signInSetActive({ session: res.createdSessionId });
           console.log('[AuthScreen] ✓ Login successful, session activated');
-          return; // Do not navigate here; App.tsx will react to isSignedIn
+          return;
         } else if ((res as any)?.status === 'needs_first_factor') {
           const r2 = await signIn.attemptFirstFactor({ strategy: 'password', password });
           if (r2.status === 'complete' && r2.createdSessionId) {
@@ -178,112 +201,92 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
             console.log('[AuthScreen] ✓ First factor login successful');
             return;
           } else {
-            Alert.alert('Login', 'Additional authentication required.');
+            showNotification('Additional authentication required.');
           }
         } else {
-          Alert.alert('Login', 'Unable to complete sign-in.');
+          showNotification('Unable to complete sign-in.');
         }
       } else {
-        // Handle signup with Clerk (email + password)
         if (!email || !password) {
-          Alert.alert('Error', 'Please enter email and password');
+          showNotification('Please enter email and password');
           setLoading(false);
           return;
         }
         if (!isSignUpLoaded || !signUp) return;
-        const res = await signUp.create({ emailAddress: email, password, firstName, lastName });
-        if (res.status === 'complete' && res.createdSessionId) {
-          console.log('[AuthScreen] Signup complete, calling setActive');
-          await signUpSetActive({ session: res.createdSessionId });
-          console.log('[AuthScreen] ✓ Signup successful');
-          return;
-        } else {
-          try {
+
+        try {
+          const res = await signUp.create({ emailAddress: email, password, firstName, lastName });
+          if (res.status === 'complete' && res.createdSessionId) {
+            await signUpSetActive({ session: res.createdSessionId });
+            return;
+          } else {
             await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
             navigation.navigate('VerifyCode', { contactLabel: email, mode: 'signup' });
-          } catch {
-            Alert.alert('Verify Email', 'Please verify your email to complete signup.');
+          }
+        } catch (err: any) {
+          if (err.errors && err.errors[0]?.message) {
+            showNotification(err.errors[0].message);
+          } else {
+            showNotification('Signup failed. Please check your details.');
           }
         }
       }
     } catch (error: any) {
-      // Handle "already signed in" error specifically
-      if (error.message?.includes('already signed in')) {
-        console.log('[AuthScreen] User is already signed in, checking current state...');
-        console.log('[AuthScreen] Current auth.isSignedIn:', auth.isSignedIn);
-        console.log('[AuthScreen] Current auth.isLoaded:', auth.isLoaded);
-        
-        // If Clerk says we're signed in but our UI doesn't reflect it, something is wrong
-        if (auth.isSignedIn) {
-          console.log('[AuthScreen] Auth state indicates signed in, waiting for UI to catch up...');
-          setLoading(false);
-          return;
-        } else {
-          console.log('[AuthScreen] Auth state shows not signed in despite error, clearing session...');
-          try {
-            await auth.signOut?.();
-            console.log('[AuthScreen] Signed out successfully, please try again');
-            Alert.alert('Please try again', 'There was a session conflict. Please sign in again.');
-          } catch (signOutError) {
-            console.error('[AuthScreen] Failed to sign out:', signOutError);
-            Alert.alert('Error', 'Please restart the app and try again.');
-          }
-        }
+      if (error.errors && error.errors[0]?.message) {
+        showNotification(error.errors[0].message);
+      } else if (error.message?.includes('already signed in')) {
+        // Handle "already signed in" silently or with specific logic
+        console.log('Already signed in');
       } else {
-        console.error("Overall Auth Error:", error);
-        Alert.alert('Error', error.message || 'An error occurred');
+        showNotification(error.message || 'An error occurred');
       }
     } finally {
       setLoading(false);
     }
-  }, [authContext, isLogin, email, password, firstName, lastName, isSignInLoaded, isSignUpLoaded, signIn, signUp, signInSetActive, signUpSetActive, navigation]);
-  
+  }, [authContext, isLogin, email, password, firstName, lastName, isSignInLoaded, isSignUpLoaded, signIn, signUp, signInSetActive, signUpSetActive, navigation, showNotification]);
+
   const handleForgotPassword = useCallback(async () => {
     if (!email) {
-      Alert.alert('Error', 'Please enter your email');
+      showNotification('Please enter your email');
       return;
     }
-    
+
     setLoading(true);
-    
+
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email);
-      
       if (error) throw error;
-      
-      Alert.alert('Success', 'Check your email for the password reset link.');
+      showNotification('Check your email for the password reset link.', 'success');
     } catch (error: any) {
-      Alert.alert('Error', error.message || 'An error occurred');
+      showNotification(error.message || 'An error occurred');
     } finally {
       setLoading(false);
     }
-  }, [email]);
-  
-  // Implemented handleGoogleAuth
-  const handleGoogleAuth = useCallback(async () => {
-    setLoading(true);
-    try {
-      const result = await startGoogleOAuth();
-      if (result?.createdSessionId && result?.setActive) {
-        console.log('[AuthScreen] Google OAuth complete, calling setActive');
-        await result.setActive({ session: result.createdSessionId });
-        console.log('[AuthScreen] ✓ Google sign-in successful');
-        return;
-      }
-      Alert.alert('Google Sign-In', 'Could not complete Google sign-in.');
-    } catch (e: any) {
-      console.error('[AuthScreen] Google OAuth error:', e);
-      Alert.alert('Google Sign-In Error', e?.message || 'An error occurred');
-    } finally {
-      setLoading(false);
-    }
-  }, [startGoogleOAuth]);
+  }, [email, showNotification]);
 
   return (
-    <KeyboardAvoidingView 
+    <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
+      {/* In-App Notification */}
+      {notification && (
+        <RNAnimated.View
+          style={[
+            styles.notification,
+            { transform: [{ translateY: notificationAnim }] },
+            notification.type === 'success' ? styles.notificationSuccess : styles.notificationError
+          ]}
+        >
+          <Icon
+            name={notification.type === 'success' ? "check-circle" : "alert-circle"}
+            size={20}
+            color="#fff"
+          />
+          <Text style={styles.notificationText}>{notification.message}</Text>
+        </RNAnimated.View>
+      )}
+
       {USE_STATIC_GRADIENT ? (
         <LinearGradient
           colors={['#5c9c00', '#8cc63f', '#5c9c00']}
@@ -294,15 +297,15 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
       ) : (
         <AnimatedGradientBackground />
       )}
-      
+
       <View style={styles.logoContainer}>
         <Image source={require('../assets/rounded_anorha.png')} style={styles.logo} />
         <Text style={styles.title}>Anorha</Text>
       </View>
-      
+
       {DISABLE_FORM_ANIMATIONS ? (
         <View style={styles.formContainer}>
-          <FormContent 
+          <FormContent
             isLogin={isLogin}
             firstName={firstName}
             setFirstName={setFirstName}
@@ -316,23 +319,16 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
             loading={loading}
             handleForgotPassword={handleForgotPassword}
             setIsLogin={setIsLogin}
+            showPassword={showPassword}
+            setShowPassword={setShowPassword}
           />
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>or</Text>
-            <View style={styles.dividerLine} />
-          </View>
-          <TouchableOpacity style={styles.socialButton} onPress={handleGoogleAuth} disabled={loading}>
-            <Image source={require('../assets/google.png')} style={{ width: 20, height: 20, marginRight: 8 }} />
-            <Text style={styles.socialButtonText}>Continue with Google</Text>
-          </TouchableOpacity>
         </View>
       ) : (
-        <Animated.View 
+        <Animated.View
           style={styles.formContainer}
           entering={FadeInDown.delay(300).duration(500)}
         >
-          <FormContent 
+          <FormContent
             isLogin={isLogin}
             firstName={firstName}
             setFirstName={setFirstName}
@@ -346,16 +342,9 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
             loading={loading}
             handleForgotPassword={handleForgotPassword}
             setIsLogin={setIsLogin}
+            showPassword={showPassword}
+            setShowPassword={setShowPassword}
           />
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>or</Text>
-            <View style={styles.dividerLine} />
-          </View>
-          <TouchableOpacity style={styles.socialButton} onPress={handleGoogleAuth} disabled={loading}>
-            <Image source={require('../assets/google.png')} style={{ width: 20, height: 20, marginRight: 8 }} />
-            <Text style={styles.socialButtonText}>Continue with Google</Text>
-          </TouchableOpacity>
         </Animated.View>
       )}
     </KeyboardAvoidingView>
@@ -407,6 +396,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     fontSize: 16,
   },
+  passwordContainer: {
+    width: '100%',
+    height: 50,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 8,
+    marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+  },
+  passwordInput: {
+    flex: 1,
+    height: '100%',
+    fontSize: 16,
+  },
+  eyeIcon: {
+    padding: 4,
+  },
   button: {
     width: '100%',
     backgroundColor: '#5c9c00',
@@ -439,50 +446,35 @@ const styles = StyleSheet.create({
     color: '#5c9c00',
     fontWeight: 'bold',
   },
-  divider: {
+  notification: {
+    position: 'absolute',
+    top: 0,
+    left: 20,
+    right: 20,
+    borderRadius: 8,
+    padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    width: '100%',
-    marginBottom: 20,
+    zIndex: 1000,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 4,
+    gap: 10,
   },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#ddd',
+  notificationError: {
+    backgroundColor: '#EF4444',
   },
-  dividerText: {
-    color: '#999',
-    marginHorizontal: 8,
+  notificationSuccess: {
+    backgroundColor: '#10B981',
+  },
+  notificationText: {
+    color: '#fff',
     fontSize: 14,
-  },
-  socialButton: {
-    width: '100%',
-    backgroundColor: 'white',
-    borderRadius: 8,
-    height: 56,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-    flexDirection: 'row',
-    borderWidth: 1,
-    borderColor: '#ddd',
-  },
-  socialButtonText: {
-    color: '#333',
     fontWeight: '600',
+    flex: 1,
   },
-  // --- Add styles for PhoneInput (Commented Out) ---
-  /* phoneContainer: {
-    width: '100%',
-    height: 50,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 8,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-    borderRightColor: '#d0d0d0',
-  }, */
-  // ------------------------------------------------------------------
 });
 
-export default AuthScreen; 
+export default AuthScreen;

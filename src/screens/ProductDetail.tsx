@@ -1500,15 +1500,30 @@ const ProductDetailScreen = observer(
       const { locationQuantities: hydratedLocQty, locations: hydratedLocs } = getLocationQtyAndLocs(hydratedVariants, groupedInventory);
 
       // Build platform data for each platform in platformSpecificData
-      // ⚡ CRITICAL FIX: Only include platforms that have ACTUAL connections
-      // This removes stale/fake platforms like 'facebook' that may exist in old metadata  
+      // ⚡ UPDATED: Include platforms that have data in platformSpecificData, even without active connections
+      // This allows platforms like Facebook (where we have AI-generated data but no connection yet) to appear as tabs
       const actualPlatformTypes = new Set(connections.map(c => c.PlatformType.toLowerCase()));
       const platformKeys = Object.keys(platformSpecificData).filter(key => {
         const keyLower = key.toLowerCase();
+        const platformData = platformSpecificData[key];
+
         // Always include if we have actual connections for this platform type
         if (actualPlatformTypes.has(keyLower)) return true;
-        // Skip stale platforms with no actual connection
-        console.log(`[ProductDetail] Filtering out stale platform '${key}' - no active connection`);
+
+        // Also include if there's meaningful data in platformSpecificData (for future publishing)
+        // This allows platforms like Facebook to show even without a connection
+        const hasMeaningfulData = platformData && (
+          platformData.title ||
+          platformData.description ||
+          platformData.variants?.length > 0
+        );
+        if (hasMeaningfulData) {
+          console.log(`[ProductDetail] Including platform '${key}' - has data but no active connection (for future publishing)`);
+          return true;
+        }
+
+        // Skip truly empty platforms
+        console.log(`[ProductDetail] Filtering out empty platform '${key}' - no data and no connection`);
         return false;
       });
 
