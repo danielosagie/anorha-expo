@@ -4,6 +4,7 @@ import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import { useNavigation } from '@react-navigation/native';
 import Card from '../components/Card';
+import InsightCard from '../components/InsightCard';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LegendStateContext } from '../context/LegendStateContext';
 import { supabase } from '../../lib/supabase';
@@ -18,7 +19,7 @@ import { useOrgNudges, trackInsightAction } from '../hooks/useOrgNudges';
 // User-relevant event types for activity display (excludes system/webhook events)
 const USER_RELEVANT_EVENT_TYPES = [
   'ORDER_CREATED',
-  'ORDER_UPDATED', 
+  'ORDER_UPDATED',
   'INVENTORY_UPDATED',
   'INVENTORY_ADJUSTMENT',
   'PRODUCT_CREATED',
@@ -34,13 +35,13 @@ interface PoolPerformance {
   barLength: number; // 0-10 bars
 }
 
-const PoolPerformanceHeatmap: React.FC<{ 
-  pools: PoolPerformance[]; 
+const PoolPerformanceHeatmap: React.FC<{
+  pools: PoolPerformance[];
   timeframe: 'Last 7d' | '30d' | '90d' | 'YTD' | '1Y';
   onTimeframeChange: (tf: 'Last 7d' | '30d' | '90d' | 'YTD' | '1Y') => void;
 }> = ({ pools, timeframe, onTimeframeChange }) => {
   const maxBars = 10;
-  
+
   // Show empty state if no data
   if (!pools || pools.length === 0) {
     return (
@@ -59,7 +60,7 @@ const PoolPerformanceHeatmap: React.FC<{
                 tf === timeframe && styles.timeframeBtnActive,
               ]}
             >
-              <Text 
+              <Text
                 style={[
                   styles.timeframeLabel,
                   tf === timeframe && styles.timeframeActive,
@@ -73,7 +74,7 @@ const PoolPerformanceHeatmap: React.FC<{
       </View>
     );
   }
-  
+
   return (
     <View style={styles.poolHeatmapContainer}>
       {pools.map((pool) => (
@@ -96,7 +97,7 @@ const PoolPerformanceHeatmap: React.FC<{
           <Text style={styles.poolPercentage}>{pool.percentage}%</Text>
         </View>
       ))}
-      
+
       {/* Timeframe Toggle */}
       <View style={styles.timeframeToggle}>
         {(['Last 7d', '30d', '90d', 'YTD', '1Y'] as const).map((tf) => (
@@ -108,7 +109,7 @@ const PoolPerformanceHeatmap: React.FC<{
               tf === timeframe && styles.timeframeBtnActive,
             ]}
           >
-            <Text 
+            <Text
               style={[
                 styles.timeframeLabel,
                 tf === timeframe && styles.timeframeActive,
@@ -128,14 +129,14 @@ const DashboardScreen = () => {
   const navigation = useNavigation<any>();
   const legendCtx = useContext(LegendStateContext);
   const { currentOrg, isLoading: isOrgLoading } = useOrg();
-  
+
   // Subscribe to real-time product variant changes
   useProductVariantRealtime();
-  
+
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
   const [loadingActivity, setLoadingActivity] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  
+
   // Tab state for Overview
   const [activeTab, setActiveTab] = useState<'low_stock' | 'recent_activity'>('low_stock');
 
@@ -195,24 +196,24 @@ const DashboardScreen = () => {
   // Fetch pool performance data from DB
   const fetchPoolPerformance = async () => {
     if (!currentOrg?.id) return;
-    
+
     try {
       setLoadingPools(true);
       const token = await ensureSupabaseJwt();
-      
+
       // Fetch pools for this org
       const poolsRes = await fetch(`https://api.sssync.app/api/pools/org/${currentOrg.id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      
+
       if (!poolsRes.ok) {
         console.error(`Pool fetch failed: ${poolsRes.status} ${poolsRes.statusText}`);
         setPoolPerformance([]);
         return;
       }
-      
+
       const poolsData = await poolsRes.json();
-      
+
       // Compute real performance data from inventory levels
       const levels = legendCtx?.inventoryLevels$?.get?.() || {};
       const performanceData: PoolPerformance[] = poolsData.map((pool: any) => {
@@ -224,12 +225,12 @@ const DashboardScreen = () => {
             poolTotal += level.Quantity;
           }
         });
-        
+
         // Calculate as percentage of total inventory
         const allInventory = Object.values(levels).reduce((sum: number, level: any) => sum + (level.Quantity || 0), 0);
         const percentage = allInventory > 0 ? Math.round((poolTotal / allInventory) * 100) : 0;
         const barLength = Math.ceil((percentage / 100) * 10);
-        
+
         return {
           id: pool.id,
           name: pool.name,
@@ -237,7 +238,7 @@ const DashboardScreen = () => {
           barLength: Math.max(0, Math.min(10, barLength)), // Clamp 0-10
         };
       });
-      
+
       setPoolPerformance(performanceData);
     } catch (e) {
       console.error('Failed to fetch pool performance:', e);
@@ -250,29 +251,29 @@ const DashboardScreen = () => {
   // Fetch location performance data (inventory by location)
   const fetchLocationPerformance = async () => {
     if (!currentOrg?.id) return;
-    
+
     try {
       setLoadingLocations(true);
       const token = await ensureSupabaseJwt();
-      
+
       // Fetch platform locations for this org
       const locationsRes = await fetch(`https://api.sssync.app/api/pools/locations/available?orgId=${currentOrg.id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      
+
       if (!locationsRes.ok) {
         console.error(`Locations fetch failed: ${locationsRes.status} ${locationsRes.statusText}`);
         // Fallback: compute from local inventory levels
         computeLocationPerformanceFromLegend();
         return;
       }
-      
+
       const locationsData = await locationsRes.json();
       const levels = legendCtx?.inventoryLevels$?.get?.() || {};
-      
+
       // Calculate total inventory across all locations
       const allInventory = Object.values(levels).reduce((sum: number, level: any) => sum + (level.Quantity || 0), 0);
-      
+
       // Group inventory by location
       const locationInventory: Record<string, number> = {};
       Object.values(levels).forEach((level: any) => {
@@ -281,7 +282,7 @@ const DashboardScreen = () => {
           locationInventory[locId] = (locationInventory[locId] || 0) + (level.Quantity || 0);
         }
       });
-      
+
       // Map locations with their inventory percentages
       const performanceData: PoolPerformance[] = (Array.isArray(locationsData) ? locationsData : [])
         .slice(0, 5) // Show top 5 locations
@@ -289,7 +290,7 @@ const DashboardScreen = () => {
           const locTotal = locationInventory[loc.Id] || locationInventory[loc.PlatformLocationId] || 0;
           const percentage = allInventory > 0 ? Math.round((locTotal / allInventory) * 100) : 0;
           const barLength = Math.ceil((percentage / 100) * 10);
-          
+
           return {
             id: loc.Id || loc.PlatformLocationId,
             name: loc.Name || loc.DisplayName || 'Location',
@@ -298,7 +299,7 @@ const DashboardScreen = () => {
           };
         })
         .filter((loc: PoolPerformance) => loc.name); // Filter out unnamed locations
-      
+
       setLocationPerformance(performanceData);
     } catch (e) {
       console.error('Failed to fetch location performance:', e);
@@ -313,7 +314,7 @@ const DashboardScreen = () => {
   const computeLocationPerformanceFromLegend = () => {
     const levels = legendCtx?.inventoryLevels$?.get?.() || {};
     const allInventory = Object.values(levels).reduce((sum: number, level: any) => sum + (level.Quantity || 0), 0);
-    
+
     // Group by location
     const locationMap: Record<string, { name: string; total: number }> = {};
     Object.values(levels).forEach((level: any) => {
@@ -324,7 +325,7 @@ const DashboardScreen = () => {
       }
       locationMap[locId].total += level.Quantity || 0;
     });
-    
+
     const performanceData: PoolPerformance[] = Object.entries(locationMap)
       .map(([id, data]) => {
         const percentage = allInventory > 0 ? Math.round((data.total / allInventory) * 100) : 0;
@@ -337,7 +338,7 @@ const DashboardScreen = () => {
       })
       .sort((a, b) => b.percentage - a.percentage)
       .slice(0, 5);
-    
+
     setLocationPerformance(performanceData);
     setLoadingLocations(false);
   };
@@ -357,50 +358,50 @@ const DashboardScreen = () => {
     const pv = legendCtx?.productVariants$?.get?.() || {};
     const levels = legendCtx?.inventoryLevels$?.get?.() || {};
     const images = legendCtx?.productImages$?.get?.() || {};
-    
+
     let total = 0;
     const variantQuantities: Record<string, number> = {};
-    
+
     Object.values(levels).forEach((level: any) => {
-        const qty = level.Quantity || 0;
-        total += qty;
-        const vid = level.ProductVariantId;
-        if (vid) {
-            variantQuantities[vid] = (variantQuantities[vid] || 0) + qty;
-        }
+      const qty = level.Quantity || 0;
+      total += qty;
+      const vid = level.ProductVariantId;
+      if (vid) {
+        variantQuantities[vid] = (variantQuantities[vid] || 0) + qty;
+      }
     });
 
     const threshold = 5;
     const items = Object.keys(variantQuantities)
-        .filter(vid => variantQuantities[vid] <= threshold)
-        .map(vid => {
-            const variant = pv[vid];
-            // Find image
-            const img = Object.values(images).find((i: any) => i.ProductVariantId === vid);
-            
-            // Determine platforms (mock logic if not strictly in variants, but we have OnShopify flags)
-            const platforms = [];
-            if (variant?.OnShopify) platforms.push('shopify');
-            if (variant?.OnSquare) platforms.push('square');
-            if (variant?.OnAmazon) platforms.push('amazon');
+      .filter(vid => variantQuantities[vid] <= threshold)
+      .map(vid => {
+        const variant = pv[vid];
+        // Find image
+        const img = Object.values(images).find((i: any) => i.ProductVariantId === vid);
 
-            return {
-                id: vid,
-                title: variant?.Title || 'Unknown Product',
-                quantity: variantQuantities[vid],
-                sku: variant?.Sku,
-                price: variant?.Price,
-                imageUrl: img?.ImageUrl,
-                platformNames: platforms
-            };
-        })
-        .sort((a, b) => a.quantity - b.quantity)
-        .slice(0, 5); // Top 5
+        // Determine platforms (mock logic if not strictly in variants, but we have OnShopify flags)
+        const platforms = [];
+        if (variant?.OnShopify) platforms.push('shopify');
+        if (variant?.OnSquare) platforms.push('square');
+        if (variant?.OnAmazon) platforms.push('amazon');
 
-    return { 
-        totalInventory: total, 
-        lowStockItems: items,
-        lowStockCount: Object.keys(variantQuantities).filter(vid => variantQuantities[vid] <= threshold).length
+        return {
+          id: vid,
+          title: variant?.Title || 'Unknown Product',
+          quantity: variantQuantities[vid],
+          sku: variant?.Sku,
+          price: variant?.Price,
+          imageUrl: img?.ImageUrl,
+          platformNames: platforms
+        };
+      })
+      .sort((a, b) => a.quantity - b.quantity)
+      .slice(0, 5); // Top 5
+
+    return {
+      totalInventory: total,
+      lowStockItems: items,
+      lowStockCount: Object.keys(variantQuantities).filter(vid => variantQuantities[vid] <= threshold).length
     };
   }, [legendCtx?.productVariants$, legendCtx?.inventoryLevels$, legendCtx?.productImages$]);
 
@@ -425,17 +426,17 @@ const DashboardScreen = () => {
       const base = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
       // Fetch more events so we can filter and still have enough to show
       const url = `${base}/api/activity?limit=20&orgId=${encodeURIComponent(currentOrg.id)}`;
-      
+
       console.log(`[Dashboard] Fetching activity from ${url}`);
-      
+
       const response = await fetch(url, {
         method: 'GET',
-        headers: { 
+        headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         }
       });
-      
+
       if (!response.ok) {
         console.error(`[Dashboard] Activity fetch failed: ${response.status} ${response.statusText}`);
         const errorBody = await response.text();
@@ -444,28 +445,28 @@ const DashboardScreen = () => {
         setLoadingActivity(false);
         return;
       }
-      
+
       const json = await response.json();
       console.log(`[Dashboard] Activity response:`, {
         eventsCount: json.events?.length || 0,
         hasMore: json.hasMore,
       });
-      
+
       if (json.events && Array.isArray(json.events)) {
         // Filter to prefer user-relevant events (not webhooks, system events, etc.)
         const filteredEvents = json.events.filter((event: any) => {
           const eventType = event.EventType || '';
           // Exclude webhook/system events explicitly
-          const isSystemEvent = eventType.includes('WEBHOOK') || 
-                                eventType.includes('SYNC_') ||
-                                eventType.includes('USER_VIEWED') ||
-                                eventType.includes('DASHBOARD') ||
-                                eventType.includes('ACCESS_REQUEST') ||
-                                eventType.includes('SCAN_') ||
-                                eventType.includes('RECONCILE');
+          const isSystemEvent = eventType.includes('WEBHOOK') ||
+            eventType.includes('SYNC_') ||
+            eventType.includes('USER_VIEWED') ||
+            eventType.includes('DASHBOARD') ||
+            eventType.includes('ACCESS_REQUEST') ||
+            eventType.includes('SCAN_') ||
+            eventType.includes('RECONCILE');
           return !isSystemEvent;
         });
-        
+
         console.log(`[Dashboard] Filtered ${json.events.length} → ${filteredEvents.length} non-system events`);
         // If we have filtered events, use them; otherwise fall back to all events (except webhooks)
         const eventsToShow = filteredEvents.length > 0 ? filteredEvents : json.events;
@@ -489,7 +490,7 @@ const DashboardScreen = () => {
       console.log('[Dashboard] Waiting for org context to load...');
       return;
     }
-    
+
     if (!currentOrg?.id) {
       console.log('[Dashboard] No org ID available after org context loaded');
       setLoadingActivity(false);
@@ -506,10 +507,10 @@ const DashboardScreen = () => {
   // Handle insight action clicks
   const handleInsightAction = async (actionLink: string, insightTitle: string) => {
     if (!currentOrg?.id) return;
-    
+
     // Track the action
     await trackInsightAction(currentOrg.id, actionLink, insightTitle);
-    
+
     // Navigate based on link
     if (actionLink.includes('/inventory')) {
       const params: any = {};
@@ -528,7 +529,7 @@ const DashboardScreen = () => {
 
   const formatActivityTime = (timestamp: string) => {
     try {
-        return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     } catch { return ''; }
   };
 
@@ -612,8 +613,8 @@ const DashboardScreen = () => {
       {/* Green Header Background */}
       <View style={styles.greenHeader} />
 
-      <ScrollView 
-        style={styles.container} 
+      <ScrollView
+        style={styles.container}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshData} tintColor="#333" />}
         contentContainerStyle={{ paddingBottom: 10 }}
@@ -626,8 +627,8 @@ const DashboardScreen = () => {
           onChangeText={handleSearchChange}
           onScan={(barcode) => {
             // When barcode is scanned, navigate to Inventory with barcode search
-            navigation.navigate('Inventory', { 
-              initialSearch: barcode, 
+            navigation.navigate('Inventory', {
+              initialSearch: barcode,
               initialSortBy: 'name',
               searchType: 'barcode'
             });
@@ -640,331 +641,178 @@ const DashboardScreen = () => {
           onClear={handleClearSearch}
         />
 
-        {/* Today Card */}
+        {/* Today Card / Insight */}
         <View style={styles.todayCardContainer}>
-            
+          {(loadingInsight || insightError || (safeInsight && safeInsight.topDIN)) ? (
+            <InsightCard
+              insight={safeInsight}
+              loading={loadingInsight}
+              error={insightError}
+              onAction={handleInsightAction}
+              onRefresh={forceRefreshInsight}
+            />
+          ) : (
             <View style={styles.todayCard}>
-                {loadingInsight ? (
-                  // Loading state with nice animation
-                  <View style={styles.insightCardGreen}>
-                    <View style={styles.insightGreenHeader}>
-                      <Text style={styles.todayTitle}>Sprout's Insight</Text>
-                      <Text style={styles.todayMeta}>Analyzing...</Text>
-                    </View>
-                    <View style={[styles.insideContainer, { alignItems: 'center', paddingVertical: 32 }]}>
-                      <ActivityIndicator size="large" color="#93C822" />
-                      <Text style={[styles.insightGreenDesc, { textAlign: 'center', marginTop: 16 }]}>
-                        Analyzing your inventory, sales trends, and market data...
-                      </Text>
-                    </View>
-                  </View>
-                ) : insightError ? (
-                  // Error state with retry options
-                  <View style={styles.insightCardGreen}>
-                    <View style={styles.insightGreenHeader}>
-                      <Text style={styles.todayTitle}>Sprout's Insight</Text>
-                      <Text style={styles.todayMeta}>Offline</Text>
-                    </View>
-                    <View style={styles.insideContainer}>
-                      <Text style={styles.insightGreenHeadline}>Connection issue</Text>
-                      <Text style={styles.insightGreenDesc}>
-                        Unable to fetch insights right now. This might be a network issue - check your connection and try again.
-                      </Text>
-                      <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
-                        <TouchableOpacity onPress={refetchInsight} style={[styles.insightGreenBtn, { flex: 1, backgroundColor: '#F3F4F6' }]}>
-                          <Text style={[styles.insightGreenBtnText, { color: '#374151' }]}>Retry</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={forceRefreshInsight} style={[styles.insightGreenBtn, { flex: 1 }]}>
-                          <Text style={styles.insightGreenBtnText}>Force Refresh</Text>
-                        </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.95}
+                style={styles.insightCardGreen}
+                onPress={forceRefreshInsight}
+              >
+                <View style={styles.insightGreenHeader}>
+                  <Icon name="sprout-outline" size={20} color="#647653" />
+                  <Text style={[styles.todayTitle, { color: '#647653' }]}>Sprout's Insight</Text>
+                  <Text style={[styles.todayMeta, { color: '#647653' }]}>Ready to analyze</Text>
+                </View>
+                <View style={styles.insideContainer}>
+                  {/* Welcome headline */}
+                  <Text style={styles.insightGreenHeadline}>
+                    {currentOrg ? `Let's grow ${currentOrg.name}` : "Welcome to Anorha"}
+                  </Text>
+
+                  {/* Description based on state */}
+                  <Text style={styles.insightGreenDesc}>
+                    {lowStockCount > 0 || totalInventory > 0
+                      ? `You have ${totalInventory} items tracked. Tap to get insights about your inventory.`
+                      : "Connect your first platform to get started"}
+                  </Text>
+
+                  {/* Quick metrics if we have data */}
+                  {totalInventory > 0 && (
+                    <View style={styles.insightGreenMetrics}>
+                      <View style={styles.insightGreenMetricCol}>
+                        <Text style={styles.insightGreenMetricLabel}>Total Items</Text>
+                        <Text style={styles.insightGreenMetricValue}>{totalInventory.toLocaleString()}</Text>
                       </View>
-                    </View>
-                  </View>
-                ) : safeInsight && safeInsight.topDIN && safeInsight.bottomDIN ? (
-                  <TouchableOpacity
-                    activeOpacity={0.95}
-                    style={styles.insightCardGreen}
-                    onPress={() => safeInsight.bottomDIN.action ? handleInsightAction(safeInsight.bottomDIN.action.link, safeInsight.bottomDIN.title) : undefined}
-                  >
-                    <View style={styles.insightGreenHeader}>
-                      
-                      <Text style={styles.todayTitle}>Sprout's Insight</Text>
-                      <Text style={styles.todayMeta}>
-                        Updated {safeInsight.timestamp ? new Date(safeInsight.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '2m ago'}
-                      </Text>
-                    </View>
-                    <View style={styles.insideContainer}>
-                      
-                      {/* Outcome Headline */}
-                      <Text style={styles.insightGreenHeadline}>
-                        {safeInsight.topDIN.headline || 'Recover value today'}
-                      </Text>
-
-                      {/* Description */}
-                      <Text style={styles.insightGreenDesc} numberOfLines={4}>
-                        {safeInsight.bottomDIN.description}
-                      </Text>
-
-                      {/* Metrics: Two-column layout */}
-                      {safeInsight.bottomDIN.metrics && safeInsight.bottomDIN.metrics.length >= 2 && (
-                        <View style={styles.insightGreenMetrics}>
-                          {safeInsight.bottomDIN.metrics[0] ? (
-                            <View style={styles.insightGreenMetricCol}>
-                              <Text style={styles.insightGreenMetricLabel}>{safeInsight.bottomDIN.metrics[0].label}</Text>
-                              <Text style={styles.insightGreenMetricValue}>{safeInsight.bottomDIN.metrics[0].value}</Text>
-                            </View>
-                          ) : null}
-                          {safeInsight.bottomDIN.metrics[1] ? (
-                            <View style={styles.insightGreenMetricCol}>
-                              <Text style={styles.insightGreenMetricLabel}>{safeInsight.bottomDIN.metrics[1].label}</Text>
-                              <Text style={[styles.insightGreenMetricValue, styles.insightGreenMetricPositive]}>
-                                {safeInsight.bottomDIN.metrics[1].value}
-                              </Text>
-                            </View>
-                          ) : null}
-                        </View>
-                      )}
-
-                      {/* Primary Action or Suggestion-only message */}
-                      {safeInsight.suggestionOnly ? (
-                        <View style={[styles.insightGreenBtn, { backgroundColor: '#E5E7EB' }]}>
-                          <Icon name="lightbulb-on-outline" size={18} color="#374151" style={{ marginRight: 8 }} />
-                          <Text style={[styles.insightGreenBtnText, { color: '#111827' }]}>
-                            {safeInsight.suggestionText || 'Best course of action suggested above'}
-                          </Text>
-                        </View>
-                      ) : safeInsight.bottomDIN.action ? (
-                        <TouchableOpacity
-                          onPress={() =>
-                            handleInsightAction(
-                              safeInsight.bottomDIN.action!.link,
-                              safeInsight.bottomDIN.title,
-                            )
-                          }
-                          style={styles.insightGreenBtn}
-                        >
-                          <Text style={styles.insightGreenBtnText}>
-                            {safeInsight.bottomDIN.action.label || 'Take action'}
-                          </Text>
-                          <Icon name="arrow-right" size={20} color="#fff" />
-                        </TouchableOpacity>
-                      ) : null}
-
-                      {/* Footer: Product breakdown or meta actions */}
-                      {safeInsight.bottomDIN.affectedProducts && safeInsight.bottomDIN.affectedProducts.length > 0 ? (
-                        <View style={[styles.insightGreenFooter, { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#E5E7EB', flexDirection: 'column', alignItems: 'flex-start' }]}>
-                          <Text style={[styles.insightGreenSourcesText, { fontSize: 12, fontWeight: '600', marginBottom: 4 }]}>
-                            Based on {safeInsight.bottomDIN.affectedProducts.length} product{safeInsight.bottomDIN.affectedProducts.length > 1 ? 's' : ''}:
-                          </Text>
-                          {safeInsight.bottomDIN.affectedProducts.slice(0, 2).map((product: any, idx: number) => (
-                            <Text key={idx} style={[styles.insightGreenSourcesText, { fontSize: 11, marginTop: 2 }]}>
-                              • {product.name} ({product.quantity} units)
-                            </Text>
-                          ))}
-                          {safeInsight.bottomDIN.affectedProducts.length > 2 && (
-                            <Text style={[styles.insightGreenSourcesText, { fontSize: 11, marginTop: 2, fontWeight: '500', color: '#6366F1' }]}>
-                              + {safeInsight.bottomDIN.affectedProducts.length - 2} more
-                            </Text>
-                          )}
-                        </View>
-                      ) : (
-                        <View style={styles.insightGreenFooter}>
-                          <View style={styles.insightGreenMetaLeft}>
-                            <TouchableOpacity style={styles.insightGreenIconBtn}>
-                              <Icon name="content-copy" size={16} color="#6B7280" />
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.insightGreenIconBtn}>
-                              <Icon name="thumb-up-outline" size={16} color="#6B7280" />
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.insightGreenIconBtn}>
-                              <Icon name="thumb-down-outline" size={16} color="#6B7280" />
-                            </TouchableOpacity>
-                            <TouchableOpacity onPress={forceRefreshInsight} style={styles.insightGreenIconBtn}>
-                              <Icon name="refresh" size={16} color="#6B7280" />
-                            </TouchableOpacity>
-                          </View>
-                          <TouchableOpacity style={styles.insightGreenSources} onPress={() => setSourcesVisible(true)}>
-                            <View style={styles.insightGreenAvatars}>
-                              <View style={[styles.avatar, { backgroundColor: '#A78BFA', marginRight: -8 }]} />
-                              <View style={[styles.avatar, { backgroundColor: '#60A5FA', marginRight: -8 }]} />
-                              <View style={[styles.avatar, { backgroundColor: '#F87171', marginRight: -8 }]} />
-                              <View style={[styles.avatar, { backgroundColor: '#FBBF24' }]} />
-                            </View>
-                            <Text style={styles.insightGreenSourcesText}>Sources</Text>
-                          </TouchableOpacity>
-                        </View>
-                      )}
-                    </View>
-                  </TouchableOpacity>
-                ) : (
-                  // Beautiful default empty state - shows when no insight is available
-                  <TouchableOpacity
-                    activeOpacity={0.95}
-                    style={styles.insightCardGreen}
-                    onPress={forceRefreshInsight}
-                  >
-                    <View style={styles.insightGreenHeader}>
-                      <Text style={styles.todayTitle}>Sprout's Insight</Text>
-                      <Text style={styles.todayMeta}>Ready to analyze</Text>
-                    </View>
-                    <View style={styles.insideContainer}>
-                      {/* Welcome headline */}
-                      <Text style={styles.insightGreenHeadline}>
-                        {currentOrg ? `Let's grow ${currentOrg.name}` : "Welcome to Anorha"}
-                      </Text>
-
-                      {/* Description based on state */}
-                      <Text style={styles.insightGreenDesc}>
-                        {lowStockCount > 0 || totalInventory > 0
-                          ? `You have ${totalInventory} items tracked. Tap to get insights about your inventory, sales velocity, and opportunities.`
-                          : "Connect your first platform to get started"}
-                      </Text>
-
-                      {/* Quick metrics if we have data */}
-                      {totalInventory > 0 && (
-                        <View style={styles.insightGreenMetrics}>
-                          <View style={styles.insightGreenMetricCol}>
-                            <Text style={styles.insightGreenMetricLabel}>Total Items</Text>
-                            <Text style={styles.insightGreenMetricValue}>{totalInventory.toLocaleString()}</Text>
-                          </View>
-                          <View style={styles.insightGreenMetricCol}>
-                            <Text style={styles.insightGreenMetricLabel}>Low Stock</Text>
-                            <Text style={[styles.insightGreenMetricValue, lowStockCount > 0 ? styles.insightGreenMetricWarning : styles.insightGreenMetricPositive]}>
-                              {lowStockCount}
-                            </Text>
-                          </View>
-                        </View>
-                      )}
-
-                      {/* CTA Button */}
-                      <TouchableOpacity
-                        onPress={forceRefreshInsight}
-                        style={styles.insightGreenBtn}
-                      >
-                        <Text style={styles.insightGreenBtnText}>
-                          {loadingInsight ? 'Analyzing...' : 'Generate Insight'}
+                      <View style={styles.insightGreenMetricCol}>
+                        <Text style={styles.insightGreenMetricLabel}>Low Stock</Text>
+                        <Text style={[styles.insightGreenMetricValue, lowStockCount > 0 ? styles.insightGreenMetricWarning : styles.insightGreenMetricPositive]}>
+                          {lowStockCount}
                         </Text>
-                        <Icon name={loadingInsight ? "loading" : "sparkles"} size={20} color="#fff" />
-                      </TouchableOpacity>
-
-                      {/* Footer - Show product sources or default footer */}
-                      <View style={styles.insightGreenFooter}>
-                        <View style={styles.insightGreenMetaLeft}>
-                          <Icon name="robot-outline" size={16} color="#6B7280" style={{marginRight: 4}} />
-                          <Text style={styles.insightGreenSourcesText}>Powered by AI</Text>
-                        </View>
-                        <View style={styles.insightGreenSources}>
-                          <View style={styles.insightGreenAvatars}>
-                            <View style={[styles.avatar, { backgroundColor: '#93C822', marginRight: -8 }]} />
-                            <View style={[styles.avatar, { backgroundColor: '#60A5FA', marginRight: -8 }]} />
-                            <View style={[styles.avatar, { backgroundColor: '#FBBF24' }]} />
-                          </View>
-                          <Text style={styles.insightGreenSourcesText}>Your data</Text>
-                        </View>
                       </View>
                     </View>
+                  )}
+
+                  {/* CTA Button */}
+                  <TouchableOpacity
+                    onPress={forceRefreshInsight}
+                    style={styles.insightGreenBtn}
+                  >
+                    <Text style={styles.insightGreenBtnText}>
+                      {loadingInsight ? 'Analyzing...' : 'Generate Insight'}
+                    </Text>
+                    <Icon name={loadingInsight ? "loading" : "sparkles"} size={20} color="#fff" />
                   </TouchableOpacity>
-                )}
+
+                  {/* Footer */}
+                  <View style={styles.insightGreenFooter}>
+                    <View style={styles.insightGreenMetaLeft}>
+                      <Icon name="robot-outline" size={16} color="#6B7280" style={{ marginRight: 4 }} />
+                      <Text style={styles.insightGreenSourcesText}>Powered by AI</Text>
+                    </View>
+                  </View>
+                </View>
+              </TouchableOpacity>
             </View>
+          )}
         </View>
 
         {/* Overview */}
         <View style={styles.sectionContainer}>
-            <View style={[styles.todayCard, {padding: 0}]}>
-              <View style={[styles.tabsContainer, {margin: 8, marginTop: 7, backgroundColor: "#fff", justifyContent: 'space-between'}]}>
-                <Text style={[styles.sectionTitle, {marginBottom: 0}]}>Overview</Text>
-              </View>
-            
-              <View style={[styles.tabsContainer, {marginHorizontal: 8, marginTop: 0}]}>
-                  <TouchableOpacity 
-                      style={[styles.tab, activeTab === 'low_stock' && styles.activeTab]}
-                      onPress={() => setActiveTab('low_stock')}
-                  >
-                      <Icon name="package-variant" size={16} color={activeTab === 'low_stock' ? '#1F2937' : '#6B7280'} style={{marginRight: 6}} />
-                      <Text style={[styles.tabText, activeTab === 'low_stock' && styles.activeTabText]}>Low Stock</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity 
-                      style={[styles.tab, activeTab === 'recent_activity' && styles.activeTab]}
-                      onPress={() => setActiveTab('recent_activity')}
-                  >
-                      <Icon name="clock-outline" size={16} color={activeTab === 'recent_activity' ? '#1F2937' : '#6B7280'} style={{marginRight: 6}} />
-                      <Text style={[styles.tabText, activeTab === 'recent_activity' && styles.activeTabText]}>Recent Activity</Text>
-                  </TouchableOpacity>
-              </View>
+          <View style={[styles.todayCard, { padding: 8, paddingTop: 4}]}>
+            <View style={[styles.tabsContainer, { marginHorizontal  : 4, marginTop: 8, marginBottom: 4, backgroundColor: "#fff", justifyContent: 'space-between' }]}>
+              <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>Overview</Text>
+            </View>
 
-              {activeTab === 'low_stock' && (
-                  <View style={styles.listContainer}>
-                      {lowStockItems.map((item) => (
-                          <InventoryListCard
-                              key={item.id}
-                              id={item.id}
-                              title={item.title}
-                              sku={item.sku}
-                              price={item.price}
-                              totalQuantity={item.quantity}
-                              imageUrl={item.imageUrl}
-                              platformNames={item.platformNames}
-                              onPress={() => navigation.navigate('ProductDetail', { productId: item.id })}
-                          />
-                      ))}
-                      {lowStockItems.length === 0 && (
-                          <View style={styles.emptyState}>
-                              <Icon name="check-circle" size={32} color="rgb(208, 255, 170)" />
-                              <Text style={styles.emptyText}>Everything is stocked!</Text>
-                          </View>
-                      )}
-                </View>
+            <View style={[styles.tabsContainer, { marginHorizontal: 8, marginTop: 0 }]}>
+              <TouchableOpacity
+                style={[styles.tab, activeTab === 'low_stock' && styles.activeTab]}
+                onPress={() => setActiveTab('low_stock')}
+              >
+                <Icon name="package-variant" size={16} color={activeTab === 'low_stock' ? '#1F2937' : '#6B7280'} style={{ marginRight: 6 }} />
+                <Text style={[styles.tabText, activeTab === 'low_stock' && styles.activeTabText]}>Low Stock</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.tab, activeTab === 'recent_activity' && styles.activeTab]}
+                onPress={() => setActiveTab('recent_activity')}
+              >
+                <Icon name="clock-outline" size={16} color={activeTab === 'recent_activity' ? '#1F2937' : '#6B7280'} style={{ marginRight: 6 }} />
+                <Text style={[styles.tabText, activeTab === 'recent_activity' && styles.activeTabText]}>Recent Activity</Text>
+              </TouchableOpacity>
+            </View>
+
+            {activeTab === 'low_stock' && (
+              <View style={styles.listContainer}>
+                {lowStockItems.map((item) => (
+                  <InventoryListCard
+                    key={item.id}
+                    id={item.id}
+                    title={item.title}
+                    sku={item.sku}
+                    price={item.price}
+                    totalQuantity={item.quantity}
+                    imageUrl={item.imageUrl}
+                    platformNames={item.platformNames}
+                    onPress={() => navigation.navigate('ProductDetail', { productId: item.id })}
+                  />
+                ))}
+                {lowStockItems.length === 0 && (
+                  <View style={styles.emptyState}>
+                    <Icon name="check-circle" size={32} color="rgb(208, 255, 170)" />
+                    <Text style={styles.emptyText}>Everything is stocked!</Text>
+                  </View>
+                )}
+              </View>
             )}
 
             {activeTab === 'recent_activity' && (
-                <View style={styles.listContainer}>
-                    {recentActivity.slice(0, 3).map((event, idx) => {
-                        let imageUrl = undefined;
-                        let productTitle = event.Details?.productTitle || event.Message;
-                        let sku = event.Details?.sku;
-                        
-                        if (event.ProductVariantId) {
-                            const images = legendCtx?.productImages$?.get?.() || {};
-                            const variants = legendCtx?.productVariants$?.get?.() || {};
-                            
-                            const img = Object.values(images).find((i: any) => i.ProductVariantId === event.ProductVariantId);
-                            imageUrl = img?.ImageUrl;
-                            
-                            const variant = variants[event.ProductVariantId];
-                            if (variant) {
-                                 if (!event.Details?.productTitle) productTitle = variant.Title;
-                                 if (!sku) sku = variant.Sku;
-                            }
-                        }
+              <View style={styles.listContainer}>
+                {recentActivity.slice(0, 3).map((event, idx) => {
+                  let imageUrl = undefined;
+                  let productTitle = event.Details?.productTitle || event.Message;
+                  let sku = event.Details?.sku;
 
-                        return (
-                            <ActivityEventCard 
-                                key={event.Id || idx} 
-                                id={event.Id || `activity-${idx}`}
-                                title={productTitle}
-                                displayTitle={event.EventType === 'INVENTORY_UPDATE' ? 'Inventory Adjustment' : 'System Update'}
-                                sku={sku}
-                                timestamp={event.Timestamp}
-                                imageUrl={imageUrl}
-                                reasonText={event.Details?.reason}
-                                eventType={event.EventType}
-                                ownerLabel={event.Details?.platform}
-                                onPress={() => event.ProductVariantId && navigation.navigate('ProductDetail', { productId: event.ProductVariantId })}
-                            />
-                        );
-                    })}
-                    {recentActivity.length === 0 && (
-                      <View style={styles.emptyState}>
-                        <Text style={styles.emptyText}>No recent activity</Text>
-                      </View>
-                    )}
-                </View>
+                  if (event.ProductVariantId) {
+                    const images = legendCtx?.productImages$?.get?.() || {};
+                    const variants = legendCtx?.productVariants$?.get?.() || {};
+
+                    const img = Object.values(images).find((i: any) => i.ProductVariantId === event.ProductVariantId);
+                    imageUrl = img?.ImageUrl;
+
+                    const variant = variants[event.ProductVariantId];
+                    if (variant) {
+                      if (!event.Details?.productTitle) productTitle = variant.Title;
+                      if (!sku) sku = variant.Sku;
+                    }
+                  }
+
+                  return (
+                    <ActivityEventCard
+                      key={event.Id || idx}
+                      id={event.Id || `activity-${idx}`}
+                      title={productTitle}
+                      displayTitle={event.EventType === 'INVENTORY_UPDATE' ? 'Inventory Adjustment' : 'System Update'}
+                      sku={sku}
+                      timestamp={event.Timestamp}
+                      imageUrl={imageUrl}
+                      reasonText={event.Details?.reason}
+                      eventType={event.EventType}
+                      ownerLabel={event.Details?.platform}
+                      onPress={() => event.ProductVariantId && navigation.navigate('ProductDetail', { productId: event.ProductVariantId })}
+                    />
+                  );
+                })}
+                {recentActivity.length === 0 && (
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyText}>No recent activity</Text>
+                  </View>
+                )}
+              </View>
             )}
-            </View>
+          </View>
         </View>
 
       </ScrollView>
-      
+
       {/* Sources Bottom Sheet */}
       <Modal
         visible={sourcesVisible}
@@ -994,7 +842,7 @@ const DashboardScreen = () => {
           )}
         </View>
       </Modal>
-      
+
       {/* Floating Tab Bar provided by Navigator, but we ensure spacing */}
     </View>
   );
@@ -1003,7 +851,7 @@ const DashboardScreen = () => {
 const styles = StyleSheet.create({
   fullScreenContainer: {
     flex: 1,
-    backgroundColor: 'rgb(208, 255, 170)', 
+    backgroundColor: '#FEF4DD',
   },
   greenHeader: {
     position: 'absolute',
@@ -1011,7 +859,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 60,
-    backgroundColor: 'rgb(208, 255, 170)',
+    backgroundColor: '#FEF4DD',
   },
   container: {
     flex: 1,
@@ -1031,7 +879,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#6B7280',
   },
-  
+
   // Today Card
   todayCardContainer: {
     marginBottom: 24,
@@ -1065,11 +913,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderRadius: 20,
     padding: 0,
-    shadowColor: '#000',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.1)', // slightly darker lime-200 for better edge definition
+    // Add shadow to separate from background
+    shadowColor: '#rgba(0,0,0,1)',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    elevation: 2,
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
   },
 
   insideContainer: {
@@ -1079,16 +930,21 @@ const styles = StyleSheet.create({
     gap: 14,
     borderWidth: 2,
     borderColor: 'rgba(153, 153, 153, 0.4)',
-    
+
   },
-  // Green Card Insight
+  // Green Card Insight - Updated to match new theme
   insightCardGreen: {
-    backgroundColor: 'rgb(208, 255, 170)',
+    backgroundColor: '#FEF4DD',
     borderRadius: 20,
-    padding: 20,
-    gap: 14,
-    borderWidth: 2,
-    borderColor: 'rgb(180, 230, 50)',
+    padding: 16,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.1)',
+    shadowColor: 'rgba(0,0,0,1)',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
   },
   insightGreenHeader: {
     flexDirection: 'row',
@@ -1115,10 +971,11 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   insightGreenHeadline: {
-    fontSize: 24,
-    fontWeight: '700',
+    fontSize: 18,
+    fontWeight: '600',
     color: '#111827',
-    lineHeight: 32,
+    lineHeight: 24,
+    letterSpacing: -0.3,
   },
   insightGreenDesc: {
     fontSize: 14,
@@ -1142,7 +999,7 @@ const styles = StyleSheet.create({
   },
   insightGreenMetricValue: {
     fontSize: 18,
-    fontWeight: '700',
+    fontWeight: '600',
     color: '#111827',
   },
   insightGreenMetricPositive: {

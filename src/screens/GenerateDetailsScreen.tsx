@@ -332,7 +332,7 @@ const groupVersionsByMatchId = (versions: Array<{ id: string; jobId: string; cre
     // Sort by creation date (newest first)
     const sortedVersions = versionGroup.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     const latestVersion = sortedVersions[0];
-    
+
     return {
       ...latestVersion,
       versionCount: sortedVersions.length,
@@ -381,7 +381,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             completedAt: data.completed_at,
           });
         }
-      } catch {}
+      } catch { }
       finally {
         if (!canceled) setFetched(true);
       }
@@ -422,7 +422,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             imageMap[variant.Id] = sortedImages;
           }
         });
-        
+
         if (!canceled) {
           console.log('[GEN-DETAILS] Loaded ProductImages from DB:', imageMap);
           setDbImages(imageMap);
@@ -440,11 +440,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   console.log('[GEN-DETAILS] results raw:', Array.isArray(results) ? `len=${results.length}` : typeof results);
 
   const first: GeneratedResult | null = useMemo(() => (Array.isArray(results) && results.length > 0 ? results[0] : null), [results]);
-  
+
   // Prefer user-captured images: 1) from ProductImages DB, 2) from params, 3) fallback to scraped
   const userImagesByIndex: Record<number, string[]> = useMemo(() => {
     const map: Record<number, string[]> = {};
-    
+
     // Priority 1: ProductImages from database (actual user photos)
     if (Object.keys(dbImages).length > 0 && Array.isArray(results)) {
       results.forEach((r, idx) => {
@@ -454,7 +454,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
       });
     }
-    
+
     // Priority 2: Images passed via navigation params
     const fromParams = (route.params as any)?.userImagesByIndex;
     if (fromParams && typeof fromParams === 'object') {
@@ -465,7 +465,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
       });
     }
-    
+
     // Priority 3: Fallback to scraped sourceImageUrl ONLY if no user images found
     (Array.isArray(results) ? results : []).forEach((r, i) => {
       if (!map[i]) {
@@ -475,10 +475,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
       }
     });
-    
+
     return map;
   }, [results, dbImages, route.params]);
-  
+
   // ========== CRITICAL FIX: useRef for data persistence + auto-save ==========
   const [updateCounter, setUpdateCounter] = useState(0);
   const platformsRef = useRef<GeneratedPlatformDetails>({});
@@ -486,7 +486,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const debounceTimerRef = useRef<any>(null);
   const lastHydratedJobRef = useRef<string | null>(null);
   const lastSavedRef = useRef<string>('');
-  
+
   const updatePlatforms = (updater: (prev: GeneratedPlatformDetails) => GeneratedPlatformDetails) => {
     platformsRef.current = updater(platformsRef.current);
     forceUpdate({}); // Trigger re-render
@@ -499,46 +499,46 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const displayedPlatforms = platformsRef.current;
   useEffect(() => {
     if (!first || !first.platforms) return;
-    
+
     // Only hydrate if this is new data (different jobId)
     const currentJobId = jobId || JSON.stringify(first.platforms).slice(0, 50);
     if (lastHydratedJobRef.current === currentJobId) {
       console.log('[GEN-DETAILS] Skipping re-hydration - same job');
       return;
     }
-    
+
     const rawPlatforms = first.platforms;
     console.log('[GEN-DETAILS] Hydrating new data. JobId:', currentJobId);
     console.log('[GEN-DETAILS] Raw platforms from backend:', rawPlatforms);
-    
+
     // Normalize each platform for ListingEditorForm compatibility
     const normalized: Record<string, any> = {};
     for (const [key, value] of Object.entries(rawPlatforms)) {
       normalized[key] = normalizeForListingEditor(value);
     }
-    
+
     console.log('[GEN-DETAILS] Normalized platforms:', Object.keys(normalized));
-    
+
     // CRITICAL: If backend didn't send shopify, create it from first available platform
     // This ensures canonicalKey (which prefers shopify) has data to display
     if (!normalized.shopify && Object.keys(normalized).length > 0) {
       const firstPlatformKey = Object.keys(normalized)[0];
       const firstPlatformData = normalized[firstPlatformKey];
       console.log('[GEN-DETAILS] Backend missing shopify - creating canonical from:', firstPlatformKey);
-      
+
       // Create shopify with core fields from first platform
       // Handle various image field names across platforms
-      const imageUrls = firstPlatformData.images || 
-                       firstPlatformData.imageUrls || 
-                       firstPlatformData.imageUrl || 
-                       firstPlatformData.image_link ||
-                       firstPlatformData.picURL ||
-                       (first.sourceImageUrl ? [first.sourceImageUrl] : []);
-      
+      const imageUrls = firstPlatformData.images ||
+        firstPlatformData.imageUrls ||
+        firstPlatformData.imageUrl ||
+        firstPlatformData.image_link ||
+        firstPlatformData.picURL ||
+        (first.sourceImageUrl ? [first.sourceImageUrl] : []);
+
       normalized.shopify = {
         title: firstPlatformData.title || firstPlatformData.name || '',
         description: firstPlatformData.description || '',
-        price: typeof firstPlatformData.price === 'string' 
+        price: typeof firstPlatformData.price === 'string'
           ? parseFloat(firstPlatformData.price.replace(/[^0-9.]/g, '')) || 0
           : (firstPlatformData.price || 0),
         sku: firstPlatformData.sku || '',
@@ -549,16 +549,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         images: Array.isArray(imageUrls) ? imageUrls : (imageUrls ? [imageUrls] : []),
       };
     }
-    
+
     // Hydrate into platformsRef (preserves user edits)
     const hydrated = hydratePlatformsFromBackend(normalized, platformsRef.current);
     console.log('[GEN-DETAILS] Hydrated platforms:', Object.keys(hydrated));
     updatePlatforms(() => hydrated);
-    
+
     lastHydratedJobRef.current = currentJobId;
   }, [first, jobId]);
-  
-  
+
+
   // ========== AUTO-SAVE DEBOUNCE: Save to /api/products/drafts every 2s idle ==========
   useEffect(() => {
     const variantId = (route.params as any)?.variantId || first?.variantId;
@@ -574,7 +574,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       try {
         const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
         const token = await ensureSupabaseJwt();
-        
+
         if (!baseUrl || !token) {
           console.log('[GEN-DETAILS AutoSave] Missing baseUrl or token, skipping');
           return;
@@ -622,7 +622,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [versionsSheetOpen, setVersionsSheetOpen] = useState(false);
   const [versions, setVersions] = useState<Array<{ id: string; jobId: string; createdAt: string; platforms: any; sources?: Array<{ url: string; usedForFields?: string[] }>; matchJobId?: string; source?: string; versionCount?: number; allVersions?: Array<any> }>>([]);
   const [selectedFieldKey, setSelectedFieldKey] = useState<string | null>(null);
-  const [versionsTab, setVersionsTab] = useState<'versions'|'sources'>('versions');
+  const [versionsTab, setVersionsTab] = useState<'versions' | 'sources'>('versions');
   const [scannerOpen, setScannerOpen] = useState(false);
   const [isFilling, setIsFilling] = useState(false);
   const [recentlyFilledByPlatform, setRecentlyFilledByPlatform] = useState<Record<string, string[]>>({});
@@ -660,82 +660,82 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [mediaModalVisible, setMediaModalVisible] = useState(false);
   const [selectedVariantForMedia, setSelectedVariantForMedia] = useState<string | null>(null);
 
-    // Fetch connections and locations on mount
-    useEffect(() => {
-      (async () => {
-        try {
-          const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
-          const token = await ensureSupabaseJwt();
-          if (!baseUrl || !token) return;
-          
-          const connRes = await fetch(`${baseUrl}/api/platform-connections`, {
-            headers: { Authorization: `Bearer ${token}` },
+  // Fetch connections and locations on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+        const token = await ensureSupabaseJwt();
+        if (!baseUrl || !token) return;
+
+        const connRes = await fetch(`${baseUrl}/api/platform-connections`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        let connections = connRes.ok ? await connRes.json() : [];
+        setAllConnections(connections);
+
+        // ⚡ OPTIMIZED: Query PlatformLocations directly from DB instead of calling sync endpoint
+        console.log('[GenerateDetails] ⚡ Loading locations directly from PlatformLocations table...');
+
+        const connectionIds = connections.map((c: any) => c.Id);
+        if (connectionIds.length === 0) {
+          console.log('[GenerateDetails] No connections found');
+          setPlatformLocations({});
+          return;
+        }
+
+        // Query PlatformLocations directly from Supabase
+        const { data: platformLocs, error } = await supabase
+          .from('PlatformLocations')
+          .select('PlatformConnectionId, PlatformLocationId, Name')
+          .in('PlatformConnectionId', connectionIds);
+
+        if (error) {
+          console.error('[GenerateDetails] Failed to query PlatformLocations:', error);
+          setPlatformLocations({});
+          return;
+        }
+
+        console.log('[GenerateDetails] ✅ Retrieved', platformLocs?.length || 0, 'locations from DB in <1s');
+
+        // Build map: connectionId -> location objects
+        const locsByConnection = new Map<string, Array<{ id: string; name: string }>>();
+        for (const loc of platformLocs || []) {
+          if (!locsByConnection.has(loc.PlatformConnectionId)) {
+            locsByConnection.set(loc.PlatformConnectionId, []);
+          }
+          locsByConnection.get(loc.PlatformConnectionId)!.push({
+            id: loc.PlatformLocationId,
+            name: loc.Name || 'Unnamed Location'
           });
-          let connections = connRes.ok ? await connRes.json() : [];
-          setAllConnections(connections);
-          
-          // ⚡ OPTIMIZED: Query PlatformLocations directly from DB instead of calling sync endpoint
-          console.log('[GenerateDetails] ⚡ Loading locations directly from PlatformLocations table...');
-          
-          const connectionIds = connections.map((c: any) => c.Id);
-          if (connectionIds.length === 0) {
-            console.log('[GenerateDetails] No connections found');
-            setPlatformLocations({});
-            return;
-          }
-          
-          // Query PlatformLocations directly from Supabase
-          const { data: platformLocs, error } = await supabase
-            .from('PlatformLocations')
-            .select('PlatformConnectionId, PlatformLocationId, Name')
-            .in('PlatformConnectionId', connectionIds);
-          
-          if (error) {
-            console.error('[GenerateDetails] Failed to query PlatformLocations:', error);
-            setPlatformLocations({});
-            return;
-          }
-          
-          console.log('[GenerateDetails] ✅ Retrieved', platformLocs?.length || 0, 'locations from DB in <1s');
-          
-          // Build map: connectionId -> location objects
-          const locsByConnection = new Map<string, Array<{ id: string; name: string }>>();
-          for (const loc of platformLocs || []) {
-            if (!locsByConnection.has(loc.PlatformConnectionId)) {
-              locsByConnection.set(loc.PlatformConnectionId, []);
-            }
-            locsByConnection.get(loc.PlatformConnectionId)!.push({
-              id: loc.PlatformLocationId,
-              name: loc.Name || 'Unnamed Location'
+        }
+
+        // Extract locations by platform type
+        const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>> = {};
+        for (const conn of connections) {
+          const platform = conn.PlatformType?.toLowerCase();
+          if (!platform || !conn.IsEnabled) continue;
+
+          const locs = locsByConnection.get(conn.Id) || [];
+          if (!locsByPlatform[platform]) locsByPlatform[platform] = [];
+
+          for (const loc of locs) {
+            locsByPlatform[platform].push({
+              ...loc,
+              connectionId: conn.Id,
+              connectionName: conn.DisplayName || conn.PlatformType
             });
           }
-          
-          // Extract locations by platform type
-          const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>> = {};
-          for (const conn of connections) {
-            const platform = conn.PlatformType?.toLowerCase();
-            if (!platform || !conn.IsEnabled) continue;
-            
-            const locs = locsByConnection.get(conn.Id) || [];
-            if (!locsByPlatform[platform]) locsByPlatform[platform] = [];
-            
-            for (const loc of locs) {
-              locsByPlatform[platform].push({
-                ...loc,
-                connectionId: conn.Id,
-                connectionName: conn.DisplayName || conn.PlatformType
-              });
-            }
-          }
-          
-          console.log('[GenerateDetails] Built platform locations:', Object.keys(locsByPlatform).map(p => `${p}: ${locsByPlatform[p].length} locs`));
-          setPlatformLocations(locsByPlatform);
-        } catch (e) {
-          console.error('Failed to fetch connections/locations:', e);
         }
-      })();
-    }, []);
-  
+
+        console.log('[GenerateDetails] Built platform locations:', Object.keys(locsByPlatform).map(p => `${p}: ${locsByPlatform[p].length} locs`));
+        setPlatformLocations(locsByPlatform);
+      } catch (e) {
+        console.error('Failed to fetch connections/locations:', e);
+      }
+    })();
+  }, []);
+
   useEffect(() => {
     if (regenModalOpen && regenAutoRun && !regenSubmitting) {
       // small delay to allow modal layout before firing
@@ -746,7 +746,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       return () => clearTimeout(t);
     }
   }, [regenModalOpen, regenAutoRun, regenSubmitting]);
-  
+
   // Try to pull items list from params if provided; fallback to single
   const items = useMemo(() => {
     const raw = ((route.params as any)?.items || []) as Array<{ index: number; title?: string; thumb?: string; matchesCount?: number; matchJobId?: string }>;
@@ -759,18 +759,18 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }));
     if (normalized.length) return normalized;
     // Build from results if items not passed
-    const fallback = Array.isArray(results) ? results.map((r, i) => ({ 
-      index: r.productIndex ?? i, 
-      title: `Item ${i + 1}`, 
-      thumb: r.sourceImageUrl || '', 
+    const fallback = Array.isArray(results) ? results.map((r, i) => ({
+      index: r.productIndex ?? i,
+      title: `Item ${i + 1}`,
+      thumb: r.sourceImageUrl || '',
       matchesCount: 0,
       matchJobId: matchJobId // Use global matchJobId for fallback items
     })) : [];
     if (fallback.length) return fallback;
-    return [{ 
-      index: first?.productIndex ?? 0, 
-      title: 'Item 1', 
-      thumb: first?.sourceImageUrl || '', 
+    return [{
+      index: first?.productIndex ?? 0,
+      title: 'Item 1',
+      thumb: first?.sourceImageUrl || '',
       matchesCount: 0,
       matchJobId: matchJobId // Use global matchJobId for single item
     }];
@@ -779,7 +779,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const jobMap = ((route.params as any)?.jobMap || {}) as Record<number, { jobId: string; status?: string }>;
   // Derive quick lookups for presence of jobs
   const hasGenerateForIndex = useMemo(() => (idx: number) => Boolean(jobMap[idx]?.jobId), [jobMap]);
-  
+
   // Navigation state for modal integration (like MatchSelectionScreen)
   const [currentProductIndex, setCurrentProductIndex] = useState((first?.productIndex as number) ?? (items[0]?.index || 0));
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
@@ -830,44 +830,44 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   // Update checklist when displayed platforms change (using flexible pricing)
   useEffect(() => {
     const next: Record<string, { missing: string[]; ready: boolean }> = {};
-    
+
     for (const key of Object.keys(displayedPlatforms)) {
       const data = displayedPlatforms[key] || {};
       const missing: string[] = [];
-      
+
       // Title is required
       if (isEmpty(data.title)) {
         missing.push('title');
       }
-      
+
       // SKU is required
       if (isEmpty(data.sku)) {
         missing.push('sku');
       }
-      
+
       // Price: flexible (flat OR all variants)
       if (!hasPlatformPrice(data)) {
         missing.push('price');
       }
-      
+
       // Images (optional but good practice)
       // Not blocking, just informational
-      
+
       next[key] = { missing, ready: missing.length === 0 };
     }
-    
+
     setChecklist(next);
   }, [displayedPlatforms]);
 
   // Fetch versions when sheet opens
   useEffect(() => {
     if (!versionsSheetOpen) return;
-    
+
     // Try to get versions from generate jobs related to this match
     const productId = (route.params as any)?.productId || first?.productId || null;
     const variantId = (route.params as any)?.variantId || first?.variantId || null;
     const currentMatchJobId = matchJobId;
-    
+
     (async () => {
       try {
         // First try to get versions from the backend API
@@ -887,7 +887,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             }
           }
         }
-        
+
         // Fallback: get all generate jobs and filter by current match context
         const token = await ensureSupabaseJwt();
         const { data: generateJobs, error } = await supabase
@@ -896,15 +896,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           .eq('status', 'completed')
           .order('created_at', { ascending: false })
           .limit(50); // Increased limit to get more versions for grouping
-          
+
         if (!error && generateJobs) {
           const relatedVersions = generateJobs
             .filter(job => {
               // Include jobs that either have the same match_job_id or contain results for the same product
-              return job.match_job_id === currentMatchJobId || 
-                     (Array.isArray(job.results) && job.results.some((r: any) => 
-                       r.productId === productId || r.productIndex === first?.productIndex
-                     ));
+              return job.match_job_id === currentMatchJobId ||
+                (Array.isArray(job.results) && job.results.some((r: any) =>
+                  r.productId === productId || r.productIndex === first?.productIndex
+                ));
             })
             .map(job => ({
               id: job.job_id,
@@ -914,7 +914,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               matchJobId: job.match_job_id,
               source: job.results?.[0]?.source || 'generated'
             }));
-            
+
           // Group versions by match job ID  
           const groupedVersions = groupVersionsByMatchId(relatedVersions);
           setVersions(groupedVersions);
@@ -941,10 +941,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         if (!canceled && Array.isArray(data?.jobs)) {
           const jobs = data.jobs.map((j: any) => ({ jobId: j.jobId, status: j.status, createdAt: j.createdAt, completedAt: j.completedAt }));
           setUserGenerateJobs(jobs);
-          
+
           // Update itemGenerateJobs with the latest job data for each product index
           const jobsByIndex: Record<number, { jobId: string; status?: string }> = {};
-          
+
           // First, include any jobs passed in via jobMap
           Object.entries(jobMap || {}).forEach(([indexStr, jobInfo]) => {
             const idx = parseInt(indexStr, 10);
@@ -952,7 +952,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               jobsByIndex[idx] = jobInfo;
             }
           });
-          
+
           // Then add jobs from the API response
           jobs.forEach((job: any) => {
             // For generate jobs, we need to fetch results to map to indices
@@ -962,11 +962,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               jobsByIndex[currentIdx] = { jobId: job.jobId, status: job.status };
             }
           });
-          
+
           console.log('[GenerateDetails] Updated jobsByIndex:', jobsByIndex);
           setItemGenerateJobs(jobsByIndex);
         }
-      } catch {}
+      } catch { }
     })();
     return () => { canceled = true };
   }, []);
@@ -979,7 +979,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       return isPlatformReady(platformData, platformKey, ignoredPlatforms);
     });
   }, [displayedPlatforms, platformKeys, ignoredPlatforms]);
-  
+
   const canPublish = useMemo(() => readyPlatforms.length > 0, [readyPlatforms]);
 
   // Helper: get missing fields for a platform
@@ -987,15 +987,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     const schema = PLATFORM_FIELD_SCHEMA[platformKey] || {};
     const currentData = displayedPlatforms[platformKey] || {};
     const missing: Array<{ path: string; label: string; type: string; required?: boolean }> = [];
-    
+
     const checkFields = (obj: any, data: any, prefix = '') => {
       Object.entries(obj).forEach(([key, fieldDef]: [string, any]) => {
         const path = prefix ? `${prefix}.${key}` : key;
         const value = data?.[key];
-        const isEmpty = value === undefined || value === null || 
-                       (typeof value === 'string' && value.trim() === '') ||
-                       (Array.isArray(value) && value.length === 0);
-        
+        const isEmpty = value === undefined || value === null ||
+          (typeof value === 'string' && value.trim() === '') ||
+          (Array.isArray(value) && value.length === 0);
+
         if (fieldDef.type === 'object' && fieldDef.schema) {
           // Nested object - check recursively
           checkFields(fieldDef.schema, value || {}, path);
@@ -1020,7 +1020,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
       });
     };
-    
+
     checkFields(schema, currentData);
     return missing;
   };
@@ -1030,12 +1030,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     const schema = PLATFORM_FIELD_SCHEMA[platformKey] || {};
     const query = fieldSearchQuery.toLowerCase();
     const filtered: Array<{ path: string; label: string; type: string; required?: boolean; group?: string }> = [];
-    
+
     const searchFields = (obj: any, prefix = '', group = '') => {
       Object.entries(obj).forEach(([key, fieldDef]: [string, any]) => {
         const path = prefix ? `${prefix}.${key}` : key;
         const label = fieldDef.label || key;
-        
+
         if (fieldDef.type === 'object' && fieldDef.schema) {
           // Group header
           if (!query || label.toLowerCase().includes(query) || key.toLowerCase().includes(query)) {
@@ -1056,7 +1056,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
       });
     };
-    
+
     searchFields(schema);
     return filtered;
   };
@@ -1065,14 +1065,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const addFieldToPlatform = (platformKey: string, fieldPath: string) => {
     const pathParts = fieldPath.split('.');
     const schema = PLATFORM_FIELD_SCHEMA[platformKey] || {};
-    
+
     // Navigate to the field definition
     let fieldDef = schema;
     for (const part of pathParts.slice(0, -1)) {
       fieldDef = fieldDef[part]?.schema || fieldDef[part] || {};
     }
     const finalField = fieldDef[pathParts[pathParts.length - 1]];
-    
+
     // Determine default value based on field type
     let defaultValue: any;
     if (finalField?.type) {
@@ -1102,12 +1102,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       // If no field definition found, default to empty string (this allows adding any field)
       defaultValue = '';
     }
-    
+
     // Set the field value in the platform data
     updatePlatforms(prev => {
       const next = { ...prev };
       const platformData = { ...(next[platformKey] || {}) };
-      
+
       // For simple fields (no dots), add directly to platform
       if (pathParts.length === 1) {
         platformData[fieldPath] = defaultValue;
@@ -1122,11 +1122,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
         current[pathParts[pathParts.length - 1]] = defaultValue;
       }
-      
+
       next[platformKey] = platformData;
       return next;
     });
-    
+
     setMissingFieldsModalOpen(false);
   };
 
@@ -1143,7 +1143,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     const keys = Object.keys(displayedPlatforms || {});
     const canonicalKey = keys.includes('shopify') ? 'shopify' : keys[0];
     const canonical = (displayedPlatforms?.[canonicalKey] || {}) as any;
-    
+
     // Helper to parse numeric fields
     const parseNumeric = (raw: any): number | undefined => {
       if (raw === undefined || raw === null || raw === '') return undefined;
@@ -1151,12 +1151,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const cleaned = parseFloat(String(raw).replace(/[^0-9.]/g, ''));
       return Number.isFinite(cleaned) && cleaned >= 0 ? cleaned : undefined;
     };
-    
+
     const payload = {
       platformDetails: {
         canonical: {
           title: canonical.title || '',
-          sku: String(canonical.sku || `DRAFT-${(first?.productId||'').slice(0,8)}`),
+          sku: String(canonical.sku || `DRAFT-${(first?.productId || '').slice(0, 8)}`),
           price: (() => {
             const raw = (canonical as any).price;
             if (typeof raw === 'number') return raw;
@@ -1187,53 +1187,53 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           // Variant options (if single variant with options)
           selectedOptions: Array.isArray(canonical.selectedOptions) ? canonical.selectedOptions : undefined,
           // Variant structure (if variants array exists)
-          variants: Array.isArray(canonical.variants) && canonical.variants.length > 0 
+          variants: Array.isArray(canonical.variants) && canonical.variants.length > 0
             ? canonical.variants.map((v: any) => {
-                // Handle both modern format (optionValues: {Size: '2TB'}) and legacy format (option1_name, option1_value)
-                let optionFields: any = {};
-                
-                if (v.optionValues && typeof v.optionValues === 'object') {
-                  // Modern format: { Size: '2TB', Color: 'Black' }
-                  // Convert to legacy format for backend
-                  console.log('[buildPlatformPayload] Converting modern optionValues to legacy format:', v.optionValues);
-                  const entries = Object.entries(v.optionValues);
-                  entries.forEach(([name, value], idx) => {
-                    if (idx === 0) {
-                      optionFields.option1_name = name;
-                      optionFields.option1_value = value;
-                    } else if (idx === 1) {
-                      optionFields.option2_name = name;
-                      optionFields.option2_value = value;
-                    } else if (idx === 2) {
-                      optionFields.option3_name = name;
-                      optionFields.option3_value = value;
-                    }
-                  });
-                } else {
-                  // Legacy format already present
-                  optionFields.option1_name = v.option1_name || undefined;
-                  optionFields.option1_value = v.option1_value || undefined;
-                  optionFields.option2_name = v.option2_name || undefined;
-                  optionFields.option2_value = v.option2_value || undefined;
-                  optionFields.option3_name = v.option3_name || undefined;
-                  optionFields.option3_value = v.option3_value || undefined;
-                }
-                
-                return {
-                  ...optionFields,
-                  sku: v.sku || undefined,
-                  barcode: v.barcode || undefined,
-                  price: parseNumeric(v.price),
-                  compareAtPrice: parseNumeric(v.compareAtPrice),
-                  costPerItem: parseNumeric(v.costPerItem),
-                  inventoryQuantity: parseNumeric(v.inventoryQuantity),
-                  inventoryTracker: v.inventoryTracker || undefined,
-                  tracked: v.tracked !== undefined ? v.tracked : undefined,
-                  requiresShipping: v.requiresShipping !== undefined ? v.requiresShipping : undefined,
-                  weightValueGrams: parseNumeric(v.weightValueGrams),
-                  inventoryByLocation: v.inventoryByLocation || undefined,
-                };
-              })
+              // Handle both modern format (optionValues: {Size: '2TB'}) and legacy format (option1_name, option1_value)
+              let optionFields: any = {};
+
+              if (v.optionValues && typeof v.optionValues === 'object') {
+                // Modern format: { Size: '2TB', Color: 'Black' }
+                // Convert to legacy format for backend
+                console.log('[buildPlatformPayload] Converting modern optionValues to legacy format:', v.optionValues);
+                const entries = Object.entries(v.optionValues);
+                entries.forEach(([name, value], idx) => {
+                  if (idx === 0) {
+                    optionFields.option1_name = name;
+                    optionFields.option1_value = value;
+                  } else if (idx === 1) {
+                    optionFields.option2_name = name;
+                    optionFields.option2_value = value;
+                  } else if (idx === 2) {
+                    optionFields.option3_name = name;
+                    optionFields.option3_value = value;
+                  }
+                });
+              } else {
+                // Legacy format already present
+                optionFields.option1_name = v.option1_name || undefined;
+                optionFields.option1_value = v.option1_value || undefined;
+                optionFields.option2_name = v.option2_name || undefined;
+                optionFields.option2_value = v.option2_value || undefined;
+                optionFields.option3_name = v.option3_name || undefined;
+                optionFields.option3_value = v.option3_value || undefined;
+              }
+
+              return {
+                ...optionFields,
+                sku: v.sku || undefined,
+                barcode: v.barcode || undefined,
+                price: parseNumeric(v.price),
+                compareAtPrice: parseNumeric(v.compareAtPrice),
+                costPerItem: parseNumeric(v.costPerItem),
+                inventoryQuantity: parseNumeric(v.inventoryQuantity),
+                inventoryTracker: v.inventoryTracker || undefined,
+                tracked: v.tracked !== undefined ? v.tracked : undefined,
+                requiresShipping: v.requiresShipping !== undefined ? v.requiresShipping : undefined,
+                weightValueGrams: parseNumeric(v.weightValueGrams),
+                inventoryByLocation: v.inventoryByLocation || undefined,
+              };
+            })
             : undefined,
         },
         // ALSO send platform-specific data to preserve original generated fields
@@ -1249,20 +1249,20 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       media: (() => {
         // CRITICAL: Use userImagesByIndex which prioritizes: 1) DB images, 2) params, 3) scraped fallback
         const imgs = new Set<string>();
-        
+
         // First, collect from displayed platforms (preserves user edits in the form)
-        for (const k of Object.keys(displayedPlatforms||{})) {
+        for (const k of Object.keys(displayedPlatforms || {})) {
           const p = (displayedPlatforms as any)[k] || {};
           const arr = p.images || p.imageUris || [];
           if (Array.isArray(arr)) {
-            arr.forEach((u:string)=> {
+            arr.forEach((u: string) => {
               if (typeof u === 'string' && u && !u.includes('firecrawl') && !u.includes('serpapi')) {
                 imgs.add(u);
               }
             });
           }
         }
-        
+
         // Add user images from computed userImagesByIndex (includes DB images!)
         const idx = (first?.productIndex as number) ?? 0;
         const userImages = userImagesByIndex[idx] || [];
@@ -1271,14 +1271,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             imgs.add(u);
           }
         });
-        
+
         const imageUris = Array.from(imgs);
         console.log('[buildPlatformPayload] Using user images (DB + params):', imageUris);
         return { imageUris, coverImageIndex: 0 };
       })(),
-      selectedPlatformsToPublish: Object.keys(displayedPlatforms||{}),
+      selectedPlatformsToPublish: Object.keys(displayedPlatforms || {}),
     };
-    
+
     return payload;
   };
 
@@ -1313,9 +1313,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const gen = (data?.generatedDetails || data || {}) as any;
       const genPlatforms = (gen.platforms || {}) as Record<string, any>;
 
-      const mergeFields = ['title','description','tags','price','weight','weightUnit','sku','barcode','images','options','seoTitle','seoDescription'];
+      const mergeFields = ['title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode', 'images', 'options', 'seoTitle', 'seoDescription'];
       const next = { ...displayedPlatforms } as any;
-      const changedMap: Record<string,string[]> = {};
+      const changedMap: Record<string, string[]> = {};
       for (const k of Object.keys(genPlatforms)) {
         const incoming = genPlatforms[k] || {};
         const curr = next[k] || {};
@@ -1337,10 +1337,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       setRecentlyFilledByPlatform(changedMap);
       // Track refilled fields per platform for pill badges
       setRefilledFieldsByPlatform(prev => {
-        const merged: Record<string,string[]> = { ...prev };
+        const merged: Record<string, string[]> = { ...prev };
         for (const k of Object.keys(changedMap)) {
           const prevArr = merged[k] || [];
-          merged[k] = Array.from(new Set([ ...prevArr, ...changedMap[k] ]));
+          merged[k] = Array.from(new Set([...prevArr, ...changedMap[k]]));
         }
         return merged;
       });
@@ -1348,11 +1348,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       updatePlatforms(prev => {
         const out: any = { ...prev };
         for (const k of Object.keys(changedMap)) {
-          out[k] = { ...(out[k]||{}), __refilled: Array.from(new Set([ ...((out[k]?.__refilled)||[]), ...changedMap[k] ])) };
+          out[k] = { ...(out[k] || {}), __refilled: Array.from(new Set([...((out[k]?.__refilled) || []), ...changedMap[k]])) };
         }
         return out;
       });
-    } catch {}
+    } catch { }
     finally {
       setIsFilling(false);
     }
@@ -1429,7 +1429,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }));
         setRefilledFieldsByPlatform(prev => ({
           ...prev,
-          [regenPlatformKey]: Array.from(new Set([ ...(prev[regenPlatformKey]||[]), regenFieldKey! ]))
+          [regenPlatformKey]: Array.from(new Set([...(prev[regenPlatformKey] || []), regenFieldKey!]))
         }));
       }
     } catch (e) {
@@ -1450,10 +1450,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         console.log('[doSaveDraft] Missing required data');
         return;
       }
-      
+
       const payload = buildPlatformPayload();
       console.log('[doSaveDraft] Saving payload:', JSON.stringify(payload, null, 2));
-      
+
       const res = await fetch(`${baseUrl}/api/products/publish`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -1466,20 +1466,20 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           selectedPlatformsToPublish: [],
         })
       });
-      
+
       if (res.ok) {
         console.log('[doSaveDraft] Draft saved successfully');
-        
+
         // Fetch the updated variant data from the database to show the saved values
         const { data: updatedVariant, error: fetchError } = await supabase
           .from('ProductVariants')
           .select('*')
           .eq('Id', variantId)
           .single();
-        
+
         if (!fetchError && updatedVariant) {
           console.log('[doSaveDraft] Fetched updated variant:', updatedVariant);
-          
+
           // Update the displayed platforms with the saved data
           // This ensures the UI reflects what's actually in the database
           const canonicalKey = platformKeys.includes('shopify') ? 'shopify' : platformKeys[0];
@@ -1499,7 +1499,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             }));
           }
         }
-        
+
         // Show success message briefly before navigating
         alert('Draft saved successfully!');
         navigation.goBack();
@@ -1519,7 +1519,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     console.log('displayedPlatforms:', JSON.stringify(displayedPlatforms, null, 2));
     console.log('readyPlatforms:', readyPlatforms);
     console.log('platformKeys:', platformKeys);
-    
+
     try {
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
       const token = await ensureSupabaseJwt();
@@ -1527,19 +1527,19 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         console.log('doPublish - Missing baseUrl or token');
         return;
       }
-      
+
       const payload = buildPlatformPayload();
       const canonical = payload.platformDetails?.canonical || {};
       console.log('doPublish - Canonical payload:', canonical);
 
       // Validate readiness with flexible pricing
       const missingByPlatform: Record<string, string[]> = {};
-      
+
       for (const platform of readyPlatforms) {
         const platformKey = String(platform).toLowerCase();
         const platformData = (payload.platformDetails as any)?.[platformKey] || {};
         const missing = getMissingPlatformFields(platformData, platformKey);
-        
+
         if (missing.length > 0) {
           console.log(`doPublish - ${platformKey} missing fields:`, missing);
           missingByPlatform[platformKey] = missing;
@@ -1548,9 +1548,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
       }
       console.log('doPublish - Missing by platform:', missingByPlatform);
-      
+
       if (Object.keys(missingByPlatform).length) {
-        const lines = Object.entries(missingByPlatform).map(([plat, fields]) => 
+        const lines = Object.entries(missingByPlatform).map(([plat, fields]) =>
           `${PLATFORM_META[plat]?.label || plat}: Missing ${fields.join(', ')}`
         );
         alert(`Cannot publish yet!\n\n${lines.join('\n')}\n\nPlease fill in all required fields.`);
@@ -1563,18 +1563,18 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       });
       const connections = connRes.ok ? await connRes.json() : [];
       setAllConnections(connections);
-      
+
       // Extract locations from connections
       const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>> = {};
       for (const conn of connections) {
         const platform = conn.PlatformType?.toLowerCase();
         if (!platform || !conn.IsEnabled) continue;
-        
+
         const platformData = conn.PlatformSpecificData || {};
         const locations = platformData.locations || [];
-        
+
         if (!locsByPlatform[platform]) locsByPlatform[platform] = [];
-        
+
         for (const loc of locations) {
           locsByPlatform[platform].push({
             id: loc.id || loc.gid || '',
@@ -1585,11 +1585,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
       }
       setPlatformLocations(locsByPlatform);
-      
+
       // Auto-select first connection for each ready platform
       const autoSelected: Record<string, string> = {};
       for (const platform of readyPlatforms) {
-        const platformConns = connections.filter((c: any) => 
+        const platformConns = connections.filter((c: any) =>
           c.PlatformType?.toLowerCase() === platform.toLowerCase() && c.IsEnabled
         );
         if (platformConns.length > 0) {
@@ -1597,7 +1597,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
       }
       setSelectedConnectionIds(autoSelected);
-      
+
       // Show modal
       setPublishModalOpen(true);
 
@@ -1613,38 +1613,38 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('User not authenticated');
-      
+
       for (const localUri of localUris) {
         // Skip if already a public URL
         if (localUri.startsWith('http://') || localUri.startsWith('https://')) {
           publicUrls.push(localUri);
           continue;
         }
-        
+
         try {
           console.log('[UPLOAD] Uploading image:', localUri);
           const parsedPath = Paths.parse(localUri);
           const srcFile = new File(new Directory(parsedPath.dir), parsedPath.base);
           const bytes = await srcFile.bytes();
-          
+
           const fileName = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
-          
+
           const { data, error } = await supabase.storage
             .from('product-images')
             .upload(fileName, bytes, {
               contentType: 'image/jpeg',
               cacheControl: '3600',
             });
-          
+
           if (error) {
             console.error('[UPLOAD] Supabase upload error:', error);
             continue; // Skip this image but continue with others
           }
-          
+
           const { data: urlData } = supabase.storage
             .from('product-images')
             .getPublicUrl(fileName);
-          
+
           const publicUrl = urlData.publicUrl;
           console.log('[UPLOAD] Successfully uploaded to:', publicUrl);
           publicUrls.push(publicUrl);
@@ -1671,14 +1671,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         console.log('[confirmAndPublish] Missing required data, aborting');
         return;
       }
-      
+
       const rawPayload = buildPlatformPayload();
-      
+
       // Upload local images to Supabase before publishing
       console.log('[confirmAndPublish] Uploading local images...');
       const uploadedImageUris = await uploadLocalImagesToSupabase(rawPayload.media.imageUris || []);
       console.log('[confirmAndPublish] Uploaded images:', uploadedImageUris);
-      
+
       // Replace local URIs with uploaded public URLs
       const payload = {
         ...rawPayload,
@@ -1687,18 +1687,18 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           imageUris: uploadedImageUris,
         },
       };
-      
+
       const canonical = payload.platformDetails?.canonical || {};
 
       // Expand "ALL" selections to actual connection IDs
       const actualConnectionIds: Record<string, string[]> = {};
       const accountNamesList: string[] = [];
-      
+
       for (const [platform, selection] of Object.entries(selectedConnectionIds)) {
-        const platformConns = allConnections.filter((c: any) => 
+        const platformConns = allConnections.filter((c: any) =>
           c.PlatformType?.toLowerCase() === platform.toLowerCase() && c.IsEnabled
         );
-        
+
         if (selection === 'ALL') {
           actualConnectionIds[platform] = platformConns.map((c: any) => c.Id);
           accountNamesList.push(...platformConns.map((c: any) => c.DisplayName));
@@ -1710,7 +1710,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       }
 
       const platformsToPublish = Object.keys(actualConnectionIds);
-      
+
       const publishPayload = {
         productId,
         variantId,
@@ -1720,7 +1720,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         selectedPlatformsToPublish: platformsToPublish,
         connectionIds: actualConnectionIds,
       };
-      
+
       console.log('[confirmAndPublish] Publishing to:', platformsToPublish);
       console.log('[confirmAndPublish] Connection IDs:', actualConnectionIds);
       console.log('[confirmAndPublish] Canonical data being sent:', JSON.stringify(payload.platformDetails.canonical, null, 2));
@@ -1731,13 +1731,13 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(publishPayload),
       });
-      
+
       console.log('[confirmAndPublish] Response status:', publishRes.status);
 
       if (!publishRes.ok) {
         const errorText = await publishRes.text();
         console.error('Publish failed:', errorText);
-        
+
         // Parse error for better user messaging
         try {
           const errorJson = JSON.parse(errorText);
@@ -1749,7 +1749,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         } catch {
           alert(`Failed to publish: ${errorText}`);
         }
-        
+
         // Don't clear data on error - user can fix and retry
         return;
       }
@@ -1759,7 +1759,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         const arr = Array.isArray(payload.media?.imageUris) ? payload.media.imageUris : [];
         return arr[idx] || first?.sourceImageUrl || '';
       })();
-      
+
       navigation.navigate('PublishConfirmation', {
         productId,
         variantId,
@@ -1794,7 +1794,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           return null;
         }
         if (s?.status === 'failed' || s?.status === 'cancelled') return null;
-      } catch {}
+      } catch { }
       await new Promise(res => setTimeout(res, 1200));
     }
     return null;
@@ -1809,7 +1809,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (!baseUrl || !productId || !variantId || !token) return;
 
 
-      
+
       const payload = buildPlatformPayload();
       const submit = await fetch(`${baseUrl}/api/products/regenerate/submit`, {
         method: 'POST',
@@ -1838,7 +1838,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (generatedPlatforms && generatedPlatforms[platformKey]) {
         // Update displayed platforms with the new generated data
         const normalized = normalizeForListingEditor(generatedPlatforms[platformKey]);
-        updatePlatforms(prev => 
+        updatePlatforms(prev =>
           hydratePlatformsFromBackend({ [platformKey]: normalized }, prev)
         );
       }
@@ -1905,8 +1905,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (!baseUrl || !productId || !variantId || !token) return;
       const payload = buildPlatformPayload();
       const fieldGroups: Record<string, string[]> = {
-        boost: ['tags','categorySuggestion','brand','seoTitle','seoDescription'],
-        advanced: ['googleShopping','itemSpecifics','returnPolicy','shippingDetails']
+        boost: ['tags', 'categorySuggestion', 'brand', 'seoTitle', 'seoDescription'],
+        advanced: ['googleShopping', 'itemSpecifics', 'returnPolicy', 'shippingDetails']
       };
       const targetFields = fieldGroups[kind] || [];
       const userQuery = kind === 'boost'
@@ -1939,7 +1939,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const matched = resultArray.find((r: any) => r.productIndex === currentProductIndex) || resultArray[0];
       const incomingPlatform = (matched?.platforms || {})[platformKey] || {};
       const normalized = normalizeForListingEditor(incomingPlatform);
-      updatePlatforms(prev => 
+      updatePlatforms(prev =>
         hydratePlatformsFromBackend({ [platformKey]: normalized }, prev)
       );
     } catch (e) {
@@ -1966,7 +1966,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
       if (!result.canceled && result.assets.length > 0) {
         const asset = result.assets[0];
-        
+
         // Upload to Supabase (like AddProductScreen does)
         try {
           const { data: { user } } = await supabase.auth.getUser();
@@ -1982,7 +1982,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
           // Create file name in user's folder
           const fileName = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
-          
+
           const { data, error } = await supabase.storage
             .from('product-images')
             .upload(fileName, bytes, {
@@ -2029,7 +2029,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       Alert.alert('No variant selected');
       return;
     }
-    
+
     console.log('[Phase2 Media] Set variant', selectedVariantForMedia, 'photo to:', imageUrl);
     setSelectedVariantForMedia(null);
   };
@@ -2039,7 +2039,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     const variantId = (route.params as any)?.variantId;
     const hasResults = Array.isArray(results) && results.length > 0;
     const hasPlatformData = Object.keys(platformsRef.current).length > 0;
-    
+
     // Only load draft if:
     // 1. We have a variantId
     // 2. platformsRef is still empty (not already hydrated from results or previous load)
@@ -2054,7 +2054,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       try {
         const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
         const token = await ensureSupabaseJwt();
-        
+
         if (!baseUrl || !token) {
           console.log('[GEN-DETAILS DraftLoad] Missing baseUrl or token, skipping');
           return;
@@ -2076,7 +2076,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
         const draftResponse = await response.json();
         const currentDraft = draftResponse?.currentDraft;
-        
+
         if (!currentDraft || !currentDraft.DraftData) {
           console.log('[GEN-DETAILS DraftLoad] No draft data found');
           return;
@@ -2096,265 +2096,266 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
     return () => { canceled = true };
   }, [(route.params as any)?.variantId, results]);
-  
+
 
   return (
     <View style={{ flex: 1 }}>
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <View style={{ position: 'absolute', top: -32, right: 16, zIndex: 4000, flexDirection: 'row', gap: 8 }}>
-        <TouchableOpacity onPress={() => setVersionsSheetOpen(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5' }}>
-          <Text style={{ color: '#000', fontWeight: '600' }}>•••</Text>
-        </TouchableOpacity>
-      </View>
-      {/* Back button and Current Jobs buttons */}
-      <View style={{ position: 'absolute', top: -32, left: 16, zIndex: 4000, flexDirection: 'row', gap: 8 }}>
-        <TouchableOpacity 
-          onPress={() => {
-            // Navigate back to past scans page
-            navigation.goBack();
-          }} 
-          style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}
-        >
-          <Icon name="arrow-left" size={18} color={'#000'} />
-          <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Back</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}>
-          <Boxes size={18} color={'#000'} />
-          <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Current Jobs</Text>
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView>
-        {first ? (
-          
-          <>
-          
-            
-            {/* Editor form that matches the product page design */}
-            <ListingEditorForm
-              platforms={displayedPlatforms}
-              updateCounter={updateCounter}
-              images={(userImagesByIndex[(first?.productIndex as number) ?? 0] || [first?.sourceImageUrl || '']).filter(Boolean)}
-              platformLocations={platformLocations}
-              onChangePlatforms={(next) => {
-                console.log('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
-                // DEEP merge: preserve all existing fields while updating changed ones
-                // This preserves user edits AND keeps all loaded backend data
-                updatePlatforms(prev => {
-                  const merged = { ...prev };
-                  for (const [platformKey, platformData] of Object.entries(next)) {
-                    const prevPlatform = prev[platformKey] || {};
-                    
-                    // Deep merge platform data
-                    merged[platformKey] = {
-                      ...prevPlatform,
-                      ...platformData
-                    };
-
-                    // CRITICAL: Preserve variant inventoryByLocation when merging variants array
-                    if (Array.isArray(platformData?.variants) && Array.isArray(prevPlatform.variants)) {
-                      merged[platformKey].variants = platformData.variants.map((newVariant: any) => {
-                        const prevVariant = prevPlatform.variants?.find((v: any) => v.id === newVariant.id);
-                        if (prevVariant?.inventoryByLocation) {
-                          return {
-                            ...newVariant,
-                            inventoryByLocation: {
-                              ...prevVariant.inventoryByLocation,
-                              ...(newVariant.inventoryByLocation || {})
-                            }
-                          };
-                        }
-                        return newVariant;
-                      });
-                    }
-                  }
-                  console.log('[GEN-DETAILS] Deep merged platforms, keys:', Object.keys(merged));
-                  return merged;
-                });
-              }}
-              onOpenFieldPanel={handleOpenFieldPanel}
-              onRegenerateField={ENABLE_AI_REFILL_FEATURES ? regenerateField : undefined}
-              onOpenBarcodeScanner={(onResult)=>{
-                setScannerOpen(true);
-                // handler stored on closure
-                (GenerateDetailsScreen as any)._scannerResultHandler = onResult;
-              }}
-              onOpenImageCapture={(done)=>{
-                // Use AddProduct camera flow; pass a callback for captured images (photos only)
-                (route as any).navigation?.navigate?.('AddProduct', { firstPhotos: [], bulkItems: [], captureOnly: true, onDone: (uris: string[]) => done(uris) } as any);
-              }}
-              onAddMissingField={(platformKey: string) => {
-                setSelectedMissingPlatform(platformKey);
-                setFieldSearchQuery('');
-                setMissingFieldsModalOpen(true);
-              }}
-              getMissingFieldsCount={(platformKey: string) => getMissingFields(platformKey).length}
-              onGeneratePlatform={generatePlatform}
-              enableAIRefill={ENABLE_AI_REFILL_FEATURES}
-              onSuggestVariants={suggestVariants}
-              onBoostListing={boostListing}
-            />
-          </>
-        ) : (
-          <Text style={styles.meta}>No results</Text>
-        )}
-      </ScrollView>
-      
-
-
-      <ItemJobsModal
-        visible={jobsModalVisible}
-        onClose={() => setJobsModalVisible(false)}
-        items={items}
-        currentIndex={currentProductIndex}
-        scanColor={() => '#10B981'}
-        matchColor={() => '#10B981'}
-        detailsColor={(idx) => {
-          const s = itemGenerateJobs[idx]?.status;
-          if (s === 'completed') return '#93C822';
-          if (s === 'failed') return '#e11d48';
-          if (s) return '#FFD700';
-          return '#4B5563';
-        }}
-        detailsEnabled={(idx) => !!itemGenerateJobs[idx]?.jobId}
-        countLabel={'Generations'}
-        getSecondaryText={(idx) => {
-          const jid = itemGenerateJobs[idx]?.jobId;
-          const rec = jid ? userGenerateJobs.find(j => j.jobId === jid) : null;
-          if (!rec) return null;
-          if (rec.status === 'completed') return 'Generated';
-          if (rec.status === 'failed') return 'Generation failed';
-          if (rec.status === 'processing' || rec.status === 'queued') return 'Generating…';
-          const date = rec.completedAt || rec.createdAt;
-          return date ? `Last: ${new Date(date).toLocaleString()}` : null;
-        }}
-         onQuickGenerate={async (idx) => {
-           try {
-             // TODO: Implement quick generate for this specific item
-             // For now, navigate back to match selection to start the flow
-             setCurrentProductIndex(idx);
-             setJobsModalVisible(false);
-             (route as any).navigation?.navigate?.('MatchSelectionScreen', { focusIndex: idx, items, jobMap: itemGenerateJobs } as any);
-           } catch (e) {
-             console.error('Quick generate failed:', e);
-           }
-         }}
-         onPickScan={(idx) => {
-          setCurrentProductIndex(idx);
-          setSelectedIndices([]);
-          setSelectedPlatforms([]);
-          setSelectedTemplate(null);
-          setJobsModalVisible(false);
-          setBottomNavState('empty');
-        }}
-        onPickMatch={(idx) => {
-          // Jump to match selection for this item, use specific match job id for that item
-          const selectedItem = items.find(item => item.index === idx);
-          const itemMatchJobId = selectedItem?.matchJobId || matchJobId; // Fallback to global if not found
-          setCurrentProductIndex(idx);
-          setJobsModalVisible(false);
-          (route as any).navigation?.navigate?.('MatchSelectionScreen', { 
-            jobId: itemMatchJobId, 
-            focusIndex: idx, 
-            items, 
-            jobMap: itemGenerateJobs 
-          } as any);
-        }}
-         onPickDetails={(idx) => {
-          const jid = itemGenerateJobs[idx]?.jobId;
-          if (jid) {
-            setCurrentProductIndex(idx);
-            setJobsModalVisible(false);
-            // Navigate via LoadingScreen to show proper loading state
-            (route as any).navigation?.navigate?.('LoadingScreen', {
-              processType: 'generate',
-              payload: { jobId: jid, firstPhotos: [] },
-              onCompleteRoute: { 
-                screen: 'GenerateDetailsScreen', 
-                params: { 
-                  jobId: jid, 
-                  items, 
-                  jobMap: itemGenerateJobs,
-                  focusIndex: idx 
-                } 
-              }
-            } as any);
-          }
-        }}
-      />
-  
-    </ScrollView>
-    <View style={{backgroundColor: 'white', paddingBottom: 24}}>
-      <BottomActionBar
-        primaryLabel={
-          canPublish 
-            ? `Publish to ${readyPlatforms.length} platform${readyPlatforms.length === 1 ? '' : 's'}` 
-            : 'Publish listing (not ready)'
-        }
-        primaryDisabled={!canPublish}
-        onPrimary={doPublish}
-        secondaryLabel={'Save draft'}
-        onSecondary={doSaveDraft}
-      />
-    </View>
-
-
-    {!!lastFillCount && ENABLE_AI_REFILL_FEATURES && (
-      <View style={{ position: 'absolute', bottom: 96, left: 16, right: 16, backgroundColor: 'rgba(17,17,17,0.92)', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, alignItems: 'center' }}>
-        <Text style={{ color: '#fff', fontWeight: '600' }}>Filled {lastFillCount} field{lastFillCount === 1 ? '' : 's'}</Text>
-      </View>
-    )}
-    {fillOverlayOpen && ENABLE_AI_REFILL_FEATURES && (
-      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 6000 }} pointerEvents="box-none">
-        <TouchableOpacity activeOpacity={1} onPress={() => setFillOverlayOpen(false)} style={{ height: 8 }} />
-        <View style={{ backgroundColor: '#fff', borderBottomLeftRadius: 14, borderBottomRightRadius: 14, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderColor: '#E5E5E5' }}>
-          <Text style={{ color: '#000', fontWeight: '700', marginBottom: 8 }}>Choose fields to fill</Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-            {['title','description','tags','price','sku','barcode','seoTitle','seoDescription','options'].map((f) => {
-              const selected = fillSelectedFields.includes(f);
-              return (
-                <TouchableOpacity key={f} onPress={() => setFillSelectedFields(prev => selected ? prev.filter(x=>x!==f) : [...prev, f])} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: selected ? '#93C822' : '#E5E5E5', backgroundColor: selected ? 'rgba(147,200,34,0.08)' : '#fff', marginRight: 8, marginBottom: 8 }}>
-                  <Text style={{ color: '#000' }}>{f}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, marginBottom: 4, alignItems: "center" }}>
-            <TouchableOpacity onPress={() => setFillOverlayOpen(false)} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12 }}>
-              <Text style={{ color: '#000' }}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => { setFillOverlayOpen(false); fillTheRest(); }} style={{ backgroundColor: '#93C822', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Sparkles size={16} color={'#111'} />
-              <Text style={{ color: '#000', fontWeight: '700' }}>Fill selected</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    )}
-    {scannerOpen && (
-      <View style={styles.scannerDockFull} pointerEvents="box-none">
-        <View style={styles.scannerFullBleed}>
-          <CameraView
-            style={{ width: '100%', height: 240 }}
-            facing={'back'}
-            onBarcodeScanned={(result:any) => {
-              const code = result?.data || result?.rawValue;
-              if (code && (GenerateDetailsScreen as any)._scannerResultHandler) {
-                (GenerateDetailsScreen as any)._scannerResultHandler(code);
-                setScannerOpen(false);
-                (GenerateDetailsScreen as any)._scannerResultHandler = null;
-              }
-            }}
-            barcodeScannerSettings={{ barcodeTypes: ['qr','ean13','upc_a','upc_e','code128'] }}
-          />
-          <TouchableOpacity onPress={() => { setScannerOpen(false); (GenerateDetailsScreen as any)._scannerResultHandler = null; }} style={styles.scannerCloseFull}>
-            <Text style={{ color: '#fff', fontSize: 28 }}>×</Text>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+        <View style={{ position: 'absolute', top: -32, right: 16, zIndex: 4000, flexDirection: 'row', gap: 8 }}>
+          <TouchableOpacity onPress={() => setVersionsSheetOpen(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5' }}>
+            <Text style={{ color: '#000', fontWeight: '600' }}>•••</Text>
           </TouchableOpacity>
         </View>
+        {/* Back button and Current Jobs buttons */}
+        <View style={{ position: 'absolute', top: -32, left: 16, zIndex: 4000, flexDirection: 'row', gap: 8 }}>
+          <TouchableOpacity
+            onPress={() => {
+              // Navigate back to past scans page
+              navigation.goBack();
+            }}
+            style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}
+          >
+            <Icon name="arrow-left" size={18} color={'#000'} />
+            <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Back</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}>
+            <Boxes size={18} color={'#000'} />
+            <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Current Jobs</Text>
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView>
+          {first ? (
+
+            <>
+
+
+              {/* Editor form that matches the product page design */}
+              <ListingEditorForm
+                platforms={displayedPlatforms}
+                updateCounter={updateCounter}
+                images={(userImagesByIndex[(first?.productIndex as number) ?? 0] || [first?.sourceImageUrl || '']).filter(Boolean)}
+                platformLocations={platformLocations}
+                onChangePlatforms={(next) => {
+                  console.log('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
+                  // DEEP merge: preserve all existing fields while updating changed ones
+                  // This preserves user edits AND keeps all loaded backend data
+                  updatePlatforms(prev => {
+                    const merged = { ...prev };
+                    for (const [platformKey, platformData] of Object.entries(next)) {
+                      const prevPlatform = prev[platformKey] || {};
+
+                      // Deep merge platform data
+                      merged[platformKey] = {
+                        ...prevPlatform,
+                        ...platformData
+                      };
+
+                      // CRITICAL: Preserve variant inventoryByLocation when merging variants array
+                      if (Array.isArray(platformData?.variants) && Array.isArray(prevPlatform.variants)) {
+                        merged[platformKey].variants = platformData.variants.map((newVariant: any) => {
+                          const prevVariant = prevPlatform.variants?.find((v: any) => v.id === newVariant.id);
+                          if (prevVariant?.inventoryByLocation) {
+                            return {
+                              ...newVariant,
+                              inventoryByLocation: {
+                                ...prevVariant.inventoryByLocation,
+                                ...(newVariant.inventoryByLocation || {})
+                              }
+                            };
+                          }
+                          return newVariant;
+                        });
+                      }
+                    }
+                    console.log('[GEN-DETAILS] Deep merged platforms, keys:', Object.keys(merged));
+                    return merged;
+                  });
+                }}
+                onOpenFieldPanel={handleOpenFieldPanel}
+                onRegenerateField={ENABLE_AI_REFILL_FEATURES ? regenerateField : undefined}
+                onOpenBarcodeScanner={(onResult) => {
+                  setScannerOpen(true);
+                  // handler stored on closure
+                  (GenerateDetailsScreen as any)._scannerResultHandler = onResult;
+                }}
+                onOpenImageCapture={(done) => {
+                  // Use AddProduct camera flow; pass a callback for captured images (photos only)
+                  (route as any).navigation?.navigate?.('AddProduct', { firstPhotos: [], bulkItems: [], captureOnly: true, onDone: (uris: string[]) => done(uris) } as any);
+                }}
+                onAddMissingField={(platformKey: string) => {
+                  setSelectedMissingPlatform(platformKey);
+                  setFieldSearchQuery('');
+                  setMissingFieldsModalOpen(true);
+                }}
+                getMissingFieldsCount={(platformKey: string) => getMissingFields(platformKey).length}
+                onGeneratePlatform={generatePlatform}
+                enableAIRefill={ENABLE_AI_REFILL_FEATURES}
+                onSuggestVariants={suggestVariants}
+                onBoostListing={boostListing}
+                isGenerationMode={true}
+              />
+            </>
+          ) : (
+            <Text style={styles.meta}>No results</Text>
+          )}
+        </ScrollView>
+
+
+
+        <ItemJobsModal
+          visible={jobsModalVisible}
+          onClose={() => setJobsModalVisible(false)}
+          items={items}
+          currentIndex={currentProductIndex}
+          scanColor={() => '#10B981'}
+          matchColor={() => '#10B981'}
+          detailsColor={(idx) => {
+            const s = itemGenerateJobs[idx]?.status;
+            if (s === 'completed') return '#93C822';
+            if (s === 'failed') return '#e11d48';
+            if (s) return '#FFD700';
+            return '#4B5563';
+          }}
+          detailsEnabled={(idx) => !!itemGenerateJobs[idx]?.jobId}
+          countLabel={'Generations'}
+          getSecondaryText={(idx) => {
+            const jid = itemGenerateJobs[idx]?.jobId;
+            const rec = jid ? userGenerateJobs.find(j => j.jobId === jid) : null;
+            if (!rec) return null;
+            if (rec.status === 'completed') return 'Generated';
+            if (rec.status === 'failed') return 'Generation failed';
+            if (rec.status === 'processing' || rec.status === 'queued') return 'Generating…';
+            const date = rec.completedAt || rec.createdAt;
+            return date ? `Last: ${new Date(date).toLocaleString()}` : null;
+          }}
+          onQuickGenerate={async (idx) => {
+            try {
+              // TODO: Implement quick generate for this specific item
+              // For now, navigate back to match selection to start the flow
+              setCurrentProductIndex(idx);
+              setJobsModalVisible(false);
+              (route as any).navigation?.navigate?.('MatchSelectionScreen', { focusIndex: idx, items, jobMap: itemGenerateJobs } as any);
+            } catch (e) {
+              console.error('Quick generate failed:', e);
+            }
+          }}
+          onPickScan={(idx) => {
+            setCurrentProductIndex(idx);
+            setSelectedIndices([]);
+            setSelectedPlatforms([]);
+            setSelectedTemplate(null);
+            setJobsModalVisible(false);
+            setBottomNavState('empty');
+          }}
+          onPickMatch={(idx) => {
+            // Jump to match selection for this item, use specific match job id for that item
+            const selectedItem = items.find(item => item.index === idx);
+            const itemMatchJobId = selectedItem?.matchJobId || matchJobId; // Fallback to global if not found
+            setCurrentProductIndex(idx);
+            setJobsModalVisible(false);
+            (route as any).navigation?.navigate?.('MatchSelectionScreen', {
+              jobId: itemMatchJobId,
+              focusIndex: idx,
+              items,
+              jobMap: itemGenerateJobs
+            } as any);
+          }}
+          onPickDetails={(idx) => {
+            const jid = itemGenerateJobs[idx]?.jobId;
+            if (jid) {
+              setCurrentProductIndex(idx);
+              setJobsModalVisible(false);
+              // Navigate via LoadingScreen to show proper loading state
+              (route as any).navigation?.navigate?.('LoadingScreen', {
+                processType: 'generate',
+                payload: { jobId: jid, firstPhotos: [] },
+                onCompleteRoute: {
+                  screen: 'GenerateDetailsScreen',
+                  params: {
+                    jobId: jid,
+                    items,
+                    jobMap: itemGenerateJobs,
+                    focusIndex: idx
+                  }
+                }
+              } as any);
+            }
+          }}
+        />
+
+      </ScrollView>
+      <View style={{ backgroundColor: 'white', paddingBottom: 24 }}>
+        <BottomActionBar
+          primaryLabel={
+            canPublish
+              ? `Publish to ${readyPlatforms.length} platform${readyPlatforms.length === 1 ? '' : 's'}`
+              : 'Publish listing (not ready)'
+          }
+          primaryDisabled={!canPublish}
+          onPrimary={doPublish}
+          secondaryLabel={'Save draft'}
+          onSecondary={doSaveDraft}
+        />
       </View>
-    )}
-    {versionsSheetOpen && (
+
+
+      {!!lastFillCount && ENABLE_AI_REFILL_FEATURES && (
+        <View style={{ position: 'absolute', bottom: 96, left: 16, right: 16, backgroundColor: 'rgba(17,17,17,0.92)', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, alignItems: 'center' }}>
+          <Text style={{ color: '#fff', fontWeight: '600' }}>Filled {lastFillCount} field{lastFillCount === 1 ? '' : 's'}</Text>
+        </View>
+      )}
+      {fillOverlayOpen && ENABLE_AI_REFILL_FEATURES && (
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 6000 }} pointerEvents="box-none">
+          <TouchableOpacity activeOpacity={1} onPress={() => setFillOverlayOpen(false)} style={{ height: 8 }} />
+          <View style={{ backgroundColor: '#fff', borderBottomLeftRadius: 14, borderBottomRightRadius: 14, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderColor: '#E5E5E5' }}>
+            <Text style={{ color: '#000', fontWeight: '700', marginBottom: 8 }}>Choose fields to fill</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+              {['title', 'description', 'tags', 'price', 'sku', 'barcode', 'seoTitle', 'seoDescription', 'options'].map((f) => {
+                const selected = fillSelectedFields.includes(f);
+                return (
+                  <TouchableOpacity key={f} onPress={() => setFillSelectedFields(prev => selected ? prev.filter(x => x !== f) : [...prev, f])} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: selected ? '#93C822' : '#E5E5E5', backgroundColor: selected ? 'rgba(147,200,34,0.08)' : '#fff', marginRight: 8, marginBottom: 8 }}>
+                    <Text style={{ color: '#000' }}>{f}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, marginBottom: 4, alignItems: "center" }}>
+              <TouchableOpacity onPress={() => setFillOverlayOpen(false)} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12 }}>
+                <Text style={{ color: '#000' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => { setFillOverlayOpen(false); fillTheRest(); }} style={{ backgroundColor: '#93C822', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Sparkles size={16} color={'#111'} />
+                <Text style={{ color: '#000', fontWeight: '700' }}>Fill selected</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+      {scannerOpen && (
+        <View style={styles.scannerDockFull} pointerEvents="box-none">
+          <View style={styles.scannerFullBleed}>
+            <CameraView
+              style={{ width: '100%', height: 240 }}
+              facing={'back'}
+              onBarcodeScanned={(result: any) => {
+                const code = result?.data || result?.rawValue;
+                if (code && (GenerateDetailsScreen as any)._scannerResultHandler) {
+                  (GenerateDetailsScreen as any)._scannerResultHandler(code);
+                  setScannerOpen(false);
+                  (GenerateDetailsScreen as any)._scannerResultHandler = null;
+                }
+              }}
+              barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'] }}
+            />
+            <TouchableOpacity onPress={() => { setScannerOpen(false); (GenerateDetailsScreen as any)._scannerResultHandler = null; }} style={styles.scannerCloseFull}>
+              <Text style={{ color: '#fff', fontSize: 28 }}>×</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+      {versionsSheetOpen && (
         <>
           <TouchableOpacity
             activeOpacity={1}
@@ -2364,10 +2365,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           <View style={styles.versionsSheet}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
               <View style={{ flexDirection: 'row', gap: 8 }}>
-                <TouchableOpacity onPress={() => setVersionsTab('versions')} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: versionsTab==='versions'? '#93C822':'#E5E5E5', backgroundColor: versionsTab==='versions'?'rgba(147,200,34,0.08)':'#fff' }}>
+                <TouchableOpacity onPress={() => setVersionsTab('versions')} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: versionsTab === 'versions' ? '#93C822' : '#E5E5E5', backgroundColor: versionsTab === 'versions' ? 'rgba(147,200,34,0.08)' : '#fff' }}>
                   <Text style={{ color: '#000', fontWeight: '600' }}>Versions</Text>
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => setVersionsTab('sources')} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: versionsTab==='sources'? '#93C822':'#E5E5E5', backgroundColor: versionsTab==='sources'?'rgba(147,200,34,0.08)':'#fff' }}>
+                <TouchableOpacity onPress={() => setVersionsTab('sources')} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: versionsTab === 'sources' ? '#93C822' : '#E5E5E5', backgroundColor: versionsTab === 'sources' ? 'rgba(147,200,34,0.08)' : '#fff' }}>
                   <Text style={{ color: '#000', fontWeight: '600' }}>Sources</Text>
                 </TouchableOpacity>
               </View>
@@ -2385,11 +2386,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                   const isCurrentVersion = v.jobId === jobId;
                   const platformCount = Object.keys(v.platforms || {}).length;
                   const hasMultipleVersions = (v.versionCount || 1) > 1;
-                  
+
                   return (
                     <View key={v.id} style={{ marginBottom: 8 }}>
                       {/* Main version card */}
-                      <TouchableOpacity 
+                      <TouchableOpacity
                         onPress={() => {
                           // Normalize and hydrate the version data
                           const normalized: Record<string, any> = {};
@@ -2398,14 +2399,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                           }
                           updatePlatforms(prev => hydratePlatformsFromBackend(normalized, prev));
                           setVersionsSheetOpen(false);
-                        }} 
+                        }}
                         style={[
-                          { 
-                            borderWidth: 1, 
-                            borderColor: isCurrentVersion ? '#93C822' : '#E5E5E5', 
+                          {
+                            borderWidth: 1,
+                            borderColor: isCurrentVersion ? '#93C822' : '#E5E5E5',
                             backgroundColor: isCurrentVersion ? 'rgba(147,200,34,0.05)' : '#fff',
-                            borderRadius: 10, 
-                            padding: 12, 
+                            borderRadius: 10,
+                            padding: 12,
                           }
                         ]}
                       >
@@ -2421,11 +2422,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                             {new Date(v.createdAt).toLocaleDateString()}
                           </Text>
                         </View>
-                        
+
                         <Text style={{ color: '#666', fontSize: 12, marginBottom: 4 }}>
                           Latest: {new Date(v.createdAt).toLocaleTimeString()}
                         </Text>
-                        
+
                         {platformCount > 0 ? (
                           <Text style={{ color: '#000', fontSize: 13 }}>
                             {platformCount} platform{platformCount !== 1 ? 's' : ''}: {Object.keys(v.platforms || {}).map(k => PLATFORM_META[k]?.label || k).join(', ')}
@@ -2433,14 +2434,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                         ) : (
                           <Text style={{ color: '#999', fontSize: 13, fontStyle: 'italic' }}>No platform data</Text>
                         )}
-                        
+
                         {v.matchJobId && (
                           <Text style={{ color: '#666', fontSize: 11, marginTop: 4 }}>
                             Match ID: {v.matchJobId.slice(0, 8)}...
                           </Text>
                         )}
                       </TouchableOpacity>
-                      
+
                       {/* Show all versions if multiple exist */}
                       {hasMultipleVersions && Array.isArray(v.allVersions) && (
                         <View style={{ marginTop: 8, marginLeft: 16 }}>
@@ -2448,7 +2449,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                           {v.allVersions.map((version: any, versionIndex: number) => {
                             const isCurrentSubVersion = version.jobId === jobId;
                             const versionPlatformCount = Object.keys(version.platforms || {}).length;
-                            
+
                             return (
                               <TouchableOpacity
                                 key={version.id}
@@ -2479,13 +2480,13 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                                     {new Date(version.createdAt).toLocaleTimeString()}
                                   </Text>
                                 </View>
-                                
+
                                 {versionPlatformCount > 0 && (
                                   <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>
                                     {versionPlatformCount} platforms: {Object.keys(version.platforms || {}).map(k => PLATFORM_META[k]?.label || k).join(', ')}
                                   </Text>
                                 )}
-                                
+
                                 {version.source && (
                                   <Text style={{ color: '#666', fontSize: 10, marginTop: 2 }}>
                                     Source: {version.source}
@@ -2507,12 +2508,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                     <>
                       <Text style={{ color: '#000', fontWeight: '700', marginBottom: 6 }}>Sources for "{selectedFieldKey}"</Text>
                       {(() => {
-                        const rows: Array<{ url: string }>= [];
+                        const rows: Array<{ url: string }> = [];
                         for (const v of versions) {
                           const src = (v.sources || []).filter(s => !s.usedForFields || s.usedForFields.includes(selectedFieldKey));
                           src.forEach(s => rows.push({ url: s.url }));
                         }
-                        const unique = Array.from(new Set(rows.map(r=>r.url)));
+                        const unique = Array.from(new Set(rows.map(r => r.url)));
                         return unique.length === 0 ? (
                           <Text style={{ color: '#666' }}>No recorded field-level sources.</Text>
                         ) : unique.map(u => (
@@ -2529,396 +2530,396 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           </View>
         </>
       )}
-    {missingFieldsModalOpen && (
-      <>
-        <TouchableOpacity
-          activeOpacity={1}
-          onPress={() => setMissingFieldsModalOpen(false)}
-          style={styles.modalBackdrop}
-        />
-        <View style={styles.missingFieldsModal}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-            <Text style={{ fontSize: 18, fontWeight: '700', color: '#000' }}>Add Missing Field</Text>
-            <TouchableOpacity onPress={() => setMissingFieldsModalOpen(false)}>
-              <X size={24} color={'#000'} />
+      {missingFieldsModalOpen && (
+        <>
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={() => setMissingFieldsModalOpen(false)}
+            style={styles.modalBackdrop}
+          />
+          <View style={styles.missingFieldsModal}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: '#000' }}>Add Missing Field</Text>
+              <TouchableOpacity onPress={() => setMissingFieldsModalOpen(false)}>
+                <X size={24} color={'#000'} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Search field */}
+            <View style={{ marginBottom: 16 }}>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search fields..."
+                value={fieldSearchQuery}
+                onChangeText={setFieldSearchQuery}
+              />
+            </View>
+
+            {/* Platform info */}
+            <Text style={{ fontSize: 14, color: '#666', marginBottom: 12 }}>
+              Platform: {PLATFORM_META[selectedMissingPlatform]?.label || selectedMissingPlatform}
+            </Text>
+
+            <ScrollView style={{ maxHeight: 400 }}>
+              {(() => {
+                const filteredFields = getFilteredFields(selectedMissingPlatform);
+                const missingFields = getMissingFields(selectedMissingPlatform);
+                const missingPaths = new Set(missingFields.map(f => f.path));
+
+                // Group fields by their group
+                const groupedFields: Record<string, Array<{ path: string; label: string; type: string; required?: boolean }>> = {};
+                filteredFields.forEach(field => {
+                  const group = field.group || 'Core Fields';
+                  if (!groupedFields[group]) groupedFields[group] = [];
+                  groupedFields[group].push(field);
+                });
+
+                return Object.entries(groupedFields).map(([groupName, fields]) => (
+                  <View key={groupName} style={{ marginBottom: 16 }}>
+                    <TouchableOpacity
+                      onPress={() => setExpandedGroups(prev => ({ ...prev, [groupName]: !prev[groupName] }))}
+                      style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}
+                    >
+                      <Icon name={expandedGroups[groupName] ? 'chevron-down' : 'chevron-right'} size={18} color="#666" />
+                      <Text style={{ fontSize: 16, fontWeight: '600', color: '#000', marginLeft: 4 }}>{groupName}</Text>
+                    </TouchableOpacity>
+
+                    {expandedGroups[groupName] && fields.map(field => {
+                      const isMissing = missingPaths.has(field.path);
+                      const isCurrentlyEmpty = !displayedPlatforms[selectedMissingPlatform]?.[field.path];
+
+                      return (
+                        <TouchableOpacity
+                          key={field.path}
+                          onPress={() => addFieldToPlatform(selectedMissingPlatform, field.path)}
+                          style={[
+                            styles.fieldOption,
+                            isMissing && styles.missingFieldOption
+                          ]}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 14, fontWeight: '600', color: '#000' }}>
+                              {field.label}
+                              {field.required && <Text style={{ color: '#ef4444' }}> *</Text>}
+                            </Text>
+                            <Text style={{ fontSize: 12, color: '#666' }}>
+                              {field.type} • {field.path}
+                            </Text>
+                          </View>
+                          {isMissing && (
+                            <View style={styles.missingBadge}>
+                              <Text style={{ fontSize: 10, color: '#ef4444' }}>Missing</Text>
+                            </View>
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ));
+              })()}
+            </ScrollView>
+
+            <TouchableOpacity
+              onPress={() => setMissingFieldsModalOpen(false)}
+              style={styles.modalCancelButton}
+            >
+              <Text style={{ color: '#000', fontWeight: '600' }}>Cancel</Text>
             </TouchableOpacity>
           </View>
-          
-          {/* Search field */}
-          <View style={{ marginBottom: 16 }}>
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search fields..."
-              value={fieldSearchQuery}
-              onChangeText={setFieldSearchQuery}
-            />
-          </View>
-          
-          {/* Platform info */}
-          <Text style={{ fontSize: 14, color: '#666', marginBottom: 12 }}>
-            Platform: {PLATFORM_META[selectedMissingPlatform]?.label || selectedMissingPlatform}
-          </Text>
-          
-          <ScrollView style={{ maxHeight: 400 }}>
-            {(() => {
-              const filteredFields = getFilteredFields(selectedMissingPlatform);
-              const missingFields = getMissingFields(selectedMissingPlatform);
-              const missingPaths = new Set(missingFields.map(f => f.path));
-              
-              // Group fields by their group
-              const groupedFields: Record<string, Array<{ path: string; label: string; type: string; required?: boolean }>> = {};
-              filteredFields.forEach(field => {
-                const group = field.group || 'Core Fields';
-                if (!groupedFields[group]) groupedFields[group] = [];
-                groupedFields[group].push(field);
-              });
-              
-              return Object.entries(groupedFields).map(([groupName, fields]) => (
-                <View key={groupName} style={{ marginBottom: 16 }}>
-                  <TouchableOpacity
-                    onPress={() => setExpandedGroups(prev => ({ ...prev, [groupName]: !prev[groupName] }))}
-                    style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}
-                  >
-                    <Icon name={expandedGroups[groupName] ? 'chevron-down' : 'chevron-right'} size={18} color="#666" />
-                    <Text style={{ fontSize: 16, fontWeight: '600', color: '#000', marginLeft: 4 }}>{groupName}</Text>
-                  </TouchableOpacity>
-                  
-                  {expandedGroups[groupName] && fields.map(field => {
-                    const isMissing = missingPaths.has(field.path);
-                    const isCurrentlyEmpty = !displayedPlatforms[selectedMissingPlatform]?.[field.path];
-                    
-                    return (
-                      <TouchableOpacity
-                        key={field.path}
-                        onPress={() => addFieldToPlatform(selectedMissingPlatform, field.path)}
-                        style={[
-                          styles.fieldOption,
-                          isMissing && styles.missingFieldOption
-                        ]}
-                      >
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ fontSize: 14, fontWeight: '600', color: '#000' }}>
-                            {field.label}
-                            {field.required && <Text style={{ color: '#ef4444' }}> *</Text>}
-                          </Text>
-                          <Text style={{ fontSize: 12, color: '#666' }}>
-                            {field.type} • {field.path}
-                          </Text>
-                        </View>
-                        {isMissing && (
-                          <View style={styles.missingBadge}>
-                            <Text style={{ fontSize: 10, color: '#ef4444' }}>Missing</Text>
-                          </View>
-                        )}
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              ));
-            })()}
-          </ScrollView>
-          
+        </>
+      )}
+      {/* Regenerate modal */}
+      {regenModalOpen && (
+        <>
           <TouchableOpacity
-            onPress={() => setMissingFieldsModalOpen(false)}
-            style={styles.modalCancelButton}
-          >
-            <Text style={{ color: '#000', fontWeight: '600' }}>Cancel</Text>
-          </TouchableOpacity>
-        </View>
-      </>
-    )}
-    {/* Regenerate modal */}
-    {regenModalOpen && (
-      <>
-        <TouchableOpacity
-          activeOpacity={1}
-          onPress={() => setRegenModalOpen(false)}
-          style={styles.modalBackdrop}
-        />
-        <View style={[styles.missingFieldsModal, { left: 0, right: 0, borderRadius: 16, backgroundColor: "#FFF" }] }>
+            activeOpacity={1}
+            onPress={() => setRegenModalOpen(false)}
+            style={styles.modalBackdrop}
+          />
+          <View style={[styles.missingFieldsModal, { left: 0, right: 0, borderRadius: 16, backgroundColor: "#FFF" }]}>
 
-          {/* Modal Header */}
-          <View style={{ flex: 1, flexDirection: 'row', alignContent: "center", alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-       
-            <View style={{flexDirection: "row", alignItems: "center", gap: 3}}>
-              <Pencil size={16} color={'#000'} />
-              <Text style={{ fontSize: 18, fontWeight: '700', color: '#000', alignItems: 'center', gap: 3}}>
-                Editing This Field
-              </Text>
+            {/* Modal Header */}
+            <View style={{ flex: 1, flexDirection: 'row', alignContent: "center", alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
+                <Pencil size={16} color={'#000'} />
+                <Text style={{ fontSize: 18, fontWeight: '700', color: '#000', alignItems: 'center', gap: 3 }}>
+                  Editing This Field
+                </Text>
+
+              </View>
+
+
+              <TouchableOpacity style={[styles.btnSecondary, { flexDirection: "row", backgroundColor: "#FFF", }]} onPress={() => setRegenModalOpen(false)}>
+                <Icon name="arrow-left" size={18} color={'#000'} />
+                <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Back</Text>
+              </TouchableOpacity>
+
+
 
             </View>
-            
-
-            <TouchableOpacity style={[styles.btnSecondary, {flexDirection: "row", backgroundColor: "#FFF",}]} onPress={() => setRegenModalOpen(false)}>
-              <Icon name="arrow-left" size={18} color={'#000'} />
-              <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Back</Text>
-            </TouchableOpacity>
-
-        
-
-          </View>
 
 
-          {/* Current Field Card */}
-          <View style={{flexDirection: "column", borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: "#FFF", borderRadius: 10, marginBottom: 20, gap: 8, boxShadow: "offsetX: 3, color: black, " }}>
+            {/* Current Field Card */}
+            <View style={{ flexDirection: "column", borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: "#FFF", borderRadius: 10, marginBottom: 20, gap: 8, boxShadow: "offsetX: 3, color: black, " }}>
 
-            <View style={{flex: 1, flexDirection: "row", justifyContent: "space-around", alignItems: "center", paddingHorizontal: 10, paddingVertical: 5}}>
-              
-              <Text style={{ flex: 1, justifyContent: "flex-start", color: '#71717A' }}>
-               <Text style={{ color: '#000', fontWeight: '600', textTransform: "capitalize"}}>{regenFieldKey} • {regenPlatformKey}</Text>
-              </Text>
+              <View style={{ flex: 1, flexDirection: "row", justifyContent: "space-around", alignItems: "center", paddingHorizontal: 10, paddingVertical: 5 }}>
+
+                <Text style={{ flex: 1, justifyContent: "flex-start", color: '#71717A' }}>
+                  <Text style={{ color: '#000', fontWeight: '600', textTransform: "capitalize" }}>{regenFieldKey} • {regenPlatformKey}</Text>
+                </Text>
 
 
-              {/* Version switcher with arrows */}
-              <View style={{ flex: 1, justifyContent: "flex-end", flexDirection: 'row', alignItems: 'center', gap: 8, }}>
-                <TouchableOpacity onPress={() => setRegenActiveVersion(v => Math.max(0, v - 1))} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, padding: 6 }}>
-                  <Icon name="chevron-left" size={18} color="#000" />
+                {/* Version switcher with arrows */}
+                <View style={{ flex: 1, justifyContent: "flex-end", flexDirection: 'row', alignItems: 'center', gap: 8, }}>
+                  <TouchableOpacity onPress={() => setRegenActiveVersion(v => Math.max(0, v - 1))} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, padding: 6 }}>
+                    <Icon name="chevron-left" size={18} color="#000" />
+                  </TouchableOpacity>
+                  <Text style={{ color: '#000', fontWeight: '600' }}>{regenVersions[regenActiveVersion]?.label || 'Version'}</Text>
+                  <TouchableOpacity onPress={() => setRegenActiveVersion(v => Math.min(regenVersions.length - 1, v + 1))} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, backgroundColor: "#71717A", padding: 6 }}>
+                    <Icon name="chevron-right" size={18} color="#FFF" />
+                  </TouchableOpacity>
+                </View>
+
+              </View>
+
+
+              {/* Original/current text area (read-only) */}
+              <View style={{ flex: 1, marginHorizontal: 8, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, padding: 10, marginBottom: 10, backgroundColor: '#FAFAFA' }}>
+                <Text style={{ color: '#000' }}>
+                  {regenVersions[regenActiveVersion]?.text || ''}
+                </Text>
+              </View>
+
+
+            </View>
+
+            {/* Prompt presets - horizontal scroll at same width as input below */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }} contentContainerStyle={{ paddingRight: 6 }}>
+              {['Fill missing', 'More casual', 'More corporate', 'More direct', 'Translate'].map(p => (
+                <TouchableOpacity key={p} onPress={() => setRegenText(t => (t ? `${t} ${p}` : p))} style={{ marginRight: 8, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: "#FFF", }}>
+                  <Text style={{ color: '#000' }}>{p}</Text>
                 </TouchableOpacity>
-                <Text style={{ color: '#000', fontWeight: '600' }}>{regenVersions[regenActiveVersion]?.label || 'Version'}</Text>
-                <TouchableOpacity onPress={() => setRegenActiveVersion(v => Math.min(regenVersions.length - 1, v + 1))} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, backgroundColor: "#71717A", padding: 6 }}>
-                  <Icon name="chevron-right" size={18} color="#FFF" />
+              ))}
+            </ScrollView>
+
+            <View style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, backgroundColor: "#FFF", }}>
+              {/* Instruction input */}
+              <TextInput
+                style={[styles.input, { borderColor: "transparent", minHeight: 120, textAlignVertical: 'top' }]}
+                value={regenText}
+                onChangeText={setRegenText}
+                placeholder="How do you want to edit this?"
+                multiline
+              />
+
+              {/* Actions */}
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 }}>
+                <TouchableOpacity style={[styles.blackBtnPrimary, regenSubmitting && { opacity: 0.7, backgroundColor: "#000" }]} disabled={regenSubmitting} onPress={submitRegenerateField}>
+                  <Text style={{ color: '#fff' }}>{regenSubmitting ? 'Generating…' : <Icon name="arrow-right" size={18} color={'#FFF'} />}</Text>
                 </TouchableOpacity>
               </View>
 
-            </View>
-            
 
-            {/* Original/current text area (read-only) */}
-            <View style={{ flex: 1, marginHorizontal: 8, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, padding: 10, marginBottom: 10, backgroundColor: '#FAFAFA' }}>
-              <Text style={{ color: '#000' }}>
-                {regenVersions[regenActiveVersion]?.text || ''}
-              </Text>
-            </View>
 
+            </View>
 
           </View>
+        </>
+      )}
 
-          {/* Prompt presets - horizontal scroll at same width as input below */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }} contentContainerStyle={{ paddingRight: 6 }}>
-            {['Fill missing','More casual','More corporate','More direct','Translate'].map(p => (
-              <TouchableOpacity key={p} onPress={() => setRegenText(t => (t ? `${t} ${p}` : p))} style={{ marginRight: 8, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: "#FFF",}}>
-                <Text style={{ color: '#000' }}>{p}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+      {/* Publish Confirmation Modal */}
+      {publishModalOpen && (
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 9999 }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 20, width: '90%', maxHeight: '80%' }}>
+            <Text style={{ fontSize: 20, fontWeight: '700', color: '#000', marginBottom: 16 }}>Review & Publish</Text>
 
-          <View style={{borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, backgroundColor: "#FFF", }}>
-            {/* Instruction input */}
-            <TextInput
-              style={[styles.input, { borderColor: "transparent", minHeight: 120, textAlignVertical: 'top' }]}
-              value={regenText}
-              onChangeText={setRegenText}
-              placeholder="How do you want to edit this?"
-              multiline
-            />
+            <ScrollView style={{ maxHeight: 400 }}>
+              <Text style={{ fontSize: 14, fontWeight: '600', color: '#666', marginBottom: 12 }}>Publishing to {readyPlatforms.length} platform(s)</Text>
+
+              {/* Summary */}
+              <View style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginBottom: 16 }}>
+                <Text style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Product: {buildPlatformPayload().platformDetails?.canonical?.title || 'Untitled'}</Text>
+                <Text style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>SKU: {buildPlatformPayload().platformDetails?.canonical?.sku || 'N/A'}</Text>
+                <Text style={{ fontSize: 12, color: '#666' }}>Price: ${buildPlatformPayload().platformDetails?.canonical?.price || 0}</Text>
+              </View>
+
+              {/* Platform Account Selection */}
+              <Text style={{ fontSize: 14, fontWeight: '600', color: '#000', marginBottom: 8 }}>Select Accounts</Text>
+              {readyPlatforms.map((platform) => {
+                const platformConns = allConnections.filter((c: any) =>
+                  c.PlatformType?.toLowerCase() === platform.toLowerCase() && c.IsEnabled
+                );
+                const selectedConnId = selectedConnectionIds[platform];
+                const allSelected = selectedConnId === 'ALL';
+
+                return (
+                  <View key={platform} style={{ marginBottom: 12 }}>
+                    <Text style={{ fontSize: 12, fontWeight: '600', color: '#666', marginBottom: 4 }}>
+                      {PLATFORM_META[platform]?.label || platform}
+                    </Text>
+                    {platformConns.length === 0 ? (
+                      <Text style={{ fontSize: 12, color: '#F00', fontStyle: 'italic' }}>No connections available</Text>
+                    ) : (
+                      <View style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8 }}>
+                        {/* Ensure default selection is 'ALL' if not set */}
+                        {(() => {
+                          // If no selection for this platform, default to 'ALL'
+                          if (selectedConnId === undefined) {
+                            setTimeout(() => {
+                              setSelectedConnectionIds(prev => {
+                                // Only set if still undefined (avoid race)
+                                if (prev[platform] === undefined) {
+                                  return { ...prev, [platform]: 'ALL' };
+                                }
+                                return prev;
+                              });
+                            }, 0);
+                          }
+                          return null;
+                        })()}
+
+                        {/* All option */}
+                        {platformConns.length > 1 && (
+                          <TouchableOpacity
+                            onPress={() => setSelectedConnectionIds(prev => ({ ...prev, [platform]: 'ALL' }))}
+                            style={{
+                              padding: 12,
+                              backgroundColor: allSelected ? '#F0F9FF' : '#FFF',
+                              borderBottomWidth: 1,
+                              borderBottomColor: '#E5E5E5',
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                            }}
+                          >
+                            <Text style={{ fontSize: 14, color: '#000', fontWeight: '600', flex: 1 }}>All Accounts ({platformConns.length})</Text>
+                            {allSelected && <Icon name="check-circle" size={18} color="#93C822" />}
+                          </TouchableOpacity>
+                        )}
+                        {/* Individual accounts */}
+                        {platformConns.map((conn: any) => (
+                          <TouchableOpacity
+                            key={conn.Id}
+                            onPress={() => setSelectedConnectionIds(prev => ({ ...prev, [platform]: conn.Id }))}
+                            style={{
+                              padding: 12,
+                              backgroundColor: selectedConnId === conn.Id ? '#F0F9FF' : '#FFF',
+                              borderBottomWidth: 1,
+                              borderBottomColor: '#E5E5E5',
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                            }}
+                          >
+                            <Text style={{ fontSize: 14, color: '#000', flex: 1 }}>{conn.DisplayName}</Text>
+                            {selectedConnId === conn.Id && <Icon name="check-circle" size={18} color="#93C822" />}
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                );
+              })}
+            </ScrollView>
 
             {/* Actions */}
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 }}>
-              <TouchableOpacity style={[styles.blackBtnPrimary, regenSubmitting && { opacity: 0.7, backgroundColor: "#000" }]} disabled={regenSubmitting} onPress={submitRegenerateField}>
-                <Text style={{ color: '#fff' }}>{regenSubmitting ? 'Generating…' : <Icon name="arrow-right" size={18} color={'#FFF'} />}</Text>
+            <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
+              <TouchableOpacity
+                onPress={() => setPublishModalOpen(false)}
+                style={{ flex: 1, paddingVertical: 12, backgroundColor: '#F5F5F5', borderRadius: 8, alignItems: 'center' }}
+              >
+                <Text style={{ fontSize: 14, fontWeight: '600', color: '#666' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={confirmAndPublish}
+                style={{ flex: 1, paddingVertical: 12, backgroundColor: '#93C822', borderRadius: 8, alignItems: 'center' }}
+                disabled={Object.keys(selectedConnectionIds).length === 0}
+              >
+                <Text style={{ fontSize: 14, fontWeight: '600', color: '#FFF' }}>
+                  Publish to {(() => {
+                    let total = 0;
+                    for (const [platform, selection] of Object.entries(selectedConnectionIds)) {
+                      if (selection === 'ALL') {
+                        const platformConns = allConnections.filter((c: any) =>
+                          c.PlatformType?.toLowerCase() === platform.toLowerCase() && c.IsEnabled
+                        );
+                        total += platformConns.length;
+                      } else {
+                        total += 1;
+                      }
+                    }
+                    return total;
+                  })()} Account(s)
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+      {/* Media Gallery Modal */}
+      {mediaModalVisible && (
+        <>
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={() => setMediaModalVisible(false)}
+            style={styles.modalBackdrop}
+          />
+          <View style={[styles.missingFieldsModal, { left: 0, right: 0, borderRadius: 16, backgroundColor: "#FFF", maxHeight: '80%' }]}>
+            {/* Modal Header */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#E5E5E5' }}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: '#000' }}>Media Gallery</Text>
+              <TouchableOpacity style={[styles.btnSecondary, { backgroundColor: "#FFF" }]} onPress={() => setMediaModalVisible(false)}>
+                <Icon name="close" size={20} color={'#000'} />
               </TouchableOpacity>
             </View>
 
-
-
-          </View>
-          
-        </View>
-      </>
-    )}
-
-    {/* Publish Confirmation Modal */}
-    {publishModalOpen && (
-      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 9999 }}>
-        <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 20, width: '90%', maxHeight: '80%' }}>
-          <Text style={{ fontSize: 20, fontWeight: '700', color: '#000', marginBottom: 16 }}>Review & Publish</Text>
-          
-          <ScrollView style={{ maxHeight: 400 }}>
-            <Text style={{ fontSize: 14, fontWeight: '600', color: '#666', marginBottom: 12 }}>Publishing to {readyPlatforms.length} platform(s)</Text>
-            
-            {/* Summary */}
-            <View style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginBottom: 16 }}>
-              <Text style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Product: {buildPlatformPayload().platformDetails?.canonical?.title || 'Untitled'}</Text>
-              <Text style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>SKU: {buildPlatformPayload().platformDetails?.canonical?.sku || 'N/A'}</Text>
-              <Text style={{ fontSize: 12, color: '#666' }}>Price: ${buildPlatformPayload().platformDetails?.canonical?.price || 0}</Text>
-            </View>
-
-            {/* Platform Account Selection */}
-            <Text style={{ fontSize: 14, fontWeight: '600', color: '#000', marginBottom: 8 }}>Select Accounts</Text>
-            {readyPlatforms.map((platform) => {
-              const platformConns = allConnections.filter((c: any) => 
-                c.PlatformType?.toLowerCase() === platform.toLowerCase() && c.IsEnabled
-              );
-              const selectedConnId = selectedConnectionIds[platform];
-              const allSelected = selectedConnId === 'ALL';
-              
-              return (
-                <View key={platform} style={{ marginBottom: 12 }}>
-                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#666', marginBottom: 4 }}>
-                    {PLATFORM_META[platform]?.label || platform}
-                  </Text>
-                  {platformConns.length === 0 ? (
-                    <Text style={{ fontSize: 12, color: '#F00', fontStyle: 'italic' }}>No connections available</Text>
-                  ) : (
-                    <View style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8 }}>
-                      {/* Ensure default selection is 'ALL' if not set */}
-                      {(() => {
-                        // If no selection for this platform, default to 'ALL'
-                        if (selectedConnId === undefined) {
-                          setTimeout(() => {
-                            setSelectedConnectionIds(prev => {
-                              // Only set if still undefined (avoid race)
-                              if (prev[platform] === undefined) {
-                                return { ...prev, [platform]: 'ALL' };
-                              }
-                              return prev;
-                            });
-                          }, 0);
-                        }
-                        return null;
-                      })()}
-
-                      {/* All option */}
-                      {platformConns.length > 1 && (
-                        <TouchableOpacity
-                          onPress={() => setSelectedConnectionIds(prev => ({ ...prev, [platform]: 'ALL' }))}
-                          style={{
-                            padding: 12,
-                            backgroundColor: allSelected ? '#F0F9FF' : '#FFF',
-                            borderBottomWidth: 1,
-                            borderBottomColor: '#E5E5E5',
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                          }}
-                        >
-                          <Text style={{ fontSize: 14, color: '#000', fontWeight: '600', flex: 1 }}>All Accounts ({platformConns.length})</Text>
-                          {allSelected && <Icon name="check-circle" size={18} color="#93C822" />}
-                        </TouchableOpacity>
-                      )}
-                      {/* Individual accounts */}
-                      {platformConns.map((conn: any) => (
-                        <TouchableOpacity
-                          key={conn.Id}
-                          onPress={() => setSelectedConnectionIds(prev => ({ ...prev, [platform]: conn.Id }))}
-                          style={{
-                            padding: 12,
-                            backgroundColor: selectedConnId === conn.Id ? '#F0F9FF' : '#FFF',
-                            borderBottomWidth: 1,
-                            borderBottomColor: '#E5E5E5',
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                          }}
-                        >
-                          <Text style={{ fontSize: 14, color: '#000', flex: 1 }}>{conn.DisplayName}</Text>
-                          {selectedConnId === conn.Id && <Icon name="check-circle" size={18} color="#93C822" />}
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  )}
+            {/* Media Gallery Display */}
+            <ScrollView style={{ marginBottom: 16, maxHeight: 300 }}>
+              {mediaGallery.length === 0 ? (
+                <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 32 }}>
+                  <Icon name="image-off" size={48} color="#CCC" />
+                  <Text style={{ color: '#666', marginTop: 12, fontSize: 14 }}>No images yet. Tap "Add Photos" to get started.</Text>
                 </View>
-              );
-            })}
-          </ScrollView>
-
-          {/* Actions */}
-          <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
-            <TouchableOpacity
-              onPress={() => setPublishModalOpen(false)}
-              style={{ flex: 1, paddingVertical: 12, backgroundColor: '#F5F5F5', borderRadius: 8, alignItems: 'center' }}
-            >
-              <Text style={{ fontSize: 14, fontWeight: '600', color: '#666' }}>Cancel</Text>
-            </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={confirmAndPublish}
-                      style={{ flex: 1, paddingVertical: 12, backgroundColor: '#93C822', borderRadius: 8, alignItems: 'center' }}
-                      disabled={Object.keys(selectedConnectionIds).length === 0}
-                    >
-                      <Text style={{ fontSize: 14, fontWeight: '600', color: '#FFF' }}>
-                        Publish to {(() => {
-                          let total = 0;
-                          for (const [platform, selection] of Object.entries(selectedConnectionIds)) {
-                            if (selection === 'ALL') {
-                              const platformConns = allConnections.filter((c: any) => 
-                                c.PlatformType?.toLowerCase() === platform.toLowerCase() && c.IsEnabled
-                              );
-                              total += platformConns.length;
-                            } else {
-                              total += 1;
-                            }
-                          }
-                          return total;
-                        })()} Account(s)
-                      </Text>
-                    </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    )}
-    {/* Media Gallery Modal */}
-    {mediaModalVisible && (
-      <>
-        <TouchableOpacity
-          activeOpacity={1}
-          onPress={() => setMediaModalVisible(false)}
-          style={styles.modalBackdrop}
-        />
-        <View style={[styles.missingFieldsModal, { left: 0, right: 0, borderRadius: 16, backgroundColor: "#FFF", maxHeight: '80%' }]}>
-          {/* Modal Header */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#E5E5E5' }}>
-            <Text style={{ fontSize: 18, fontWeight: '700', color: '#000' }}>Media Gallery</Text>
-            <TouchableOpacity style={[styles.btnSecondary, { backgroundColor: "#FFF" }]} onPress={() => setMediaModalVisible(false)}>
-              <Icon name="close" size={20} color={'#000'} />
-            </TouchableOpacity>
-          </View>
-
-          {/* Media Gallery Display */}
-          <ScrollView style={{ marginBottom: 16, maxHeight: 300 }}>
-            {mediaGallery.length === 0 ? (
-              <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 32 }}>
-                <Icon name="image-off" size={48} color="#CCC" />
-                <Text style={{ color: '#666', marginTop: 12, fontSize: 14 }}>No images yet. Tap "Add Photos" to get started.</Text>
-              </View>
-            ) : (
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                {mediaGallery.map((imageUrl, index) => (
-                  <View key={index} style={{ position: 'relative', width: '30%', aspectRatio: 1 }}>
-                    <Image source={{ uri: imageUrl }} style={{ width: '100%', height: '100%', borderRadius: 8 }} />
-                    <TouchableOpacity
-                      onPress={() => handleRemoveMedia(index)}
-                      style={{ position: 'absolute', top: -8, right: -8, width: 28, height: 28, borderRadius: 14, backgroundColor: '#FF4444', alignItems: 'center', justifyContent: 'center' }}
-                    >
-                      <Icon name="close" size={16} color="#FFF" />
-                    </TouchableOpacity>
-                    <View style={{ position: 'absolute', bottom: 4, left: 4, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-                      <Text style={{ color: '#FFF', fontSize: 12 }}>{index + 1}</Text>
+              ) : (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                  {mediaGallery.map((imageUrl, index) => (
+                    <View key={index} style={{ position: 'relative', width: '30%', aspectRatio: 1 }}>
+                      <Image source={{ uri: imageUrl }} style={{ width: '100%', height: '100%', borderRadius: 8 }} />
+                      <TouchableOpacity
+                        onPress={() => handleRemoveMedia(index)}
+                        style={{ position: 'absolute', top: -8, right: -8, width: 28, height: 28, borderRadius: 14, backgroundColor: '#FF4444', alignItems: 'center', justifyContent: 'center' }}
+                      >
+                        <Icon name="close" size={16} color="#FFF" />
+                      </TouchableOpacity>
+                      <View style={{ position: 'absolute', bottom: 4, left: 4, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                        <Text style={{ color: '#FFF', fontSize: 12 }}>{index + 1}</Text>
+                      </View>
                     </View>
-                  </View>
-                ))}
-              </View>
-            )}
-          </ScrollView>
+                  ))}
+                </View>
+              )}
+            </ScrollView>
 
-          {/* Actions */}
-          <View style={{ flexDirection: 'row', gap: 12 }}>
-            <TouchableOpacity
-              onPress={handlePickImage}
-              style={{ flex: 1, paddingVertical: 12, backgroundColor: '#93C822', borderRadius: 8, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}
-            >
-              <Icon name="image-plus" size={18} color="#FFF" />
-              <Text style={{ color: '#FFF', fontWeight: '600' }}>Add Photos</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => setMediaModalVisible(false)}
-              style={{ flex: 1, paddingVertical: 12, backgroundColor: '#F5F5F5', borderRadius: 8, alignItems: 'center' }}
-            >
-              <Text style={{ color: '#000', fontWeight: '600' }}>Done</Text>
-            </TouchableOpacity>
+            {/* Actions */}
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <TouchableOpacity
+                onPress={handlePickImage}
+                style={{ flex: 1, paddingVertical: 12, backgroundColor: '#93C822', borderRadius: 8, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}
+              >
+                <Icon name="image-plus" size={18} color="#FFF" />
+                <Text style={{ color: '#FFF', fontWeight: '600' }}>Add Photos</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setMediaModalVisible(false)}
+                style={{ flex: 1, paddingVertical: 12, backgroundColor: '#F5F5F5', borderRadius: 8, alignItems: 'center' }}
+              >
+                <Text style={{ color: '#000', fontWeight: '600' }}>Done</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
-      </>
-    )}
+        </>
+      )}
     </View>
   );
 }
@@ -2947,24 +2948,24 @@ const styles = StyleSheet.create({
   scannerCloseFull: { position: 'absolute', top: 100, right: 12, backgroundColor: 'rgba(0,0,0,0.5)', width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   // Missing fields modal
   modalBackdrop: { position: 'absolute', top: 0, left: 0, bottom: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 6000 },
-  missingFieldsModal: { 
-    position: 'absolute', 
-    top: '18%', 
-    left: 16, 
-    right: 16, 
-    backgroundColor: '#fff', 
-    borderRadius: 32, 
-    padding: 20, 
-    maxHeight: '80%', 
-    zIndex: 6001 
-  }, 
-  searchInput: { 
-    borderWidth: 1, 
-    borderColor: '#E5E5E5', 
-    borderRadius: 10, 
-    paddingHorizontal: 12, 
-    paddingVertical: 10, 
-    fontSize: 16 
+  missingFieldsModal: {
+    position: 'absolute',
+    top: '18%',
+    left: 16,
+    right: 16,
+    backgroundColor: '#fff',
+    borderRadius: 32,
+    padding: 20,
+    maxHeight: '80%',
+    zIndex: 6001
+  },
+  searchInput: {
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16
   },
   fieldOption: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, marginBottom: 8, backgroundColor: '#fff' },
   missingFieldOption: { borderColor: '#fecaca', backgroundColor: '#fef2f2' },
@@ -2972,29 +2973,29 @@ const styles = StyleSheet.create({
   modalCancelButton: { marginTop: 16, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
   btnSecondary: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
   btnPrimary: { backgroundColor: '#93C822', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
-  blackBtnPrimary: {backgroundColor: '#000', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center'},
-  
+  blackBtnPrimary: { backgroundColor: '#000', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
+
   // Platform picker modal styles
   platformPickerModal: { position: 'absolute', top: '15%', left: 16, right: 16, backgroundColor: '#fff', borderRadius: 16, padding: 20, maxHeight: '70%', zIndex: 6001 },
   platformPill: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, backgroundColor: '#fff' },
   generatePlatformPill: { borderColor: '#93C822', backgroundColor: 'rgba(147,200,34,0.05)' },
-  addMissingFieldButton: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
+  addMissingFieldButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12, 
-    paddingHorizontal: 16, 
-    borderRadius: 12, 
-    borderWidth: 1, 
-    borderStyle: 'dashed', 
-    borderColor: '#71717A', 
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#71717A',
     marginTop: 16,
     gap: 8
   },
-  addMissingFieldText: { 
-    color: '#71717A', 
-    fontSize: 14, 
-    fontWeight: '600' 
+  addMissingFieldText: {
+    color: '#71717A',
+    fontSize: 14,
+    fontWeight: '600'
   },
   addTagBtn: { alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center' },
   tagChip: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },

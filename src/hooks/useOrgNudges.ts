@@ -36,6 +36,15 @@ export interface DashboardInsight {
   severity: 'good' | 'neutral' | 'warning' | 'critical';
   urgency?: InsightUrgency;
   timestamp?: string;
+  reasoning?: string;
+  sources?: Array<{
+    type: 'database' | 'web';
+    title?: string;
+    url?: string;
+    snippet?: string;
+  }>;
+  suggestionOnly?: boolean;
+  suggestionText?: string;
 }
 
 export interface NudgesResponse {
@@ -65,7 +74,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
 
   const fetchNudges = useCallback(async () => {
     console.log(`[useOrgNudges] fetchNudges called with orgId: ${orgId || 'UNDEFINED'}`);
-    
+
     if (!orgId) {
       console.log(`[useOrgNudges] ❌ No orgId provided, skipping fetch`);
       setInsight(null);
@@ -79,7 +88,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
     try {
       console.log(`[useOrgNudges] 🔐 Getting JWT token via Supabase bridge...`);
       const token = await ensureSupabaseJwt();
-      
+
       if (!token) {
         console.error(`[useOrgNudges] ❌ No token available from bridge`);
         throw new Error('No JWT token available');
@@ -101,7 +110,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
 
       console.log(`[useOrgNudges] 🚀 Making fetch request...`);
       const startTime = Date.now();
-      
+
       const response = await fetch(url, {
         method: 'GET',
         headers: {
@@ -121,12 +130,12 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
       }
 
       const data: NudgesResponse = await response.json();
-      
+
       if (!data.insight) {
         console.warn(`[useOrgNudges] ⚠️ Response missing insight data:`, data);
         throw new Error('Invalid response: missing insight');
       }
-      
+
       console.log(`[useOrgNudges] ✅ Received insight: ${data.insight.severity} - ${data.insight.title}`);
 
       setInsight(data.insight);
@@ -152,7 +161,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
   useEffect(() => {
     const prevOrgId = prevOrgIdRef.current;
     console.log(`[useOrgNudges] useEffect triggered, orgId: ${orgId || 'UNDEFINED'}`);
-    
+
     if (orgId) {
       if (prevOrgId !== orgId) {
         console.log(`[useOrgNudges] 🎯 orgId changed from ${prevOrgId || 'UNDEFINED'} to ${orgId} - will fetch insights!`);
@@ -162,7 +171,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
     } else {
       console.log(`[useOrgNudges] ⏭️ Skipping fetchNudges - no orgId (waiting for currentOrg to load...)`);
     }
-    
+
     prevOrgIdRef.current = orgId;
   }, [orgId, fetchNudges]);
 

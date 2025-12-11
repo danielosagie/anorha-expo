@@ -120,7 +120,7 @@ const ProductDetailScreen = observer(
     // 🚨 DEBUG: Intercept all fetch calls from this component
     React.useEffect(() => {
       const originalFetch = window.fetch;
-      window.fetch = function(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+      window.fetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
         const url = input?.toString() || '';
         if (url.includes('sync-locations')) {
           console.error('[ProductDetail] 🚨 DETECTED sync-locations call from ProductDetail:', url, init);
@@ -144,12 +144,12 @@ const ProductDetailScreen = observer(
     const [connections, setConnections] = useState<PlatformConnection[]>([]);
     const [activityLogs, setActivityLogs] = useState<ActivityLogEntry[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(!passedItem);
-    
+
     // Modal states
     const [isActivityModalVisible, setIsActivityModalVisible] = useState(false);
     const [isBarcodeScannerVisible, setIsBarcodeScannerVisible] = useState(false);
     const [isImagePickerVisible, setIsImagePickerVisible] = useState(false);
-    
+
     // Track if initial load has completed to prevent overwrites
     const hasLoadedInitialData = useRef(false);
     const [isDangerZoneVisible, setIsDangerZoneVisible] = useState(false);
@@ -157,7 +157,7 @@ const ProductDetailScreen = observer(
     // CRITICAL: Use timestamp-based blocking instead of boolean to prevent race conditions
     const justSavedTimestampRef = useRef<number>(0);
     const SAVE_BLOCK_WINDOW_MS = 2000; // Block realtime updates for 2 seconds after save
-    
+
     // Helper to check if we're in the save blocking window
     const isInSaveBlockingWindow = useCallback(() => {
       const now = Date.now();
@@ -168,35 +168,35 @@ const ProductDetailScreen = observer(
       }
       return isBlocking;
     }, []);
-    
+
     // Auto-save state (no more manual editing mode)
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [lastSaveTime, setLastSaveTime] = useState<number>(0);
     const [isUploadingImages, setIsUploadingImages] = useState(false);
     const listingEditorRef = useRef<ListingEditorFormRef | null>(null);
-    
+
     // Non-blocking notification banner
     const [bannerMessage, setBannerMessage] = useState<string | null>(null);
     const bannerOpacity = useRef(new Animated.Value(0)).current;
     const bannerTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-    
+
     // Show banner notification (auto-hides after 3 seconds)
     const showBanner = useCallback((message: string) => {
       // Clear any existing timeout
       if (bannerTimeout.current) {
         clearTimeout(bannerTimeout.current);
       }
-      
+
       setBannerMessage(message);
-      
+
       // Fade in
       Animated.timing(bannerOpacity, {
         toValue: 1,
         duration: 300,
         useNativeDriver: true,
       }).start();
-      
+
       // Auto-hide after 3 seconds
       bannerTimeout.current = setTimeout(() => {
         Animated.timing(bannerOpacity, {
@@ -217,7 +217,9 @@ const ProductDetailScreen = observer(
     const [allProductVariants, setAllProductVariants] = useState<any[]>([]);
     // Ref to access allProductVariants in realtime callbacks (avoids stale closure)
     const allProductVariantsRef = useRef<any[]>([]);
-    
+    // ⚡ Store platform location names map for consistent location name resolution
+    const [platformLocationNames, setPlatformLocationNames] = useState<Map<string, string>>(new Map());
+
     // Keep ref in sync with state
     useEffect(() => {
       allProductVariantsRef.current = allProductVariants;
@@ -270,7 +272,7 @@ const ProductDetailScreen = observer(
     const [fetchErrors, setFetchErrors] = useState<string[]>([]);
 
     // State for sync loading
-     const [isSyncing, setIsSyncing] = useState(false);
+    const [isSyncing, setIsSyncing] = useState(false);
 
     // Helper function to get proper location names from platform data
     const getLocationName = useCallback((level: InventoryLevel, connection: PlatformConnection, mapping?: PlatformProductMapping): string => {
@@ -281,12 +283,12 @@ const ProductDetailScreen = observer(
           return mappingData.locationName;
         }
       }
-      
+
       // Try to get location name from connection's platform-specific data
       if (connection.PlatformSpecificData && typeof connection.PlatformSpecificData === 'object') {
         const connectionData = connection.PlatformSpecificData as any;
         if (connectionData.locations && Array.isArray(connectionData.locations)) {
-          const location = connectionData.locations.find((loc: any) => 
+          const location = connectionData.locations.find((loc: any) =>
             loc.id === level.PlatformLocationId || loc.gid === level.PlatformLocationId
           );
           if (location?.name) {
@@ -298,14 +300,14 @@ const ProductDetailScreen = observer(
       // Default based on platform type and location ID
       const platformType = connection.PlatformType?.toLowerCase() || '';
       if (platformType.includes('shopify')) {
-        return level.PlatformLocationId === 'gid://shopify/Location/1' ? 'Main Location' : 
-               `Location ${level.PlatformLocationId?.split('/').pop() || ''}`;
+        return level.PlatformLocationId === 'gid://shopify/Location/1' ? 'Main Location' :
+          `Location ${level.PlatformLocationId?.split('/').pop() || ''}`;
       } else if (platformType.includes('square')) {
         return 'Main Location';
       } else if (platformType.includes('clover')) {
         return 'Main Location';
       }
-      
+
       return `Location ${level.PlatformLocationId || 'Unknown'}`;
     }, []);
 
@@ -364,7 +366,7 @@ const ProductDetailScreen = observer(
           // ⚡ CRITICAL: Store raw inventory levels for displayedPlatforms hydration
           setRawInventoryLevels((inventoryData as InventoryLevel[]) || []);
         }
-        
+
         // ⚡ Store all variants for hydration
         if (allProductVariantsData) {
           console.log('[ProductDetail] Storing', allProductVariantsData.length, 'variants in state for hydration');
@@ -374,13 +376,13 @@ const ProductDetailScreen = observer(
         // ⚡ Load locations from PlatformLocations table - build a lookup map for fast access
         const connectionIds = platformConnections.map(c => c.Id);
         const locationNameMap = new Map<string, string>(); // locationId -> name
-        
+
         if (connectionIds.length > 0) {
           const { data: platformLocs, error: locError } = await supabase
             .from('PlatformLocations')
             .select('PlatformConnectionId, PlatformLocationId, Name')
             .in('PlatformConnectionId', connectionIds);
-          
+
           if (locError) {
             console.error('Error loading platform locations:', locError);
           } else {
@@ -390,6 +392,8 @@ const ProductDetailScreen = observer(
               locationNameMap.set(`${loc.PlatformConnectionId}-${loc.PlatformLocationId}`, loc.Name || 'Unnamed Location');
             });
             console.log('[ProductDetail] ✅ Loaded', platformLocs?.length || 0, 'location names from DB');
+            // ⚡ Store in state for access by buildPlatformLocations
+            setPlatformLocationNames(new Map(locationNameMap));
           }
         }
 
@@ -409,7 +413,7 @@ const ProductDetailScreen = observer(
 
         // Group inventory by platform with proper names from DB
         const grouped: GroupedInventoryLocations = {};
-        
+
         // Helper to get location name - use DB lookup first
         const getLocationNameFromDB = (locationId: string, connectionId: string): string => {
           // Try full key first
@@ -421,31 +425,31 @@ const ProductDetailScreen = observer(
           if (locationNameMap.has(locationId)) {
             return locationNameMap.get(locationId)!;
           }
-          
+
           // CRITICAL FIX: Better fallback handling for platform-specific location IDs
           // Shopify location IDs are GIDs like "gid://shopify/Location/12345"
           if (locationId?.includes('gid://shopify/Location/')) {
             const locNumber = locationId.split('/').pop();
             return `Shopify Location #${locNumber}`;
           }
-          
+
           // Square location IDs are alphanumeric like "LY3ETP80S0CFK"
           // These should have been synced to PlatformLocations - log warning if not found
           if (locationId && locationId.length >= 10 && /^[A-Z0-9]+$/.test(locationId)) {
             console.warn(`[ProductDetail] Square location ${locationId} not found in PlatformLocations. May need to re-sync locations.`);
             return `Square Location (${locationId.substring(0, 6)}...)`;
           }
-          
+
           // Generic fallback
           if (locationId === 'default') {
             return 'Default Location';
           }
-          
+
           // Show truncated ID if nothing else works
           if (locationId && locationId.length > 10) {
             return `Location (${locationId.substring(0, 8)}...)`;
           }
-          
+
           return locationId || 'Main Location';
         };
 
@@ -534,7 +538,7 @@ const ProductDetailScreen = observer(
     // Load additional product details (images, tags, variants, etc.) - consolidated like PastScansScreen
     const loadProductDetails = useCallback(async () => {
       if (!detailedItem) return;
-      
+
       // Don't overwrite if user has unsaved changes
       if (hasUnsavedChanges) {
         console.log('[ProductDetail] Skipping reload - user has unsaved changes');
@@ -628,7 +632,7 @@ const ProductDetailScreen = observer(
         }
 
 
-        
+
         // ⚡ NOTE: VariantPricing table no longer exists - pricing is stored in InventoryLevels.Price
         // Variants and inventory are loaded in loadPlatformData() instead
         console.log('[ProductDetail] Variants loaded via loadPlatformData, not VariantPricing table');
@@ -686,32 +690,81 @@ const ProductDetailScreen = observer(
     const buildPlatformLocations = useCallback(() => {
       // ⚡ OPTIMIZED: Build from already-loaded grouped inventory state
       // No additional Supabase query needed - data was already fetched in loadPlatformData
-      const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>> = {};
-      
+      const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string; platformType: string }>> = {};
+
+      // Helper to get best available location name (without platform prefix - logos will show platform)
+      const resolveName = (locationId: string, connectionId: string, fallbackName: string): string => {
+        // Try full key first (most specific)
+        const fullKey = `${connectionId}-${locationId}`;
+        if (platformLocationNames.has(fullKey)) {
+          return platformLocationNames.get(fullKey)!;
+        }
+        // Try just location ID
+        if (platformLocationNames.has(locationId)) {
+          return platformLocationNames.get(locationId)!;
+        }
+        // Use provided fallback (from groupedInventory)
+        if (fallbackName && fallbackName !== 'Unnamed Location' && !fallbackName.includes('...')) {
+          return fallbackName;
+        }
+        // Last resort fallbacks - cleaner without platform prefix (logo will show platform)
+        if (locationId?.includes('gid://shopify/Location/')) {
+          const locNumber = locationId.split('/').pop();
+          return `#${locNumber}`;
+        }
+        if (locationId && locationId.length >= 10 && /^[A-Z0-9]+$/.test(locationId)) {
+          return `(${locationId.substring(0, 6)}...)`;
+        }
+        return fallbackName || locationId || 'Default Location';
+      };
+
       // Build from groupedInventory which contains all locations already loaded from DB
       Object.values(groupedInventory).forEach(platformGroup => {
         const platform = platformGroup.platformType?.toLowerCase();
         if (!platform) return;
-        
+
         if (!locsByPlatform[platform]) locsByPlatform[platform] = [];
-        
+
+
         platformGroup.locations.forEach(loc => {
+          // STRICT FILTERING: Prevent cross-contamination of locations
+          // Sometimes connections might be mislabeled or data mixed
+          const locId = loc.locationId || '';
+
+          if (platform === 'shopify') {
+            // Shopify IDs are either numeric string or GID
+            // If it looks like a Square ID (alphanumeric, long, no slashes), skip it
+            const isLikeSquare = /^[A-Z0-9]{8,}$/.test(locId) && !/^\d+$/.test(locId);
+            if (isLikeSquare) {
+              console.warn(`[ProductDetail] Filtered out likely-Square location from Shopify list: ${locId}`);
+              return;
+            }
+          } else if (platform === 'square') {
+            // Square IDs shouldn't look like Shopify GIDs
+            if (locId.includes('gid://shopify/')) {
+              console.warn(`[ProductDetail] Filtered out likely-Shopify location from Square list: ${locId}`);
+              return;
+            }
+          }
+
           // CRITICAL: Use locationId (PlatformLocationId) not id (InventoryLevel UUID)
           // This must match the keys in variant.inventoryByLocation
           const exists = locsByPlatform[platform].some(l => l.id === loc.locationId);
           if (!exists) {
+            const resolvedName = resolveName(loc.locationId, loc.platformConnectionId, loc.locationName);
             locsByPlatform[platform].push({
               id: loc.locationId,  // Use PlatformLocationId, not InventoryLevel ID
-              name: loc.locationName || 'Unnamed Location',
+              name: resolvedName,
               connectionId: loc.platformConnectionId,
-              connectionName: platformGroup.displayName
+              connectionName: platformGroup.displayName,
+              platformType: platform  // Include platform type for logo rendering
             });
           }
         });
       });
-      
+
       return locsByPlatform;
-    }, [groupedInventory]);
+    }, [groupedInventory, platformLocationNames]);
 
     // Auto-save function with proper API call
     // Note: Pricing validation is flexible - either flat price OR all variants have prices
@@ -739,7 +792,7 @@ const ProductDetailScreen = observer(
         // Extract canonical data from shopify platform (or first available)
         const canonicalKey = Object.keys(displayedPlatforms).includes('shopify') ? 'shopify' : Object.keys(displayedPlatforms)[0];
         const canonical = displayedPlatforms[canonicalKey] || {};
-        
+
         // Prepare update data - using the correct API structure from the backend
         const updateData = {
           Title: canonical.title || formData.Title,
@@ -790,10 +843,10 @@ const ProductDetailScreen = observer(
         // Using timestamp-based blocking (2 second window) instead of boolean to prevent race conditions
         justSavedTimestampRef.current = Date.now();
         console.log('[ProductDetail] Set save blocking timestamp:', justSavedTimestampRef.current);
-        
+
         console.log('[ProductDetail] updateData being set:', JSON.stringify(updateData, null, 2).slice(0, 500));
         console.log('[ProductDetail] displayedPlatforms being set:', JSON.stringify(displayedPlatforms, null, 2).slice(0, 500));
-        
+
         // ✅ CRITICAL FIX: Use a function to merge state properly
         // This prevents losing data like ImageUrls, Options, Metadata that aren't in updateData
         setDetailedItem(prev => {
@@ -807,10 +860,10 @@ const ProductDetailScreen = observer(
           console.log('[ProductDetail] setDetailedItem merged result:', JSON.stringify(merged, null, 2).slice(0, 300));
           return merged;
         });
-        
+
         setHasUnsavedChanges(false);
         setLastSaveTime(Date.now());
-        
+
         // CRITICAL FIX: Clear draft data after successful save
         // This fixes the "Changes not published" message persisting
         setDraftData(null);
@@ -837,8 +890,8 @@ const ProductDetailScreen = observer(
 
     // Update inventory quantity with auto-save using the correct API endpoint
     const updateInventoryQuantity = useCallback(async (
-      platformConnectionId: string, 
-      locationId: string, 
+      platformConnectionId: string,
+      locationId: string,
       quantity: number
     ) => {
       try {
@@ -874,7 +927,7 @@ const ProductDetailScreen = observer(
           Object.keys(updated).forEach(platformName => {
             const platform = updated[platformName];
             if (platform.platformConnectionId === platformConnectionId) {
-              platform.locations = platform.locations.map(loc => 
+              platform.locations = platform.locations.map(loc =>
                 loc.locationId === locationId ? { ...loc, quantity } : loc
               );
             }
@@ -921,12 +974,12 @@ const ProductDetailScreen = observer(
 
     const uploadImagesToSupabase = async (assets: ImagePicker.ImagePickerAsset[]): Promise<string[]> => {
       const uploadedUrls: string[] = [];
-      
+
       for (const asset of assets) {
         try {
           const response = await fetch(asset.uri);
           const blob = await response.blob();
-          
+
           const fileExt = asset.uri.split('.').pop() || 'jpg';
           const fileName = `${detailedItem?.Id}-${Date.now()}.${fileExt}`;
           const filePath = `product-images/${fileName}`;
@@ -982,7 +1035,7 @@ const ProductDetailScreen = observer(
 
         // Update local state
         setDetailedItem(prev => prev ? { ...prev, ImageUrls: updatedImages } : prev);
-        
+
         Alert.alert('Success', `Added ${imageUrls.length} image(s) to product`);
       } catch (error) {
         console.error('Error adding images to product:', error);
@@ -1018,7 +1071,7 @@ const ProductDetailScreen = observer(
 
         // Update local state
         setDetailedItem(prev => prev ? { ...prev, ImageUrls: updatedImages } : prev);
-        
+
         Alert.alert('Success', 'Image removed from product');
       } catch (error) {
         console.error('Error removing image:', error);
@@ -1101,7 +1154,7 @@ const ProductDetailScreen = observer(
 
       const { productVariants$ } = observables;
       const itemData = productVariants$[productId].get();
-      
+
       if (itemData) {
         setDetailedItem(itemData);
         setFormData({
@@ -1172,15 +1225,15 @@ const ProductDetailScreen = observer(
       if (!invLevels || invLevels.length === 0) {
         console.log('[ProductDetail] hydrateInventoryFromDB: No inventory levels, returning variants without inventory');
       }
-      
+
       console.log('[ProductDetail] hydrateInventoryFromDB: Hydrating', variants.length, 'variants with', invLevels?.length || 0, 'inventory levels');
-      
+
       return variants.map((v: any) => {
         const inventoryByLocation: Record<string, any> = {};
-        
+
         // Find inventory levels for THIS variant specifically
         const variantInventory = invLevels?.filter(level => level.ProductVariantId === v.Id) || [];
-        
+
         // Map InventoryLevels to inventoryByLocation format
         variantInventory.forEach((level: InventoryLevel) => {
           const locId = level.PlatformLocationId || 'default';
@@ -1190,13 +1243,13 @@ const ProductDetailScreen = observer(
             compareAtPrice: level.CompareAtPrice || undefined,
           };
         });
-        
-        console.log('[ProductDetail] Hydrated variant', v.Sku || v.Id, 'with', Object.keys(inventoryByLocation).length, 'locations, total qty:', 
+
+        console.log('[ProductDetail] Hydrated variant', v.Sku || v.Id, 'with', Object.keys(inventoryByLocation).length, 'locations, total qty:',
           Object.values(inventoryByLocation).reduce((sum: number, loc: any) => sum + (loc.quantity || 0), 0));
-        
+
         // Build optionValues from Options object
         const optionValues = v.Options && typeof v.Options === 'object' ? v.Options : {};
-        
+
         return {
           id: v.Id,
           optionValues,
@@ -1214,7 +1267,7 @@ const ProductDetailScreen = observer(
     // Also track last inventory count to allow re-hydration when inventory arrives later
     const hasHydratedPlatformsRef = useRef<string | null>(null);
     const lastHydratedInventoryCountRef = useRef<number>(0);
-    
+
     // Populate form fields from detailedItem when it loads
     useEffect(() => {
       if (!detailedItem) return;
@@ -1226,7 +1279,7 @@ const ProductDetailScreen = observer(
         console.log('[ProductDetail] Skipping useEffect - in save blocking window, preserving displayedPlatforms');
         return; // Don't reset anything - let the blocking window expire naturally
       }
-      
+
       // ⚡ CRITICAL FIX: Only hydrate displayedPlatforms ONCE per product
       // After initial hydration, only user edits should modify displayedPlatforms
       // We check and set the ref IMMEDIATELY to prevent race conditions
@@ -1238,18 +1291,18 @@ const ProductDetailScreen = observer(
         console.log('[ProductDetail] ⚠️ Already hydrated for product', detailedItem.Id, '- skipping to preserve data');
         return; // Exit early - don't even update formData again
       }
-      
+
       // ⚡ Don't hydrate until data is actually loaded
       // This prevents hydrating with empty data on first render before loadPlatformData completes
       const hasVariantData = allProductVariants && allProductVariants.length > 0;
       const hasInventoryData = rawInventoryLevels && rawInventoryLevels.length > 0;
-      
+
       // Wait for at least variant data before hydrating (inventory might be legitimately empty)
       if (!hasVariantData) {
         console.log('[ProductDetail] Waiting for variant data before hydrating displayedPlatforms');
         return;
       }
-      
+
       console.log('[ProductDetail] Data ready for hydration - variants:', allProductVariants?.length, 'inventory:', rawInventoryLevels?.length);
 
       // Populate formData
@@ -1272,7 +1325,7 @@ const ProductDetailScreen = observer(
       // Extract additional generated fields from Metadata (cast to any for JSONB field)
       const metadata = ((detailedItem as any).Metadata as Record<string, any>) || {};
       const tags = ((detailedItem as any).Tags as string[]) || [];
-      
+
       const canonicalBase = {
         title: detailedItem.Title || '',
         sku: detailedItem.Sku || '',
@@ -1299,18 +1352,18 @@ const ProductDetailScreen = observer(
         ...(metadata.platformSpecificData?.shopify || {}),
       };
 
-      console.log('[ProductDetail] Setting displayedPlatforms with tags:', canonicalBase.tags, 
-        'allProductVariants:', allProductVariants?.length, 
+      console.log('[ProductDetail] Setting displayedPlatforms with tags:', canonicalBase.tags,
+        'allProductVariants:', allProductVariants?.length,
         'rawInventoryLevels:', rawInventoryLevels?.length,
         'aiPrice:', canonicalBase.aiRecommendedPrice);
 
       // ⚡ CRITICAL FIX: Use rawInventoryLevels directly (loaded from InventoryLevels table)
       // and allProductVariants (loaded from ProductVariants table)
       // NOT variantPricing which comes from non-existent VariantPricing table
-      
+
       // Hydrate variants with inventory data from REAL database data
       const hydratedVariants = hydrateInventoryFromDB(allProductVariants || [], rawInventoryLevels || []);
-      
+
       // Build per-platform locations + aggregated quantities from groupedInventory
       const platformLocationState: Record<string, { locations: Array<{ id: string; name: string; connectionId: string; connectionName: string }>; locationQuantities: Record<string, number> }> = {};
       Object.values(groupedInventory).forEach(platformGroup => {
@@ -1328,22 +1381,22 @@ const ProductDetailScreen = observer(
         });
         platformLocationState[platformKey] = { locations, locationQuantities };
       });
-      
-      console.log('[ProductDetail] Hydrated variants:', hydratedVariants.length, 
+
+      console.log('[ProductDetail] Hydrated variants:', hydratedVariants.length,
         'with inventory:', hydratedVariants.map(v => `${v.sku || v.id}: ${Object.keys(v.inventoryByLocation || {}).length} locs`).join(', '));
 
       // FIX: Populate ALL platforms from metadata.platformSpecificData, not just shopify
       // This ensures all platform data is displayed, not wiped out
       const platformSpecificData = metadata.platformSpecificData || {};
       const allPlatforms: Record<string, any> = {};
-      
+
       // Build location quantities directly from hydrated variant inventory data
       // This ensures UI quantities match actual loaded inventory
       // CRITICAL FIX: Use groupedInventory to resolve location names instead of raw IDs
       const getLocationQtyAndLocs = (variants: any[], groupedInv: typeof groupedInventory) => {
         const locationQtyMap: Record<string, number> = {};
         const locationsMap: Record<string, { id: string; name: string }> = {};
-        
+
         // First, build a map of all known location names from groupedInventory
         const locationNameLookup: Record<string, string> = {};
         Object.values(groupedInv).forEach(platformGroup => {
@@ -1353,7 +1406,7 @@ const ProductDetailScreen = observer(
             }
           });
         });
-        
+
         if (variants && variants.length > 0) {
           variants.forEach(v => {
             if (v.inventoryByLocation) {
@@ -1380,16 +1433,16 @@ const ProductDetailScreen = observer(
                       locationName = locId || 'Unknown Location';
                     }
                   }
-                  locationsMap[locId] = { 
-                    id: locId, 
-                    name: locationName 
+                  locationsMap[locId] = {
+                    id: locId,
+                    name: locationName
                   };
                 }
               });
             }
           });
         }
-        
+
         return {
           locationQuantities: locationQtyMap,
           locations: Object.values(locationsMap)
@@ -1403,57 +1456,74 @@ const ProductDetailScreen = observer(
       if (platformKeys.length > 0) {
         platformKeys.forEach(platformKey => {
           const platformData = platformSpecificData[platformKey] || {};
+          const platformKeyLower = platformKey.toLowerCase();
+
+          // ⚡ CRITICAL FIX: Use per-platform locations from platformLocationState
+          // This ensures each platform only sees its own locations, not all platforms mixed together
+          const perPlatformLocs = platformLocationState[platformKeyLower]?.locations || hydratedLocs;
+          const perPlatformLocQty = platformLocationState[platformKeyLower]?.locationQuantities || hydratedLocQty;
+
+          // ⚡ CRITICAL FIX: ALWAYS use freshly hydrated variants from DB
+          // stale platformData.variants may have outdated inventory data
+          // Merge: keep platformData fields, but override variants with fresh inventory
+          const freshVariants = hydratedVariants && hydratedVariants.length > 0 ? hydratedVariants : [];
+
           allPlatforms[platformKey] = {
             ...canonicalBase,
             ...platformData,
-            options: platformData.options || (detailedItem.Options && typeof detailedItem.Options === 'object' 
-              ? Object.entries(detailedItem.Options).map(([name, values]) => ({ name, values: Array.isArray(values) ? values : [values] })) 
+            options: platformData.options || (detailedItem.Options && typeof detailedItem.Options === 'object'
+              ? Object.entries(detailedItem.Options).map(([name, values]) => ({ name, values: Array.isArray(values) ? values : [values] }))
               : []),
-            variants: platformData.variants || (hydratedVariants && hydratedVariants.length > 0 ? hydratedVariants : []),
-            locations: hydratedLocs,
-            locationQuantities: hydratedLocQty,
+            variants: freshVariants, // ALWAYS use fresh DB variants
+            locations: perPlatformLocs, // Use per-platform locations
+            locationQuantities: perPlatformLocQty,
           };
         });
-        console.log('[ProductDetail] Built platforms from metadata:', platformKeys, 'with', hydratedLocs.length, 'locations and qty:', hydratedLocQty);
+        console.log('[ProductDetail] Built platforms from metadata:', platformKeys, 'with per-platform locations:',
+          Object.entries(platformLocationState).map(([k, v]) => `${k}: ${v.locations.length} locs`).join(', '));
       } else {
         // Fallback: If no platformSpecificData, use shopify as default
-        allPlatforms.shopify = { 
-          ...canonicalBase, 
-          options: detailedItem.Options && typeof detailedItem.Options === 'object' 
-            ? Object.entries(detailedItem.Options).map(([name, values]) => ({ name, values: Array.isArray(values) ? values : [values] })) 
+        // Use shopify-specific locations if available
+        const shopifyLocs = platformLocationState['shopify']?.locations || hydratedLocs;
+        const shopifyLocQty = platformLocationState['shopify']?.locationQuantities || hydratedLocQty;
+
+        allPlatforms.shopify = {
+          ...canonicalBase,
+          options: detailedItem.Options && typeof detailedItem.Options === 'object'
+            ? Object.entries(detailedItem.Options).map(([name, values]) => ({ name, values: Array.isArray(values) ? values : [values] }))
             : [],
           variants: hydratedVariants && hydratedVariants.length > 0 ? hydratedVariants : [],
-          locations: hydratedLocs,
-          locationQuantities: hydratedLocQty,
+          locations: shopifyLocs,
+          locationQuantities: shopifyLocQty,
         };
-        console.log('[ProductDetail] No platformSpecificData, using shopify as default with', hydratedLocs.length, 'locations');
+        console.log('[ProductDetail] No platformSpecificData, using shopify as default with', shopifyLocs.length, 'locations');
       }
 
       // ⚡ Set displayedPlatforms - this only runs on FIRST load for this product
       // The early return above prevents re-hydration
       setDisplayedPlatforms(allPlatforms);
-      
+
       // Mark as hydrated for this product AFTER setting state
       hasHydratedPlatformsRef.current = detailedItem.Id;
       lastHydratedInventoryCountRef.current = currentInventoryCount;
-      console.log('[ProductDetail] ✅ Initial hydration complete for product', detailedItem.Id, 
+      console.log('[ProductDetail] ✅ Initial hydration complete for product', detailedItem.Id,
         'with', Object.keys(allPlatforms).length, 'platforms');
     }, [detailedItem?.Id, allProductVariants, rawInventoryLevels, hydrateInventoryFromDB, hasUnsavedChanges, isInSaveBlockingWindow]); // Depend on real inventory data from DB
 
     // Phase 2: Load drafts from backend (ONCE only, do NOT re-fetch when platforms change)
     // CRITICAL FIX: Removed displayedPlatforms from dependencies to prevent overwriting user edits
     const hasFetchedDraftRef = useRef<string | null>(null); // Track which product ID we fetched for
-    
+
     useEffect(() => {
       // GUARD 1: Only fetch if we have a product
       if (!detailedItem?.Id) return;
-      
+
       // GUARD 2: Don't re-fetch if we already fetched for this product
       if (hasFetchedDraftRef.current === detailedItem.Id) {
         console.log('[ProductDetail] Draft already fetched for product', detailedItem.Id, '- skipping');
         return;
       }
-      
+
       // GUARD 3: Don't fetch if user has unsaved changes (this would overwrite them!)
       if (hasUnsavedChanges) {
         console.log('[ProductDetail] User has unsaved changes - skipping draft fetch');
@@ -1490,7 +1560,7 @@ const ProductDetailScreen = observer(
 
               // Mark as fetched for this product (prevents re-fetching)
               hasFetchedDraftRef.current = detailedItem.Id;
-              
+
               // CRITICAL: Do NOT merge draft data into displayedPlatforms!
               // The draft contains OLD data from original publish time.
               // displayedPlatforms should reflect CURRENT edits.
@@ -1516,11 +1586,11 @@ const ProductDetailScreen = observer(
     // Set up realtime subscriptions
     // Use refs to track state to avoid stale closure issues
     const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
-    
+
     useEffect(() => {
       hasUnsavedChangesRef.current = hasUnsavedChanges;
     }, [hasUnsavedChanges]);
-    
+
     useEffect(() => {
       if (!detailedItem) return;
 
@@ -1540,29 +1610,29 @@ const ProductDetailScreen = observer(
           (payload) => {
             console.log('[ProductDetail] REALTIME EVENT FIRED:', payload.eventType);
             console.log('[ProductDetail] hasUnsavedChangesRef.current:', hasUnsavedChangesRef.current);
-            
+
             // ✅ CRITICAL FIX: Check timestamp-based blocking window FIRST
             // This prevents realtime from overwriting data right after a save
             if (isInSaveBlockingWindow()) {
               console.log('[ProductDetail] ⚠️ BLOCKING REALTIME - in save blocking window (2s after save)');
               return;
             }
-            
+
             // CRITICAL: Never update if user has unsaved changes
             if (hasUnsavedChangesRef.current) {
               console.log('[ProductDetail] ⚠️ BLOCKING REALTIME - user has unsaved changes');
               showBanner('External update available. Save your changes first.');
               return;
             }
-            
+
             if (payload.eventType === 'UPDATE' && payload.new) {
               const updatedProduct = payload.new as ProductVariant;
               console.log('[ProductDetail] Processing realtime update for:', updatedProduct.Title);
-              
+
               // ✅ CRITICAL FIX: Merge instead of replacing to preserve nested data
               setDetailedItem((prev) => {
                 if (!prev) return prev;
-                
+
                 // Check if this is a meaningful update or just a timestamp change
                 const hasRealChanges = (
                   prev.Title !== updatedProduct.Title ||
@@ -1574,9 +1644,9 @@ const ProductDetailScreen = observer(
                   console.log('[ProductDetail] No meaningful changes, skipping realtime update');
                   return prev;
                 }
-                
+
                 console.log('[ProductDetail] ✅ Applying realtime update (merging to preserve nested data)');
-                
+
                 // ✅ MERGE: Keep existing nested data (ImageUrls, Options, Metadata, etc.)
                 // Only take scalar fields from the realtime update, preserve complex objects from prev
                 // Cast to ProductVariant to satisfy TypeScript - we know these fields exist at runtime
@@ -1602,7 +1672,7 @@ const ProductDetailScreen = observer(
                   ...((prev as any).PlatformSpecificData ? { PlatformSpecificData: (prev as any).PlatformSpecificData } : {}),
                 } as ProductVariant;
               });
-              
+
               // Show non-blocking notification
               showBanner('Product updated from external source');
             }
@@ -1629,48 +1699,48 @@ const ProductDetailScreen = observer(
             const updatedLevel = payload.new as InventoryLevel | undefined;
             const deletedLevel = payload.old as InventoryLevel | undefined;
             const affectedVariantId = updatedLevel?.ProductVariantId || deletedLevel?.ProductVariantId;
-            
+
             // CRITICAL: Check if this inventory update is for one of our product's variants
             const ourVariantIds = allProductVariantsRef.current.map(v => v.Id);
             if (!affectedVariantId || !ourVariantIds.includes(affectedVariantId)) {
               // Not our product - ignore
               return;
             }
-            
+
             console.log('[ProductDetail] Inventory level updated:', payload.eventType, 'for variant:', affectedVariantId);
-            
+
             // ✅ CRITICAL: Block during save window to prevent race conditions
             if (isInSaveBlockingWindow()) {
               console.log('[ProductDetail] ⚠️ Skipping inventory reload - in save blocking window');
               return;
             }
-            
+
             // CRITICAL: Don't reload if user has unsaved changes - it will overwrite their edits
             if (hasUnsavedChangesRef.current) {
               console.log('[ProductDetail] ⚠️ Skipping inventory reload - user has unsaved changes');
               showBanner('Inventory changed externally. Save your changes first.');
               return;
             }
-            
+
             // Update inventory in place without full page reload
             if (payload.eventType === 'UPDATE' && updatedLevel) {
               // Update raw inventory levels and trigger re-render
               setRawInventoryLevels(prev => {
-                const updated = prev.map(level => 
-                  level.Id === updatedLevel.Id 
+                const updated = prev.map(level =>
+                  level.Id === updatedLevel.Id
                     ? { ...level, Quantity: updatedLevel.Quantity, Price: updatedLevel.Price }
                     : level
                 );
                 return updated;
               });
-              
+
               // Also update grouped inventory for immediate UI update
               setGroupedInventory(prev => {
                 const updated = { ...prev };
                 Object.keys(updated).forEach(platformName => {
                   const platform = updated[platformName];
-                  platform.locations = platform.locations.map(loc => 
-                    loc.locationId === updatedLevel.PlatformLocationId 
+                  platform.locations = platform.locations.map(loc =>
+                    loc.locationId === updatedLevel.PlatformLocationId
                       ? { ...loc, quantity: updatedLevel.Quantity }
                       : loc
                   );
@@ -1701,13 +1771,13 @@ const ProductDetailScreen = observer(
           },
           (payload) => {
             console.log('[ProductDetail] Platform mapping updated:', payload.eventType);
-            
+
             // ✅ CRITICAL: Block during save window
             if (isInSaveBlockingWindow()) {
               console.log('[ProductDetail] ⚠️ Skipping mapping reload - in save blocking window');
               return;
             }
-            
+
             // Mapping changes are less disruptive - reload if no unsaved changes
             if (!hasUnsavedChangesRef.current) {
               loadPlatformData();
@@ -1747,7 +1817,7 @@ const ProductDetailScreen = observer(
       const unsubscribeUpdate = collaboration.onProductUpdate((update) => {
         // Ignore our own updates
         if (update.userId === detailedItem.UserId) return;
-        
+
         // CRITICAL FIX: Only process updates for the CURRENT variant being edited
         // This prevents the page from "switching" to a different variant when 
         // a webhook updates another variant in the same product
@@ -1757,7 +1827,7 @@ const ProductDetailScreen = observer(
         }
 
         console.log('[ProductDetail] Received update from teammate for current variant:', update);
-        
+
         // Refresh product data from Supabase (single source of truth)
         const observables = getLegendStateObservables();
         if (observables?.productVariants$) {
@@ -1833,10 +1903,10 @@ const ProductDetailScreen = observer(
       <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
         {/* Non-blocking notification banner */}
         {bannerMessage && (
-          <Animated.View 
+          <Animated.View
             style={[
               styles.notificationBanner,
-              { 
+              {
                 opacity: bannerOpacity,
                 backgroundColor: theme.colors.primary + 'E6', // 90% opacity
               }
@@ -1845,7 +1915,7 @@ const ProductDetailScreen = observer(
             <Text style={styles.notificationBannerText}>{bannerMessage}</Text>
           </Animated.View>
         )}
-        
+
         <ScrollView contentContainerStyle={styles.scrollContent}>
           {/* Header with auto-save indicator */}
           <View style={[styles.header, { backgroundColor: theme.colors.surface }]}>
@@ -1863,7 +1933,7 @@ const ProductDetailScreen = observer(
               {hasUnsavedChanges && (
                 <Text style={{ color: 'orange', fontSize: 12 }}>Unsaved changes</Text>
               )}
-              
+
               {!isSaving && lastSaveTime > 0 && (
                 <Text style={[styles.savedText, { color: theme.colors.success }]}>
                   Saved {new Date(lastSaveTime).toLocaleTimeString()}
@@ -1877,7 +1947,7 @@ const ProductDetailScreen = observer(
             </View>
           </View>
 
-          
+
 
           {/* Listing editor (edit mode) */}
           <Card style={styles.basicSection}>
@@ -1897,7 +1967,7 @@ const ProductDetailScreen = observer(
                   const merged = { ...prev };
                   for (const [platformKey, platformData] of Object.entries(next)) {
                     const prevPlatform = prev[platformKey] || {};
-                    
+
                     // Deep merge platform data
                     merged[platformKey] = {
                       ...prevPlatform,
@@ -1927,7 +1997,7 @@ const ProductDetailScreen = observer(
               }}
               onChangeImages={(next) => { reorderImages(next); }}
               onOpenFieldPanel={undefined}
-              onOpenBarcodeScanner={(onResult)=>{
+              onOpenBarcodeScanner={(onResult) => {
                 setIsBarcodeScannerVisible(true);
                 // handler stored on closure
                 (ProductDetailScreen as any)._scannerResultHandler = onResult;
@@ -1959,10 +2029,10 @@ const ProductDetailScreen = observer(
                         </View>
                         <View style={styles.platformDetails}>
                           <Text style={[styles.platformName, { color: theme.colors.text }]}>{platformName}</Text>
-                          <Text style={[styles.platformStatus, {color: theme.colors.text}]}>Status: {mapping.SyncStatus || 'Connected'}</Text>
+                          <Text style={[styles.platformStatus, { color: theme.colors.text }]}>Status: {mapping.SyncStatus || 'Connected'}</Text>
                         </View>
                       </View>
-                      <TouchableOpacity 
+                      <TouchableOpacity
                         style={styles.delistButton}
                         onPress={() => {
                           Alert.alert('Delist', `Remove listing from ${platformName}?`, [
@@ -1988,7 +2058,7 @@ const ProductDetailScreen = observer(
             ) : (
               <View style={styles.noPlatformsContainer}>
                 <Text style={[styles.noPlatformsText, { color: theme.colors.textSecondary }]}>No active listings</Text>
-                <TouchableOpacity onPress={() => listingEditorRef.current?.openPlatformPicker?.()} style={[styles.syncButton, { backgroundColor: theme.colors.primary, marginTop: 8 }]}> 
+                <TouchableOpacity onPress={() => listingEditorRef.current?.openPlatformPicker?.()} style={[styles.syncButton, { backgroundColor: theme.colors.primary, marginTop: 8 }]}>
                   <Text style={{ color: '#fff', fontWeight: '600' }}>+ Add Platform</Text>
                 </TouchableOpacity>
               </View>
@@ -2075,7 +2145,7 @@ const ProductDetailScreen = observer(
             </View>
           </Card>
         </ScrollView>
-        
+
         {/* Sync Status Indicator */}
         {hasUnsavedChanges && (
           <BottomActionBar
@@ -2091,7 +2161,7 @@ const ProductDetailScreen = observer(
               <CameraView
                 style={{ width: '100%', height: 240 }}
                 facing={'back'}
-                onBarcodeScanned={(result:any) => {
+                onBarcodeScanned={(result: any) => {
                   const code = result?.data || result?.rawValue;
                   if (code && (ProductDetailScreen as any)._scannerResultHandler) {
                     (ProductDetailScreen as any)._scannerResultHandler(code);
@@ -2099,7 +2169,7 @@ const ProductDetailScreen = observer(
                     (ProductDetailScreen as any)._scannerResultHandler = null;
                   }
                 }}
-                barcodeScannerSettings={{ barcodeTypes: ['qr','ean13','upc_a','upc_e','code128'] }}
+                barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'] }}
               />
               <TouchableOpacity onPress={() => { setIsBarcodeScannerVisible(false); (ProductDetailScreen as any)._scannerResultHandler = null; }} style={styles.scannerCloseFull}>
                 <Text style={{ color: '#fff', fontSize: 28 }}>×</Text>
@@ -2207,7 +2277,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 16,
   },
-  
+
   // Image Section
   imageSection: {
     margin: 16,
@@ -2272,7 +2342,7 @@ const styles = StyleSheet.create({
     margin: 16,
     marginTop: 0,
   },
-  
+
   formGroup: {
     marginBottom: 16,
   },
