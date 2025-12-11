@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useContext } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, Dimensions, Image } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, Dimensions, Image, Modal, Pressable } from 'react-native';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import { useNavigation } from '@react-navigation/native';
@@ -149,6 +149,7 @@ const DashboardScreen = () => {
   const [loadingLocations, setLoadingLocations] = useState(false);
   const [activeTimeframe, setActiveTimeframe] = useState<'Last 7d' | '30d' | '90d' | 'YTD' | '1Y'>('Last 7d');
   const [showPoolsMode, setShowPoolsMode] = useState(true); // true = pools, false = locations
+  const [sourcesVisible, setSourcesVisible] = useState(false);
 
   // AI-generated insights
   const { insight, loading: loadingInsight, error: insightError, refetch: refetchInsight, forceRefresh: forceRefreshInsight } = useOrgNudges(currentOrg?.id);
@@ -541,6 +542,58 @@ const DashboardScreen = () => {
     setSearchQuery('');
   };
 
+  // Sources bottom sheet data
+  const insightSources = safeInsight?.sources || [];
+  const hasSources = insightSources.length > 0;
+  const getFavicon = (url?: string) => {
+    if (!url) return null;
+    try {
+      const domain = new URL(url).hostname;
+      return `https://www.google.com/s2/favicons?sz=64&domain=${domain}`;
+    } catch {
+      return null;
+    }
+  };
+
+  const renderSourceItem = (source: any, idx: number) => {
+    const isDb = source.type === 'database';
+    const favicon = !isDb ? getFavicon(source.url) : null;
+    return (
+      <View key={idx} style={styles.sourceItem}>
+        <View style={styles.sourceIconWrap}>
+          {isDb ? (
+            <Icon name="database" size={18} color="#10B981" />
+          ) : favicon ? (
+            <Image source={{ uri: favicon }} style={styles.favicon} />
+          ) : (
+            <Icon name="web" size={18} color="#3B82F6" />
+          )}
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.sourceTitle}>
+            {isDb ? 'Supabase (Anorha)' : source.title || source.url || 'Source'}
+          </Text>
+          {source.query ? (
+            <Text style={styles.sourceSub} numberOfLines={2}>
+              {source.query}
+            </Text>
+          ) : null}
+          {typeof source.rowsReturned === 'number' ? (
+            <Text style={styles.sourceMeta}>{source.rowsReturned} rows</Text>
+          ) : null}
+          {source.sampleRows && source.sampleRows.length > 0 ? (
+            <Text style={styles.sourceMeta}>Sample: {JSON.stringify(source.sampleRows.slice(0, 2))}</Text>
+          ) : null}
+          {source.url ? (
+            <Text style={[styles.sourceMeta, { color: '#2563EB' }]} numberOfLines={1}>
+              {source.url}
+            </Text>
+          ) : null}
+        </View>
+      </View>
+    );
+  };
+
   // Show loading state while org context is still loading
   if (isOrgLoading) {
     return (
@@ -592,20 +645,39 @@ const DashboardScreen = () => {
             
             <View style={styles.todayCard}>
                 {loadingInsight ? (
-                  <View style={styles.insightLoading}>
-                    <ActivityIndicator size="small" color="#111827" />
-                    <Text style={styles.insightLoadingText}>Loading insights...</Text>
+                  // Loading state with nice animation
+                  <View style={styles.insightCardGreen}>
+                    <View style={styles.insightGreenHeader}>
+                      <Text style={styles.todayTitle}>Sprout's Insight</Text>
+                      <Text style={styles.todayMeta}>Analyzing...</Text>
+                    </View>
+                    <View style={[styles.insideContainer, { alignItems: 'center', paddingVertical: 32 }]}>
+                      <ActivityIndicator size="large" color="#93C822" />
+                      <Text style={[styles.insightGreenDesc, { textAlign: 'center', marginTop: 16 }]}>
+                        Analyzing your inventory, sales trends, and market data...
+                      </Text>
+                    </View>
                   </View>
                 ) : insightError ? (
-                  <View style={styles.insightError}>
-                    <Text style={styles.insightErrorText}>Unable to load insights</Text>
-                    <View style={styles.insightErrorActions}>
-                      <TouchableOpacity onPress={refetchInsight}>
-                        <Text style={styles.insightRetryText}>Retry</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity onPress={forceRefreshInsight} style={styles.forceRefreshBtn}>
-                        <Text style={styles.forceRefreshText}>Force Refresh</Text>
-                      </TouchableOpacity>
+                  // Error state with retry options
+                  <View style={styles.insightCardGreen}>
+                    <View style={styles.insightGreenHeader}>
+                      <Text style={styles.todayTitle}>Sprout's Insight</Text>
+                      <Text style={styles.todayMeta}>Offline</Text>
+                    </View>
+                    <View style={styles.insideContainer}>
+                      <Text style={styles.insightGreenHeadline}>Connection issue</Text>
+                      <Text style={styles.insightGreenDesc}>
+                        Unable to fetch insights right now. This might be a network issue - check your connection and try again.
+                      </Text>
+                      <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
+                        <TouchableOpacity onPress={refetchInsight} style={[styles.insightGreenBtn, { flex: 1, backgroundColor: '#F3F4F6' }]}>
+                          <Text style={[styles.insightGreenBtnText, { color: '#374151' }]}>Retry</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={forceRefreshInsight} style={[styles.insightGreenBtn, { flex: 1 }]}>
+                          <Text style={styles.insightGreenBtnText}>Force Refresh</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   </View>
                 ) : safeInsight && safeInsight.topDIN && safeInsight.bottomDIN ? (
@@ -653,8 +725,15 @@ const DashboardScreen = () => {
                         </View>
                       )}
 
-                      {/* Primary Action Button */}
-                      {safeInsight.bottomDIN.action && (
+                      {/* Primary Action or Suggestion-only message */}
+                      {safeInsight.suggestionOnly ? (
+                        <View style={[styles.insightGreenBtn, { backgroundColor: '#E5E7EB' }]}>
+                          <Icon name="lightbulb-on-outline" size={18} color="#374151" style={{ marginRight: 8 }} />
+                          <Text style={[styles.insightGreenBtnText, { color: '#111827' }]}>
+                            {safeInsight.suggestionText || 'Best course of action suggested above'}
+                          </Text>
+                        </View>
+                      ) : safeInsight.bottomDIN.action ? (
                         <TouchableOpacity
                           onPress={() =>
                             handleInsightAction(
@@ -669,46 +748,122 @@ const DashboardScreen = () => {
                           </Text>
                           <Icon name="arrow-right" size={20} color="#fff" />
                         </TouchableOpacity>
-                      )}
+                      ) : null}
 
-                      {/* Footer: Meta actions + Sources */}
-                      <View style={styles.insightGreenFooter}>
-                        <View style={styles.insightGreenMetaLeft}>
-                          <TouchableOpacity style={styles.insightGreenIconBtn}>
-                            <Icon name="content-copy" size={16} color="#6B7280" />
-                          </TouchableOpacity>
-                          <TouchableOpacity style={styles.insightGreenIconBtn}>
-                            <Icon name="thumb-up-outline" size={16} color="#6B7280" />
-                          </TouchableOpacity>
-                          <TouchableOpacity style={styles.insightGreenIconBtn}>
-                            <Icon name="thumb-down-outline" size={16} color="#6B7280" />
-                          </TouchableOpacity>
-                          <TouchableOpacity onPress={forceRefreshInsight} style={styles.insightGreenIconBtn}>
-                            <Icon name="refresh" size={16} color="#6B7280" />
-            
+                      {/* Footer: Product breakdown or meta actions */}
+                      {safeInsight.bottomDIN.affectedProducts && safeInsight.bottomDIN.affectedProducts.length > 0 ? (
+                        <View style={[styles.insightGreenFooter, { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#E5E7EB', flexDirection: 'column', alignItems: 'flex-start' }]}>
+                          <Text style={[styles.insightGreenSourcesText, { fontSize: 12, fontWeight: '600', marginBottom: 4 }]}>
+                            Based on {safeInsight.bottomDIN.affectedProducts.length} product{safeInsight.bottomDIN.affectedProducts.length > 1 ? 's' : ''}:
+                          </Text>
+                          {safeInsight.bottomDIN.affectedProducts.slice(0, 2).map((product: any, idx: number) => (
+                            <Text key={idx} style={[styles.insightGreenSourcesText, { fontSize: 11, marginTop: 2 }]}>
+                              • {product.name} ({product.quantity} units)
+                            </Text>
+                          ))}
+                          {safeInsight.bottomDIN.affectedProducts.length > 2 && (
+                            <Text style={[styles.insightGreenSourcesText, { fontSize: 11, marginTop: 2, fontWeight: '500', color: '#6366F1' }]}>
+                              + {safeInsight.bottomDIN.affectedProducts.length - 2} more
+                            </Text>
+                          )}
+                        </View>
+                      ) : (
+                        <View style={styles.insightGreenFooter}>
+                          <View style={styles.insightGreenMetaLeft}>
+                            <TouchableOpacity style={styles.insightGreenIconBtn}>
+                              <Icon name="content-copy" size={16} color="#6B7280" />
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.insightGreenIconBtn}>
+                              <Icon name="thumb-up-outline" size={16} color="#6B7280" />
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.insightGreenIconBtn}>
+                              <Icon name="thumb-down-outline" size={16} color="#6B7280" />
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={forceRefreshInsight} style={styles.insightGreenIconBtn}>
+                              <Icon name="refresh" size={16} color="#6B7280" />
+                            </TouchableOpacity>
+                          </View>
+                          <TouchableOpacity style={styles.insightGreenSources} onPress={() => setSourcesVisible(true)}>
+                            <View style={styles.insightGreenAvatars}>
+                              <View style={[styles.avatar, { backgroundColor: '#A78BFA', marginRight: -8 }]} />
+                              <View style={[styles.avatar, { backgroundColor: '#60A5FA', marginRight: -8 }]} />
+                              <View style={[styles.avatar, { backgroundColor: '#F87171', marginRight: -8 }]} />
+                              <View style={[styles.avatar, { backgroundColor: '#FBBF24' }]} />
+                            </View>
+                            <Text style={styles.insightGreenSourcesText}>Sources</Text>
                           </TouchableOpacity>
                         </View>
-                        <TouchableOpacity style={styles.insightGreenSources}>
-                          <View style={styles.insightGreenAvatars}>
-                            <View style={[styles.avatar, { backgroundColor: '#A78BFA', marginRight: -8 }]} />
-                            <View style={[styles.avatar, { backgroundColor: '#60A5FA', marginRight: -8 }]} />
-                            <View style={[styles.avatar, { backgroundColor: '#F87171', marginRight: -8 }]} />
-                            <View style={[styles.avatar, { backgroundColor: '#FBBF24' }]} />
-                          </View>
-                          <Text style={styles.insightGreenSourcesText}>Sources</Text>
-                        </TouchableOpacity>
-                      </View>
+                      )}
                     </View>
                   </TouchableOpacity>
                 ) : (
-                  <View style={styles.noInsightContainer}>
-                    <Text style={styles.quickStatusSubtext}>
-                      No insights available at this time.
-                    </Text>
-                    <TouchableOpacity onPress={forceRefreshInsight} style={styles.forceRefreshBtn}>
-                      <Text style={styles.forceRefreshText}>Generate Insight</Text>
-                    </TouchableOpacity>
-                  </View>
+                  // Beautiful default empty state - shows when no insight is available
+                  <TouchableOpacity
+                    activeOpacity={0.95}
+                    style={styles.insightCardGreen}
+                    onPress={forceRefreshInsight}
+                  >
+                    <View style={styles.insightGreenHeader}>
+                      <Text style={styles.todayTitle}>Sprout's Insight</Text>
+                      <Text style={styles.todayMeta}>Ready to analyze</Text>
+                    </View>
+                    <View style={styles.insideContainer}>
+                      {/* Welcome headline */}
+                      <Text style={styles.insightGreenHeadline}>
+                        {currentOrg ? `Let's grow ${currentOrg.name}` : "Welcome to Anorha"}
+                      </Text>
+
+                      {/* Description based on state */}
+                      <Text style={styles.insightGreenDesc}>
+                        {lowStockCount > 0 || totalInventory > 0
+                          ? `You have ${totalInventory} items tracked. Tap to get insights about your inventory, sales velocity, and opportunities.`
+                          : "Connect your first platform to get started"}
+                      </Text>
+
+                      {/* Quick metrics if we have data */}
+                      {totalInventory > 0 && (
+                        <View style={styles.insightGreenMetrics}>
+                          <View style={styles.insightGreenMetricCol}>
+                            <Text style={styles.insightGreenMetricLabel}>Total Items</Text>
+                            <Text style={styles.insightGreenMetricValue}>{totalInventory.toLocaleString()}</Text>
+                          </View>
+                          <View style={styles.insightGreenMetricCol}>
+                            <Text style={styles.insightGreenMetricLabel}>Low Stock</Text>
+                            <Text style={[styles.insightGreenMetricValue, lowStockCount > 0 ? styles.insightGreenMetricWarning : styles.insightGreenMetricPositive]}>
+                              {lowStockCount}
+                            </Text>
+                          </View>
+                        </View>
+                      )}
+
+                      {/* CTA Button */}
+                      <TouchableOpacity
+                        onPress={forceRefreshInsight}
+                        style={styles.insightGreenBtn}
+                      >
+                        <Text style={styles.insightGreenBtnText}>
+                          {loadingInsight ? 'Analyzing...' : 'Generate Insight'}
+                        </Text>
+                        <Icon name={loadingInsight ? "loading" : "sparkles"} size={20} color="#fff" />
+                      </TouchableOpacity>
+
+                      {/* Footer - Show product sources or default footer */}
+                      <View style={styles.insightGreenFooter}>
+                        <View style={styles.insightGreenMetaLeft}>
+                          <Icon name="robot-outline" size={16} color="#6B7280" style={{marginRight: 4}} />
+                          <Text style={styles.insightGreenSourcesText}>Powered by AI</Text>
+                        </View>
+                        <View style={styles.insightGreenSources}>
+                          <View style={styles.insightGreenAvatars}>
+                            <View style={[styles.avatar, { backgroundColor: '#93C822', marginRight: -8 }]} />
+                            <View style={[styles.avatar, { backgroundColor: '#60A5FA', marginRight: -8 }]} />
+                            <View style={[styles.avatar, { backgroundColor: '#FBBF24' }]} />
+                          </View>
+                          <Text style={styles.insightGreenSourcesText}>Your data</Text>
+                        </View>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
                 )}
             </View>
         </View>
@@ -809,6 +964,36 @@ const DashboardScreen = () => {
         </View>
 
       </ScrollView>
+      
+      {/* Sources Bottom Sheet */}
+      <Modal
+        visible={sourcesVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSourcesVisible(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setSourcesVisible(false)}>
+          <View />
+        </Pressable>
+        <View style={styles.sourcesSheet}>
+          <View style={styles.sourcesHeader}>
+            <Text style={styles.sourcesTitle}>Data & Sources</Text>
+            <TouchableOpacity onPress={() => setSourcesVisible(false)}>
+              <Icon name="close" size={22} color="#111827" />
+            </TouchableOpacity>
+          </View>
+          {hasSources ? (
+            <ScrollView style={{ maxHeight: 420 }}>
+              {insightSources.map(renderSourceItem)}
+            </ScrollView>
+          ) : (
+            <View style={styles.emptyState}>
+              <Icon name="database-off" size={28} color="#9CA3AF" />
+              <Text style={styles.emptyText}>No sources available</Text>
+            </View>
+          )}
+        </View>
+      </Modal>
       
       {/* Floating Tab Bar provided by Navigator, but we ensure spacing */}
     </View>
@@ -963,6 +1148,9 @@ const styles = StyleSheet.create({
   insightGreenMetricPositive: {
     color: '#059669',
   },
+  insightGreenMetricWarning: {
+    color: '#D97706',
+  },
   insightGreenBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -977,6 +1165,69 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#fff',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  sourcesSheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    padding: 16,
+    gap: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  sourcesHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  sourcesTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  sourceItem: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  sourceIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  favicon: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+  },
+  sourceTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  sourceSub: {
+    fontSize: 12,
+    color: '#4B5563',
+  },
+  sourceMeta: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
   },
   insightGreenFooter: {
     flexDirection: 'row',

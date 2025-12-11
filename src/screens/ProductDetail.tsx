@@ -215,6 +215,13 @@ const ProductDetailScreen = observer(
     const [rawInventoryLevels, setRawInventoryLevels] = useState<InventoryLevel[]>([]);
     // ⚡ Store all variants for this product
     const [allProductVariants, setAllProductVariants] = useState<any[]>([]);
+    // Ref to access allProductVariants in realtime callbacks (avoids stale closure)
+    const allProductVariantsRef = useRef<any[]>([]);
+    
+    // Keep ref in sync with state
+    useEffect(() => {
+      allProductVariantsRef.current = allProductVariants;
+    }, [allProductVariants]);
 
     // ========== CRITICAL FIX: useRef for data persistence + auto-save ==========
     const [updateCounter, setUpdateCounter] = useState(0);
@@ -414,10 +421,31 @@ const ProductDetailScreen = observer(
           if (locationNameMap.has(locationId)) {
             return locationNameMap.get(locationId)!;
           }
-          // Fallback to formatted ID
+          
+          // CRITICAL FIX: Better fallback handling for platform-specific location IDs
+          // Shopify location IDs are GIDs like "gid://shopify/Location/12345"
           if (locationId?.includes('gid://shopify/Location/')) {
-            return `Location ${locationId.split('/').pop()}`;
+            const locNumber = locationId.split('/').pop();
+            return `Shopify Location #${locNumber}`;
           }
+          
+          // Square location IDs are alphanumeric like "LY3ETP80S0CFK"
+          // These should have been synced to PlatformLocations - log warning if not found
+          if (locationId && locationId.length >= 10 && /^[A-Z0-9]+$/.test(locationId)) {
+            console.warn(`[ProductDetail] Square location ${locationId} not found in PlatformLocations. May need to re-sync locations.`);
+            return `Square Location (${locationId.substring(0, 6)}...)`;
+          }
+          
+          // Generic fallback
+          if (locationId === 'default') {
+            return 'Default Location';
+          }
+          
+          // Show truncated ID if nothing else works
+          if (locationId && locationId.length > 10) {
+            return `Location (${locationId.substring(0, 8)}...)`;
+          }
+          
           return locationId || 'Main Location';
         };
 
@@ -1311,9 +1339,20 @@ const ProductDetailScreen = observer(
       
       // Build location quantities directly from hydrated variant inventory data
       // This ensures UI quantities match actual loaded inventory
-      const getLocationQtyAndLocs = (variants: any[]) => {
+      // CRITICAL FIX: Use groupedInventory to resolve location names instead of raw IDs
+      const getLocationQtyAndLocs = (variants: any[], groupedInv: typeof groupedInventory) => {
         const locationQtyMap: Record<string, number> = {};
         const locationsMap: Record<string, { id: string; name: string }> = {};
+        
+        // First, build a map of all known location names from groupedInventory
+        const locationNameLookup: Record<string, string> = {};
+        Object.values(groupedInv).forEach(platformGroup => {
+          (platformGroup.locations || []).forEach(loc => {
+            if (loc.locationId && loc.locationName) {
+              locationNameLookup[loc.locationId] = loc.locationName;
+            }
+          });
+        });
         
         if (variants && variants.length > 0) {
           variants.forEach(v => {
@@ -1321,10 +1360,29 @@ const ProductDetailScreen = observer(
               Object.entries(v.inventoryByLocation).forEach(([locId, inv]: [string, any]) => {
                 locationQtyMap[locId] = (locationQtyMap[locId] || 0) + (inv.quantity || 0);
                 if (!locationsMap[locId]) {
-                  // Use locId as name (will be resolved to proper names from groupedInventory later)
+                  // CRITICAL FIX: Resolve location name from groupedInventory lookup
+                  // Fall back to formatted ID if not found
+                  let locationName = locationNameLookup[locId];
+                  if (!locationName) {
+                    // Handle Shopify GID format
+                    if (locId?.includes('gid://shopify/Location/')) {
+                      const locNumber = locId.split('/').pop();
+                      locationName = `Shopify Location #${locNumber}`;
+                    }
+                    // Handle Square alphanumeric format
+                    else if (locId && locId.length >= 10 && /^[A-Z0-9]+$/.test(locId)) {
+                      locationName = `Square Location (${locId.substring(0, 6)}...)`;
+                    }
+                    else if (locId === 'default') {
+                      locationName = 'Default Location';
+                    }
+                    else {
+                      locationName = locId || 'Unknown Location';
+                    }
+                  }
                   locationsMap[locId] = { 
                     id: locId, 
-                    name: locId === 'default' ? 'Main Location' : locId 
+                    name: locationName 
                   };
                 }
               });
@@ -1338,7 +1396,7 @@ const ProductDetailScreen = observer(
         };
       };
 
-      const { locationQuantities: hydratedLocQty, locations: hydratedLocs } = getLocationQtyAndLocs(hydratedVariants);
+      const { locationQuantities: hydratedLocQty, locations: hydratedLocs } = getLocationQtyAndLocs(hydratedVariants, groupedInventory);
 
       // Build platform data for each platform in platformSpecificData
       const platformKeys = Object.keys(platformSpecificData);
@@ -1553,18 +1611,33 @@ const ProductDetailScreen = observer(
         .subscribe();
 
       // Subscribe to inventory level changes - but DON'T trigger full reload if user is editing
+      // CRITICAL FIX: Don't filter by ProductVariantId in the subscription because:
+      // - detailedItem.Id is often the BASE variant
+      // - Inventory is stored against OPTION variants (different IDs)
+      // - Instead, we filter in the callback using allProductVariantsRef
       const inventorySubscription = supabase
-        .channel(`inventory-${detailedItem.Id}`)
+        .channel(`inventory-product-${detailedItem.ProductId}`)
         .on(
           'postgres_changes',
           {
             event: '*',
             schema: 'public',
             table: 'InventoryLevels',
-            filter: `ProductVariantId=eq.${detailedItem.Id}`,
+            // No filter here - we check in callback if it's for our product
           },
           (payload) => {
-            console.log('[ProductDetail] Inventory level updated:', payload.eventType);
+            const updatedLevel = payload.new as InventoryLevel | undefined;
+            const deletedLevel = payload.old as InventoryLevel | undefined;
+            const affectedVariantId = updatedLevel?.ProductVariantId || deletedLevel?.ProductVariantId;
+            
+            // CRITICAL: Check if this inventory update is for one of our product's variants
+            const ourVariantIds = allProductVariantsRef.current.map(v => v.Id);
+            if (!affectedVariantId || !ourVariantIds.includes(affectedVariantId)) {
+              // Not our product - ignore
+              return;
+            }
+            
+            console.log('[ProductDetail] Inventory level updated:', payload.eventType, 'for variant:', affectedVariantId);
             
             // ✅ CRITICAL: Block during save window to prevent race conditions
             if (isInSaveBlockingWindow()) {
@@ -1580,23 +1653,35 @@ const ProductDetailScreen = observer(
             }
             
             // Update inventory in place without full page reload
-            if (payload.eventType === 'UPDATE' && payload.new) {
-              const updatedLevel = payload.new as InventoryLevel;
+            if (payload.eventType === 'UPDATE' && updatedLevel) {
+              // Update raw inventory levels and trigger re-render
+              setRawInventoryLevels(prev => {
+                const updated = prev.map(level => 
+                  level.Id === updatedLevel.Id 
+                    ? { ...level, Quantity: updatedLevel.Quantity, Price: updatedLevel.Price }
+                    : level
+                );
+                return updated;
+              });
+              
+              // Also update grouped inventory for immediate UI update
               setGroupedInventory(prev => {
                 const updated = { ...prev };
                 Object.keys(updated).forEach(platformName => {
                   const platform = updated[platformName];
                   platform.locations = platform.locations.map(loc => 
-                    loc.id === updatedLevel.Id 
+                    loc.locationId === updatedLevel.PlatformLocationId 
                       ? { ...loc, quantity: updatedLevel.Quantity }
                       : loc
                   );
                 });
                 return updated;
               });
-              console.log('[ProductDetail] ✅ Inventory updated in place');
+              console.log('[ProductDetail] ✅ Inventory updated in place for variant', affectedVariantId);
+              showBanner('Inventory updated from external source');
             } else {
               // For INSERT/DELETE, do a full reload only if not in blocking window
+              console.log('[ProductDetail] Inventory INSERT/DELETE - triggering full reload');
               loadPlatformData();
             }
           }

@@ -26,6 +26,8 @@ console.log('[supabase.ts] Computed apiBaseUrl candidate =', apiBaseUrl);
 let currentSupabaseJwt: string | null = null;
 let refreshIntervalHandle: ReturnType<typeof setInterval> | null = null;
 let getClerkTokenFn: (() => Promise<string | null>) | null = null;
+// Promise lock to prevent race conditions when multiple components call ensureSupabaseJwt concurrently
+let exchangeInProgress: Promise<boolean> | null = null;
 
 // Custom fetch for Supabase client to inject Authorization and handle 401 refresh
 const realFetch = globalThis.fetch.bind(globalThis);
@@ -69,12 +71,32 @@ export function getCurrentSupabaseJwt(): string | null {
 }
 
 async function refreshSupabaseToken(): Promise<boolean> {
-  // Reuse the same exchange flow
-  return exchangeClerkForSupabase();
+  // If an exchange is already in progress, wait for it instead of starting another
+  if (exchangeInProgress) {
+    console.log('[supabase.ts] Exchange already in progress, waiting...');
+    return exchangeInProgress;
+  }
+  
+  // Start exchange and store the promise so concurrent calls can wait
+  exchangeInProgress = exchangeClerkForSupabase().finally(() => {
+    exchangeInProgress = null;
+  });
+  
+  return exchangeInProgress;
 }
 
 export async function ensureSupabaseJwt(): Promise<string | null> {
+  // Fast path: return cached token if available
   if (currentSupabaseJwt) return currentSupabaseJwt;
+  
+  // If exchange is in progress, wait for it
+  if (exchangeInProgress) {
+    console.log('[supabase.ts] ensureSupabaseJwt: waiting for in-progress exchange...');
+    await exchangeInProgress;
+    return currentSupabaseJwt;
+  }
+  
+  // Start new exchange
   const ok = await refreshSupabaseToken();
   return ok ? currentSupabaseJwt : null;
 }
