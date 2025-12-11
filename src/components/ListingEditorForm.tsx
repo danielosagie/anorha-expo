@@ -269,10 +269,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
     // If platform has its own locations array, use that
     if (activeData.locations && activeData.locations.length > 0) {
       console.log(`[ListingEditorForm] Using locations from activeData for ${activePlatformKey}:`, activeData.locations);
-      return activeData.locations.map((loc: any) => ({
+      const locs = activeData.locations.map((loc: any) => ({
         ...loc,
         platformType: loc.platformType || activePlatformKey.toLowerCase()
       }));
+
+      console.log(`[ListingEditorForm] Locations for ${activePlatformKey}:`, JSON.stringify(locs.map((l: any) => ({ id: l.id, name: l.name }))));
+      return locs;
     }
 
     // Otherwise, get from platformLocations prop for this platform type
@@ -1149,35 +1152,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                 )}
               </View>
 
-              {/* Presets Section 
-              <View style={{ marginBottom: 20 }}>
-                <Text style={styles.fieldLabel}>Presets</Text>
-                <View style={{ maxHeight: 150, backgroundColor: '#f0f8ff', borderRadius: 8, padding: 10 }}>
-                  <ScrollView showsVerticalScrollIndicator={true}>
-                    {optionPresets.map((preset, idx) => (
-                      <TouchableOpacity
-                        key={`preset-${preset.name}-${idx}`}
-                        style={[styles.optionChip, { marginBottom: 8, backgroundColor: '#fff' }]}
-                        onPress={() => {
-                          setNewOptionName(preset.name);
-                          setNewOptionValues(preset.values);
-                        }}
-                      >
-                        <Text style={{ fontWeight: 'bold', marginBottom: 4 }}>{preset.name}</Text>
-                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
-                          {preset.values.map(value => (
-                            <Text key={value} style={{ fontSize: 12, color: '#666' }}>
-                              {value}
-                            </Text>
-                          ))}
-                        </View>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-              </View>
-              */}
-
               <Text style={styles.fieldLabel}>Option Name</Text>
               <TextInput
                 style={styles.input}
@@ -1187,33 +1161,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                 placeholderTextColor={"#999999"}
               />
 
-              {/* Show preset and platform options as quick suggestions
-              <Text style={[styles.fieldLabel, { marginTop: 10 }]}>Quick Presets & Platform Options</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
-                {[...PRESET_OPTIONS, ...allPlatformOptions].map((opt, idx) => (
-                  <TouchableOpacity
-                    key={`quick-preset-${idx}`}
-                    style={{
-                      paddingHorizontal: 10,
-                      paddingVertical: 6,
-                      marginRight: 8,
-                      backgroundColor: newOptionName === opt.name ? '#dbeafe' : '#f3f4f6',
-                      borderRadius: 6,
-                      borderWidth: newOptionName === opt.name ? 2 : 1,
-                      borderColor: newOptionName === opt.name ? '#3b82f6' : '#d1d5db'
-                    }}
-                    onPress={() => {
-                      setNewOptionName(opt.name);
-                      setNewOptionValues(opt.values.slice(0, 1).map(v => v) || ['']);
-                    }}
-                  >
-                    <Text style={{ fontSize: 12, color: newOptionName === opt.name ? '#1e40af' : '#666' }}>
-                      {opt.name}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-              */}
+
 
               <Text style={[styles.fieldLabel, { marginTop: 10 }]}>Option Values</Text>
               {newOptionValues.map((v, idx) => (
@@ -1290,6 +1238,11 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
         <View style={{ marginVertical: 8, flexDirection: 'column', gap: 8 }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <Text style={styles.sectionTitle}>Inventory{activeTab === 'all' ? ' (All Platforms)' : ''}</Text>
+            {/* DEBUG: Log LocationDropdown condition */}
+            {(() => {
+              console.log(`[LocationDropdown DEBUG] activeTab=${activeTab}, selectedInventoryType=${selectedInventoryType}, shouldShow=${selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all'}, locationsCount=${locations?.length}`);
+              return null;
+            })()}
             {/* Locations only for LOCATION_VARIANT_WITH_OPTIONS; NEVER show for VARIANT_WITH_OPTIONS or BASIC */}
             {selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all' && (
               <LocationDropdown
@@ -2201,14 +2154,21 @@ function LocationDropdown({
   const selected = locations.find(l => l.id === selectedId) || locations[0];
   const Logo = selected ? platformLogoMap[selected.platformType] : null;
 
+  console.log(`[LocationDropdown RENDER] selectedId=${selectedId}, selected=${selected?.name}, locCount=${locations.length}, hasLogo=${!!Logo}, items=${locations.map(l => l.name).join(', ')}`);
+
   return (
-    <View style={{ position: 'relative', zIndex: open ? 1000 : 1 }}>
-      <TouchableOpacity style={styles.dropdown} onPress={() => setOpen(o => !o)}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+    <View style={{ position: 'relative', zIndex: open ? 1000 : 1, minWidth: 160 }}>
+      <TouchableOpacity
+        style={[styles.dropdown, { minWidth: 150, maxWidth: 200 }]}
+        onPress={() => setOpen(o => !o)}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
           {Logo && <Logo width={16} height={16} />}
-          <Text style={{ color: '#000', flex: 1 }} numberOfLines={1}>{selected?.name || 'Select Location'}</Text>
+          <Text style={{ color: '#000', fontSize: 13, flexShrink: 1 }} numberOfLines={1} ellipsizeMode="tail">
+            {selected?.name || 'Select Location'}
+          </Text>
         </View>
-        <Icon name="chevron-down" size={18} color="#000" />
+        <Icon name="chevron-down" size={18} color="#000" style={{ marginLeft: 4 }} />
       </TouchableOpacity>
       {open && (
         <View style={[styles.dropdownMenu, { position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 1000, marginTop: 0, maxHeight: 200 }]}>

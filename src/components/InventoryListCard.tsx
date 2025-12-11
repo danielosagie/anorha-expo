@@ -61,7 +61,7 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
       onPress={onPress}
       activeOpacity={0.7}
     >
-      <View style={[styles.card, { backgroundColor: 'rgba(222, 222, 222, 0.01)', }]}>
+      <View style={[styles.card, { backgroundColor: 'rgba(228, 228, 228, 0.01)', }]}>
         {/* Left side - Image */}
         <View style={styles.imageContainer}>
           {imageUrl ? (
@@ -154,7 +154,7 @@ const styles = StyleSheet.create({
   cardContainer: {
     marginBottom: 12,
     marginHorizontal: 8,
-    backgroundColor: 'rgba(153,153,153,0.1)',
+    backgroundColor: 'rgba(228, 228, 228, 0.01)',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,

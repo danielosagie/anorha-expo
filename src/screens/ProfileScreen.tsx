@@ -50,7 +50,7 @@ const SSSYNC_API_BASE_URL = "https://api.sssync.app"; // Keep if used for constr
 
 // Define route param types (add other screens/params if needed)
 type ProfileScreenRouteParams = {
-  Profile: { refresh?: number }; // Define the refresh param as optional number
+  Profile: { refresh?: number; openAddConnection?: boolean }; // Define route params
 };
 
 // Type for navigation prop
@@ -78,7 +78,7 @@ interface PlatformConnection {
   DisplayName: string; // User-given name for the connection, or default - Match case from data
   Status: string; // e.g., 'active', 'inactive', 'error', 'pending' - Match case from data
   // Add other fields matching the case from fetched data if needed
-  UserId: string; 
+  UserId: string;
   IsEnabled: boolean;
   LastSyncSuccessAt: string | null;
   CreatedAt: string;
@@ -98,10 +98,10 @@ interface PlatformConnection {
 
 
 const SQUARE_SCOPES = [
-  'ITEMS_READ', 
-  'ITEMS_WRITE', 
-  'MERCHANT_PROFILE_READ', 
-  'ORDERS_READ', 
+  'ITEMS_READ',
+  'ITEMS_WRITE',
+  'MERCHANT_PROFILE_READ',
+  'ORDERS_READ',
   'ORDERS_WRITE',
   'INVENTORY_READ',
   'WEBHOOKS_READ',
@@ -195,11 +195,11 @@ const ProfileScreen = () => {
   const { toggles } = usePlatformConnections();
   // @ts-ignore - setOrg might not be in the type definition but is likely in the context value
   const { currentOrg, setOrg } = useOrg();
-  
+
   // For refresh trigger from route params
   const routeRefreshParam = route.params?.refresh || 0;
   const [refreshTrigger, setRefreshTrigger] = useState(routeRefreshParam);
-  
+
   useEffect(() => {
     if (route.params?.refresh) {
       setRefreshTrigger(route.params.refresh);
@@ -208,7 +208,7 @@ const ProfileScreen = () => {
 
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [darkModeEnabled, setDarkModeEnabled] = useState(false);
-  
+
   // --- NEW State for Connections ---
   const [showConnections, setShowConnections] = useState(true);
   const [platformConnections, setPlatformConnections] = useState<PlatformConnection[]>([]);
@@ -233,12 +233,12 @@ const ProfileScreen = () => {
   const [showCreatePool, setShowCreatePool] = useState(false);
   const [showManagePool, setShowManagePool] = useState(false);
   const [selectedPoolId, setSelectedPoolId] = useState<string | null>(null);
-  
+
   type ShopifyFlowStep = 'idle' | 'enterInfo'; // Simplified states
   const [pastedShopifyUrl, setPastedShopifyUrl] = useState('');
   const [manualShopName, setManualShopName] = useState('');
   // --- END REVISED Guided Shopify Flow State ---
-  
+
   const { user } = useUser();
   const [planName, setPlanName] = useState('');
   const [stats, setStats] = useState({ products: 0, locations: 0 });
@@ -266,21 +266,21 @@ const ProfileScreen = () => {
         // Entitlements
         const e = await fetchUserEntitlements();
         setEntitlements(e);
-        
+
         // Load Live Stats
         const { count: prodCount } = await supabase
-            .from('ProductVariants')
-            .select('*', { count: 'exact', head: true })
-            .eq('UserId', user.id);
-            
-        const { count: locCount } = await supabase
-            .from('PlatformLocations')
-            .select('*', { count: 'exact', head: true })
-            .eq('UserId', user.id);
+          .from('ProductVariants')
+          .select('*', { count: 'exact', head: true })
+          .eq('UserId', user.id);
 
-        setStats({ 
-            products: prodCount || 0, 
-            locations: locCount || 0 
+        const { count: locCount } = await supabase
+          .from('PlatformLocations')
+          .select('*', { count: 'exact', head: true })
+          .eq('UserId', user.id);
+
+        setStats({
+          products: prodCount || 0,
+          locations: locCount || 0
         });
 
       } catch (e) {
@@ -296,8 +296,8 @@ const ProfileScreen = () => {
       if (user && currentOrg && (currentOrg.name.includes('Workspace') || currentOrg.name.includes('Personal'))) {
         // Check Clerk memberships for a "Real" organization
         const memberships = user.organizationMemberships;
-        const realOrgMem = memberships?.find(m => 
-          !m.organization.name.includes('Workspace') && 
+        const realOrgMem = memberships?.find(m =>
+          !m.organization.name.includes('Workspace') &&
           !m.organization.name.includes('Personal')
         );
 
@@ -305,9 +305,9 @@ const ProfileScreen = () => {
           console.log('[ProfileScreen] Auto-switching to real org:', realOrgMem.organization.name);
           // Update the global OrgContext
           setOrg({
-              id: realOrgMem.organization.id,
-              name: realOrgMem.organization.name,
-              role: realOrgMem.role,
+            id: realOrgMem.organization.id,
+            name: realOrgMem.organization.name,
+            role: realOrgMem.role,
           });
         }
       }
@@ -342,13 +342,13 @@ const ProfileScreen = () => {
   // Define loadConnections function that will be used by fetchConnections
   const loadConnections = async () => {
     setIsLoadingConnections(true);
-    
+
     try {
       console.log('[ProfileScreen] Attempting to fetch user connections');
-      
+
       // Add a small delay to avoid rate limiting
       await new Promise(resolve => setTimeout(resolve, 300));
-      
+
       // First try to get connections from SSSync API for most up-to-date status
       const session = await supabase.auth.getSession();
       const token = session?.data?.session?.access_token;
@@ -356,12 +356,12 @@ const ProfileScreen = () => {
       if (token) {
         try {
           const apiResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${token}`,
               'Content-Type': 'application/json',
-        },
-      });
+            },
+          });
 
           if (apiResponse.ok) {
             const apiData = await apiResponse.json();
@@ -378,21 +378,21 @@ const ProfileScreen = () => {
           // Continue to fallback mechanism
         }
       }
-      
+
       // Fallback: Get connections directly from Supabase if API fails
       console.log('[ProfileScreen] Using fallback: Fetching connections directly from DB');
       const { data: { user }, error: userError } = await supabase.auth.getUser();
-      
+
       if (userError || !user) {
         throw new Error("Authentication required to fetch connections");
       }
-      
+
       const { data, error } = await supabase
         .from('PlatformConnections')
         .select('*')
         .eq('UserId', user.id)
         .order('CreatedAt', { ascending: false });
-        
+
       if (error) {
         console.error('[ProfileScreen] Error fetching connections from DB:', error);
         throw new Error(`Database error: ${error.message}`);
@@ -403,7 +403,7 @@ const ProfileScreen = () => {
     } catch (err: any) {
       console.error('[ProfileScreen] Critical error loading connections:', err);
       Alert.alert(
-        "Connection Error", 
+        "Connection Error",
         "Unable to load your platform connections. Please check your internet connection and try again."
       );
       setPlatformConnections([]);
@@ -417,7 +417,7 @@ const ProfileScreen = () => {
   const fetchConnections = useCallback(() => {
     loadConnections();
   }, []);
-  
+
   // Load platform connections from Supabase
   useFocusEffect(
     useCallback(() => {
@@ -445,10 +445,10 @@ const ProfileScreen = () => {
         return;
       }
       setLoadingPools(true);
-      
+
       // Add a small delay to avoid rate limiting
       await new Promise(resolve => setTimeout(resolve, 300));
-      
+
       // Use API endpoint instead of direct DB access
       const token = await ensureSupabaseJwt();
       const response = await fetch(`${SSSYNC_API_BASE_URL}/api/pools/org/${currentOrg.id}`, {
@@ -465,16 +465,16 @@ const ProfileScreen = () => {
 
       const data = await response.json();
       let list = Array.isArray(data) ? data : [];
-      
+
       // If not admin, restrict to assigned pools
       if (currentOrg.role !== 'org:admin' && Array.isArray(currentOrg.assignedPoolIds)) {
         const allowed = new Set(currentOrg.assignedPoolIds);
         list = list.filter((p) => allowed.has(p.id));
       }
-      
-      setPools(list.map((p) => ({ 
-        id: p.id, 
-        name: p.name, 
+
+      setPools(list.map((p) => ({
+        id: p.id,
+        name: p.name,
         description: p.description || '',
         sync_inventory: p.sync_inventory,
         sync_pricing: p.sync_pricing
@@ -526,6 +526,20 @@ const ProfileScreen = () => {
       overlay.disableForScreen();
     };
   }, [overlay]); // Remove handleStartConnectPlatform dependency to prevent re-runs
+
+  // Auto-open overlay if coming from onboarding
+  useEffect(() => {
+    if (route.params?.openAddConnection) {
+      console.log('[ProfileScreen] Auto-opening add connection overlay from onboarding');
+      // Small delay to ensure overlay is ready
+      const timer = setTimeout(() => {
+        overlay.show();
+      }, 500);
+      // Clear the param to prevent re-triggering
+      navigation.setParams({ openAddConnection: undefined } as any);
+      return () => clearTimeout(timer);
+    }
+  }, [route.params?.openAddConnection]);
   // --- END GLOBAL OVERLAY wiring ---
 
   // --- Unified API token helper (Supabase session only via bridge) ---
@@ -537,8 +551,8 @@ const ProfileScreen = () => {
   // --- NEW: Delete Connection Logic ---
   const handleDisconnectPlatform = async (connectionId: string, platformName: string) => {
     Alert.alert(
-      `Disconnect ${platformName}`, 
-      `Are you sure you want to disconnect your ${platformName} account? This will stop syncing products.`, 
+      `Disconnect ${platformName}`,
+      `Are you sure you want to disconnect your ${platformName} account? This will stop syncing products.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -554,7 +568,7 @@ const ProfileScreen = () => {
               }
 
               // 2. Make API Call 
-              const response = await fetch(`https://api.sssync.app/api/platform-connections/${connectionId}`, { 
+              const response = await fetch(`https://api.sssync.app/api/platform-connections/${connectionId}`, {
                 method: 'DELETE',
                 headers: {
                   'Authorization': `Bearer ${token}`,
@@ -565,17 +579,17 @@ const ProfileScreen = () => {
                 const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
                 throw new Error(errorData.message || `Failed to disconnect. Status: ${response.status}`);
               }
-              
+
               console.log(`[ProfileScreen] Successfully disconnected connection ID: ${connectionId}`);
               Alert.alert('Disconnected', `${platformName} connection removed.`);
-              
+
               // --- NEW: Reset Legend State to clear out old data ---
               await resetLegendState();
               console.log('[ProfileScreen] Legend state reset successfully.');
               // --- END NEW ---
 
               // 3. Refresh the connections list
-              fetchConnections(); 
+              fetchConnections();
 
             } catch (error: unknown) {
               console.error("[ProfileScreen] Error disconnecting platform:", error);
@@ -649,10 +663,10 @@ const ProfileScreen = () => {
               }
 
               console.log(`[ProfileScreen] Successfully disconnected old connection ${connectionId}`);
-              
+
               // Reset Legend State to clear out old data
               await resetLegendState();
-              
+
               // Step 2: Immediately initiate new OAuth connection based on platform type
               if (platformType === 'square') {
                 // Call Square OAuth flow
@@ -660,12 +674,14 @@ const ProfileScreen = () => {
               } else if (platformType === 'shopify') {
                 // For Shopify, show the add connection overlay
                 overlay.show();
+              } else if (platformType === 'facebook') {
+                await handleFacebookConnect();
               } else {
                 // For other platforms, just show the add connection overlay
                 Alert.alert('Success', `${platformName} disconnected. Please add a new connection.`);
                 overlay.show();
               }
-              
+
               // Refresh the connections list
               fetchConnections();
 
@@ -680,7 +696,7 @@ const ProfileScreen = () => {
     );
   };
   // --- END Reconnect Platform Logic ---
- 
+
   const handleOpenBilling = async () => {
     try {
       const token = await getApiToken();
@@ -749,9 +765,9 @@ const ProfileScreen = () => {
     try {
       await WebBrowser.openBrowserAsync(backendInitiationUrl);
     } catch (error: unknown) {
-       console.error('[ProfileScreen] WebBrowser Error opening for copy:', error);
-       const message = error instanceof Error ? error.message : String(error);
-       Alert.alert('Browser Error', `An error occurred opening the browser: ${message}`);
+      console.error('[ProfileScreen] WebBrowser Error opening for copy:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      Alert.alert('Browser Error', `An error occurred opening the browser: ${message}`);
     }
   };
   // --- END Guided Shopify Flow Logic ---
@@ -793,7 +809,7 @@ const ProfileScreen = () => {
       // You might want to add a user-facing confirmation here or after the deep link handler works
       if (result.type === 'cancel' || result.type === 'dismiss') {
         Alert.alert('Connection Cancelled', 'You cancelled or dismissed the final Shopify connection step.');
-      } else if (result.type !== 'success') { 
+      } else if (result.type !== 'success') {
         // Log the actual result type for debugging if it's not success/cancel/dismiss
         console.warn('[ProfileScreen] Unexpected WebBrowser Auth Result type:', result.type, result);
         // Provide a generic error, or handle specific types like 'locked' if necessary
@@ -801,10 +817,10 @@ const ProfileScreen = () => {
       }
 
     } catch (error: unknown) {
-       console.error('[ProfileScreen] Final WebBrowser Auth Error:', error);
-       const message = error instanceof Error ? error.message : String(error);
-       Alert.alert('Connection Error', `An error occurred opening the browser for final auth: ${message}`);
-     }
+      console.error('[ProfileScreen] Final WebBrowser Auth Error:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      Alert.alert('Connection Error', `An error occurred opening the browser for final auth: ${message}`);
+    }
   };
 
   // REVISED: Single handler for confirm button in the combined modal
@@ -831,7 +847,7 @@ const ProfileScreen = () => {
     } else if (manualShopName) {
       // Basic validation for manual name (e.g., non-empty, maybe no spaces)
       const trimmedName = manualShopName.trim();
-      
+
       // Try to extract shop name from URL if user pasted the full URL
       let extractedShopName = trimmedName;
       if (trimmedName.includes('admin.shopify.com')) {
@@ -842,17 +858,17 @@ const ProfileScreen = () => {
           console.log(`[ProfileScreen] Extracted shop name from manual URL: ${extractedShopName}`);
         }
       }
-      
+
       if (extractedShopName && !extractedShopName.includes(' ')) { // Example validation
-         shopNameToConnect = extractedShopName;
-         isValid = true;
-         console.log(`[ProfileScreen] Using manual shop name: ${shopNameToConnect}`);
+        shopNameToConnect = extractedShopName;
+        isValid = true;
+        console.log(`[ProfileScreen] Using manual shop name: ${shopNameToConnect}`);
       } else {
-          Alert.alert(
-             "Invalid Shop Name",
-             "Please enter a valid shop name (usually contains letters, numbers, hyphens, no spaces) or a full Shopify admin URL."
-           );
-          return; // Stop processing if manual name is invalid
+        Alert.alert(
+          "Invalid Shop Name",
+          "Please enter a valid shop name (usually contains letters, numbers, hyphens, no spaces) or a full Shopify admin URL."
+        );
+        return; // Stop processing if manual name is invalid
       }
     }
 
@@ -864,7 +880,7 @@ const ProfileScreen = () => {
       // Call the connection function
       connectWithExtractedShopName(shopNameToConnect);
     } else {
-       // This case should ideally not be reached if button disable logic is correct, but good fallback.
+      // This case should ideally not be reached if button disable logic is correct, but good fallback.
       Alert.alert("Missing Input", "Please paste the Shopify URL or enter the shop name.");
     }
   };
@@ -883,7 +899,7 @@ const ProfileScreen = () => {
       showStatusNotification('Processing', `Starting scan for ${platformName}...`, 'info');
 
       // Determine which endpoint to use based on isReconnect
-      const endpoint = isReconnect 
+      const endpoint = isReconnect
         ? `${SSSYNC_API_BASE_URL}/api/sync/connection/${connectionId}/reconcile` // Reconcile for reconnections
         : `${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/start-scan`; // Regular scan for new connections
 
@@ -901,19 +917,19 @@ const ProfileScreen = () => {
       }
 
       const responseData = await response.json().catch(() => ({}));
-      
+
       // --- MODIFIED: Show notification and navigate with Job ID ---
       showStatusNotification(
-        'Scan Initialized', 
+        'Scan Initialized',
         `Now analyzing products for ${platformName}. You can monitor the progress on the next screen.`,
         'info' // Use 'info' as it's a start, not a final success
       );
-      
+
       console.log(`[ProfileScreen] Successfully initiated scan for ${platformName} (Connection ID: ${connectionId}). Response:`, responseData);
-      
+
       // Navigate to MappingReviewScreen immediately, passing the jobId to monitor progress.
-      navigation.navigate('MappingReview', { 
-        connectionId, 
+      navigation.navigate('MappingReview', {
+        connectionId,
         platformName,
         jobId: responseData.jobId, // Pass the jobId from the API response
       });
@@ -921,7 +937,7 @@ const ProfileScreen = () => {
     } catch (error: unknown) {
       console.error(`[ProfileScreen] Error starting scan for ${platformName}:`, error);
       const message = error instanceof Error ? error.message : String(error);
-      
+
       // Show an error notification
       showStatusNotification('Error', `Could not start scan for ${platformName}: ${message}`, 'danger');
     }
@@ -996,7 +1012,7 @@ const ProfileScreen = () => {
       } else {
         let errorMessage = "An unexpected error occurred during Clover authentication.";
         if (result.type === 'locked') {
-            errorMessage = "The authentication session is locked. Please try again or use another method.";
+          errorMessage = "The authentication session is locked. Please try again or use another method.";
         }
         Alert.alert("Connection Error", errorMessage);
         console.warn("[ProfileScreen] Clover Connect: Unexpected WebBrowser result type:", result.type, result);
@@ -1047,7 +1063,7 @@ const ProfileScreen = () => {
 
         if (status === 'success') {
           Alert.alert("Success", message || "Square account connected successfully!");
-           if (connectionId) {
+          if (connectionId) {
             console.log(`[ProfileScreen] Square Connect: Connection ID ${connectionId}. Syncing locations...`);
             // Sync locations first, then start scan
             try {
@@ -1092,76 +1108,27 @@ const ProfileScreen = () => {
   };
   // --- END Square Connection Logic ---
 
-  // --- NEW: Facebook Connection Logic ---
+  // --- Facebook Connection Logic (Simplified) ---
   const handleFacebookConnect = async () => {
-    console.log("[ProfileScreen] Initiating Facebook connection (New OAuth Flow)...");
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) {
         Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
-        console.error("[ProfileScreen] Facebook Connect: Error getting user:", userError);
         return;
       }
-      const sssyncUserId = user.id;
 
-      const finalRedirectUri = "anorhaapp://auth/callback?platform=facebook";
-      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/facebook/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
-      console.log("[ProfileScreen] Facebook Connect: Backend Auth URL:", backendAuthUrl);
+      const finalRedirectUri = 'anorhaapp://auth-callback';
+      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/facebook/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
 
-      const result = await WebBrowser.openAuthSessionAsync(backendAuthUrl, finalRedirectUri);
-      console.log("[ProfileScreen] Facebook Connect: WebBrowser result:", result);
+      console.log("[ProfileScreen] Facebook Connect: Starting flow...");
+      await WebBrowser.openAuthSessionAsync(backendAuthUrl, finalRedirectUri);
 
-      if (result.type === 'success' && result.url) {
-        // Remove hash fragment if present (e.g., #_=_) before parsing
-        const urlWithoutHash = result.url.split('#')[0];
-        const urlParams = new URLSearchParams(urlWithoutHash.split('?')[1]);
-        const status = urlParams.get('status');
-        const message = urlParams.get('message');
-        const connectionId = urlParams.get('connectionId');
+      // Refresh connections - App handles deep link too
+      await fetchConnections();
 
-        console.log("[ProfileScreen] Facebook Connect: Callback params:", { status, message, connectionId });
-
-        if (status === 'success') {
-          Alert.alert("Success", message || "Facebook account connected successfully!");
-          if (connectionId) {
-            console.log(`[ProfileScreen] Facebook Connect: Connection ID ${connectionId}. Syncing locations...`);
-            // Sync locations first, then start scan
-            try {
-              const token = await ensureSupabaseJwt();
-              await fetch(`${SSSYNC_API_BASE_URL}/api/pools/locations/sync/${connectionId}`, {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${token}`,
-                  'Content-Type': 'application/json',
-                },
-              });
-              console.log(`[ProfileScreen] Facebook Connect: Locations synced for ${connectionId}`);
-            } catch (syncError) {
-              console.error(`[ProfileScreen] Facebook Connect: Failed to sync locations:`, syncError);
-              // Continue anyway - scan can still start
-            }
-            await startPlatformScan(connectionId, 'Facebook');
-          }
-          fetchConnections();
-        } else {
-          Alert.alert("Connection Failed", message || "Failed to connect Facebook account.");
-          console.error("[ProfileScreen] Facebook Connect: Connection failed via backend callback:", { status, message });
-        }
-      } else if (result.type === 'cancel' || result.type === 'dismiss') {
-        Alert.alert("Cancelled", "Facebook connection process was cancelled.");
-        console.log("[ProfileScreen] Facebook Connect: User cancelled or dismissed flow.");
-      } else {
-        let errorMessage = "An unexpected error occurred during Facebook authentication.";
-        if (result.type === 'locked') {
-          errorMessage = "The authentication session is locked. Please try again or use another method.";
-        }
-        Alert.alert("Connection Error", errorMessage);
-        console.warn("[ProfileScreen] Facebook Connect: Unexpected WebBrowser result type:", result.type, result);
-      }
     } catch (error: unknown) {
       console.error("[ProfileScreen] Facebook Connect: General error:", error);
-      const message = error instanceof Error ? error.message : String(error);
-      Alert.alert("Error", `Failed to connect Facebook: ${message}`);
+      Alert.alert("Error", "Failed to initiate Facebook connection.");
     }
   };
   // --- END Facebook Connection Logic ---
@@ -1169,7 +1136,7 @@ const ProfileScreen = () => {
   // --- NEW: Handler for Review & Sync ---
   const handleReviewAndSync = (connectionId: string, platformName: string) => {
     console.log(`[ProfileScreen] Initiating Review & Sync for Connection ID: ${connectionId}, Platform: ${platformName}`);
-    
+
     // Navigate to the MappingReview screen
     navigation.navigate('MappingReview', { connectionId, platformName });
   };
@@ -1216,10 +1183,10 @@ const ProfileScreen = () => {
       console.error("Caught unexpected error getting session:", catchError.message);
     }
   };
-  
+
   // Add state for dev mode
   const [isDevMode, setIsDevMode] = useState(false);
-  
+
   // Billing modal state
   const [showBillingPortal, setShowBillingPortal] = useState(false);
   const [billingPortalUrl, setBillingPortalUrl] = useState<string | null>(null);
@@ -1250,29 +1217,30 @@ const ProfileScreen = () => {
 
   // Modify the menuItems array to be dynamic based on dev mode
   const menuItems = [
-    { icon: 'credit-card', 
-      title: 'Subscription & Billing', 
+    {
+      icon: 'credit-card',
+      title: 'Subscription & Billing',
       badge: entitlements?.planName || 'Free',
       onPress: () => handleOpenBilling()
     },
-    { 
-      icon: 'account-group', 
-      title: 'Team', 
+    {
+      icon: 'account-group',
+      title: 'Team',
       onPress: () => handleOpenTeams()
     },
-    { 
-      icon: 'help-circle', 
+    {
+      icon: 'help-circle',
       title: 'Give Feedback',
       onPress: async () => {
         await WebBrowser.openBrowserAsync('https://anorha.userjot.com/');
       }
     },
     // Developer Mode switch - its state is independent of the token button now
-  
+
     // Billing portal entry
-    
+
     // "Show Auth Token" button is now always present
-    
+
     { icon: 'logout', title: 'Logout', isDestructive: true, onPress: handleLogout },
   ];
 
@@ -1282,10 +1250,10 @@ const ProfileScreen = () => {
     title: 'Show Auth Token',
     onPress: logCurrentUserToken,
   */}
-  
+
   const renderMenuItem = (item: any, index: number) => (
-    <TouchableOpacity 
-      key={item.title} 
+    <TouchableOpacity
+      key={item.title}
       style={[
         styles.menuItem,
         index < menuItems.length - 1 ? styles.menuItemBorder : null
@@ -1293,16 +1261,16 @@ const ProfileScreen = () => {
       onPress={item.onPress}
     >
       <View style={styles.menuItemLeft}>
-        <Icon 
-          name={item.icon} 
-          size={24} 
-          color={item.isDestructive ? theme.colors.error : '#555'} 
-          style={styles.menuIcon} 
+        <Icon
+          name={item.icon}
+          size={24}
+          color={item.isDestructive ? theme.colors.error : '#555'}
+          style={styles.menuIcon}
         />
         {item.customComponent || (
-          <Text 
+          <Text
             style={[
-              styles.menuText, 
+              styles.menuText,
               item.isDestructive ? { color: theme.colors.error } : null
             ]}
           >
@@ -1310,7 +1278,7 @@ const ProfileScreen = () => {
           </Text>
         )}
       </View>
-      
+
       {item.badge ? (
         <View style={[styles.menuBadge, { backgroundColor: theme.colors.primary + '20' }]}>
           <Text style={[styles.menuBadgeText, { color: theme.colors.primary }]}>{item.badge}</Text>
@@ -1320,7 +1288,7 @@ const ProfileScreen = () => {
       )}
     </TouchableOpacity>
   );
-  
+
   // Add a state for the realtime channel
   const [realtimeChannel, setRealtimeChannel] = useState<RealtimeChannel | null>(null);
 
@@ -1335,7 +1303,7 @@ const ProfileScreen = () => {
     return () => {
       try {
         parentNav?.setOptions?.({ tabBarStyle: { display: 'flex' } });
-      } catch {}
+      } catch { }
     };
   }, [overlay.visible]);
 
@@ -1399,7 +1367,7 @@ const ProfileScreen = () => {
   const syncUserOrgs = async () => {
     try {
       const token = await ensureSupabaseJwt();
-      
+
       // Call sync endpoint to create OrgMemberships from Clerk teams
       const response = await fetch(
         'https://api.sssync.app/api/organizations/sync-clerk-teams',
@@ -1411,26 +1379,26 @@ const ProfileScreen = () => {
           },
         }
       );
-      
+
       if (response.ok) {
         console.log('Synced Clerk teams with orgs');
-        
+
         // 2. FORCE BACKEND TO FIX ACTIVE ORG & SYNC LOCAL STATE
         const activeRes = await fetch(`${SSSYNC_API_BASE_URL}/api/organizations/me/active`, {
-            headers: { 'Authorization': `Bearer ${token}` }
+          headers: { 'Authorization': `Bearer ${token}` }
         });
-        
+
         if (activeRes.ok) {
-            const activeData = await activeRes.json();
-            // If backend says we should be on a different org than what we have, switch!
-            if (activeData.activeOrg && activeData.activeOrg.Id !== currentOrg?.id && setOrg) {
-                console.log('[ProfileScreen] Backend corrected active org to:', activeData.activeOrg.Name);
-                setOrg({
-                    id: activeData.activeOrg.Id,
-                    name: activeData.activeOrg.Name,
-                    role: activeData.activeOrg.userRole || 'org:admin' 
-                });
-            }
+          const activeData = await activeRes.json();
+          // If backend says we should be on a different org than what we have, switch!
+          if (activeData.activeOrg && activeData.activeOrg.Id !== currentOrg?.id && setOrg) {
+            console.log('[ProfileScreen] Backend corrected active org to:', activeData.activeOrg.Name);
+            setOrg({
+              id: activeData.activeOrg.Id,
+              name: activeData.activeOrg.Name,
+              role: activeData.activeOrg.userRole || 'org:admin'
+            });
+          }
         }
 
         // Then reload orgs in OrgSwitcher or trigger refresh
@@ -1448,7 +1416,7 @@ const ProfileScreen = () => {
   // Clean up the subscription when the component unmounts
   useEffect(() => {
     setupRealtimeSubscription();
-    
+
     return () => {
       if (realtimeChannel) {
         console.log('[ProfileScreen] Cleaning up realtime subscription');
@@ -1460,7 +1428,7 @@ const ProfileScreen = () => {
 
 
   return (
-    <ScrollView 
+    <ScrollView
       style={styles.container}
       contentContainerStyle={styles.scrollViewContent}
       showsVerticalScrollIndicator={false}
@@ -1474,22 +1442,22 @@ const ProfileScreen = () => {
         currentOrgId={currentOrg?.id}
       />
       */}
-      
+
 
       <Animated.View entering={FadeInUp.delay(100).duration(500)}>
-        
+
         {/* Account Card */}
         <Card style={styles.card}>
           <View style={styles.accountHeader}>
             {user?.imageUrl ? (
-              <Image 
-                source={{ uri: user.imageUrl }} 
-                style={{ width: 64, height: 64, borderRadius: 32 }} 
+              <Image
+                source={{ uri: user.imageUrl }}
+                style={{ width: 64, height: 64, borderRadius: 32 }}
               />
             ) : (
-              <PlaceholderImage 
-                size={64} 
-                borderRadius={32} 
+              <PlaceholderImage
+                size={64}
+                borderRadius={32}
                 color="#6A5ACD"
                 type="gradient"
                 text={user?.firstName?.[0] || 'U'}
@@ -1498,7 +1466,7 @@ const ProfileScreen = () => {
             <View style={styles.accountInfo}>
               <Text style={styles.accountName}>{user?.fullName || user?.firstName || 'User'}</Text>
               <Text style={styles.accountEmail}>{user?.primaryEmailAddress?.emailAddress || ''}</Text>
-              
+
               <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
                 <Text style={styles.orgLabel}>Organization: </Text>
                 <Text style={styles.orgName}>
@@ -1507,25 +1475,25 @@ const ProfileScreen = () => {
               </View>
 
               {currentOrg?.name?.includes('Workspace') && (
-                 <TouchableOpacity 
-                    onPress={() => {
-                        const real = user?.organizationMemberships?.find(m => !m.organization.name.includes('Workspace'));
-                        if (real && setOrg) setOrg({ id: real.organization.id, name: real.organization.name, role: real.role });
-                    }}
-                    style={{ marginTop: 8 }}
-                 >
-                    <Text style={{ fontSize: 12, color: theme.colors.primary, fontWeight: 'bold', textDecorationLine: 'underline' }}>
-                       Switch to {user?.organizationMemberships?.find(m => !m.organization.name.includes('Workspace'))?.organization?.name || 'Real Org'}
-                    </Text>
-                 </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => {
+                    const real = user?.organizationMemberships?.find(m => !m.organization.name.includes('Workspace'));
+                    if (real && setOrg) setOrg({ id: real.organization.id, name: real.organization.name, role: real.role });
+                  }}
+                  style={{ marginTop: 8 }}
+                >
+                  <Text style={{ fontSize: 12, color: theme.colors.primary, fontWeight: 'bold', textDecorationLine: 'underline' }}>
+                    Switch to {user?.organizationMemberships?.find(m => !m.organization.name.includes('Workspace'))?.organization?.name || 'Real Org'}
+                  </Text>
+                </TouchableOpacity>
               )}
             </View>
-          
+
           </View>
-          
-        
-        
-          
+
+
+
+
 
           {/* Seller Stats Section 
           <View style={[styles.sellerStatsSection, { backgroundColor: theme.colors.surface }]}>
@@ -1578,28 +1546,28 @@ const ProfileScreen = () => {
           </View>
         </Card>
       </Animated.View>
-      
+
       {/* Integrations Card */}
       <Animated.View entering={FadeInUp.delay(200).duration(500)}>
         <Card style={styles.card}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Connected Platforms</Text>
-            <TouchableOpacity style={styles.manageBtn} onPress={() => setIsEditMode(!isEditMode)}> 
+            <TouchableOpacity style={styles.manageBtn} onPress={() => setIsEditMode(!isEditMode)}>
               <Text style={styles.manageBtnText}>
                 {isEditMode ? 'Done' : 'Manage'}
               </Text>
             </TouchableOpacity>
           </View>
-          
+
           {/* --- UPDATED Integrations Rendering --- */}
           {isLoadingConnections ? (
-             <ActivityIndicator size="large" color={theme.colors.primary} style={{ marginVertical: 20 }}/>
+            <ActivityIndicator size="large" color={theme.colors.primary} style={{ marginVertical: 20 }} />
           ) : (
-          <View style={styles.integrationsContainer}>
+            <View style={styles.integrationsContainer}>
               {/* Map over FETCHED connections, not AVAILABLE_PLATFORMS */}
               {(() => {
                 // Calculate filteredConnections first
-                
+
                 // --- DEBUG: Log connections right before filter --- 
                 // console.log(`[ProfileScreen PRE-FILTER DEBUG] connections at filter time: ${JSON.stringify(platformConnections)}`);
                 // --- END DEBUG ---
@@ -1611,7 +1579,7 @@ const ProfileScreen = () => {
                 // Perform logging and return JSX
                 if (!(platformConnections.length > 0)) {
                   // console.log("[ProfileScreen RENDER DEBUG] connections.length is NOT > 0");
-                   // Note: This case might be redundant if filteredConnections handles it, but keep for explicit logging
+                  // Note: This case might be redundant if filteredConnections handles it, but keep for explicit logging
                 } else {
                   // console.log(`[ProfileScreen RENDER DEBUG] connections.length > 0 ? true`);
                 }
@@ -1620,41 +1588,41 @@ const ProfileScreen = () => {
                 // console.log(`[ProfileScreen FILTERED DEBUG] Filtered connections data: ${JSON.stringify(filteredConnections)}`);
 
                 if (filteredConnections.length === 0) {
-                   // console.log("[ProfileScreen RENDER DEBUG] No connections after filtering.");
-                   // Return null here, the text below will handle the message
-                   return null; 
+                  // console.log("[ProfileScreen RENDER DEBUG] No connections after filtering.");
+                  // Return null here, the text below will handle the message
+                  return null;
                 } else {
-                   // console.log("[ProfileScreen RENDER DEBUG] Mapping filtered connections...");
-                   // Now map the filtered array
-                   return filteredConnections.map((connection) => {
-                      const platformConfig = AVAILABLE_PLATFORMS.find(p => p.key === connection.PlatformType);
-                      if (!platformConfig) {
-                          // console.log(`[ProfileScreen MAP DEBUG] Skipping connection ID: ${connection.Id} - No platform config found for type: ${connection.PlatformType}`);
-                          return null;
-                      } 
+                  // console.log("[ProfileScreen RENDER DEBUG] Mapping filtered connections...");
+                  // Now map the filtered array
+                  return filteredConnections.map((connection) => {
+                    const platformConfig = AVAILABLE_PLATFORMS.find(p => p.key === connection.PlatformType);
+                    if (!platformConfig) {
+                      // console.log(`[ProfileScreen MAP DEBUG] Skipping connection ID: ${connection.Id} - No platform config found for type: ${connection.PlatformType}`);
+                      return null;
+                    }
 
-                      // console.log(`[ProfileScreen MAP DEBUG] Rendering item for connection ID: ${connection.Id}, Name: ${connection.DisplayName || platformConfig.name}`);
+                    // console.log(`[ProfileScreen MAP DEBUG] Rendering item for connection ID: ${connection.Id}, Name: ${connection.DisplayName || platformConfig.name}`);
 
-                      // --- NEW: Parse Shopify Display Name ---
-                      let displayShopName = connection.DisplayName || platformConfig.name;
-                      if (connection.PlatformType === 'shopify' && connection.DisplayName.includes('.myshopify.com')) {
-                         displayShopName = connection.DisplayName.replace('.myshopify.com', '');
-                      }
-                      // --- END Parsing ---
+                    // --- NEW: Parse Shopify Display Name ---
+                    let displayShopName = connection.DisplayName || platformConfig.name;
+                    if (connection.PlatformType === 'shopify' && connection.DisplayName.includes('.myshopify.com')) {
+                      displayShopName = connection.DisplayName.replace('.myshopify.com', '');
+                    }
+                    // --- END Parsing ---
 
-                     // Render connection item
-                     const PlatformIconComponent = getPlatformIcon(platformConfig.key);
-                     
-                     return (
+                    // Render connection item
+                    const PlatformIconComponent = getPlatformIcon(platformConfig.key);
+
+                    return (
                       <View key={connection.Id} style={styles.integrationItem}>
                         {/* Delete Button (Edit Mode) */}
                         {isEditMode && (
-                          <TouchableOpacity 
+                          <TouchableOpacity
                             style={styles.deleteButton}
-                            onPress={() => handleDisconnectPlatform(connection.Id, platformConfig.name)} 
+                            onPress={() => handleDisconnectPlatform(connection.Id, platformConfig.name)}
                           >
                             <Icon name="minus-circle-outline" size={24} color={theme.colors.error} />
-                            <Text style={{color: "red", fontSize: 14}}>Disconnect</Text>
+                            <Text style={{ color: "red", fontSize: 14 }}>Disconnect</Text>
                           </TouchableOpacity>
                         )}
 
@@ -1727,128 +1695,128 @@ const ProfileScreen = () => {
                         {/* Right column: action buttons (non-edit mode only) */}
                         {!isEditMode && connection && (
                           <View style={styles.connectionActions}>
-                                {/* Pending: Start Scan */}
-                                {connection.Status === CONNECTION_STATUS.PENDING && (
-                                  <TouchableOpacity 
-                                    style={[styles.actionButton, { backgroundColor: theme.colors.primary + '20' }]}
-                                    onPress={() => startPlatformScan(connection.Id, platformConfig.name)}
-                                  >
-                                    <Icon name="play-circle" size={18} color={theme.colors.primary} />
-                                    <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Start Scan</Text>
-                              </TouchableOpacity>
-                                )}
-
-                                {/* Review: Review products */}
-                                {connection.Status === CONNECTION_STATUS.REVIEW && (
-                              <TouchableOpacity 
-                                    style={[styles.actionButton, { backgroundColor: '#FF9500' + '20' }]}
-                                    onPress={() => handleReviewAndSync(connection.Id, platformConfig.name)}
+                            {/* Pending: Start Scan */}
+                            {connection.Status === CONNECTION_STATUS.PENDING && (
+                              <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: theme.colors.primary + '20' }]}
+                                onPress={() => startPlatformScan(connection.Id, platformConfig.name)}
                               >
-                                    <Icon name="eye" size={18} color="#FF9500" />
-                                        <Text style={[styles.actionButtonText, { color: '#FF9500' }]}>Review Products</Text>
+                                <Icon name="play-circle" size={18} color={theme.colors.primary} />
+                                <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Start Scan</Text>
                               </TouchableOpacity>
-                                )}
-                                
-                                {connection.Status === CONNECTION_STATUS.READY_TO_SYNC && (
-                                  <TouchableOpacity 
-                                    style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
-                                    onPress={() => navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name })}
-                                  >
-                                    <Icon name="check-circle" size={18} color={theme.colors.success} />
-                                    <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Ready to Sync</Text>
-                                  </TouchableOpacity>
-                                )}
-                                
-                                {(connection.Status === CONNECTION_STATUS.INACTIVE) && (
-                                  <TouchableOpacity 
-                                    style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
-                                    onPress={() => startPlatformScan(connection.Id, platformConfig.name)}
-                                  >
-                                    <Icon name="play-circle" size={18} color={theme.colors.success} />
-                                    <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Activate</Text>
-                                  </TouchableOpacity>
-                                )}
+                            )}
 
-                                {/* For error state, show Reconnect (credentials) or Fix & Resume (general) */}
-                                {connection.Status === CONNECTION_STATUS.ERROR && (
-                                  <View style={{ flexDirection: 'row', gap: 8 }}>
-                                    {/* Reconnect button for credential issues */}
-                                    {(platformConfig.key === 'square' || platformConfig.key === 'shopify') && (
-                                      <TouchableOpacity 
-                                        style={[styles.actionButton, { backgroundColor: theme.colors.error + '15' }]}
-                                        onPress={() => handleReconnectPlatform(connection.Id, platformConfig.key, platformConfig.name)}
-                                      >
-                                        <Icon name="link-variant" size={18} color={theme.colors.error} />
-                                        <Text style={[styles.actionButtonText, { color: theme.colors.error }]}>Reconnect</Text>
-                                      </TouchableOpacity>
-                                    )}
-                                    {/* General Fix & Resume for other issues */}
-                                    <TouchableOpacity 
-                                      style={[styles.actionButton, { backgroundColor: theme.colors.warning + '15' }]}
-                                      onPress={() => fixAndResumeConnection(connection.Id, platformConfig.name)}
-                                    >
-                                      <Icon name="refresh" size={18} color={theme.colors.warning} />
-                                      <Text style={[styles.actionButtonText, { color: theme.colors.warning }]}>Fix & Resume</Text>
-                                    </TouchableOpacity>
-                                  </View>
+                            {/* Review: Review products */}
+                            {connection.Status === CONNECTION_STATUS.REVIEW && (
+                              <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: '#FF9500' + '20' }]}
+                                onPress={() => handleReviewAndSync(connection.Id, platformConfig.name)}
+                              >
+                                <Icon name="eye" size={18} color="#FF9500" />
+                                <Text style={[styles.actionButtonText, { color: '#FF9500' }]}>Review Products</Text>
+                              </TouchableOpacity>
+                            )}
+
+                            {connection.Status === CONNECTION_STATUS.READY_TO_SYNC && (
+                              <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
+                                onPress={() => navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name })}
+                              >
+                                <Icon name="check-circle" size={18} color={theme.colors.success} />
+                                <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Ready to Sync</Text>
+                              </TouchableOpacity>
+                            )}
+
+                            {(connection.Status === CONNECTION_STATUS.INACTIVE) && (
+                              <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
+                                onPress={() => startPlatformScan(connection.Id, platformConfig.name)}
+                              >
+                                <Icon name="play-circle" size={18} color={theme.colors.success} />
+                                <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Activate</Text>
+                              </TouchableOpacity>
+                            )}
+
+                            {/* For error state, show Reconnect (credentials) or Fix & Resume (general) */}
+                            {connection.Status === CONNECTION_STATUS.ERROR && (
+                              <View style={{ flexDirection: 'row', gap: 8 }}>
+                                {/* Reconnect button for credential issues */}
+                                {(platformConfig.key === 'square' || platformConfig.key === 'shopify') && (
+                                  <TouchableOpacity
+                                    style={[styles.actionButton, { backgroundColor: theme.colors.error + '15' }]}
+                                    onPress={() => handleReconnectPlatform(connection.Id, platformConfig.key, platformConfig.name)}
+                                  >
+                                    <Icon name="link-variant" size={18} color={theme.colors.error} />
+                                    <Text style={[styles.actionButtonText, { color: theme.colors.error }]}>Reconnect</Text>
+                                  </TouchableOpacity>
                                 )}
-                                
-                                {/* Active connections: Manage + Reconnect option for Square/Shopify */}
-                                {connection.Status === CONNECTION_STATUS.ACTIVE && (
-                                  <View style={{ flexDirection: 'row', gap: 8 }}>
-                                    <TouchableOpacity 
-                                      style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
-                                      onPress={() =>
-                                        navigation.navigate('MappingReview', {
-                                          connectionId: connection.Id,
-                                          platformName: platformConfig.name,
-                                        })
-                                      }
-                                    >
-                                      <Icon name="cog" size={18} color={theme.colors.primary} />
-                                      <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>
-                                        Manage
-                                      </Text>
-                                    </TouchableOpacity>
-                                    {/* Reconnect option for Square/Shopify to refresh credentials */}
-                                    {(platformConfig.key === 'square' || platformConfig.key === 'shopify') && (
-                                      <TouchableOpacity 
-                                        style={[styles.actionButton, { backgroundColor: '#6B7280' + '15' }]}
-                                        onPress={() => handleReconnectPlatform(connection.Id, platformConfig.key, platformConfig.name)}
-                                      >
-                                        <Icon name="link-variant" size={18} color="#6B7280" />
-                                      </TouchableOpacity>
-                                    )}
-                                  </View>
+                                {/* General Fix & Resume for other issues */}
+                                <TouchableOpacity
+                                  style={[styles.actionButton, { backgroundColor: theme.colors.warning + '15' }]}
+                                  onPress={() => fixAndResumeConnection(connection.Id, platformConfig.name)}
+                                >
+                                  <Icon name="refresh" size={18} color={theme.colors.warning} />
+                                  <Text style={[styles.actionButtonText, { color: theme.colors.warning }]}>Fix & Resume</Text>
+                                </TouchableOpacity>
+                              </View>
+                            )}
+
+                            {/* Active connections: Manage + Reconnect option for Square/Shopify */}
+                            {connection.Status === CONNECTION_STATUS.ACTIVE && (
+                              <View style={{ flexDirection: 'row', gap: 8 }}>
+                                <TouchableOpacity
+                                  style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
+                                  onPress={() =>
+                                    navigation.navigate('MappingReview', {
+                                      connectionId: connection.Id,
+                                      platformName: platformConfig.name,
+                                    })
+                                  }
+                                >
+                                  <Icon name="cog" size={18} color={theme.colors.primary} />
+                                  <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>
+                                    Manage
+                                  </Text>
+                                </TouchableOpacity>
+                                {/* Reconnect option for Square/Shopify to refresh credentials */}
+                                {(platformConfig.key === 'square' || platformConfig.key === 'shopify') && (
+                                  <TouchableOpacity
+                                    style={[styles.actionButton, { backgroundColor: '#6B7280' + '15' }]}
+                                    onPress={() => handleReconnectPlatform(connection.Id, platformConfig.key, platformConfig.name)}
+                                  >
+                                    <Icon name="link-variant" size={18} color="#6B7280" />
+                                  </TouchableOpacity>
                                 )}
                               </View>
+                            )}
+                          </View>
                         )}
                       </View>
-                      );
-                   });
+                    );
+                  });
                 }
-              })()} 
+              })()}
 
               {/* Render "No active connections yet" text if needed */}
               {/* --- ADJUSTED CONDITION: Show text only if the connections array is truly empty --- */}
               {platformConnections.length === 0 && (
-                  <Text style={styles.noConnectionsText}>No connections yet.</Text>
+                <Text style={styles.noConnectionsText}>No connections yet.</Text>
               )}
               {/* --- END ADJUSTED CONDITION --- */}
-              {/* Always render Add Connection Button (unless error/loading) */} 
-              <Button 
-                title="Add Connection" 
+              {/* Always render Add Connection Button (unless error/loading) */}
+              <Button
+                title="Add Connection"
                 onPress={() => {
                   console.log('[ProfileScreen] Add Connection button pressed');
                   console.log('[ProfileScreen] Before show - overlay.visible:', overlay.visible);
                   overlay.show();
                   console.log('[ProfileScreen] After show - overlay.visible:', overlay.visible);
                 }}
-                style={styles.addConnectionButton} 
+                style={styles.addConnectionButton}
               />
               {/* --- END Add Connection Button --- */}
 
-              </View>
+            </View>
           )}
           {/* --- END UPDATED Integrations Rendering --- */}
         </Card>
@@ -1857,12 +1825,12 @@ const ProfileScreen = () => {
       {/* Locations & Pools Card (v2) - render unconditionally; component resolves orgId */}
       <Animated.View entering={FadeInUp.delay(250).duration(500)}>
         <Card style={styles.card}>
-          {(currentOrg?.name?.includes('Workspace') || currentOrg?.name?.includes('Personal')) && 
-           user?.organizationMemberships?.some(m => !m.organization.name.includes('Workspace')) ? (
-             <View style={{ padding: 30, alignItems: 'center' }}>
-                <ActivityIndicator size="small" color={theme.colors.primary} />
-                <Text style={{ marginTop: 10, color: '#666', fontSize: 14 }}>Switching to your organization...</Text>
-             </View>
+          {(currentOrg?.name?.includes('Workspace') || currentOrg?.name?.includes('Personal')) &&
+            user?.organizationMemberships?.some(m => !m.organization.name.includes('Workspace')) ? (
+            <View style={{ padding: 30, alignItems: 'center' }}>
+              <ActivityIndicator size="small" color={theme.colors.primary} />
+              <Text style={{ marginTop: 10, color: '#666', fontSize: 14 }}>Switching to your organization...</Text>
+            </View>
           ) : (
             <LocationsManagerV2
               orgId={currentOrg?.id}
@@ -1871,22 +1839,22 @@ const ProfileScreen = () => {
           )}
         </Card>
       </Animated.View>
-      
-    
-      
+
+
+
       {/* Menu Card */}
       <Animated.View entering={FadeInUp.delay(400).duration(500)}>
         <Card style={styles.card}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Settings</Text>
           </View>
-          
+
           <View style={styles.menuContainer}>
             {menuItems.map((item, index) => renderMenuItem(item, index))}
           </View>
         </Card>
       </Animated.View>
-      
+
       {/* --- NEW: Add Connection Modal --- */}
       {/* --- Platform Picker Bottom Bar Overlay (no modal) --- */}
       {isAddConnectionModalVisible && (
@@ -1900,14 +1868,14 @@ const ProfileScreen = () => {
               selectedPlatforms={[]}
               isConnected={(p) => platformConnections.some((c) => c.PlatformType === p && c.Status === 'active')}
               platformActiveCounts={platformActiveCounts}
-              onShowSelection={() => {}}
-              onShowTemplates={() => {}}
-              onBackToEmpty={() => {}}
-              onBackToSelection={() => {}}
-              onOpenTemplateModal={() => {}}
-              onTemplateSelect={() => {}}
-              onPlatformToggle={() => {}}
-              onGeneratePress={() => {}}
+              onShowSelection={() => { }}
+              onShowTemplates={() => { }}
+              onBackToEmpty={() => { }}
+              onBackToSelection={() => { }}
+              onOpenTemplateModal={() => { }}
+              onTemplateSelect={() => { }}
+              onPlatformToggle={() => { }}
+              onGeneratePress={() => { }}
               onStartConnect={(platform) => {
                 setIsAddConnectionModalVisible(false);
                 if (platform === 'shopify') {
@@ -1933,136 +1901,136 @@ const ProfileScreen = () => {
                 }
               }}
             />
-            
+
           </View>
         </View>
       )}
       {/* --- END Platform Picker Bottom Bar Overlay --- */}
-      
+
       {/* --- REVISED: Guided Shopify Flow UI (Single Modal) --- */}
       <Modal
-          transparent={true}
-          animationType="fade"
-          visible={shopifyFlowStep === 'enterInfo'}
-          onRequestClose={() => setShopifyFlowStep('idle')}
+        transparent={true}
+        animationType="fade"
+        visible={shopifyFlowStep === 'enterInfo'}
+        onRequestClose={() => setShopifyFlowStep('idle')}
       >
-          <Pressable style={styles.shopifyModalOverlay} onPress={() => setShopifyFlowStep('idle')}>
-            <Pressable style={styles.shopifyModalContent} onPress={() => {}}>
-              {/* Header with Icon */}
-              <View style={styles.shopifyModalHeader}>
-                <View style={styles.shopifyIconContainer}>
-                  <ShopifySvg width={40} height={40} />
-                </View>
-                <Text style={styles.shopifyModalTitle}>Connect Shopify</Text>
-                <TouchableOpacity 
-                  onPress={() => setShopifyFlowStep('idle')}
-                  style={styles.shopifyCloseButton}
-                >
-                  <Icon name="close" size={24} color="#999" />
-                </TouchableOpacity>
+        <Pressable style={styles.shopifyModalOverlay} onPress={() => setShopifyFlowStep('idle')}>
+          <Pressable style={styles.shopifyModalContent} onPress={() => { }}>
+            {/* Header with Icon */}
+            <View style={styles.shopifyModalHeader}>
+              <View style={styles.shopifyIconContainer}>
+                <ShopifySvg width={40} height={40} />
               </View>
+              <Text style={styles.shopifyModalTitle}>Connect Shopify</Text>
+              <TouchableOpacity
+                onPress={() => setShopifyFlowStep('idle')}
+                style={styles.shopifyCloseButton}
+              >
+                <Icon name="close" size={24} color="#999" />
+              </TouchableOpacity>
+            </View>
 
-              <ScrollView style={styles.shopifyModalBody} showsVerticalScrollIndicator={false}>
-                {/* Option 1: Guided Setup */}
-                <View style={styles.shopifyOption}>
-                  <View style={styles.shopifyOptionHeader}>
-                    <View style={[styles.stepNumber, { backgroundColor: theme.colors.primary }]}>
-                      <Text style={styles.stepNumberText}>1</Text>
-                    </View>
-                    <Text style={styles.shopifyOptionTitle}>Guided Setup (Recommended)</Text>
+            <ScrollView style={styles.shopifyModalBody} showsVerticalScrollIndicator={false}>
+              {/* Option 1: Guided Setup */}
+              <View style={styles.shopifyOption}>
+                <View style={styles.shopifyOptionHeader}>
+                  <View style={[styles.stepNumber, { backgroundColor: theme.colors.primary }]}>
+                    <Text style={styles.stepNumberText}>1</Text>
                   </View>
-                  
-                  <View style={styles.shopifySteps}>
-                    <Text style={styles.shopifyStep}>1. Tap to open your Shopify store</Text>
-                    <Text style={styles.shopifyStep}>2. Copy your admin URL</Text>
-                    <Text style={styles.shopifyStep}>3. Paste it below</Text>
-                  </View>
-
-                  <Button
-                    title="Open Shopify"
-                    icon="open-in-new"
-                    onPress={openShopifyForCopy}
-                    style={styles.shopifyOpenButton}
-                  />
-
-                  <View style={styles.shopifyPasteContainer}>
-                    <TextInput
-                      style={styles.shopifyPasteInput}
-                      placeholder="Paste your Shopify admin URL..."
-                      placeholderTextColor="#bbb"
-                      value={pastedShopifyUrl}
-                      onChangeText={(text) => { setPastedShopifyUrl(text); if (text) setManualShopName(''); }}
-                      autoCapitalize="none"
-                      keyboardType="url"
-                      selectTextOnFocus
-                    />
-                    <TouchableOpacity 
-                      onPress={handlePasteFromClipboard}
-                      style={styles.shopifyPasteButton}
-                    >
-                      <Icon name="content-paste" size={20} color={theme.colors.primary} />
-                    </TouchableOpacity>
-                  </View>
+                  <Text style={styles.shopifyOptionTitle}>Guided Setup (Recommended)</Text>
                 </View>
 
-                {/* Divider */}
-                <View style={styles.shopifyDivider}>
-                  <View style={styles.dividerLine} />
-                  <Text style={styles.dividerText}>OR</Text>
-                  <View style={styles.dividerLine} />
+                <View style={styles.shopifySteps}>
+                  <Text style={styles.shopifyStep}>1. Tap to open your Shopify store</Text>
+                  <Text style={styles.shopifyStep}>2. Copy your admin URL</Text>
+                  <Text style={styles.shopifyStep}>3. Paste it below</Text>
                 </View>
 
-                {/* Option 2: Manual Entry */}
-                <View style={styles.shopifyOption}>
-                  <View style={styles.shopifyOptionHeader}>
-                    <View style={[styles.stepNumber, { backgroundColor: '#ccc' }]}>
-                      <Text style={styles.stepNumberText}>2</Text>
-                    </View>
-                    <Text style={styles.shopifyOptionTitle}>Enter Shop Name</Text>
-                  </View>
+                <Button
+                  title="Open Shopify"
+                  icon="open-in-new"
+                  onPress={openShopifyForCopy}
+                  style={styles.shopifyOpenButton}
+                />
 
-                  <Text style={styles.shopifyManualDescription}>
-                    Enter your shop's name (e.g., <Text style={{ fontWeight: '600' }}>my-store</Text> from <Text style={{ fontFamily: 'Menlo' }}>my-store.myshopify.com</Text>)
-                  </Text>
-
+                <View style={styles.shopifyPasteContainer}>
                   <TextInput
-                    style={styles.shopifyManualInput}
-                    placeholder="my-store"
+                    style={styles.shopifyPasteInput}
+                    placeholder="Paste your Shopify admin URL..."
                     placeholderTextColor="#bbb"
-                    value={manualShopName}
-                    onChangeText={(text) => { setManualShopName(text); if (text) setPastedShopifyUrl(''); }}
+                    value={pastedShopifyUrl}
+                    onChangeText={(text) => { setPastedShopifyUrl(text); if (text) setManualShopName(''); }}
                     autoCapitalize="none"
-                    autoCorrect={false}
+                    keyboardType="url"
+                    selectTextOnFocus
                   />
+                  <TouchableOpacity
+                    onPress={handlePasteFromClipboard}
+                    style={styles.shopifyPasteButton}
+                  >
+                    <Icon name="content-paste" size={20} color={theme.colors.primary} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Divider */}
+              <View style={styles.shopifyDivider}>
+                <View style={styles.dividerLine} />
+                <Text style={styles.dividerText}>OR</Text>
+                <View style={styles.dividerLine} />
+              </View>
+
+              {/* Option 2: Manual Entry */}
+              <View style={styles.shopifyOption}>
+                <View style={styles.shopifyOptionHeader}>
+                  <View style={[styles.stepNumber, { backgroundColor: '#ccc' }]}>
+                    <Text style={styles.stepNumberText}>2</Text>
+                  </View>
+                  <Text style={styles.shopifyOptionTitle}>Enter Shop Name</Text>
                 </View>
 
-                <View style={{ height: 20 }} />
-              </ScrollView>
+                <Text style={styles.shopifyManualDescription}>
+                  Enter your shop's name (e.g., <Text style={{ fontWeight: '600' }}>my-store</Text> from <Text style={{ fontFamily: 'Menlo' }}>my-store.myshopify.com</Text>)
+                </Text>
 
-              {/* Action Buttons */}
-              <View style={styles.shopifyActionButtons}>
-                <Button
-                  title="Cancel"
-                  outlined
-                  onPress={() => {
-                    setShopifyFlowStep('idle');
-                    setPastedShopifyUrl('');
-                    setManualShopName('');
-                  }}
-                  style={styles.shopifyCancelButton}
-                />
-                <Button
-                  title="Connect Shopify"
-                  onPress={handleConfirmInput}
-                  disabled={!pastedShopifyUrl && !manualShopName.trim()}
-                  style={styles.shopifyConnectButton}
+                <TextInput
+                  style={styles.shopifyManualInput}
+                  placeholder="my-store"
+                  placeholderTextColor="#bbb"
+                  value={manualShopName}
+                  onChangeText={(text) => { setManualShopName(text); if (text) setPastedShopifyUrl(''); }}
+                  autoCapitalize="none"
+                  autoCorrect={false}
                 />
               </View>
-            </Pressable>
+
+              <View style={{ height: 20 }} />
+            </ScrollView>
+
+            {/* Action Buttons */}
+            <View style={styles.shopifyActionButtons}>
+              <Button
+                title="Cancel"
+                outlined
+                onPress={() => {
+                  setShopifyFlowStep('idle');
+                  setPastedShopifyUrl('');
+                  setManualShopName('');
+                }}
+                style={styles.shopifyCancelButton}
+              />
+              <Button
+                title="Connect Shopify"
+                onPress={handleConfirmInput}
+                disabled={!pastedShopifyUrl && !manualShopName.trim()}
+                style={styles.shopifyConnectButton}
+              />
+            </View>
           </Pressable>
-        </Modal>
+        </Pressable>
+      </Modal>
       {/* --- END REVISED Guided Shopify Flow UI --- */}
-      
+
       <View style={styles.footer}>
         <Text style={styles.versionText}>Anorha v0.1</Text>
       </View>
@@ -2082,7 +2050,7 @@ const ProfileScreen = () => {
   );
 };
 
-export default ProfileScreen; 
+export default ProfileScreen;
 
 
 // Move styles definition here to fix "used before declaration" errors
@@ -2331,7 +2299,7 @@ const styles = StyleSheet.create({
     marginRight: 4,
   },
   manageButton: {
-    padding: 4, 
+    padding: 4,
     marginLeft: 8,
   },
   disconnectButton: {
@@ -2347,13 +2315,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20, 
+    padding: 20,
   },
   modalContent: {
     backgroundColor: 'white',
     borderRadius: 12,
     padding: 25,
-    width: '90%', 
+    width: '90%',
     maxWidth: '90%',
     maxHeight: '80%',
     minHeight: '70%',
@@ -2363,7 +2331,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 4,
     elevation: 5,
-    
+
   },
   modalTitle: {
     fontSize: 18,
@@ -2372,15 +2340,15 @@ const styles = StyleSheet.create({
     color: '#333',
     textAlign: 'center',
   },
-  modalPlatformGridContent: { 
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      justifyContent: 'space-between',
-      gap: 10,
+  modalPlatformGridContent: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 10,
   },
   expandedBottomNav: {
-    alignItems: 'center', 
-    gap: 12, 
+    alignItems: 'center',
+    gap: 12,
     paddingLeft: 30,
     paddingRight: 30,
     justifyContent: 'space-between',
@@ -2389,9 +2357,9 @@ const styles = StyleSheet.create({
     maxHeight: 600,
     backgroundColor: 'rgb(255, 255, 255)'
   },
-  bottomNavStepContainer: { 
-    alignItems: 'center', 
-    gap: 12, 
+  bottomNavStepContainer: {
+    alignItems: 'center',
+    gap: 12,
     paddingLeft: 30,
     paddingRight: 30,
     marginTop: 10,
@@ -2463,14 +2431,14 @@ const styles = StyleSheet.create({
   modalPlatformCard: {
     width: '100%', // Two columns
     aspectRatio: 1.2, // Adjust aspect ratio
-    justifyContent: 'center', 
-    alignItems: 'center', 
-    margin: 10, 
-    borderRadius: 12, 
-    borderWidth: 1.5, 
-    borderColor: '#ddd', 
-    backgroundColor: '#fff', 
-   
+    justifyContent: 'center',
+    alignItems: 'center',
+    margin: 10,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#ddd',
+    backgroundColor: '#fff',
+
     position: 'relative', // For the checkmark icon positioning
   },
   modalPlatformCardDisabled: {
@@ -2478,11 +2446,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
   },
   modalPlatformName: {
-      fontSize: 13, 
-      fontWeight: '500', 
-      color: '#555', 
-      textAlign: 'center', 
-      marginTop: 8, 
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#555',
+    textAlign: 'center',
+    marginTop: 8,
   },
   modalConnectedIcon: {
     position: 'absolute',
@@ -2523,7 +2491,7 @@ const styles = StyleSheet.create({
     paddingLeft: 10, // Adjust padding for icon spacing
   },
   pasteButtonText: {
-    fontSize: 14, 
+    fontSize: 14,
   },
   pasteIcon: {
     // Specific styles for the icon itself if needed
@@ -2536,7 +2504,7 @@ const styles = StyleSheet.create({
     textAlign: 'right', // Align hint text right below input
   },
   // --- END Paste UI Styles ---
-  noConnectionsText: { 
+  noConnectionsText: {
     textAlign: 'center',
     color: '#888',
     paddingVertical: 20,

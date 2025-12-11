@@ -8,32 +8,32 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  ScrollView
+  Dimensions,
+  ActivityIndicator,
+  ScrollView,
 } from 'react-native';
 import DropDownPicker from 'react-native-dropdown-picker';
-import AnimatedGradientBackground from '../components/AnimatedGradientBackground';
-import Button from '../components/Button';
 import { supabase } from '../lib/supabase';
 import { AuthContext } from '../context/AuthContext';
 import { useNavigation } from '@react-navigation/native';
-import { Image } from 'react-native'; // Added for logo
+import { Image } from 'react-native';
 import { StackNavigationProp } from '@react-navigation/stack';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useOrganizationList } from '@clerk/clerk-expo';
+import { useOrg } from '../context/OrgContext';
 
-// Assuming AppStackParamList is defined in AppNavigator or a types file
-// If not, you might need to define it here or import it.
 type AppStackParamList = {
   CreateAccountScreen: undefined;
   TabNavigator: undefined;
+  Profile: { openAddConnection?: boolean };
   ProductDetail: { productId: string };
+  MappingReview: { connectionId: string; platformName: string };
 };
 
-// Define navigation prop type for this screen
 type CreateAccountScreenNavigationProp = StackNavigationProp<AppStackParamList, 'CreateAccountScreen'>;
 
-// Define types for picker items (DropDownPicker uses label/value by default)
-// Removed PickerItem interface
-
 const CreateAccountScreen = () => {
+  // Profile form state
   const [businessName, setBusinessName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [region, setRegion] = useState<string | null>(null);
@@ -41,14 +41,15 @@ const CreateAccountScreen = () => {
   const [currency, setCurrency] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // State for dropdown open status
+  // Dropdown state
   const [openRegion, setOpenRegion] = useState(false);
   const [openCurrency, setOpenCurrency] = useState(false);
 
   const authContext = useContext(AuthContext);
   const navigation = useNavigation<CreateAccountScreenNavigationProp>();
+  const { createOrganization } = useOrganizationList();
+  const { refreshOrgs } = useOrg();
 
-  // Items for DropDownPicker (Type inferred)
   const [regionItems, setRegionItems] = useState([
     { label: 'United States', value: 'US' },
     { label: 'Canada', value: 'CA' },
@@ -56,7 +57,6 @@ const CreateAccountScreen = () => {
     { label: 'Other', value: 'Other' },
   ]);
 
-  // Type inferred
   const [currencyItems, setCurrencyItems] = useState([
     { label: 'USD ($)', value: 'USD' },
     { label: 'CAD (C$)', value: 'CAD' },
@@ -64,164 +64,177 @@ const CreateAccountScreen = () => {
     { label: 'GBP (£)', value: 'GBP' },
   ]);
 
-  const handleCompleteProfile = async () => {
-    // Updated validation check
+  const handleCompleteOnboarding = async () => {
     if (!businessName || !phoneNumber || !region || !occupation || !currency) {
-      Alert.alert('Error', 'Please fill out all fields.');
+      Alert.alert('Missing Information', 'Please fill out all fields to continue.');
       return;
     }
 
     setLoading(true);
     try {
+      // 1. Get current user
       const { data: { user }, error: userError } = await supabase.auth.getUser();
-
       if (userError || !user) {
         throw userError || new Error("User not found. Please log in again.");
       }
 
-      // --- Combine Users table updates into one call --- //
+      // 2. Save profile to Supabase
       const { error: userUpdateError } = await supabase
         .from('Users')
-        .update({ // Use UPDATE, not upsert. Assume user record exists.
-          // Only include fields from this screen + onboarding flag
-          PhoneNumber: phoneNumber.startsWith('+') ? phoneNumber : `+1${phoneNumber}`, // Basic formatting
+        .update({
+          PhoneNumber: phoneNumber.startsWith('+') ? phoneNumber : `+1${phoneNumber}`,
           Region: region,
           Occupation: occupation,
           Currency: currency,
-          isOnboardingComplete: true // Set onboarding complete here
-          // DO NOT include Email, FirstName, LastName - let them persist from signup
         })
-        .eq('Id', user.id); // Target the correct user
+        .eq('Id', user.id);
 
       if (userUpdateError) {
-        // Check if the error is because the user doesn't exist (though unlikely after getUser)
-        if (userUpdateError.code === 'PGRST204') { // PostgREST code for no rows found
-           console.error("User record not found for update, attempting upsert as fallback...");
-            // Optional Fallback: Attempt an upsert if update failed because row missing
-            // This requires including potentially required fields like Email
-            const { error: fallbackUpsertError } = await supabase.from('Users').upsert({ 
-                Id: user.id,
-                Email: user.email!, // Need email for potential insert
-                PhoneNumber: phoneNumber.startsWith('+') ? phoneNumber : `+1${phoneNumber}`,
-                Region: region,
-                Occupation: occupation,
-                Currency: currency,
-                isOnboardingComplete: true 
+        const { error: upsertError } = await supabase.from('Users').upsert({
+          Id: user.id,
+          Email: user.email!,
+          PhoneNumber: phoneNumber.startsWith('+') ? phoneNumber : `+1${phoneNumber}`,
+          Region: region,
+          Occupation: occupation,
+          Currency: currency,
         }, { onConflict: 'Id' });
-            if (fallbackUpsertError) throw fallbackUpsertError; // Throw if fallback fails too
-        } else {
-             throw userUpdateError; // Throw other update errors
+        if (upsertError) throw upsertError;
+      }
+
+      await supabase.from('UserProfiles').upsert({
+        UserId: user.id,
+        DisplayName: businessName,
+      }, { onConflict: 'UserId' });
+
+      // 3. Create Clerk organization using business name
+      console.log('[CreateAccountScreen] Creating Clerk organization:', businessName);
+      if (createOrganization) {
+        try {
+          await createOrganization({ name: businessName });
+          console.log('[CreateAccountScreen] Clerk organization created successfully');
+        } catch (orgError: any) {
+          // If org creation fails (e.g., name already exists), log but continue
+          console.warn('[CreateAccountScreen] Clerk org creation warning:', orgError.message);
         }
       }
 
-      // --- Upsert UserProfiles table (Keep as is) --- //
-      const { error: profilesUpsertError } = await supabase
-        .from('UserProfiles')
-        .upsert({ 
-          UserId: user.id,
-          DisplayName: businessName,
-          // Add other UserProfile fields if needed
-        }, { onConflict: 'UserId' });
+      // 4. Mark onboarding as complete
+      await supabase.from('Users').update({
+        isOnboardingComplete: true,
+      }).eq('Id', user.id);
 
-      if (profilesUpsertError) throw profilesUpsertError;
+      // 5. Refresh org context to pick up new org
+      if (refreshOrgs) {
+        await refreshOrgs();
+      }
 
-      Alert.alert('Success', 'Profile setup complete!');
-
-      // Navigate to the main app (TabNavigator inside AppStack) and reset history
+      // 6. Navigate to Profile screen with flag to open add connection overlay
       navigation.reset({
         index: 0,
-        routes: [{ name: 'TabNavigator' }], // Directly target screen within the *same* stack
+        routes: [
+          {
+            name: 'TabNavigator',
+            state: {
+              routes: [
+                { name: 'Profile', params: { openAddConnection: true } }
+              ],
+              index: 0,
+            }
+          }
+        ],
       });
 
     } catch (error: any) {
-      console.error("Onboarding save error:", error);
-      Alert.alert('Error', error.message || 'Failed to save profile.');
+      console.error('Onboarding error:', error);
+      Alert.alert('Error', error.message || 'Failed to complete setup.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-    >
-      <AnimatedGradientBackground />
-        <ScrollView contentContainerStyle={styles.scrollContainer}>
-          <View style={styles.logoContainer}>
-            <Image source={require('../assets/rounded_sssync.png')} style={styles.logo} />
-            <Text style={styles.title}>sssync</Text>
-          </View>
+    <View style={styles.container}>
+      <LinearGradient
+        colors={['#5c9c00', '#8cc63f', '#5c9c00']}
+        style={StyleSheet.absoluteFill}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+      />
+      <KeyboardAvoidingView
+        style={styles.keyboardView}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        {/* Header with Anorha logo */}
+        <View style={styles.header}>
+          <Image
+            source={require('../assets/anorha_logo.png')}
+            style={styles.logo}
+            resizeMode="contain"
+          />
+          <Text style={styles.headerText}>Anorha</Text>
+        </View>
 
-          <View style={styles.formContainer}>
-            <Text style={styles.headerText}>Tell us about your business</Text>
-            <Text style={styles.subHeaderText}>Let's get to know you some more</Text>
+        {/* Scrollable Card */}
+        <ScrollView
+          style={styles.cardScroll}
+          contentContainerStyle={styles.cardScrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Tell us about your business</Text>
+            <Text style={styles.cardSubtitle}>Let's get you set up</Text>
 
-            {/* Business Name */}
             <Text style={styles.label}>Business Name</Text>
             <TextInput
               style={styles.input}
               placeholder="Your Business LLC"
-              placeholderTextColor="#aaa"
+              placeholderTextColor="#9CA3AF"
               value={businessName}
               onChangeText={setBusinessName}
             />
-            <Text style={styles.inputHint}>What you will be called on the app</Text>
 
-            {/* Phone Number - Consider if needed if already verified */}
             <Text style={styles.label}>Phone Number</Text>
-            <View style={styles.phoneInputContainer}>
-              {/* Basic Country Code - enhance later if needed */}
-              <View style={styles.countryCodeContainer}>
-                 <Text style={styles.countryCodeText}>+1</Text>
+            <View style={styles.phoneRow}>
+              <View style={styles.countryCode}>
+                <Text style={styles.countryCodeText}>+1</Text>
               </View>
               <TextInput
                 style={[styles.input, styles.phoneInput]}
-                placeholder="Enter a phone number"
-                placeholderTextColor="#aaa"
+                placeholder="(555) 000-0000"
+                placeholderTextColor="#9CA3AF"
                 keyboardType="phone-pad"
                 value={phoneNumber}
                 onChangeText={setPhoneNumber}
               />
             </View>
 
-            {/* Region Picker using DropDownPicker */}
             <Text style={styles.label}>Region</Text>
             <DropDownPicker
               open={openRegion}
               value={region}
-                items={regionItems}
+              items={regionItems}
               setOpen={setOpenRegion}
               setValue={setRegion}
               setItems={setRegionItems}
-              placeholder="Select your region..."
-              containerStyle={styles.dropdownContainer}
-              style={styles.dropdownStyle}
-              dropDownContainerStyle={styles.dropdownListStyle}
-              placeholderStyle={styles.placeholderStyle}
-              textStyle={styles.dropdownTextStyle}
-              labelStyle={styles.dropdownLabelStyle}
-              listItemLabelStyle={styles.dropdownListItemLabelStyle}
+              placeholder="Select region..."
+              style={styles.dropdown}
+              dropDownContainerStyle={styles.dropdownList}
+              placeholderStyle={styles.dropdownPlaceholder}
               zIndex={3000}
-              zIndexInverse={1000}
-              maxHeight={150}
               onOpen={() => setOpenCurrency(false)}
             />
-            <Text style={styles.inputHint}>Which region are you selling in</Text>
 
-            {/* Occupation Input */}
-            <Text style={styles.label}>Occupation / Role</Text>
+            <Text style={styles.label}>Role</Text>
             <TextInput
               style={styles.input}
               placeholder="e.g., Seller, Artist, Shop Owner"
-              placeholderTextColor="#aaa"
+              placeholderTextColor="#9CA3AF"
               value={occupation}
               onChangeText={setOccupation}
             />
-            <Text style={styles.inputHint}>Describe your primary role</Text>
 
-            {/* Currency Picker using DropDownPicker */}
-            <Text style={styles.label}>Default Currency</Text>
+            <Text style={styles.label}>Currency</Text>
             <DropDownPicker
               open={openCurrency}
               value={currency}
@@ -229,213 +242,167 @@ const CreateAccountScreen = () => {
               setOpen={setOpenCurrency}
               setValue={setCurrency}
               setItems={setCurrencyItems}
-              placeholder="Select your currency..."
-              containerStyle={styles.dropdownContainer}
-              style={styles.dropdownStyle}
-              dropDownContainerStyle={styles.dropdownListStyle}
-              placeholderStyle={styles.placeholderStyle}
-              textStyle={styles.dropdownTextStyle}
-              labelStyle={styles.dropdownLabelStyle}
-              listItemLabelStyle={styles.dropdownListItemLabelStyle}
+              placeholder="Select currency..."
+              style={styles.dropdown}
+              dropDownContainerStyle={styles.dropdownList}
+              placeholderStyle={styles.dropdownPlaceholder}
               zIndex={2000}
-              zIndexInverse={2000}
-              maxHeight={150}
               onOpen={() => setOpenRegion(false)}
-              />
-            <Text style={styles.inputHint}>Primary currency for your transactions</Text>
-
-            <Button
-              title="Continue"
-              onPress={handleCompleteProfile}
-              style={styles.button}
-              textStyle={styles.buttonText}
-              loading={loading}
             />
+
+            <View style={{ height: 100 }} />
           </View>
         </ScrollView>
-    </KeyboardAvoidingView>
+
+        {/* Bottom Action */}
+        <View style={styles.bottomAction}>
+          <TouchableOpacity
+            style={[styles.primaryButton, loading && styles.buttonDisabled]}
+            onPress={handleCompleteOnboarding}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.primaryButtonText}>Get Started</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </View>
   );
 };
 
-// --- Styles --- (Combine/adapt from AuthScreen/PhoneAuthScreen)
+const { width } = Dimensions.get('window');
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  scrollContainer: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
+  keyboardView: {
+    flex: 1,
   },
-  logoContainer: {
+  header: {
     alignItems: 'center',
-    marginBottom: 30,
-    marginTop: 40, // Add some top margin
+    paddingTop: 60,
+    paddingBottom: 16,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 12,
   },
   logo: {
-    width: 60, // Slightly smaller logo for onboarding
-    height: 60,
-    borderRadius: 12,
-    marginBottom: 8,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: 'white',
-  },
-  formContainer: {
-    width: '100%',
-    maxWidth: 400, // Max width for larger screens
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 16,
-    padding: 25,
-    alignItems: 'stretch', // Align items to stretch horizontally
+    width: 40,
+    height: 40,
   },
   headerText: {
-    fontSize: 26, // Larger header
+    fontSize: 40,
     fontWeight: 'bold',
-    marginBottom: 8,
-    color: '#222',
-    textAlign: 'center',
+    color: '#fff',
+    fontFamily: 'PlusJakartaSans_700Bold',
   },
-  subHeaderText: {
-    fontSize: 16,
-    color: '#666',
+  cardScroll: {
+    flex: 1,
+  },
+  cardScrollContent: {
+    paddingBottom: 20,
+    paddingHorizontal: 20,
+  },
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 24,
+    padding: 24,
+    width: '100%',
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  cardTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#111',
     textAlign: 'center',
-    marginBottom: 30,
+    marginBottom: 8,
+  },
+  cardSubtitle: {
+    fontSize: 15,
+    color: '#6B7280',
+    textAlign: 'center',
+    marginBottom: 24,
   },
   label: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#444',
+    color: '#374151',
     marginBottom: 8,
-    marginLeft: 4, // Small indent
+    marginTop: 16,
   },
   input: {
-    width: '100%',
-    height: 50,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 8,
-    marginBottom: 4,
-    paddingHorizontal: 16,
-    fontSize: 16,
+    backgroundColor: '#F9FAFB',
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 16,
+    color: '#111',
   },
-  phoneInputContainer: {
+  phoneRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    width: '100%',
-    marginBottom: 4,
+    gap: 8,
   },
-  countryCodeContainer: {
-      height: 50,
-      backgroundColor: '#e5e5e5',
-      borderRadius: 8,
-      paddingHorizontal: 15,
-      justifyContent: 'center',
-      alignItems: 'center',
-      marginRight: 8,
-       borderWidth: 1,
-      borderColor: '#d0d0d0',
+  countryCode: {
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    padding: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   countryCodeText: {
-      fontSize: 16,
-      color: '#555',
+    fontSize: 16,
+    color: '#374151',
+    fontWeight: '500',
   },
   phoneInput: {
     flex: 1,
-    marginBottom: 0, // Remove margin as it's handled by container
-    width: undefined, // Allow flex to determine width
   },
-  pickerContainer: {
-    width: '100%',
-    height: 50,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 8,
-    marginBottom: 4,
-    justifyContent: 'center',
+  dropdown: {
+    backgroundColor: '#F9FAFB',
     borderWidth: 1,
-    borderColor: '#e0e0e0',
-    paddingHorizontal: 10, // Add padding for picker text
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    minHeight: 48,
   },
-   inputHint: {
-    fontSize: 12,
-    color: '#888',
-    marginBottom: 20,
-    marginLeft: 4,
+  dropdownList: {
+    backgroundColor: '#fff',
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    marginTop: 4,
   },
-  button: {
-    width: '100%',
-    backgroundColor: '#4a7d00', // Darker green from design
-    borderRadius: 8,
-    height: 56,
-    justifyContent: 'center',
+  dropdownPlaceholder: {
+    color: '#9CA3AF',
+  },
+  bottomAction: {
+    padding: 20,
+    paddingBottom: 40,
+  },
+  primaryButton: {
+    backgroundColor: '#93C822',
+    borderRadius: 12,
+    padding: 16,
     alignItems: 'center',
-    marginTop: 20, // Add margin above button
+    justifyContent: 'center',
+    flexDirection: 'row',
   },
-  buttonText: {
-    color: 'white',
-    fontSize: 16,
+  primaryButtonText: {
+    color: '#fff',
+    fontSize: 18,
     fontWeight: '600',
   },
-  dropdownContainer: {
-    marginBottom: 20,
-    zIndex: 1,
-  },
-  dropdownStyle: {
-    backgroundColor: '#f0f0f0',
-    borderColor: '#e0e0e0',
-    borderWidth: 1,
-    borderRadius: 8,
-    minHeight: 50,
-    paddingHorizontal: 16,
-  },
-  dropdownListStyle: {
-    backgroundColor: '#ffffff',
-    borderColor: '#cccccc',
-    borderWidth: 1,
-    borderRadius: 8,
-  },
-  placeholderStyle: {
-    color: "#aaa",
-    fontSize: 16,
-  },
-  dropdownTextStyle: {
-    fontSize: 16,
-    color: '#333',
-  },
-  dropdownLabelStyle: {
-  },
-  dropdownListItemLabelStyle: {
-    fontSize: 16,
-    color: '#333',
-  },
-});
-
-// Styles for RNPickerSelect
-const pickerSelectStyles = StyleSheet.create({
-  inputIOS: {
-    fontSize: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 10,
-    color: 'black',
-    paddingRight: 30, // to ensure the text is never behind the icon
-  },
-  inputAndroid: {
-    fontSize: 16,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    color: 'black',
-    paddingRight: 30, // to ensure the text is never behind the icon
-  },
-  placeholder: {
-    color: '#aaa',
-  },
-  iconContainer: {
-    top: 15,
-    right: 15,
+  buttonDisabled: {
+    opacity: 0.6,
   },
 });
 

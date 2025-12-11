@@ -33,9 +33,9 @@ type ManageTab = 'location' | 'pool';
 
 interface LocationsManagerV2Props {
   orgId?: string;
-  platformConnections: Array<{ 
-    Id: string; 
-    PlatformType: string; 
+  platformConnections: Array<{
+    Id: string;
+    PlatformType: string;
     DisplayName: string;
     Status?: string;
     IsEnabled?: boolean;
@@ -260,7 +260,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
 
     for (const [connId, connData] of Object.entries(record)) {
       if (!connData) continue;
-      
+
       const platformType = connData.platformType?.toLowerCase();
       if (!platformType) continue;
 
@@ -272,7 +272,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
       }
 
       const group = byPlatform.get(platformType)!;
-      
+
       // Only add if there are locations
       const locations = connData.locations || [];
       if (locations.length > 0) {
@@ -324,13 +324,13 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
   // Load an existing pool and its locations for editing
   const loadPoolForEditing = useCallback(
     async (poolId: string) => {
-    try {
-      const token = await ensureSupabaseJwt();
-      const r = await fetch(`${API_BASE_URL}/api/pools/${poolId}/locations`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!r.ok) throw new Error('Failed to load pool');
-      const j = await r.json();
+      try {
+        const token = await ensureSupabaseJwt();
+        const r = await fetch(`${API_BASE_URL}/api/pools/${poolId}/locations`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!r.ok) throw new Error('Failed to load pool');
+        const j = await r.json();
         const pool: LocationPool = j.pool;
         const locations: PoolLocation[] = j.locations || [];
 
@@ -354,7 +354,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
             locationMetadata,
           },
         }));
-    } catch (e) {
+      } catch (e) {
         console.error('[LocationsManagerV2] loadPoolForEditing error', e);
         Alert.alert('Error', 'Failed to load pool details');
       }
@@ -367,10 +367,10 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
     setLoadingManage(true);
     try {
       const token = await ensureSupabaseJwt();
-      
+
       // Load available locations FIRST
       console.log('[LocationsManagerV2] enterManageMode: loading available locations');
-    await loadAvailableLocations();
+      await loadAvailableLocations();
 
       if (!resolvedOrgId) return;
 
@@ -461,8 +461,8 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
         // Only save if something changed
         if (draft.name !== currentPool.name || JSON.stringify(draft.locationIds) !== JSON.stringify(currentPool.locationIds)) {
           const res = await fetch(`${API_BASE_URL}/api/pools/${poolId}`, {
-          method: 'PATCH',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            method: 'PATCH',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
               name: draft.name,
               location_ids: draft.locationIds,
@@ -480,10 +480,10 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
               } else if (typeof errorData === 'string') {
                 errorMessage = errorData;
               }
-              
+
               // Add status code for context
               errorMessage = `[${res.status}] ${errorMessage}`;
-              
+
               // If it's a validation error, add more context
               if (res.status === 400 && errorData.message?.includes('does not belong')) {
                 errorMessage = `Validation Error: ${errorData.message}\n\nThis usually means a location's connection doesn't belong to your organization. Please check your platform connections and ensure they're properly linked to your organization.`;
@@ -549,16 +549,16 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
       if (allLocationIds.length === 0) throw new Error('Select at least one location');
 
       const res = await fetch(`${API_BASE_URL}/api/pools`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            orgId: resolvedOrgId,
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orgId: resolvedOrgId,
           name: nameToUse,
-            syncInventory: true,
-            syncPricing: true,
+          syncInventory: true,
+          syncPricing: true,
           location_ids: allLocationIds,
-          }),
-        });
+        }),
+      });
 
       if (!res.ok) {
         const error = await res.text();
@@ -592,7 +592,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
 
       const poolData: LocationPool[] = await res.json();
       const filteredPools = (Array.isArray(poolData) ? poolData : []).filter(p => p.id !== excludePoolId);
-      
+
       setDeleteState(prev => ({ ...prev, availablePools: filteredPools }));
       return filteredPools;
     } catch (e) {
@@ -616,12 +616,12 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
 
       const res = await fetch(`${API_BASE_URL}/api/pools/${deleteState.poolId}`, {
         method: 'DELETE',
-        headers: { 
+        headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 
-          mergeIntoPoolId: deleteState.mergeTarget === 'none' ? undefined : deleteState.mergeTarget 
+        body: JSON.stringify({
+          mergeIntoPoolId: deleteState.mergeTarget === 'none' ? undefined : deleteState.mergeTarget
         }),
       });
 
@@ -644,7 +644,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
   const openDeletePool = async (poolId: string, poolName: string) => {
     const availablePools = await loadAvailablePoolsForDelete(poolId);
     const defaultMergeTarget = availablePools.length > 0 ? availablePools[0].id : 'none';
-    
+
     setDeleteState({
       visible: true,
       poolId,
@@ -725,9 +725,9 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
     const connection = available
       .flatMap((p) => p.connections)
       .find((c) => c.connectionId === connectionId);
-    
+
     if (!connection) return [];
-    
+
     return connection.locations.filter(
       (loc) => !allSelectedLocationIds.has(loc.platformLocationId)
     );
@@ -749,48 +749,57 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
 
   // Default view: list of pools and locations
   const renderDefaultView = () => (
-      <View style={styles.card}>
-        <View style={styles.headerRow}>
-          <Text style={styles.headerTitle}>Locations</Text>
+    <View style={styles.card}>
+      <View style={styles.headerRow}>
+        <Text style={styles.headerTitle}>Locations</Text>
         <TouchableOpacity onPress={enterManageMode} style={styles.manageBtn}>
-            <Text style={styles.manageBtnText}>Manage</Text>
-          </TouchableOpacity>
-        </View>
+          <Text style={styles.manageBtnText}>Manage</Text>
+        </TouchableOpacity>
+      </View>
 
-        {(!resolvedOrgId || isLoading) ? (
-          <View style={{ paddingVertical: 24 }}>
-            <ActivityIndicator size="large" color={theme.colors.primary} />
-          </View>
-        ) : (
-          <ScrollView>
+      {(!resolvedOrgId || isLoading) ? (
+        <View style={{ paddingVertical: 24 }}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+        </View>
+      ) : pools.length === 0 && groupedSingleLocations.length === 0 ? (
+        // Empty state
+        <View style={styles.emptyState}>
+          <Icon name="map-marker-off" size={48} color="#ccc" />
+          <Text style={styles.emptyStateTitle}>No Locations Yet</Text>
+          <Text style={styles.emptyStateSubtitle}>
+            Connect a platform to sync your store locations, or create a custom location group.
+          </Text>
+        </View>
+      ) : (
+        <ScrollView>
           {/* Pools section */}
           {pools.length > 0 && (
             <>
               <Text style={styles.sectionTitle}>Pools</Text>
               {pools.map((p) => (
-              <TouchableOpacity
-                key={`pool-${p.id}`}
+                <TouchableOpacity
+                  key={`pool-${p.id}`}
                   style={[
                     styles.listItem,
                     selectedListItem.kind === 'pool' && selectedListItem.id === p.id && styles.listItemPoolActive,
                   ]}
-                onPress={() => setSelectedListItem({ kind: 'pool', id: p.id })}
-              >
-                <Text style={styles.listItemText}>{p.name} - Pool</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <Icon name="lock" size={14} color="#999" />
-                  <TouchableOpacity
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      openDeletePool(p.id, p.name);
-                    }}
-                    style={{ padding: 4 }}
-                  >
-                    <Icon name="delete-outline" size={20} color="#ff4444" />
-                  </TouchableOpacity>
-                </View>
-              </TouchableOpacity>
-            ))}
+                  onPress={() => setSelectedListItem({ kind: 'pool', id: p.id })}
+                >
+                  <Text style={styles.listItemText}>{p.name} - Pool</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Icon name="lock" size={14} color="#999" />
+                    <TouchableOpacity
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        openDeletePool(p.id, p.name);
+                      }}
+                      style={{ padding: 4 }}
+                    >
+                      <Icon name="delete-outline" size={20} color="#ff4444" />
+                    </TouchableOpacity>
+                  </View>
+                </TouchableOpacity>
+              ))}
             </>
           )}
 
@@ -798,29 +807,29 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
           {groupedSingleLocations.length > 0 && (
             <>
               <Text style={[styles.sectionTitle, pools.length > 0 && { marginTop: 12 }]}>Locations</Text>
-            {groupedSingleLocations.map((l) => (
-              <TouchableOpacity
-                key={`loc-${l.id}`}
+              {groupedSingleLocations.map((l) => (
+                <TouchableOpacity
+                  key={`loc-${l.id}`}
                   style={[
                     styles.listItem,
                     selectedListItem.kind === 'single' && selectedListItem.id === l.id && styles.listItemSingleActive,
                   ]}
-                onPress={() => setSelectedListItem({ kind: 'single', id: l.id })}
-              >
-                <Text style={styles.listItemText}>{l.name}</Text>
-                {renderListItemRight(l.platformType)}
-              </TouchableOpacity>
-            ))}
+                  onPress={() => setSelectedListItem({ kind: 'single', id: l.id })}
+                >
+                  <Text style={styles.listItemText}>{l.name}</Text>
+                  {renderListItemRight(l.platformType)}
+                </TouchableOpacity>
+              ))}
             </>
           )}
-          </ScrollView>
-        )}
+        </ScrollView>
+      )}
 
       <TouchableOpacity style={styles.confirmBtn} onPress={enterCreateMode}>
-          <Icon name="plus-circle" size={18} color="#fff" />
+        <Icon name="plus-circle" size={18} color="#fff" />
         <Text style={styles.confirmBtnText}>Create Location/Group</Text>
-        </TouchableOpacity>
-      </View>
+      </TouchableOpacity>
+    </View>
   );
 
   // Manage pools view: inline card with all pools expanded
@@ -852,7 +861,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                   borderRadius: 8,
                   padding: 10,
                   marginBottom: 10,
-                  }}>
+                }}>
                   <View style={styles.poolHeader}>
                     <TextInput
                       value={draft.name}
@@ -906,7 +915,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                               setDraggedLocation(null);
                               return;
                             }
-                            
+
                             // Same pool reordering
                             const newLocationIds = data.map((item) => item.id);
                             setDraftPools((prev) => ({
@@ -924,7 +933,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                             const metaFromDraft = draft.locationMetadata?.get(locId);
                             const metaFromAvailable = availableLocationById.get(locId);
                             const meta = metaFromDraft || metaFromAvailable;
-                            
+
                             const connName = meta?.connectionName || 'Unknown connection';
                             const locName = meta?.locationName || locId;
                             const platformType = meta?.platformType || '';
@@ -953,7 +962,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                                     >
                                       {locName}
                                     </Text>
-                                    <Text 
+                                    <Text
                                       style={styles.selectedLocationSubText}
                                       numberOfLines={1}
                                       ellipsizeMode="tail"
@@ -984,7 +993,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                         />
                       </>
                     )}
-                    
+
                     {/* Drop zone for cross-pool dragging */}
                     {draggedLocation && draggedLocation.sourcePoolId !== poolId && (
                       <TouchableOpacity
@@ -995,21 +1004,21 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                           setDraftPools((prev) => {
                             const sourcePool = prev[draggedLocation.sourcePoolId];
                             const targetPool = prev[poolId];
-                            
+
                             if (!sourcePool || !targetPool) return prev;
-                            
+
                             // Remove from source
                             const newSourceLocationIds = sourcePool.locationIds.filter(id => id !== locationId);
                             const newSourceMetadata = new Map(sourcePool.locationMetadata || new Map());
                             newSourceMetadata.delete(locationId);
-                            
+
                             // Add to target
                             const newTargetLocationIds = [...targetPool.locationIds, locationId];
                             const newTargetMetadata = new Map(targetPool.locationMetadata || new Map());
                             if (metadata) {
                               newTargetMetadata.set(locationId, metadata);
                             }
-                            
+
                             return {
                               ...prev,
                               [draggedLocation.sourcePoolId]: {
@@ -1062,11 +1071,11 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                               {platform.connections.map((conn) => {
                                 const connection = platformConnections.find(c => c.Id === conn.connectionId);
                                 const needsReauth = connection && (
-                                  connection.Status === 'error' || 
+                                  connection.Status === 'error' ||
                                   connection.Status === 'disconnected' ||
                                   !connection.IsEnabled
                                 );
-                                
+
                                 return (
                                   <View key={conn.connectionId} style={{ marginBottom: 6 }}>
                                     <TouchableOpacity
@@ -1166,7 +1175,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                                     const current = prev[poolId]?.locationIds || [];
                                     const currentMetadata = prev[poolId]?.locationMetadata || new Map();
                                     if (current.includes(locationId)) return prev;
-                                    
+
                                     // Add location metadata if available
                                     if (meta) {
                                       currentMetadata.set(locationId, {
@@ -1177,7 +1186,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                                         timezone: meta.timezone,
                                       });
                                     }
-                                    
+
                                     return {
                                       ...prev,
                                       [poolId]: {
@@ -1195,7 +1204,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                                 }}
                               >
                                 <View style={{ flex: 1, minWidth: 0 }}>
-                                  <Text 
+                                  <Text
                                     style={styles.dropdownItemText}
                                     numberOfLines={1}
                                     ellipsizeMode="tail"
@@ -1203,7 +1212,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                                     {loc.locationName}
                                   </Text>
                                   {loc.timezone ? (
-                                    <Text 
+                                    <Text
                                       style={styles.dropdownItemTimezone}
                                       numberOfLines={1}
                                       ellipsizeMode="tail"
@@ -1252,25 +1261,25 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
       </View>
 
       <View style={styles.manageCard}>
-        
+
 
         {/* Both tabs visible - user can toggle */}
-            <View style={styles.tabsRow}>
-              <TouchableOpacity
-                onPress={() => setManageTab('location')}
-                style={[styles.tab, manageTab === 'location' ? styles.tabActive : styles.tabGhost]}
-              >
-                <Text style={[styles.tabText, manageTab === 'location' && styles.tabTextActive]}>Location</Text>
-                <Icon name="map-marker-outline" size={16} style={{ marginLeft: 6 }} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setManageTab('pool')}
-                style={[styles.tab, manageTab === 'pool' ? styles.tabActive : styles.tabGhost]}
-              >
-                <Text style={[styles.tabText, manageTab === 'pool' && styles.tabTextActive]}>Location Pool</Text>
-                <Icon name="account-group-outline" size={16} style={{ marginLeft: 6 }} />
-              </TouchableOpacity>
-            </View>
+        <View style={styles.tabsRow}>
+          <TouchableOpacity
+            onPress={() => setManageTab('location')}
+            style={[styles.tab, manageTab === 'location' ? styles.tabActive : styles.tabGhost]}
+          >
+            <Text style={[styles.tabText, manageTab === 'location' && styles.tabTextActive]}>Location</Text>
+            <Icon name="map-marker-outline" size={16} style={{ marginLeft: 6 }} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setManageTab('pool')}
+            style={[styles.tab, manageTab === 'pool' ? styles.tabActive : styles.tabGhost]}
+          >
+            <Text style={[styles.tabText, manageTab === 'pool' && styles.tabTextActive]}>Location Pool</Text>
+            <Icon name="account-group-outline" size={16} style={{ marginLeft: 6 }} />
+          </TouchableOpacity>
+        </View>
 
         {manageTab === 'location' ? (
           <>
@@ -1305,7 +1314,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                       platformGroup &&
                       PLATFORM_LOGOS[platformGroup.platformType as keyof typeof PLATFORM_LOGOS];
 
-                return (
+                    return (
                       <View key={connId} style={styles.platformCard}>
                         <View style={styles.platformCardHeader}>
                           <View style={styles.platformCardHeaderLeft}>
@@ -1313,7 +1322,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                             <Text style={styles.platformCardHeaderText}>
                               {conn?.connectionName || 'Unknown connection'}
                             </Text>
-                        </View>
+                          </View>
                           <TouchableOpacity
                             onPress={() =>
                               setNewPoolLocations((prev) => {
@@ -1354,7 +1363,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                           const filteredLocs = platformGroup
                             ?.connections.find((c) => c.connectionId === connId)
                             ?.locations.filter(loc => !allSelectedInCreate.has(loc.platformLocationId)) || [];
-                          
+
                           return (
                             <View style={[styles.dropdownContainer, { marginTop: 6 }]}>
                               <ScrollView style={{ maxHeight: 200 }}>
@@ -1378,7 +1387,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                                       }}
                                     >
                                       <View style={{ flex: 1, minWidth: 0 }}>
-                                        <Text 
+                                        <Text
                                           style={styles.dropdownItemText}
                                           numberOfLines={1}
                                           ellipsizeMode="tail"
@@ -1386,7 +1395,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                                           {loc.locationName}
                                         </Text>
                                         {loc.timezone ? (
-                                          <Text 
+                                          <Text
                                             style={styles.dropdownItemTimezone}
                                             numberOfLines={1}
                                             ellipsizeMode="tail"
@@ -1451,8 +1460,8 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                           {platform.connections.map((conn) => {
                             // Skip already-selected platforms
                             if (newPoolLocations[conn.connectionId]) return null;
-                              return (
-                                <TouchableOpacity
+                            return (
+                              <TouchableOpacity
                                 key={conn.connectionId}
                                 style={styles.platformSelectButton}
                                 onPress={() => setSelectedPlatformForManage(conn as any)}
@@ -1461,14 +1470,14 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                                 <Text style={styles.platformSelectText}>
                                   {conn.connectionName}
                                 </Text>
-                                </TouchableOpacity>
-                              );
-                            })}
+                              </TouchableOpacity>
+                            );
+                          })}
                         </View>
                       );
                     })
                   )}
-                      </View>
+                </View>
               )}
 
               {/* Location Selector Dropdown for chosen platform (adding new platform) */}
@@ -1486,7 +1495,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                       <Icon name="close" size={16} color="#999" />
                     </TouchableOpacity>
                   </View>
-                  
+
                   {/* Dropdown picker */}
                   <View style={styles.dropdownContainer}>
                     <ScrollView style={{ maxHeight: 200 }}>
@@ -1498,7 +1507,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                         const filteredLocs = connection?.locations.filter(
                           loc => !allSelectedInCreate.has(loc.platformLocationId)
                         ) || [];
-                        
+
                         return filteredLocs.length === 0 ? (
                           <View style={{ padding: 16, alignItems: 'center' }}>
                             <Text style={{ fontSize: 13, color: '#999' }}>
@@ -1522,7 +1531,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                               }}
                             >
                               <View style={{ flex: 1, minWidth: 0 }}>
-                                <Text 
+                                <Text
                                   style={styles.dropdownItemText}
                                   numberOfLines={1}
                                   ellipsizeMode="tail"
@@ -1530,7 +1539,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                                   {loc.locationName}
                                 </Text>
                                 {loc.timezone ? (
-                                  <Text 
+                                  <Text
                                     style={styles.dropdownItemTimezone}
                                     numberOfLines={1}
                                     ellipsizeMode="tail"
@@ -1636,7 +1645,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                           >
                             {loc.locationName}
                           </Text>
-                          <Text 
+                          <Text
                             style={styles.selectedLocationSubText}
                             numberOfLines={1}
                             ellipsizeMode="tail"
@@ -1699,7 +1708,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                               </Text>
                             </TouchableOpacity>
                           ))}
-              </View>
+                        </View>
                       );
                     })
                   )}
@@ -1721,7 +1730,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                       <Icon name="close" size={16} color="#999" />
                     </TouchableOpacity>
                   </View>
-                  
+
                   {/* Dropdown picker */}
                   <View style={styles.dropdownContainer}>
                     <ScrollView style={{ maxHeight: 200 }}>
@@ -1733,7 +1742,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                         const filteredLocs = connection?.locations.filter(
                           loc => !allSelectedInCreate.has(loc.platformLocationId)
                         ) || [];
-                        
+
                         return filteredLocs.length === 0 ? (
                           <View style={{ padding: 16, alignItems: 'center' }}>
                             <Text style={{ fontSize: 13, color: '#999' }}>
@@ -1756,7 +1765,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                               }}
                             >
                               <View style={{ flex: 1, minWidth: 0 }}>
-                                <Text 
+                                <Text
                                   style={styles.dropdownItemText}
                                   numberOfLines={1}
                                   ellipsizeMode="tail"
@@ -1764,7 +1773,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                                   {loc.locationName}
                                 </Text>
                                 {loc.timezone ? (
-                                  <Text 
+                                  <Text
                                     style={styles.dropdownItemTimezone}
                                     numberOfLines={1}
                                     ellipsizeMode="tail"
@@ -1796,8 +1805,8 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
             </View>
           </>
         )}
-          </View>
-        </View>
+      </View>
+    </View>
   );
 
   // Create pool view - now unified with location view via tabs
@@ -1811,83 +1820,83 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
       {/* Delete Confirmation Modal */}
       {deleteState.visible && (
         <Modal visible animationType="fade" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalCard, { maxWidth: 350 }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Delete Pool</Text>
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalCard, { maxWidth: 350 }]}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Delete Pool</Text>
                 <TouchableOpacity onPress={() => setDeleteState((prev) => ({ ...prev, visible: false }))}>
-                <Icon name="close" size={22} />
-              </TouchableOpacity>
-            </View>
+                  <Icon name="close" size={22} />
+                </TouchableOpacity>
+              </View>
 
-            <View style={{ paddingHorizontal: 16, paddingBottom: 16, alignContent: 'center', justifyContent: 'center' }}>
-               <Text style={styles.label}>Where will this Pool's locations go?:</Text>
-              <View style={{ marginTop: 8 }}>
-                <TouchableOpacity
-                  style={[
-                    styles.chip, 
-                    deleteState.mergeTarget === 'none' && styles.chipSelected,
+              <View style={{ paddingHorizontal: 16, paddingBottom: 16, alignContent: 'center', justifyContent: 'center' }}>
+                <Text style={styles.label}>Where will this Pool's locations go?:</Text>
+                <View style={{ marginTop: 8 }}>
+                  <TouchableOpacity
+                    style={[
+                      styles.chip,
+                      deleteState.mergeTarget === 'none' && styles.chipSelected,
                       { marginBottom: 8, alignSelf: 'flex-start' },
-                  ]}
+                    ]}
                     onPress={() => setDeleteState((prev) => ({ ...prev, mergeTarget: 'none' }))}
-                >
+                  >
                     <Text
                       style={[
-                    styles.chipText, 
+                        styles.chipText,
                         deleteState.mergeTarget === 'none' && styles.chipTextSelected,
                       ]}
                     >
-                    Delete without merging (locations become single)
-                  </Text>
-                </TouchableOpacity>
+                      Delete without merging (locations become single)
+                    </Text>
+                  </TouchableOpacity>
 
-                <ScrollView style={{ maxHeight: 200 }}>
-                  {deleteState.availablePools.map((pool) => (
-                    <TouchableOpacity
-                      key={pool.id}
-                      style={[
-                        styles.chip, 
-                        deleteState.mergeTarget === pool.id && styles.chipSelected,
-                          { marginBottom: 4, paddingHorizontal: 6, alignSelf: 'flex-start', minHeight: `10%`, minWidth: `100%`},
-                      ]}
+                  <ScrollView style={{ maxHeight: 200 }}>
+                    {deleteState.availablePools.map((pool) => (
+                      <TouchableOpacity
+                        key={pool.id}
+                        style={[
+                          styles.chip,
+                          deleteState.mergeTarget === pool.id && styles.chipSelected,
+                          { marginBottom: 4, paddingHorizontal: 6, alignSelf: 'flex-start', minHeight: `10%`, minWidth: `100%` },
+                        ]}
                         onPress={() => setDeleteState((prev) => ({ ...prev, mergeTarget: pool.id }))}
-                    >
+                      >
                         <Text
                           style={[
-                        styles.chipText, 
+                            styles.chipText,
                             deleteState.mergeTarget === pool.id && styles.chipTextSelected,
                           ]}
                         >
-                        {pool.name}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
+                          {pool.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
 
-                {deleteState.availablePools.length === 0 && (
-                  <Text style={{ fontSize: 12, color: '#999', marginTop: 8 }}>
-                    No other pools available. Locations will become single.
-                  </Text>
-                )}
+                  {deleteState.availablePools.length === 0 && (
+                    <Text style={{ fontSize: 12, color: '#999', marginTop: 8 }}>
+                      No other pools available. Locations will become single.
+                    </Text>
+                  )}
+                </View>
+              </View>
+
+              <View style={styles.footerRow}>
+                <Button
+
+                  onPress={() => setDeleteState((prev) => ({ ...prev, visible: false }))}
+                  style={{ flex: 1 }}
+                ><Text style={{ color: "white" }}>Cancel</Text></Button>
+                <Button
+                  onPress={confirmDeletePool}
+                  loading={deleteState.loading}
+                  disabled={deleteState.loading || deleteState.mergeTarget === null}
+                  style={{ flex: 1 }}
+                ><Text style={{ color: "white" }}>Delete Pool</Text></Button>
               </View>
             </View>
-
-            <View style={styles.footerRow}>
-              <Button 
-                 
-                onPress={() => setDeleteState((prev) => ({ ...prev, visible: false }))}
-                style={{ flex: 1  }} 
-              ><Text style={{color: "white"}}>Cancel</Text></Button>
-              <Button
-                onPress={confirmDeletePool}
-                loading={deleteState.loading}
-                disabled={deleteState.loading || deleteState.mergeTarget === null}
-                style={{ flex: 1}}
-              ><Text style={{color: "white"}}>Delete Pool</Text></Button>
-            </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
       )}
     </View>
   );
@@ -2325,6 +2334,26 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#8BC34A',
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 20,
+  },
+  emptyStateTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#666',
+    marginTop: 16,
+    textAlign: 'center',
+  },
+  emptyStateSubtitle: {
+    fontSize: 14,
+    color: '#999',
+    marginTop: 8,
+    textAlign: 'center',
+    lineHeight: 20,
   },
 });
 

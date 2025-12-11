@@ -1267,6 +1267,7 @@ const ProductDetailScreen = observer(
     // Also track last inventory count to allow re-hydration when inventory arrives later
     const hasHydratedPlatformsRef = useRef<string | null>(null);
     const lastHydratedInventoryCountRef = useRef<number>(0);
+    const lastLocationNamesCountRef = useRef<number>(0);
 
     // Populate form fields from detailedItem when it loads
     useEffect(() => {
@@ -1283,14 +1284,20 @@ const ProductDetailScreen = observer(
       // ⚡ CRITICAL FIX: Only hydrate displayedPlatforms ONCE per product
       // After initial hydration, only user edits should modify displayedPlatforms
       // We check and set the ref IMMEDIATELY to prevent race conditions
-      // Allow re-hydration if new inventory data arrives after first pass
+      // Allow re-hydration if new inventory data arrives after first pass OR if location names change
       const currentInventoryCount = rawInventoryLevels?.length || 0;
+      const currentLocationNamesCount = platformLocationNames.size;
       const alreadyHydrated = hasHydratedPlatformsRef.current === detailedItem.Id;
       const inventoryChanged = currentInventoryCount !== lastHydratedInventoryCountRef.current;
-      if (alreadyHydrated && !inventoryChanged) {
+      const locationNamesChanged = currentLocationNamesCount > 0 && lastLocationNamesCountRef.current !== currentLocationNamesCount;
+
+      if (alreadyHydrated && !inventoryChanged && !locationNamesChanged) {
         console.log('[ProductDetail] ⚠️ Already hydrated for product', detailedItem.Id, '- skipping to preserve data');
         return; // Exit early - don't even update formData again
       }
+
+      // Track location names count for change detection
+      lastLocationNamesCountRef.current = currentLocationNamesCount;
 
       // ⚡ Don't hydrate until data is actually loaded
       // This prevents hydrating with empty data on first render before loadPlatformData completes
@@ -1364,23 +1371,64 @@ const ProductDetailScreen = observer(
       // Hydrate variants with inventory data from REAL database data
       const hydratedVariants = hydrateInventoryFromDB(allProductVariants || [], rawInventoryLevels || []);
 
-      // Build per-platform locations + aggregated quantities from groupedInventory
+      // Build per-platform locations from rawInventoryLevels + connections
+      // ⚡ CRITICAL FIX: Don't use groupedInventory (may not be populated yet)
+      // Instead, build directly from rawInventoryLevels which IS available
       const platformLocationState: Record<string, { locations: Array<{ id: string; name: string; connectionId: string; connectionName: string }>; locationQuantities: Record<string, number> }> = {};
-      Object.values(groupedInventory).forEach(platformGroup => {
-        const platformKey = platformGroup.platformType?.toLowerCase();
-        if (!platformKey) return;
-        const locations = (platformGroup.locations || []).map(loc => ({
-          id: loc.locationId || 'default',
-          name: loc.locationName || 'Unnamed Location',
-          connectionId: loc.platformConnectionId,
-          connectionName: platformGroup.displayName || platformKey,
-        }));
-        const locationQuantities: Record<string, number> = {};
-        (platformGroup.locations || []).forEach(loc => {
-          locationQuantities[loc.locationId || 'default'] = loc.quantity ?? 0;
-        });
-        platformLocationState[platformKey] = { locations, locationQuantities };
+
+      // Build a connection -> platformType lookup
+      const connectionToPlatform = new Map<string, string>();
+      const connectionToName = new Map<string, string>();
+      connections.forEach(conn => {
+        connectionToPlatform.set(conn.Id, conn.PlatformType.toLowerCase());
+        connectionToName.set(conn.Id, conn.DisplayName || conn.PlatformType);
       });
+
+      // Group inventory levels by platform type using the connection lookup
+      rawInventoryLevels?.forEach(level => {
+        const platformType = connectionToPlatform.get(level.PlatformConnectionId);
+        if (!platformType) return;
+
+        if (!platformLocationState[platformType]) {
+          platformLocationState[platformType] = { locations: [], locationQuantities: {} };
+        }
+
+        const locId = level.PlatformLocationId || 'default';
+
+        // Check if location already added for this platform
+        const existingLoc = platformLocationState[platformType].locations.find(l => l.id === locId);
+        if (!existingLoc) {
+          // Resolve location name from platformLocationNames (loaded from PlatformLocations table)
+          let locationName = platformLocationNames.get(locId)
+            || platformLocationNames.get(`${level.PlatformConnectionId}-${locId}`);
+
+          if (!locationName) {
+            // Fallback with smart formatting
+            if (locId.includes('gid://shopify/Location/')) {
+              const locNumber = locId.split('/').pop();
+              locationName = `Location #${locNumber}`;
+            } else if (locId.length >= 10 && /^[A-Z0-9]+$/.test(locId)) {
+              locationName = `Location (${locId.substring(0, 6)}...)`;
+            } else {
+              locationName = locId;
+            }
+          }
+
+          platformLocationState[platformType].locations.push({
+            id: locId,
+            name: locationName,
+            connectionId: level.PlatformConnectionId,
+            connectionName: connectionToName.get(level.PlatformConnectionId) || platformType,
+          });
+        }
+
+        // Accumulate quantity for this location
+        platformLocationState[platformType].locationQuantities[locId] =
+          (platformLocationState[platformType].locationQuantities[locId] || 0) + (level.Quantity || 0);
+      });
+
+      console.log('[ProductDetail] Built platformLocationState from rawInventoryLevels:',
+        Object.entries(platformLocationState).map(([k, v]) => `${k}: ${v.locations.length} locs`).join(', '));
 
       console.log('[ProductDetail] Hydrated variants:', hydratedVariants.length,
         'with inventory:', hydratedVariants.map(v => `${v.sku || v.id}: ${Object.keys(v.inventoryByLocation || {}).length} locs`).join(', '));
@@ -1452,7 +1500,18 @@ const ProductDetailScreen = observer(
       const { locationQuantities: hydratedLocQty, locations: hydratedLocs } = getLocationQtyAndLocs(hydratedVariants, groupedInventory);
 
       // Build platform data for each platform in platformSpecificData
-      const platformKeys = Object.keys(platformSpecificData);
+      // ⚡ CRITICAL FIX: Only include platforms that have ACTUAL connections
+      // This removes stale/fake platforms like 'facebook' that may exist in old metadata  
+      const actualPlatformTypes = new Set(connections.map(c => c.PlatformType.toLowerCase()));
+      const platformKeys = Object.keys(platformSpecificData).filter(key => {
+        const keyLower = key.toLowerCase();
+        // Always include if we have actual connections for this platform type
+        if (actualPlatformTypes.has(keyLower)) return true;
+        // Skip stale platforms with no actual connection
+        console.log(`[ProductDetail] Filtering out stale platform '${key}' - no active connection`);
+        return false;
+      });
+
       if (platformKeys.length > 0) {
         platformKeys.forEach(platformKey => {
           const platformData = platformSpecificData[platformKey] || {};
@@ -1466,7 +1525,11 @@ const ProductDetailScreen = observer(
           // ⚡ CRITICAL FIX: ALWAYS use freshly hydrated variants from DB
           // stale platformData.variants may have outdated inventory data
           // Merge: keep platformData fields, but override variants with fresh inventory
-          const freshVariants = hydratedVariants && hydratedVariants.length > 0 ? hydratedVariants : [];
+
+          // Filter out "phantom" variants (empty options) IF we have other real variants
+          // This prevents "Variant" and "Broken" appearing together
+          const validVariants = (hydratedVariants || []).filter(v => Object.keys(v.optionValues || {}).length > 0);
+          const freshVariants = validVariants.length > 0 ? validVariants : (hydratedVariants || []);
 
           allPlatforms[platformKey] = {
             ...canonicalBase,
@@ -1508,7 +1571,7 @@ const ProductDetailScreen = observer(
       lastHydratedInventoryCountRef.current = currentInventoryCount;
       console.log('[ProductDetail] ✅ Initial hydration complete for product', detailedItem.Id,
         'with', Object.keys(allPlatforms).length, 'platforms');
-    }, [detailedItem?.Id, allProductVariants, rawInventoryLevels, hydrateInventoryFromDB, hasUnsavedChanges, isInSaveBlockingWindow]); // Depend on real inventory data from DB
+    }, [detailedItem?.Id, allProductVariants, rawInventoryLevels, hydrateInventoryFromDB, hasUnsavedChanges, isInSaveBlockingWindow, connections, platformLocationNames]); // Depend on real inventory data + connections + location names
 
     // Phase 2: Load drafts from backend (ONCE only, do NOT re-fetch when platforms change)
     // CRITICAL FIX: Removed displayedPlatforms from dependencies to prevent overwriting user edits

@@ -1,6 +1,7 @@
-import React, { useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert } from 'react-native';
+import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Animated } from 'react-native';
 import { useSignUp, useAuth } from '@clerk/clerk-expo';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 type VerifyCodeRoute = {
   params?: {
@@ -20,77 +21,196 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
   const contactLabel = route?.params?.contactLabel ?? '';
   const mode = route?.params?.mode ?? 'signup';
   const { signUp, isLoaded: isSignUpLoaded } = useSignUp();
-  const auth = useAuth() as any; // setActive may not be typed in some versions
+  const auth = useAuth() as any;
 
   const [digits, setDigits] = useState<string[]>(Array(CELL_COUNT).fill(''));
   const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const inputs = useRef<Array<TextInput | null>>([]);
   const code = useMemo(() => digits.join(''), [digits]);
+  const errorShakeAnim = useRef(new Animated.Value(0)).current;
+  const hasAutoSubmitted = useRef(false);
 
-  const onChangeDigit = (index: number, value: string) => {
-    const v = value.replace(/\D/g, '').slice(0, 1);
-    const next = [...digits];
-    next[index] = v;
-    setDigits(next);
-    
-    // Move forward if digit entered
-    if (v && index < CELL_COUNT - 1) {
-      inputs.current[index + 1]?.focus();
+  // Shake animation for error
+  const triggerErrorShake = useCallback(() => {
+    Animated.sequence([
+      Animated.timing(errorShakeAnim, { toValue: 10, duration: 50, useNativeDriver: true }),
+      Animated.timing(errorShakeAnim, { toValue: -10, duration: 50, useNativeDriver: true }),
+      Animated.timing(errorShakeAnim, { toValue: 10, duration: 50, useNativeDriver: true }),
+      Animated.timing(errorShakeAnim, { toValue: 0, duration: 50, useNativeDriver: true }),
+    ]).start();
+  }, [errorShakeAnim]);
+
+  // Handle paste - detect when user pastes a full code
+  const handleChangeText = (index: number, value: string) => {
+    // Clear any previous error when user starts typing
+    if (errorMessage) setErrorMessage(null);
+
+    // Check if this is a paste of multiple digits (e.g., full 6-digit code)
+    const cleanValue = value.replace(/\D/g, '');
+
+    if (cleanValue.length > 1) {
+      // User pasted multiple digits - fill all cells
+      const newDigits = [...digits];
+      for (let i = 0; i < CELL_COUNT; i++) {
+        newDigits[i] = cleanValue[i] || '';
+      }
+      setDigits(newDigits);
+
+      // Focus the last filled cell or the next empty one
+      const lastFilledIndex = Math.min(cleanValue.length - 1, CELL_COUNT - 1);
+      if (cleanValue.length >= CELL_COUNT) {
+        inputs.current[CELL_COUNT - 1]?.blur();
+      } else {
+        inputs.current[lastFilledIndex + 1]?.focus();
+      }
+    } else {
+      // Single digit entry
+      const v = cleanValue.slice(0, 1);
+      const newDigits = [...digits];
+      newDigits[index] = v;
+      setDigits(newDigits);
+
+      // Move forward if digit entered
+      if (v && index < CELL_COUNT - 1) {
+        inputs.current[index + 1]?.focus();
+      }
     }
   };
 
   const onKeyPress = (index: number, key: string) => {
-    // Handle backspace: clear current cell and move to previous
-    if (key === 'Backspace' && !digits[index] && index > 0) {
-      inputs.current[index - 1]?.focus();
+    if (key === 'Backspace') {
+      if (!digits[index] && index > 0) {
+        // Current cell is empty, move to previous and clear it
+        const newDigits = [...digits];
+        newDigits[index - 1] = '';
+        setDigits(newDigits);
+        inputs.current[index - 1]?.focus();
+      } else if (digits[index]) {
+        // Current cell has value, clear it
+        const newDigits = [...digits];
+        newDigits[index] = '';
+        setDigits(newDigits);
+      }
     }
   };
 
-  const submit = async () => {
+  const submit = useCallback(async () => {
+    if (submitting) return;
+
     try {
       if (code.length !== CELL_COUNT) return;
       if (!isSignUpLoaded || !signUp) {
-        Alert.alert('Please wait', 'We are preparing verification.');
+        setErrorMessage('Please wait, we are preparing verification.');
         return;
       }
       setSubmitting(true);
+      setErrorMessage(null);
+
       const res = await signUp.attemptEmailAddressVerification({ code });
+
       if (res.status === 'complete' && res.createdSessionId) {
-        // Activate the new session so getToken() starts working
-        try { await auth.setActive?.({ session: res.createdSessionId }); } catch {}
-        navigation.reset({ index: 0, routes: [{ name: 'AppStack', params: { initialScreenName: 'TabNavigator' } }] });
+        try { await auth.setActive?.({ session: res.createdSessionId }); } catch { }
+        navigation.reset({ index: 0, routes: [{ name: 'AppStack', params: { initialScreenName: 'CreateAccountScreen' } }] });
       } else {
-        Alert.alert('Verification', 'Unable to complete verification.');
+        setErrorMessage('Unable to complete verification. Please try again.');
+        triggerErrorShake();
       }
     } catch (e: any) {
-      Alert.alert('Verification failed', e?.errors?.[0]?.message || e?.message || 'Invalid code');
+      const message = e?.errors?.[0]?.message || e?.message || 'Invalid code. Please check and try again.';
+      setErrorMessage(message);
+      triggerErrorShake();
+      // Clear digits on error so user can retry
+      setDigits(Array(CELL_COUNT).fill(''));
+      hasAutoSubmitted.current = false;
+      setTimeout(() => inputs.current[0]?.focus(), 100);
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [code, isSignUpLoaded, signUp, auth, navigation, submitting, triggerErrorShake]);
+
+  // Auto-submit when all 6 digits are filled
+  useEffect(() => {
+    if (code.length === CELL_COUNT && !hasAutoSubmitted.current && !submitting) {
+      hasAutoSubmitted.current = true;
+      // Small delay to let UI update
+      setTimeout(() => {
+        submit();
+      }, 150);
+    }
+  }, [code, submit, submitting]);
+
+  // Reset auto-submit flag when code changes
+  useEffect(() => {
+    if (code.length < CELL_COUNT) {
+      hasAutoSubmitted.current = false;
+    }
+  }, [code]);
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.card}>
-        <Text style={styles.title}>Enter code</Text>
-        <Text style={styles.subtitle}>Enter the 6 digit code that was sent to you{contactLabel ? ` at ${contactLabel}` : ''}</Text>
-        <View style={styles.row}>
+        <View style={styles.iconContainer}>
+          <Icon name="email-check-outline" size={48} color="#294306" />
+        </View>
+        <Text style={styles.title}>Verify your email</Text>
+        <Text style={styles.subtitle}>
+          Enter the 6-digit code sent to{contactLabel ? `\n${contactLabel}` : ' your email'}
+        </Text>
+
+        <Animated.View style={[styles.row, { transform: [{ translateX: errorShakeAnim }] }]}>
           {digits.map((d, i) => (
             <TextInput
               key={i}
               ref={(el) => { inputs.current[i] = el; }}
-              style={styles.cell}
+              style={[
+                styles.cell,
+                d && styles.cellFilled,
+                errorMessage && styles.cellError,
+              ]}
               value={d}
-              onChangeText={(v) => onChangeDigit(i, v)}
+              onChangeText={(v) => handleChangeText(i, v)}
               onKeyPress={({ nativeEvent }) => onKeyPress(i, nativeEvent.key)}
               keyboardType="number-pad"
-              maxLength={1}
+              maxLength={6} // Allow paste of full code
               autoFocus={i === 0}
+              selectTextOnFocus
+              textContentType="oneTimeCode" // iOS autofill support
+              autoComplete="sms-otp" // Android autofill support
             />
           ))}
-        </View>
-        <TouchableOpacity style={[styles.button, submitting && { opacity: 0.6 }]} onPress={submit} disabled={code.length !== CELL_COUNT || submitting}>
-          <Text style={styles.buttonText}>{submitting ? 'Verifying…' : 'Continue'}</Text>
+        </Animated.View>
+
+        {/* Error Message - Styled inline instead of Alert */}
+        {errorMessage && (
+          <View style={styles.errorContainer}>
+            <Icon name="alert-circle-outline" size={18} color="#DC2626" />
+            <Text style={styles.errorText}>{errorMessage}</Text>
+          </View>
+        )}
+
+        <TouchableOpacity
+          style={[
+            styles.button,
+            (submitting || code.length !== CELL_COUNT) && styles.buttonDisabled,
+          ]}
+          onPress={submit}
+          disabled={code.length !== CELL_COUNT || submitting}
+          activeOpacity={0.8}
+        >
+          {submitting ? (
+            <View style={styles.buttonContent}>
+              <Icon name="loading" size={20} color="white" />
+              <Text style={styles.buttonText}>Verifying...</Text>
+            </View>
+          ) : (
+            <Text style={styles.buttonText}>Continue</Text>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.resendContainer} onPress={() => {/* TODO: resend logic */ }}>
+          <Text style={styles.resendText}>Didn't receive the code? </Text>
+          <Text style={styles.resendLink}>Resend</Text>
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
@@ -98,14 +218,124 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f7f9fb' },
-  card: { width: '90%', maxWidth: 560, backgroundColor: 'white', borderRadius: 12, padding: 24, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 12 },
-  title: { fontSize: 24, fontWeight: '700', marginBottom: 8, color: '#111' },
-  subtitle: { fontSize: 14, color: '#555', marginBottom: 16 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 24 },
-  cell: { width: 48, height: 56, backgroundColor: '#f3f7ea', borderRadius: 8, textAlign: 'center', fontSize: 22, color: '#1b2e0a' },
-  button: { backgroundColor: '#294306', height: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  buttonText: { color: 'white', fontSize: 16, fontWeight: '600' },
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f7f9fb',
+  },
+  card: {
+    width: '90%',
+    maxWidth: 400,
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 28,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+  iconContainer: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 26,
+    fontWeight: '700',
+    marginBottom: 8,
+    color: '#111',
+    textAlign: 'center',
+    fontFamily: 'PlusJakartaSans_700Bold',
+  },
+  subtitle: {
+    fontSize: 15,
+    color: '#666',
+    marginBottom: 24,
+    textAlign: 'center',
+    lineHeight: 22,
+    fontFamily: 'PlusJakartaSans_400Regular',
+  },
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+    gap: 8,
+  },
+  cell: {
+    flex: 1,
+    height: 56,
+    backgroundColor: '#f5f7f3',
+    borderRadius: 12,
+    textAlign: 'center',
+    fontSize: 24,
+    fontWeight: '600',
+    color: '#1b2e0a',
+    borderWidth: 2,
+    borderColor: '#e8ebe5',
+  },
+  cellFilled: {
+    borderColor: '#93C822',
+    backgroundColor: '#f8fbf2',
+  },
+  cellError: {
+    borderColor: '#FCA5A5',
+    backgroundColor: '#FEF2F2',
+  },
+  errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF2F2',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  errorText: {
+    color: '#DC2626',
+    fontSize: 14,
+    marginLeft: 8,
+    flex: 1,
+    fontFamily: 'PlusJakartaSans_500Medium',
+  },
+  button: {
+    backgroundColor: '#294306',
+    height: 52,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buttonDisabled: {
+    backgroundColor: '#9CA3AF',
+  },
+  buttonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  buttonText: {
+    color: 'white',
+    fontSize: 17,
+    fontWeight: '600',
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+  },
+  resendContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 20,
+  },
+  resendText: {
+    color: '#666',
+    fontSize: 14,
+    fontFamily: 'PlusJakartaSans_400Regular',
+  },
+  resendLink: {
+    color: '#294306',
+    fontSize: 14,
+    fontWeight: '600',
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+  },
 });
 
 export default VerifyCodeScreen;

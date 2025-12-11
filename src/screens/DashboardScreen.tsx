@@ -15,6 +15,8 @@ import { useOrg } from '../context/OrgContext';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 import { useProductVariantRealtime } from '../hooks/useProductVariantRealtime';
 import { useOrgNudges, trackInsightAction } from '../hooks/useOrgNudges';
+import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+
 
 // User-relevant event types for activity display (excludes system/webhook events)
 const USER_RELEVANT_EVENT_TYPES = [
@@ -129,6 +131,8 @@ const DashboardScreen = () => {
   const navigation = useNavigation<any>();
   const legendCtx = useContext(LegendStateContext);
   const { currentOrg, isLoading: isOrgLoading } = useOrg();
+  const { connections } = usePlatformConnections();
+
 
   // Subscribe to real-time product variant changes
   useProductVariantRealtime();
@@ -504,12 +508,30 @@ const DashboardScreen = () => {
     fetchLocationPerformance();
   }, [currentOrg?.id, isOrgLoading]);
 
+  // Check for connections ready to sync
+  const readyConnection = useMemo(() => {
+    return connections.find(c => c.Status === 'ready_to_sync');
+  }, [connections]);
+
+  const handleReviewMappings = () => {
+    if (readyConnection) {
+      // Find platform name from ID or use type? Assuming MappingReview needs platformName.
+      // We can try to guess or just pass a generic name if needed, but MappingReview probably wants it for display.
+      // Let's pass PlatformType as platformName or DisplayName.
+      navigation.navigate('MappingReview', {
+        connectionId: readyConnection.Id,
+        platformName: readyConnection.DisplayName || readyConnection.PlatformType
+      });
+    }
+  };
+
+
   // Handle insight action clicks
-  const handleInsightAction = async (actionLink: string, insightTitle: string) => {
+  const handleInsightAction = async (actionLink: string, insightTitle?: string) => {
     if (!currentOrg?.id) return;
 
     // Track the action
-    await trackInsightAction(currentOrg.id, actionLink, insightTitle);
+    await trackInsightAction(currentOrg.id, actionLink, insightTitle || 'Insight Action');
 
     // Navigate based on link
     if (actionLink.includes('/inventory')) {
@@ -700,7 +722,7 @@ const DashboardScreen = () => {
                     <Text style={styles.insightGreenBtnText}>
                       {loadingInsight ? 'Analyzing...' : 'Generate Insight'}
                     </Text>
-                    <Icon name={loadingInsight ? "loading" : "sparkles"} size={20} color="#fff" />
+                    <Icon name={loadingInsight ? "loading" : "auto-fix"} size={20} color="#fff" />
                   </TouchableOpacity>
 
                   {/* Footer */}
@@ -718,8 +740,8 @@ const DashboardScreen = () => {
 
         {/* Overview */}
         <View style={styles.sectionContainer}>
-          <View style={[styles.todayCard, { padding: 8, paddingTop: 4}]}>
-            <View style={[styles.tabsContainer, { marginHorizontal  : 4, marginTop: 8, marginBottom: 4, backgroundColor: "#fff", justifyContent: 'space-between' }]}>
+          <View style={[styles.todayCard, { padding: 8, paddingTop: 4 }]}>
+            <View style={[styles.tabsContainer, { marginHorizontal: 4, marginTop: 8, marginBottom: 4, backgroundColor: "#fff", justifyContent: 'space-between' }]}>
               <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>Overview</Text>
             </View>
 
@@ -842,6 +864,32 @@ const DashboardScreen = () => {
           )}
         </View>
       </Modal>
+
+      {/* Notification Banner for Ready Mappings */}
+      {readyConnection && (
+        <Animated.View
+          entering={FadeInUp.delay(500).springify()}
+          style={styles.notificationBanner}
+        >
+          <View style={styles.bannerContent}>
+            <View style={styles.bannerIcon}>
+              <Icon name="check-circle" size={24} color="#93C822" />
+            </View>
+            <View style={styles.bannerTextContainer}>
+              <Text style={styles.bannerTitle}>Mappings Ready</Text>
+              <Text style={styles.bannerSubtitle}>
+                {readyConnection.DisplayName} is ready for review.
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.bannerButton}
+              onPress={handleReviewMappings}
+            >
+              <Text style={styles.bannerButtonText}>Review</Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      )}
 
       {/* Floating Tab Bar provided by Navigator, but we ensure spacing */}
     </View>
@@ -1334,6 +1382,59 @@ const styles = StyleSheet.create({
     marginTop: 8,
     color: '#6B7280',
     fontSize: 14,
+  },
+
+  // Notification Banner
+  notificationBanner: {
+    position: 'absolute',
+    bottom: 20, // Adjust based on tab bar height if needed, usually 80-90
+    left: 16,
+    right: 16,
+    backgroundColor: '#1F2937',
+    borderRadius: 16,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 8,
+    zIndex: 100,
+  },
+  bannerContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  bannerIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(147, 200, 34, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bannerTextContainer: {
+    flex: 1,
+  },
+  bannerTitle: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  bannerSubtitle: {
+    color: '#D1D5DB', // gray-300
+    fontSize: 13,
+  },
+  bannerButton: {
+    backgroundColor: '#93C822',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  bannerButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 13,
   },
 });
 
