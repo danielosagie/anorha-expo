@@ -1,11 +1,13 @@
 import React, { useMemo, useState, useEffect, useContext } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, Dimensions, Image, Modal, Pressable } from 'react-native';
+import PagerView from 'react-native-pager-view';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import { useNavigation } from '@react-navigation/native';
 import Card from '../components/Card';
 import InsightCard from '../components/InsightCard';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { Sparkles } from 'lucide-react-native';
 import { LegendStateContext } from '../context/LegendStateContext';
 import { supabase } from '../../lib/supabase';
 import InventoryListCard from '../components/InventoryListCard';
@@ -143,6 +145,7 @@ const DashboardScreen = () => {
 
   // Tab state for Overview
   const [activeTab, setActiveTab] = useState<'low_stock' | 'recent_activity'>('low_stock');
+  const [currentInsightPage, setCurrentInsightPage] = useState(0);
 
   // Track if initial data has loaded
   const [initialDataLoaded, setInitialDataLoaded] = useState(false);
@@ -674,14 +677,45 @@ const DashboardScreen = () => {
 
         {/* Today Card / Insight */}
         <View style={styles.todayCardContainer}>
-          {(loadingInsight || insightError || (safeInsight && safeInsight.topDIN)) ? (
-            <InsightCard
-              insight={safeInsight}
-              loading={loadingInsight}
-              error={insightError}
-              onAction={handleInsightAction}
-              onRefresh={forceRefreshInsight}
-            />
+          {(loadingInsight || insightError || (safeInsight && (safeInsight.topDIN || safeInsight.insights))) ? (
+            // Handle multi-timeframe insights (Carousel)
+            (safeInsight?.insights?.length || 0) > 0 ? (
+              <View>
+                <PagerView style={{ width: '100%', height: 420 }} initialPage={0} onPageSelected={e => setCurrentInsightPage(e.nativeEvent.position)}>
+                  {safeInsight!.insights!.map((ins: any, index: number) => (
+                    <View key={index} style={{ paddingHorizontal: 4 }}>
+                      <InsightCard
+                        insight={ins}
+                        loading={loadingInsight}
+                        error={insightError}
+                        onAction={handleInsightAction}
+                        onRefresh={forceRefreshInsight}
+                      />
+                    </View>
+                  ))}
+                </PagerView>
+                {/* Pagination Dots */}
+                <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 8, gap: 8 }}>
+                  {safeInsight!.insights!.map((_: any, idx: number) => (
+                    <View
+                      key={idx}
+                      style={{
+                        width: 8, height: 8, borderRadius: 4,
+                        backgroundColor: currentInsightPage === idx ? '#647653' : '#E5E7EB'
+                      }}
+                    />
+                  ))}
+                </View>
+              </View>
+            ) : (
+              <InsightCard
+                insight={safeInsight}
+                loading={loadingInsight}
+                error={insightError}
+                onAction={handleInsightAction}
+                onRefresh={forceRefreshInsight}
+              />
+            )
           ) : (
             <View style={styles.todayCard}>
               <TouchableOpacity
@@ -689,8 +723,8 @@ const DashboardScreen = () => {
                 style={styles.insightCardGreen}
                 onPress={forceRefreshInsight}
               >
-                <View style={styles.insightGreenHeader}>
-                  <View>
+                <View style={{...styles.insightGreenHeader, marginBottom: 0}}>
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
                     <Icon name="sprout-outline" size={20} color="#647653" />
                     <Text style={[styles.todayTitle, { color: '#647653' }]}>Sprout's Insight</Text>
                   </View>
@@ -733,7 +767,7 @@ const DashboardScreen = () => {
                     <Text style={styles.insightGreenBtnText}>
                       {loadingInsight ? 'Analyzing...' : 'Generate Insight'}
                     </Text>
-                    <Icon name={loadingInsight ? "loading" : "Sparkles"} size={20} color="#fff" />
+                    <Icon name={loadingInsight ? "loading" : <Sparkles />} size={20} color="#fff" />
                   </TouchableOpacity>
 
                   {/* Footer */}
@@ -792,7 +826,7 @@ const DashboardScreen = () => {
                 ))}
                 {lowStockItems.length === 0 && (
                   <View style={styles.emptyState}>
-                    <Icon name="check-circle-outline" size={32} color="#10B981" />
+                    <Icon name="check-circle-outline" size={32} color="rgb(147, 200, 34)" />
                     <Text style={[styles.emptyText, { color: '#374151', marginTop: 8 }]}>Inventory levels are healthy.</Text>
                     <Text style={{ fontSize: 13, color: '#6B7280', marginTop: 4 }}>No low stock items detected.</Text>
                   </View>
@@ -847,10 +881,10 @@ const DashboardScreen = () => {
           </View>
         </View>
 
-      </ScrollView>
+      </ScrollView >
 
       {/* Sources Bottom Sheet */}
-      <Modal
+      < Modal
         visible={sourcesVisible}
         transparent
         animationType="slide"
@@ -877,36 +911,38 @@ const DashboardScreen = () => {
             </View>
           )}
         </View>
-      </Modal>
+      </Modal >
 
       {/* Notification Banner for Ready Mappings */}
-      {readyConnection && (
-        <Animated.View
-          entering={FadeInUp.delay(500).springify()}
-          style={styles.notificationBanner}
-        >
-          <View style={styles.bannerContent}>
-            <View style={styles.bannerIcon}>
-              <Icon name="check-circle" size={24} color="#93C822" />
+      {
+        readyConnection && (
+          <Animated.View
+            entering={FadeInUp.delay(500).springify()}
+            style={styles.notificationBanner}
+          >
+            <View style={styles.bannerContent}>
+              <View style={styles.bannerIcon}>
+                <Icon name="check-circle" size={24} color="#93C822" />
+              </View>
+              <View style={styles.bannerTextContainer}>
+                <Text style={styles.bannerTitle}>Mappings Ready</Text>
+                <Text style={styles.bannerSubtitle}>
+                  {readyConnection.DisplayName} is ready for review.
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.bannerButton}
+                onPress={handleReviewMappings}
+              >
+                <Text style={styles.bannerButtonText}>Review</Text>
+              </TouchableOpacity>
             </View>
-            <View style={styles.bannerTextContainer}>
-              <Text style={styles.bannerTitle}>Mappings Ready</Text>
-              <Text style={styles.bannerSubtitle}>
-                {readyConnection.DisplayName} is ready for review.
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={styles.bannerButton}
-              onPress={handleReviewMappings}
-            >
-              <Text style={styles.bannerButtonText}>Review</Text>
-            </TouchableOpacity>
-          </View>
-        </Animated.View>
-      )}
+          </Animated.View>
+        )
+      }
 
       {/* Floating Tab Bar provided by Navigator, but we ensure spacing */}
-    </View>
+    </View >
   );
 };
 

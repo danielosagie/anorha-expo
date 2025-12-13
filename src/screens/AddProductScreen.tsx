@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TouchableOpacity, 
-  Image, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Image,
   SafeAreaView,
   Dimensions,
   Platform,
@@ -18,7 +18,7 @@ import {
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Camera, CameraView, CameraType, FlashMode, BarcodeScanningResult } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
-import Animated, { 
+import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
@@ -178,10 +178,10 @@ type CameraMode = 'camera' | 'barcode';
 const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const navigation = useNavigation();
   const theme = useTheme();
-  
-  
+
+
   console.log('[RENDER] AddProductScreen rendered');
-  
+
   // Camera state
   const [facing, setFacing] = useState<CameraType>('back');
   const [flash, setFlash] = useState<FlashMode>('off');
@@ -189,22 +189,29 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [capturedPhotos, setCapturedPhotos] = useState<CapturedPhoto[]>([]);
   const [isCapturing, setIsCapturing] = useState(false);
   const [cameraMode, setCameraMode] = useState<CameraMode>('camera');
-  
+
   // Barcode state
   const [scannedBarcode, setScannedBarcode] = useState<string | null>(null);
   const [barcodeNotificationCount, setBarcodeNotificationCount] = useState(0);
   const [barcodeSearchResult, setBarcodeSearchResult] = useState<any | null>(null);
   const [barcodeSearching, setBarcodeSearching] = useState(false);
   const [showBarcodeResultModal, setShowBarcodeResultModal] = useState(false);
-  const [platformLocations, setPlatformLocations] = useState<{ id: string; name: string }[]>([]);
+  const [platformLocations, setPlatformLocations] = useState<{ id: string; name: string; platformType?: string }[]>([]);
 
-  // Fetch platform locations on mount
+  // Fetch platform locations on mount (with platformType from connections)
   useEffect(() => {
     const fetchLocations = async () => {
       try {
-        const { data, error } = await supabase.from('PlatformLocations').select('Id, Name');
+        // Fetch locations with their connection's platformType
+        const { data, error } = await supabase
+          .from('PlatformLocations')
+          .select('Id, Name, PlatformLocationId, PlatformConnections!inner(PlatformType)');
         if (data) {
-          setPlatformLocations(data.map((l: any) => ({ id: l.Id, name: l.Name })));
+          setPlatformLocations(data.map((l: any) => ({
+            id: l.PlatformLocationId || l.Id,
+            name: l.Name,
+            platformType: l.PlatformConnections?.PlatformType,
+          })));
         }
       } catch (e) {
         console.error('[AddProduct] Error fetching locations:', e);
@@ -212,7 +219,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     };
     fetchLocations();
   }, []);
-  
+
   // UI state
   const [currentInstruction, setCurrentInstruction] = useState<CameraInstruction>('ready');
   const [showMatchSheet, setShowMatchSheet] = useState(false);
@@ -221,10 +228,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Quick scan storage per item and current sheet context
   const [quickScanStore, setQuickScanStore] = useState<Record<string, { matchData: MatchResponse; serpApiData: any[] }>>({});
   const [currentMatchItemId, setCurrentMatchItemId] = useState<string | null>(null);
-  
+
   // Loading state tracking per item
   const [itemLoadingStates, setItemLoadingStates] = useState<Record<string, { isLoading: boolean; stage: string; }>>({});
-  
+
   // Bulk mode state
   const [isBulkMode, setIsBulkMode] = useState(false);
   const [bulkItems, setBulkItems] = useState<Array<{
@@ -234,20 +241,20 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     isActive?: boolean;
   }>>([]);
   const [activeItemId, setActiveItemId] = useState<string | null>(null);
-  
+
   // Auto-scan state
   const [isAutoScanning, setIsAutoScanning] = useState(false);
   const [quickScanResults, setQuickScanResults] = useState<any[]>([]);
-  
+
   // Job response state
   const [jobResponse, setJobResponse] = useState<JobResponse | null>(null);
   const quickScanCancelledRef = useRef(false);
-  
+
   // Notification and progress state
   const [showNotification, setShowNotification] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState('');
   const [showProgressBar, setShowProgressBar] = useState(false);
-  
+
   // Camera ref
   const cameraRef = useRef<CameraView>(null);
   const isFocused = useIsFocused();
@@ -258,7 +265,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     itemIdCounterRef.current += 1;
     return `item-${Date.now()}-${itemIdCounterRef.current}`;
   }, []);
-  
+
   // Debug useEffects to track state changes
   useEffect(() => {
     console.log('[EFFECT] bulkItems changed! New value:', {
@@ -270,16 +277,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }))
     });
   }, [bulkItems]);
-  
+
   useEffect(() => {
     console.log('[EFFECT] activeItemId changed! New value:', activeItemId);
   }, [activeItemId]);
 
-  
+
   // Animation values - separate for each modal
   const sheetTranslateY = useSharedValue(SCREEN_HEIGHT);
   const matchSheetTranslateY = useSharedValue(SCREEN_HEIGHT);
-  
+
   // Force re-render counter for debugging
   const [forceRenderCount, setForceRenderCount] = useState(0);
   const forceRerender = useCallback(() => {
@@ -289,7 +296,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const captureButtonScale = useSharedValue(1);
   const flashOpacity = useSharedValue(0);
   const overlayOpacity = useSharedValue(0.3);
-  
+
   // Progress and notification animations
   const progressWidth = useSharedValue(0);
   const spinRotation = useSharedValue(0);
@@ -308,11 +315,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const showNotificationMessage = useCallback((message: string, duration: number = 3000) => {
     setNotificationMessage(message);
     setShowNotification(true);
-    
+
     // Animate in
     notificationOpacity.value = withTiming(1, { duration: 300 });
     notificationTranslateY.value = withTiming(0, { duration: 300 });
-    
+
     // Auto hide
     setTimeout(() => {
       notificationOpacity.value = withTiming(0, { duration: 300 });
@@ -326,14 +333,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const startProgressAnimation = useCallback(() => {
     setShowProgressBar(true);
     progressWidth.value = 0;
-    
+
     // Spinning circle animation
     spinRotation.value = withRepeat(
       withTiming(360, { duration: 1000 }),
       -1,
       false
     );
-    
+
     // Progress bar fill animation
     progressWidth.value = withTiming(100, { duration: 2000 });
   }, [progressWidth, spinRotation]);
@@ -390,10 +397,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const handleFocusTap = useCallback((event: any) => {
     const { locationX, locationY } = event.nativeEvent;
     setCurrentInstruction('focus');
-    
+
     // TODO: Implement actual focus at coordinates
     console.log('Focus at:', locationX, locationY);
-    
+
     setTimeout(() => {
       setCurrentInstruction('ready');
     }, 1000);
@@ -412,58 +419,58 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
 
     if (!cameraRef.current || isCapturing) return;
-    
+
     try {
       setIsCapturing(true);
       setCurrentInstruction('processing');
-      
+
       // Start progress animation
       startProgressAnimation();
-      
+
       // Animate capture button
       captureButtonScale.value = withSpring(0.8, { duration: 100 }, () => {
         captureButtonScale.value = withSpring(1, { duration: 200 });
       });
-      
+
       // Flash effect
       if (flash === 'on') {
         flashOpacity.value = withTiming(1, { duration: 100 }, () => {
           flashOpacity.value = withTiming(0, { duration: 200 });
         });
       }
-      
+
       const photo = await cameraRef.current.takePictureAsync({
         quality: 0.7,
         base64: false,
-       });
-      
+      });
+
       if (photo) {
-      const newPhoto: CapturedPhoto = {
-        id: `photo-${Date.now()}`,
+        const newPhoto: CapturedPhoto = {
+          id: `photo-${Date.now()}`,
           uri: photo.uri,
           width: photo.width || SCREEN_WIDTH,
           height: photo.height || SCREEN_HEIGHT,
-        timestamp: Date.now(),
+          timestamp: Date.now(),
           isCover: capturedPhotos.length === 0, // First photo is cover by default
-      };
-      
-      setCapturedPhotos(prev => {
-        const updated = [...prev, newPhoto];
-        console.log('[PHOTO CAPTURE] Photos updated:', {
-          previousCount: prev.length,
-          newCount: updated.length,
-          newPhotoId: newPhoto.id,
-          allPhotoIds: updated.map(p => p.id)
+        };
+
+        setCapturedPhotos(prev => {
+          const updated = [...prev, newPhoto];
+          console.log('[PHOTO CAPTURE] Photos updated:', {
+            previousCount: prev.length,
+            newCount: updated.length,
+            newPhotoId: newPhoto.id,
+            allPhotoIds: updated.map(p => p.id)
+          });
+          return updated;
         });
-        return updated;
-      });
-      
+
         // SIMPLIFIED: Always create real items, regardless of mode
         console.log('[ITEM CREATION] ==================');
         console.log('[ITEM CREATION] Photo added to capturedPhotos:', newPhoto.id);
         console.log('[ITEM CREATION] Current bulkItems count:', bulkItems.length);
         console.log('[ITEM CREATION] Current activeItemId:', activeItemId);
-        
+
         // Always create items in bulkItems (much simpler logic)
         if (bulkItems.length === 0) {
           // Very first photo ever - create first item
@@ -478,13 +485,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           setActiveItemId(firstItem.id);
           console.log('[ITEM CREATION] Created first item:', firstItem.id);
           console.log('[ITEM CREATION] Triggering quick scan (first photo of first item)');
-          
+
           console.log('[FIRST ITEM] Created first item with ID:', firstItem.id);
           setTimeout(() => {
             console.log('[FIRST ITEM] About to call performQuickScan for first item:', firstItem.id);
             performQuickScan(newPhoto, firstItem.id);
           }, 500);
-          
+
         } else {
           // Use current state (prev) to avoid stale closures. Prefer active item by isActive flag.
           setBulkItems(prev => {
@@ -516,11 +523,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             return [...prev.map(it => ({ ...it, isActive: false })), { id: newId, photos: [newPhoto], title: undefined, isActive: true }];
           });
         }
-        
+
         setCurrentInstruction('ready');
         stopProgressAnimation();
         console.log('[ITEM CREATION] ==================');
-        
+
         // FIXED: Use refs to get current state values, not closure-captured ones
         setTimeout(() => {
           console.log('[ITEM CREATION] State after timeout - bulkItems.length:', bulkItems.length);
@@ -528,7 +535,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           console.log('[ITEM CREATION] 🚨 NOTE: These values are closure-captured and may be stale!');
         }, 100);
       }
-      
+
     } catch (error) {
       console.error('Error taking photo:', error);
       Alert.alert('Error', 'Failed to take photo. Please try again.');
@@ -545,19 +552,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       setScannedBarcode(scanningResult.data);
       setCurrentInstruction('barcode_scanned');
       setBarcodeNotificationCount(prev => prev + 1);
-      
+
       console.log('Barcode scanned:', scanningResult.data);
-      
+
       // Search backend for this barcode
       searchBarcodeOnBackend(scanningResult.data);
-      
+
       // Show multiple notifications as requested
       for (let i = 0; i < 30; i++) {
         setTimeout(() => {
           console.log(`Barcode notification ${i + 1}: ${scanningResult.data}`);
         }, i * 100);
       }
-      
+
       // Reset after some time
       setTimeout(() => {
         setCurrentInstruction('ready');
@@ -659,20 +666,20 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       cameraMode,
       hasBarcodeResult: !!barcodeSearchResult
     });
-    
+
     // BARCODE MODE: Open barcode result modal if we have a result
     if (cameraMode === 'barcode' && barcodeSearchResult) {
       console.log('[CONTINUE] Barcode mode - opening barcode result modal');
       setShowBarcodeResultModal(true);
       return;
     }
-    
+
     // Always open sheet - it will show empty state if no photos
     setShowMatchSheet(false);
     matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
     setShowDeepSearchSheet(true);
     sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4); // Position for 60% height sheet
-  }, [sheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems.length, activeItemId, cameraMode, barcodeSearchResult]); 
+  }, [sheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems.length, activeItemId, cameraMode, barcodeSearchResult]);
 
   // Handle image picker - SIMPLIFIED: Always add to bulkItems
   const handleImageUpload = useCallback(async () => {
@@ -681,7 +688,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       Alert.alert('Permission needed', 'We need camera roll permissions to upload images.');
       return;
     }
-    
+
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
@@ -699,9 +706,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         timestamp: Date.now(),
         isCover: false, // Will be set based on item logic
       };
-      
+
       console.log('[IMAGE UPLOAD] Adding uploaded image to bulkItems system');
-      
+
       // Use the same logic as camera capture - add to bulkItems
       if (bulkItems.length === 0) {
         // Create first item with uploaded photo
@@ -724,9 +731,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         setBulkItems(prev => prev.map(item => {
           if (item.id === activeItemId) {
             const isFirstPhoto = item.photos.length === 0;
-            return { 
-              ...item, 
-              photos: [...item.photos, { ...newPhoto, isCover: isFirstPhoto }] 
+            return {
+              ...item,
+              photos: [...item.photos, { ...newPhoto, isCover: isFirstPhoto }]
             };
           }
           return item;
@@ -757,7 +764,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           performQuickScan(newPhoto, newItem.id);
         }, 500);
       }
-      
+
       // Also keep legacy array for backward compatibility during transition
       setCapturedPhotos(prev => [...prev, newPhoto]);
     }
@@ -780,10 +787,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Legacy photo management functions - no longer needed with simplified bulkItems system
   // (All photo management now happens through bulkItems functions)
-  
+
   // Drag handlers for photo reordering (still needed for UI feedback)
   const [draggedPhotoId, setDraggedPhotoId] = useState<string | null>(null);
-  
+
   const handleDragStart = useCallback((photoId: string) => {
     setDraggedPhotoId(photoId);
     console.log('Drag started for photo:', photoId);
@@ -811,21 +818,21 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Get auth headers
   async function getAuthHeaders() {
-  try {
-    const token = await ensureSupabaseJwt();
-    return {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    };
-  } catch (error) {
-    console.error('Error getting auth headers:', error);
-    return {
-      'Content-Type': 'application/json',
-      // 'Authorization': `Bearer ${token}`, // Uncomment when you have auth
-    };
+    try {
+      const token = await ensureSupabaseJwt();
+      return {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      };
+    } catch (error) {
+      console.error('Error getting auth headers:', error);
+      return {
+        'Content-Type': 'application/json',
+        // 'Authorization': `Bearer ${token}`, // Uncomment when you have auth
+      };
+    }
   }
-  }
-  
+
   async function getToken() {
     return await ensureSupabaseJwt();
   }
@@ -834,7 +841,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const uploadImageToSupabase = useCallback(async (localUri: string, photoId: string): Promise<string> => {
     try {
       console.log('[UPLOAD] Starting upload for:', photoId);
-      
+
       // Get current user
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
@@ -848,11 +855,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       // Create file name
       const fileName = `${user.id}/${photoId}-${Date.now()}.jpg`;
-      
+
       // Convert base64 to proper blob for upload
       // Use bytes directly
       const byteArray = bytes;
-      
+
       const { data, error } = await supabase.storage
         .from('product-images')
         .upload(fileName, byteArray, {
@@ -872,7 +879,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       const publicUrl = urlData.publicUrl;
       console.log('[UPLOAD] Successfully uploaded to:', publicUrl);
-      
+
       return publicUrl;
     } catch (error) {
       console.error('[UPLOAD] Failed to upload image:', error);
@@ -892,211 +899,211 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
     setIsAutoScanning(true);
     setCurrentInstruction('processing');
-    
+
     // Set loading state for this item
     setItemLoadingStates(prev => ({
       ...prev,
       [itemId]: { isLoading: true, stage: 'Quick Scanning...' }
     }));
-    
+
     try {
-        // Ensure auth bridge is ready and we have a Supabase JWT before any network calls
-        const tokenMaybe = await ensureSupabaseJwt();
-        if (!tokenMaybe) {
-          console.warn('[QUICK SCAN] No Supabase JWT available. Are you signed in and the Clerk bridge configured?');
-          showNotificationMessage('Sign in required to scan. Please log in and try again.', 3000);
-          setCurrentInstruction('ready');
-          stopProgressAnimation();
-          setIsAutoScanning(false);
-          
-          // Clear loading state for this item (auth error)
-          setItemLoadingStates(prev => {
-            const { [itemId]: removed, ...rest } = prev;
-            return rest;
-          });
-          return;
-        }
-        console.log('[QUICK SCAN] Starting quick scan for photo:', photo.id);
-        console.log('[QUICK SCAN] Photo URI:', photo.uri);
-        console.log('[QUICK SCAN] Timestamp:', new Date().toISOString());
-      
-        // Upload image to Supabase Storage first
-        console.log('[QUICK SCAN] Uploading image to Supabase...');
-        const publicImageUrl = await uploadImageToSupabase(photo.uri, photo.id);
-        console.log('[QUICK SCAN] Image uploaded to:', publicImageUrl);
-
-        const token = tokenMaybe;
-        
-        // Call the actual backend /orchestrate/quick-scan endpoint
-        const response = await fetch('https://api.sssync.app/api/products/orchestrate/quick-scan', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            images: [{
-              url: publicImageUrl, // Use Supabase public URL instead of local file path
-              metadata: {
-                id: photo.id,
-                timestamp: photo.timestamp,
-                width: photo.width,
-                height: photo.height
-              }
-            }],
-            targetSites: ['general'],
-
-            reranker: "llama4-groq", //"reranker": "llama4-groq"  // or "jina-modal" or "fast-text" or "none" 
-            mode: "ocr-vlm-search"
-          })
-        });
-        
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        
-        const quickScanResult = await response.json();
-        
-        console.log('[QUICK SCAN] Response received:', JSON.stringify(quickScanResult, null, 2));
-        console.log('[QUICK SCAN] Processing time:', quickScanResult.totalProcessingTimeMs + 'ms');
-        console.log('[QUICK SCAN] Overall confidence:', quickScanResult.overallConfidence);
-        console.log('[QUICK SCAN] Recommended action:', quickScanResult.recommendedAction);
-        
-        // Extract matches and reranker metadata
-        const allMatches = quickScanResult.results?.flatMap((result: any) => result.matches) || [];
-        const rerankerMeta = (() => {
-          const first = quickScanResult.results?.[0];
-          const ra = first?.rerankerAnalysis;
-          if (!ra) return undefined;
-          return {
-            type: ra.type as 'llama4-groq' | 'jina-modal' | 'fast-text' | 'none',
-            rankingMethod: ra.rankingMethod as 'exact_match' | 'semantic_similarity' | 'fuzzy_match' | 'vector_fallback' | undefined,
-            confidence: typeof ra.confidence === 'number' ? ra.confidence : undefined,
-            reasoning: typeof ra.reasoning === 'string' ? ra.reasoning : undefined,
-            processingTimeMs: typeof ra.processingTimeMs === 'number' ? ra.processingTimeMs : undefined,
-            alternatives: Array.isArray(ra.alternatives) ? ra.alternatives : undefined,
-          };
-        })();
-        
-        setTimeout(async () => {
-          if (quickScanCancelledRef.current) {
-            console.log('[QUICK SCAN] Scan was cancelled before displaying results, skipping UI update');
-            setIsAutoScanning(false);
-            stopProgressAnimation();
-            setItemLoadingStates(prev => {
-              const { [itemId]: removed, ...rest } = prev;
-              return rest;
-            });
-            setCurrentInstruction('ready');
-            return;
-          }
-          // Show matches for any of these scenarios:
-          // 1. Backend explicitly recommends showing matches (high or medium confidence)
-          // 2. We have matches even with low confidence (let user decide)
-          const shouldShowMatches = 
-            quickScanResult.recommendedAction === 'show_single_match' ||
-            quickScanResult.recommendedAction === 'show_multiple_candidates' ||
-            (allMatches.length > 0 && quickScanResult.overallConfidence !== 'low') ||
-            (allMatches.length > 0 && quickScanResult.recommendedAction === 'fallback_to_manual'); // Show even low confidence matches
-          
-          if (shouldShowMatches) {
-            const confidenceMessage = quickScanResult.overallConfidence === 'high' ? 'High confidence matches found!' :
-           quickScanResult.overallConfidence === 'medium' ? 'Good matches found!' :
-             'Possible matches found (low confidence)';
-            console.log(`[QUICK SCAN] ${confidenceMessage} - showing match sheet`);
-            console.log(`[QUICK SCAN] Recommended action: ${quickScanResult.recommendedAction}, confidence: ${quickScanResult.overallConfidence}, matches: ${allMatches.length}`);
-            
-            setQuickScanResults(allMatches);
-            const nextMatchData: MatchResponse = {
-              systemAction: quickScanResult.recommendedAction as any || 'show_multiple_matches',
-              confidence: quickScanResult.overallConfidence,
-              totalMatches: allMatches.length,
-              rankedCandidates: allMatches.map((match: any) => ({
-                id: match.ProductVariantId || match.productId || `match-${Date.now()}`,
-                title: match.title || 'Unknown Product',
-                description: match.description || '',
-                price: match.price || 0,
-                imageUrl: match.imageUrl || '',
-                // matchPercentage: Math.round((match.combinedScore || 0) * 100),
-                sourceUrl: match.productUrl || match.link || '',
-              }))
-            };
-            if (rerankerMeta) {
-              nextMatchData.reranker = rerankerMeta;
-            }
-            setMatchData(nextMatchData);
-            // Persist per-item for reopening and for MatchSelection overrides
-            console.log('[QUICK SCAN] Storing results for itemId:', itemId);
-            console.log('[QUICK SCAN] Match data:', nextMatchData);
-            setQuickScanStore(prev => {
-              const updated = {
-                ...prev,
-                [itemId]: { matchData: nextMatchData, serpApiData: candidatesToSerpApiData(nextMatchData.rankedCandidates as any) }
-              };
-              console.log('[QUICK SCAN] Updated quickScanStore keys:', Object.keys(updated));
-              return updated;
-            });
-            setCurrentMatchItemId(itemId);
-            setCurrentInstruction('matches_found');
-            stopProgressAnimation();
-            // Ensure bulk sheet is closed before opening match sheet
-            setShowDeepSearchSheet(false);
-            sheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
-            setShowMatchSheet(true);
-            matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2); // Taller sheet (80% height visible)
-          } else {
-            console.log('[QUICK SCAN] No matches found, creating item automatically');
-            // NO FALLBACK TO ANALYZE - just create item and show deep search
-            setCurrentInstruction('no_matches');
-            stopProgressAnimation();
-            showNotificationMessage('No matches found. Item created - use search options to find your product.', 4000);
-            setTimeout(() => {
-              setShowMatchSheet(false);
-              matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
-              setShowDeepSearchSheet(true);
-              sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
-            }, 1000);
-          }
-          setIsAutoScanning(false);
-          
-          // Clear loading state for this item
-          setItemLoadingStates(prev => {
-            const { [itemId]: removed, ...rest } = prev;
-            return rest;
-          });
-        }, 500);
-        
-      } catch (error) {
-        console.error('[QUICK SCAN] Quick scan failed:', error);
-
-        if (quickScanCancelledRef.current) {
-          console.log('[QUICK SCAN] Error occurred but scan was cancelled, skipping UI updates');
-          setIsAutoScanning(false);
-          stopProgressAnimation();
-          setItemLoadingStates(prev => {
-            const { [itemId]: removed, ...rest } = prev;
-            return rest;
-          });
-          setCurrentInstruction('ready');
-          return;
-        }
-
-        console.log('[QUICK SCAN] Creating item automatically (no fallback to analyze)');
-        // NO FALLBACK TO ANALYZE - just create item
-        setCurrentInstruction('no_matches');
+      // Ensure auth bridge is ready and we have a Supabase JWT before any network calls
+      const tokenMaybe = await ensureSupabaseJwt();
+      if (!tokenMaybe) {
+        console.warn('[QUICK SCAN] No Supabase JWT available. Are you signed in and the Clerk bridge configured?');
+        showNotificationMessage('Sign in required to scan. Please log in and try again.', 3000);
+        setCurrentInstruction('ready');
         stopProgressAnimation();
-        showNotificationMessage('Quick scan failed. Item created - use search options.', 3000);
-        setTimeout(() => {
-          setShowMatchSheet(false);
-          matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
-          setShowDeepSearchSheet(true);
-          sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
-        }, 1000);
         setIsAutoScanning(false);
-        
-        // Clear loading state for this item (error case)
+
+        // Clear loading state for this item (auth error)
         setItemLoadingStates(prev => {
           const { [itemId]: removed, ...rest } = prev;
           return rest;
         });
+        return;
       }
+      console.log('[QUICK SCAN] Starting quick scan for photo:', photo.id);
+      console.log('[QUICK SCAN] Photo URI:', photo.uri);
+      console.log('[QUICK SCAN] Timestamp:', new Date().toISOString());
+
+      // Upload image to Supabase Storage first
+      console.log('[QUICK SCAN] Uploading image to Supabase...');
+      const publicImageUrl = await uploadImageToSupabase(photo.uri, photo.id);
+      console.log('[QUICK SCAN] Image uploaded to:', publicImageUrl);
+
+      const token = tokenMaybe;
+
+      // Call the actual backend /orchestrate/quick-scan endpoint
+      const response = await fetch('https://api.sssync.app/api/products/orchestrate/quick-scan', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          images: [{
+            url: publicImageUrl, // Use Supabase public URL instead of local file path
+            metadata: {
+              id: photo.id,
+              timestamp: photo.timestamp,
+              width: photo.width,
+              height: photo.height
+            }
+          }],
+          targetSites: ['general'],
+
+          reranker: "llama4-groq", //"reranker": "llama4-groq"  // or "jina-modal" or "fast-text" or "none" 
+          mode: "ocr-vlm-search"
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const quickScanResult = await response.json();
+
+      console.log('[QUICK SCAN] Response received:', JSON.stringify(quickScanResult, null, 2));
+      console.log('[QUICK SCAN] Processing time:', quickScanResult.totalProcessingTimeMs + 'ms');
+      console.log('[QUICK SCAN] Overall confidence:', quickScanResult.overallConfidence);
+      console.log('[QUICK SCAN] Recommended action:', quickScanResult.recommendedAction);
+
+      // Extract matches and reranker metadata
+      const allMatches = quickScanResult.results?.flatMap((result: any) => result.matches) || [];
+      const rerankerMeta = (() => {
+        const first = quickScanResult.results?.[0];
+        const ra = first?.rerankerAnalysis;
+        if (!ra) return undefined;
+        return {
+          type: ra.type as 'llama4-groq' | 'jina-modal' | 'fast-text' | 'none',
+          rankingMethod: ra.rankingMethod as 'exact_match' | 'semantic_similarity' | 'fuzzy_match' | 'vector_fallback' | undefined,
+          confidence: typeof ra.confidence === 'number' ? ra.confidence : undefined,
+          reasoning: typeof ra.reasoning === 'string' ? ra.reasoning : undefined,
+          processingTimeMs: typeof ra.processingTimeMs === 'number' ? ra.processingTimeMs : undefined,
+          alternatives: Array.isArray(ra.alternatives) ? ra.alternatives : undefined,
+        };
+      })();
+
+      setTimeout(async () => {
+        if (quickScanCancelledRef.current) {
+          console.log('[QUICK SCAN] Scan was cancelled before displaying results, skipping UI update');
+          setIsAutoScanning(false);
+          stopProgressAnimation();
+          setItemLoadingStates(prev => {
+            const { [itemId]: removed, ...rest } = prev;
+            return rest;
+          });
+          setCurrentInstruction('ready');
+          return;
+        }
+        // Show matches for any of these scenarios:
+        // 1. Backend explicitly recommends showing matches (high or medium confidence)
+        // 2. We have matches even with low confidence (let user decide)
+        const shouldShowMatches =
+          quickScanResult.recommendedAction === 'show_single_match' ||
+          quickScanResult.recommendedAction === 'show_multiple_candidates' ||
+          (allMatches.length > 0 && quickScanResult.overallConfidence !== 'low') ||
+          (allMatches.length > 0 && quickScanResult.recommendedAction === 'fallback_to_manual'); // Show even low confidence matches
+
+        if (shouldShowMatches) {
+          const confidenceMessage = quickScanResult.overallConfidence === 'high' ? 'High confidence matches found!' :
+            quickScanResult.overallConfidence === 'medium' ? 'Good matches found!' :
+              'Possible matches found (low confidence)';
+          console.log(`[QUICK SCAN] ${confidenceMessage} - showing match sheet`);
+          console.log(`[QUICK SCAN] Recommended action: ${quickScanResult.recommendedAction}, confidence: ${quickScanResult.overallConfidence}, matches: ${allMatches.length}`);
+
+          setQuickScanResults(allMatches);
+          const nextMatchData: MatchResponse = {
+            systemAction: quickScanResult.recommendedAction as any || 'show_multiple_matches',
+            confidence: quickScanResult.overallConfidence,
+            totalMatches: allMatches.length,
+            rankedCandidates: allMatches.map((match: any) => ({
+              id: match.ProductVariantId || match.productId || `match-${Date.now()}`,
+              title: match.title || 'Unknown Product',
+              description: match.description || '',
+              price: match.price || 0,
+              imageUrl: match.imageUrl || '',
+              // matchPercentage: Math.round((match.combinedScore || 0) * 100),
+              sourceUrl: match.productUrl || match.link || '',
+            }))
+          };
+          if (rerankerMeta) {
+            nextMatchData.reranker = rerankerMeta;
+          }
+          setMatchData(nextMatchData);
+          // Persist per-item for reopening and for MatchSelection overrides
+          console.log('[QUICK SCAN] Storing results for itemId:', itemId);
+          console.log('[QUICK SCAN] Match data:', nextMatchData);
+          setQuickScanStore(prev => {
+            const updated = {
+              ...prev,
+              [itemId]: { matchData: nextMatchData, serpApiData: candidatesToSerpApiData(nextMatchData.rankedCandidates as any) }
+            };
+            console.log('[QUICK SCAN] Updated quickScanStore keys:', Object.keys(updated));
+            return updated;
+          });
+          setCurrentMatchItemId(itemId);
+          setCurrentInstruction('matches_found');
+          stopProgressAnimation();
+          // Ensure bulk sheet is closed before opening match sheet
+          setShowDeepSearchSheet(false);
+          sheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
+          setShowMatchSheet(true);
+          matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2); // Taller sheet (80% height visible)
+        } else {
+          console.log('[QUICK SCAN] No matches found, creating item automatically');
+          // NO FALLBACK TO ANALYZE - just create item and show deep search
+          setCurrentInstruction('no_matches');
+          stopProgressAnimation();
+          showNotificationMessage('No matches found. Item created - use search options to find your product.', 4000);
+          setTimeout(() => {
+            setShowMatchSheet(false);
+            matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
+            setShowDeepSearchSheet(true);
+            sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
+          }, 1000);
+        }
+        setIsAutoScanning(false);
+
+        // Clear loading state for this item
+        setItemLoadingStates(prev => {
+          const { [itemId]: removed, ...rest } = prev;
+          return rest;
+        });
+      }, 500);
+
+    } catch (error) {
+      console.error('[QUICK SCAN] Quick scan failed:', error);
+
+      if (quickScanCancelledRef.current) {
+        console.log('[QUICK SCAN] Error occurred but scan was cancelled, skipping UI updates');
+        setIsAutoScanning(false);
+        stopProgressAnimation();
+        setItemLoadingStates(prev => {
+          const { [itemId]: removed, ...rest } = prev;
+          return rest;
+        });
+        setCurrentInstruction('ready');
+        return;
+      }
+
+      console.log('[QUICK SCAN] Creating item automatically (no fallback to analyze)');
+      // NO FALLBACK TO ANALYZE - just create item
+      setCurrentInstruction('no_matches');
+      stopProgressAnimation();
+      showNotificationMessage('Quick scan failed. Item created - use search options.', 3000);
+      setTimeout(() => {
+        setShowMatchSheet(false);
+        matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
+        setShowDeepSearchSheet(true);
+        sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
+      }, 1000);
+      setIsAutoScanning(false);
+
+      // Clear loading state for this item (error case)
+      setItemLoadingStates(prev => {
+        const { [itemId]: removed, ...rest } = prev;
+        return rest;
+      });
+    }
   }, [isAutoScanning, sheetTranslateY, stopProgressAnimation, uploadImageToSupabase, candidatesToSerpApiData, quickScanCancelledRef]);
 
   // Open Match Selection screen using quick scan results for a given item
@@ -1142,7 +1149,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const performAnalyze = useCallback(async (firstPhotos: CapturedPhoto[]) => {
     try {
       console.log('[ANALYZE] Sending payload of ' + firstPhotos.length + ' first photos to backend for analysis, matching, and item creation');
-      
+
       // Upload images to Supabase Storage first
       console.log('[ANALYZE] Uploading images to Supabase...');
 
@@ -1152,39 +1159,39 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       const products = publicImageUrls.map((url, index) => ({
         productIndex: index,
-        images: [{url}]
+        images: [{ url }]
       }));
 
       console.log('[ANALYZE] Images uploaded to:', publicImageUrls);
-      
-             const finalPayload = {
-         products,
-         options: {
-           useReranking: true,
-           vectorSearchLimit: 10,
-         }
-       };
 
-       const token = await getToken();
-       const response = await fetch('https://api.sssync.app/api/products/orchestrate/match', {
-         method: 'POST',
-         headers: { 
-          'Authorization': `Bearer ${token}`, 
-          'Content-Type': 'application/json' 
+      const finalPayload = {
+        products,
+        options: {
+          useReranking: true,
+          vectorSearchLimit: 10,
+        }
+      };
+
+      const token = await getToken();
+      const response = await fetch('https://api.sssync.app/api/products/orchestrate/match', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
         },
-         body: JSON.stringify(finalPayload)
+        body: JSON.stringify(finalPayload)
       });
 
       console.log('[ANALYZE] Response received:', response);
-      
+
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
-      
+
       const analyzeResult = await response.json();
       console.log('[ANALYZE] Response received:', analyzeResult);
       return analyzeResult;
-      
+
     } catch (error) {
       console.error('[ANALYZE] Analyze failed:', error);
       showNotificationMessage('Analysis failed. Please try again in a second or two.', 3000);
@@ -1205,7 +1212,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     } else {
       // If the user is trying to TURN ON bulk mode...
       setIsBulkMode(true);
-      
+
       // If there are existing photos that haven't been put into an item yet,
       // create the first item with them. This handles the transition from non-bulk to bulk.
       if (capturedPhotos.length > 0 && bulkItems.length === 0) {
@@ -1227,7 +1234,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     console.log('[ADD NEW ITEM] Starting to add new item:', newItemId);
     console.log('[ADD NEW ITEM] Current bulk mode:', isBulkMode);
     console.log('[ADD NEW ITEM] Current items count:', bulkItems.length);
-    
+
     // Auto-enable bulk mode when adding items
     if (!isBulkMode) {
       console.log('[ADD NEW ITEM] Enabling bulk mode');
@@ -1292,8 +1299,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         return newItems;
       });
       setActiveItemId(newItemId);
-    } 
-    
+    }
+
     if (isBulkMode && bulkItems.length > 0) {
       console.log("You can't disable bulk mode when there are items in the list");
       showNotificationMessage('You can\'t disable bulk mode when there are items in the list', 3000);
@@ -1312,7 +1319,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return next;
     });
     setActiveItemId(itemId);
-    
+
     // Show notification of which item is now active
     const itemIndex = bulkItems.findIndex(item => item.id === itemId) + 1;
     showNotificationMessage(`Switched to Item ${itemIndex}`, 1500);
@@ -1536,8 +1543,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           <Text style={styles.permissionText}>
             We need camera access to help you scan and identify products
           </Text>
-          <TouchableOpacity 
-            style={styles.permissionButton} 
+          <TouchableOpacity
+            style={styles.permissionButton}
             onPress={() => Camera.requestCameraPermissionsAsync()}
           >
             <Text style={styles.permissionButtonText}>Grant Permission</Text>
@@ -1550,7 +1557,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   return (
     <GestureHandlerRootView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="black" />
-      
+
       {/* Camera View */}
       <CameraView
         ref={cameraRef}
@@ -1563,22 +1570,22 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
         }}
       >
-      {/* Flash overlay */}
-      <Animated.View style={[styles.flashOverlay, flashAnimatedStyle]} />
-      
-      {/* Camera paused overlay */}
-      {(showDeepSearchSheet || showMatchSheet || showBarcodeResultModal) && (
-        <View style={styles.cameraPausedOverlay}>
-          <View style={styles.cameraPausedIndicator}>
-            <MaterialIcons name="pause-circle-filled" size={48} color="rgba(255,255,255,0.8)" />
-            <Text style={styles.cameraPausedText}>Camera Paused</Text>
-            <Text style={styles.cameraPausedSubtext}>Saving battery while sheet is open</Text>
+        {/* Flash overlay */}
+        <Animated.View style={[styles.flashOverlay, flashAnimatedStyle]} />
+
+        {/* Camera paused overlay */}
+        {(showDeepSearchSheet || showMatchSheet || showBarcodeResultModal) && (
+          <View style={styles.cameraPausedOverlay}>
+            <View style={styles.cameraPausedIndicator}>
+              <MaterialIcons name="pause-circle-filled" size={48} color="rgba(255,255,255,0.8)" />
+              <Text style={styles.cameraPausedText}>Camera Paused</Text>
+              <Text style={styles.cameraPausedSubtext}>Saving battery while sheet is open</Text>
+            </View>
           </View>
-        </View>
-      )}
-      
+        )}
+
         {/* Tap to focus overlay */}
-          <Pressable 
+        <Pressable
           style={styles.tapToFocusOverlay}
           onPress={(event) => {
             // Close sheets if open - instant close
@@ -1597,18 +1604,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             }
           }}
         />
-        
+
         {/* Photo stack (top left) - shows active item's photos in bulk mode */}
         {(() => {
           const activeItem = activeItemId ? bulkItems.find(item => item.id === activeItemId) : null;
           const displayPhotos = activeItem?.photos || [];
           const itemIndex = activeItem ? bulkItems.findIndex(item => item.id === activeItemId) + 1 : 0;
-          
+
           console.log('[PHOTO STACK] Rendering for activeItemId:', activeItemId);
           console.log('[PHOTO STACK] Found activeItem:', activeItem ? 'YES' : 'NO');
           console.log('[PHOTO STACK] displayPhotos count:', displayPhotos.length);
           console.log('[PHOTO STACK] displayPhotos IDs:', displayPhotos.map(p => p.id));
-          
+
           return (
             <View style={styles.photoStackContainer} key={`photo-stack-${activeItemId || 'none'}`}>
               {/* Active item indicator - always show if there's an active item */}
@@ -1617,19 +1624,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   <Text style={styles.activeItemIndicatorText}>
                     Item {itemIndex}
                   </Text>
-          </View>
+                </View>
               )}
-              
+
               {displayPhotos.length > 0 && (
-                <PhotoStack 
+                <PhotoStack
                   key={`photos-${activeItemId}-${displayPhotos.length}`}
                   photos={displayPhotos}
-                  onSetCover={activeItemId 
+                  onSetCover={activeItemId
                     ? (photoId: string) => setBulkItemCoverPhoto(activeItemId, photoId)
                     : () => console.log('No active item for cover photo')
                   }
                   onRemovePhoto={activeItemId
-                    ? (photoId: string) => removeBulkItemPhoto(activeItemId, photoId) 
+                    ? (photoId: string) => removeBulkItemPhoto(activeItemId, photoId)
                     : () => console.log('No active item for photo removal')
                   }
                   onDoubleTap={activeItemId
@@ -1645,54 +1652,54 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             </View>
           );
         })()}
-        
-                 {/* Camera controls (top right) */}
-         <CameraControls 
-           flash={flash}
-           onToggleFlash={toggleFlash}
-           onToggleFacing={toggleFacing}
-           onPastScans={() => navigation.navigate('PastScans' as never)}
-           isBulkMode={isBulkMode}
-           onToggleBulkMode={toggleBulkMode}
-         />
-        
-                 {/* Center overlay with instructions */}
-         <CenterOverlay 
-           instruction={getInstructionText(currentInstruction)}
-           isProcessing={currentInstruction === 'processing'}
-           cameraMode={cameraMode}
-           scannedBarcode={scannedBarcode}
-           onCopyBarcode={copyBarcodeToClipboard}
-         />
-         
-         {/* Photo frame overlay */}
-         <View style={styles.photoFrameOverlay} />
-         
-         {/* Scan line overlay for barcode mode */}
-         {cameraMode === 'barcode' && (
-           <View style={styles.scanLineContainer}>
-             <View style={styles.scanLine} />
+
+        {/* Camera controls (top right) */}
+        <CameraControls
+          flash={flash}
+          onToggleFlash={toggleFlash}
+          onToggleFacing={toggleFacing}
+          onPastScans={() => navigation.navigate('PastScans' as never)}
+          isBulkMode={isBulkMode}
+          onToggleBulkMode={toggleBulkMode}
+        />
+
+        {/* Center overlay with instructions */}
+        <CenterOverlay
+          instruction={getInstructionText(currentInstruction)}
+          isProcessing={currentInstruction === 'processing'}
+          cameraMode={cameraMode}
+          scannedBarcode={scannedBarcode}
+          onCopyBarcode={copyBarcodeToClipboard}
+        />
+
+        {/* Photo frame overlay */}
+        <View style={styles.photoFrameOverlay} />
+
+        {/* Scan line overlay for barcode mode */}
+        {cameraMode === 'barcode' && (
+          <View style={styles.scanLineContainer}>
+            <View style={styles.scanLine} />
           </View>
-         )}
-         
-         {/* Progress Bar */}
-         {showProgressBar && (
-           <ProgressBarOverlay 
-             progressWidth={progressWidth}
-             spinRotation={spinRotation}
-           />
-         )}
-         
-         {/* Notification Bar */}
-         {showNotification && (
-           <NotificationBar 
-             message={notificationMessage}
-             opacity={notificationOpacity}
-             translateY={notificationTranslateY}
-           />
-         )}
-         
-         {/* DEBUG: Visual State Indicator 
+        )}
+
+        {/* Progress Bar */}
+        {showProgressBar && (
+          <ProgressBarOverlay
+            progressWidth={progressWidth}
+            spinRotation={spinRotation}
+          />
+        )}
+
+        {/* Notification Bar */}
+        {showNotification && (
+          <NotificationBar
+            message={notificationMessage}
+            opacity={notificationOpacity}
+            translateY={notificationTranslateY}
+          />
+        )}
+
+        {/* DEBUG: Visual State Indicator 
          {__DEV__ && (
            <View style={styles.debugOverlay}>
              <Text style={styles.debugText}>
@@ -1739,9 +1746,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           </View>
            </View>
          )} */}
-        
-                 {/* Bottom controls */}
-        <BottomControls 
+
+        {/* Bottom controls */}
+        <BottomControls
           onCapture={handleCapture}
           isCapturing={isCapturing}
           captureButtonScale={captureButtonScale}
@@ -1751,6 +1758,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           onImageUpload={handleImageUpload}
           onContinue={handleContinue}
           hasBarcodeResult={!!barcodeSearchResult}
+          productName={barcodeSearchResult?.variant?.Title}
         />
       </CameraView>
 
@@ -1764,7 +1772,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         presentationStyle="overFullScreen"
       >
         {showMatchSheet && matchData ? (
-          <MatchResultsSheet 
+          <MatchResultsSheet
             matchData={matchData}
             onClose={closeMatchSheet}
             onUseForSelection={() => openMatchSelectionForItem(currentMatchItemId)}
@@ -1782,58 +1790,58 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onRequestClose={closeBulkItemsSheet}
         presentationStyle="overFullScreen"
       >
-      {showDeepSearchSheet && (() => {
-        console.log('[SHEET CONDITIONAL] Sheet IS showing - showDeepSearchSheet is true');
-        console.log('[SHEET PROPS] ==================');
-        console.log('[SHEET PROPS] Passing to BulkItemsSheet:');
-        console.log('[SHEET PROPS] - photos (capturedPhotos):', capturedPhotos.length, 'items');
-        capturedPhotos.forEach((photo, index) => {
-          console.log(`[SHEET PROPS]   Photo ${index + 1}:`, {
-            id: photo.id,
-            uri: photo.uri.substring(0, 30) + '...',
-            isCover: photo.isCover
+        {showDeepSearchSheet && (() => {
+          console.log('[SHEET CONDITIONAL] Sheet IS showing - showDeepSearchSheet is true');
+          console.log('[SHEET PROPS] ==================');
+          console.log('[SHEET PROPS] Passing to BulkItemsSheet:');
+          console.log('[SHEET PROPS] - photos (capturedPhotos):', capturedPhotos.length, 'items');
+          capturedPhotos.forEach((photo, index) => {
+            console.log(`[SHEET PROPS]   Photo ${index + 1}:`, {
+              id: photo.id,
+              uri: photo.uri.substring(0, 30) + '...',
+              isCover: photo.isCover
+            });
           });
-        });
-        console.log('[SHEET PROPS] - isBulkMode:', isBulkMode);
-        console.log('[SHEET PROPS] - bulkItems:', bulkItems.length, 'items');
-        bulkItems.forEach((item, index) => {
-          console.log(`[SHEET PROPS]   BulkItem ${index + 1}:`, {
-            id: item.id,
-            photosCount: item.photos.length,
-            isActive: item.isActive
+          console.log('[SHEET PROPS] - isBulkMode:', isBulkMode);
+          console.log('[SHEET PROPS] - bulkItems:', bulkItems.length, 'items');
+          bulkItems.forEach((item, index) => {
+            console.log(`[SHEET PROPS]   BulkItem ${index + 1}:`, {
+              id: item.id,
+              photosCount: item.photos.length,
+              isActive: item.isActive
+            });
           });
-        });
-        console.log('[SHEET PROPS] - activeItemId:', activeItemId);
-        console.log('[SHEET PROPS] ==================');
-        
-        return (
-          <BulkItemsSheet 
-            onClose={closeBulkItemsSheet}
-            onStartBroadSearch={handleStartBroadSearch}
-            sheetStyle={sheetAnimatedStyle}
-            photos={capturedPhotos}
-            isBulkMode={isBulkMode}
-            bulkItems={bulkItems}
-            activeItemId={activeItemId}
-            onAddNewItem={addNewBulkItem}
-            onImageUpload={handleImageUpload}
-            onDeleteItem={deleteBulkItem}
-            onMovePhoto={movePhoto}
-            onSelectItem={selectActiveItem}
-            onSetCoverPhoto={setBulkItemCoverPhoto}
-            onRemovePhoto={removeBulkItemPhoto}
-            performAnalyze={performAnalyze}
-            sheetTranslateY={sheetTranslateY}
-            navigation={navigation}
-            jobResponse={jobResponse}
-            setJobResponse={setJobResponse}
-            quickScanStore={quickScanStore}
-            onOpenQuickMatches={openQuickMatchesForItem}
-            itemLoadingStates={itemLoadingStates}
-            setItemLoadingStates={setItemLoadingStates}
-          />
-        );
-      })()}
+          console.log('[SHEET PROPS] - activeItemId:', activeItemId);
+          console.log('[SHEET PROPS] ==================');
+
+          return (
+            <BulkItemsSheet
+              onClose={closeBulkItemsSheet}
+              onStartBroadSearch={handleStartBroadSearch}
+              sheetStyle={sheetAnimatedStyle}
+              photos={capturedPhotos}
+              isBulkMode={isBulkMode}
+              bulkItems={bulkItems}
+              activeItemId={activeItemId}
+              onAddNewItem={addNewBulkItem}
+              onImageUpload={handleImageUpload}
+              onDeleteItem={deleteBulkItem}
+              onMovePhoto={movePhoto}
+              onSelectItem={selectActiveItem}
+              onSetCoverPhoto={setBulkItemCoverPhoto}
+              onRemovePhoto={removeBulkItemPhoto}
+              performAnalyze={performAnalyze}
+              sheetTranslateY={sheetTranslateY}
+              navigation={navigation}
+              jobResponse={jobResponse}
+              setJobResponse={setJobResponse}
+              quickScanStore={quickScanStore}
+              onOpenQuickMatches={openQuickMatchesForItem}
+              itemLoadingStates={itemLoadingStates}
+              setItemLoadingStates={setItemLoadingStates}
+            />
+          );
+        })()}
       </Modal>
 
       {/* Barcode Quick Inventory Editor Modal (Reused MatchSheet Style) */}
@@ -1846,57 +1854,61 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         presentationStyle="overFullScreen"
       >
         {showBarcodeResultModal && barcodeSearchResult ? (
-            <Animated.View style={[styles.matchSheet, matchSheetAnimatedStyle]}>
-              <QuickProductDetailSheet
-                product={barcodeSearchResult}
-                platformLocations={platformLocations}
-                onClose={closeBarcodeSheet}
-                onOpenDetail={() => {
-                  if (barcodeSearchResult?.variant?.ProductId) {
-                    closeBarcodeSheet();
-                    (navigation as any).navigate('ProductDetail', {
-                      productId: barcodeSearchResult.variant.ProductId,
-                    });
-                  }
-                }}
-                onSave={async (updates) => {
-                  console.log('[BARCODE SAVE] Saving updates:', updates);
-                  try {
-                    // Use Supabase directly to update inventory
-                    // updates = [{ variantId, location, quantity, price }]
-                    const updatePromises = updates.map(async (update) => {
-                      const { variantId, location, quantity, price } = update;
-                      
-                      // Prepare payload
-                      const payload: any = {
-                        Quantity: quantity,
-                        UpdatedAt: new Date().toISOString(),
-                      };
-                      if (price !== undefined) payload.Price = price;
+          <Animated.View style={[styles.matchSheet, matchSheetAnimatedStyle]}>
+            <QuickProductDetailSheet
+              product={barcodeSearchResult}
+              platformLocations={platformLocations}
+              onClose={closeBarcodeSheet}
+              onOpenDetail={() => {
+                // ProductDetail expects a ProductVariant Id, not the parent Product Id
+                const variantId = barcodeSearchResult?.variant?.Id;
+                if (variantId) {
+                  closeBarcodeSheet();
+                  (navigation as any).navigate('ProductDetail', {
+                    productId: variantId,  // This is the ProductVariant.Id that ProductDetail expects
+                  });
+                } else {
+                  console.error('[QUICK DETAIL] No variant Id found for navigation');
+                }
+              }}
+              onSave={async (updates) => {
+                console.log('[BARCODE SAVE] Saving updates:', updates);
+                try {
+                  // Use Supabase directly to update inventory
+                  // updates = [{ variantId, location, quantity, price }]
+                  const updatePromises = updates.map(async (update) => {
+                    const { variantId, location, quantity, price } = update;
 
-                      // Update inventory level
-                      const { error } = await supabase
-                        .from('InventoryLevels')
-                        .update(payload)
-                        .eq('ProductVariantId', variantId)
-                        .eq('PlatformLocationId', location);
-                        
-                      if (error) throw error;
-                    });
+                    // Prepare payload
+                    const payload: any = {
+                      Quantity: quantity,
+                      UpdatedAt: new Date().toISOString(),
+                    };
+                    if (price !== undefined) payload.Price = price;
 
-                    await Promise.all(updatePromises);
-                    Alert.alert('Success', 'Inventory updated successfully');
-                    
-                    // Close sheet after save? Or keep open?
-                    // User might want to scan next.
-                    // Let's keep open for verification or manual close.
-                  } catch (e) {
-                    console.error('[BARCODE SAVE] Error:', e);
-                    Alert.alert('Error', 'Failed to save updates');
-                  }
-                }}
-              />
-            </Animated.View>
+                    // Update inventory level
+                    const { error } = await supabase
+                      .from('InventoryLevels')
+                      .update(payload)
+                      .eq('ProductVariantId', variantId)
+                      .eq('PlatformLocationId', location);
+
+                    if (error) throw error;
+                  });
+
+                  await Promise.all(updatePromises);
+                  Alert.alert('Success', 'Inventory updated successfully');
+
+                  // Close sheet after save? Or keep open?
+                  // User might want to scan next.
+                  // Let's keep open for verification or manual close.
+                } catch (e) {
+                  console.error('[BARCODE SAVE] Error:', e);
+                  Alert.alert('Error', 'Failed to save updates');
+                }
+              }}
+            />
+          </Animated.View>
         ) : null}
       </Modal>
     </GestureHandlerRootView>
@@ -1922,11 +1934,11 @@ const ProgressBarOverlay: React.FC<{
     <View style={styles.progressBarContainer}>
       <View style={styles.progressBarBackground}>
         <Animated.View style={[styles.progressBarFill, progressBarStyle]} />
-              </View>
+      </View>
       <Animated.View style={[styles.progressSpinner, spinnerStyle]}>
         <Icon name="loading" size={20} color="#4CAF50" />
-        </Animated.View>
-            </View>
+      </Animated.View>
+    </View>
   );
 };
 
@@ -1945,7 +1957,7 @@ const NotificationBar: React.FC<{
     <Animated.View style={[styles.notificationBar, notificationStyle]}>
       <Icon name="information-outline" size={20} color="white" />
       <Text style={styles.notificationText}>{message}</Text>
-        </Animated.View>
+    </Animated.View>
   );
 };
 
@@ -1968,7 +1980,7 @@ const CenterOverlay: React.FC<{
             <Text style={styles.copyButtonText}>Copy</Text>
           </TouchableOpacity>
         </Animated.View>
-              </View>
+      </View>
     );
   }
 
@@ -1980,7 +1992,7 @@ const CenterOverlay: React.FC<{
         {isProcessing && (
           <View style={styles.processingIndicator}>
             <MaterialIcons name="sync" size={16} color="white" />
-            </View>
+          </View>
         )}
       </Animated.View>
     </View>
@@ -1998,62 +2010,64 @@ const BottomControls: React.FC<{
   onImageUpload: () => void;
   onContinue: () => void;
   hasBarcodeResult?: boolean;
-}> = ({ 
-  onCapture, 
-  isCapturing, 
-  captureButtonScale, 
-  photosCount, 
-  cameraMode, 
-  onToggleCameraMode, 
+  productName?: string; // For showing product name on Update button
+}> = ({
+  onCapture,
+  isCapturing,
+  captureButtonScale,
+  photosCount,
+  cameraMode,
+  onToggleCameraMode,
   onImageUpload,
   onContinue,
-  hasBarcodeResult
+  hasBarcodeResult,
+  productName
 }) => {
-  const captureButtonAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: captureButtonScale.value }],
-  }));
+    const captureButtonAnimatedStyle = useAnimatedStyle(() => ({
+      transform: [{ scale: captureButtonScale.value }],
+    }));
 
-  return (
+    return (
       <View style={styles.bottomControls}>
         <Animated.View entering={FadeIn.delay(500)} style={styles.controlsRow}>
-        <TouchableOpacity style={styles.galleryButton} onPress={onImageUpload}>
+          <TouchableOpacity style={styles.galleryButton} onPress={onImageUpload}>
             <Icon name="image-multiple-outline" size={24} color="white" />
           </TouchableOpacity>
-          
+
           <Animated.View style={captureButtonAnimatedStyle}>
             <TouchableOpacity
               style={styles.captureButton}
-            onPress={onCapture}
+              onPress={onCapture}
               disabled={isCapturing}
             >
               <View style={styles.captureButtonInner} />
             </TouchableOpacity>
           </Animated.View>
-          
-        <TouchableOpacity style={styles.focusButton} onPress={onToggleCameraMode}>
-          <Icon 
-            name={cameraMode === 'camera' ? 'camera' : 'barcode-scan'} 
-            size={24} 
-            color="white" 
-          />
+
+          <TouchableOpacity style={styles.focusButton} onPress={onToggleCameraMode}>
+            <Icon
+              name={cameraMode === 'camera' ? 'camera' : 'barcode-scan'}
+              size={24}
+              color="white"
+            />
           </TouchableOpacity>
         </Animated.View>
 
-      <Animated.View entering={SlideInDown.delay(700)} style={styles.continueButtonContainer}>
-        <TouchableOpacity style={styles.continueButton} onPress={onContinue}>
-          <Text style={styles.continueButtonText}>
-            {cameraMode === 'barcode' && hasBarcodeResult
-              ? 'Open Update Product'
-              : photosCount > 0 
-                ? `Continue with ${photosCount} photo${photosCount > 1 ? 's' : ''}`
-                : 'Take a photo to get started'
-            }
-          </Text>
+        <Animated.View entering={SlideInDown.delay(700)} style={styles.continueButtonContainer}>
+          <TouchableOpacity style={styles.continueButton} onPress={onContinue}>
+            <Text style={styles.continueButtonText} numberOfLines={1}>
+              {cameraMode === 'barcode' && hasBarcodeResult
+                ? productName ? `Update: ${productName.slice(0, 25)}${productName.length > 25 ? '...' : ''}` : 'Open Update Product'
+                : photosCount > 0
+                  ? `Continue with ${photosCount} photo${photosCount > 1 ? 's' : ''}`
+                  : 'Take a photo to get started'
+              }
+            </Text>
           </TouchableOpacity>
-      </Animated.View>
-    </View>
-  );
-};
+        </Animated.View>
+      </View>
+    );
+  };
 
 // Helper to clean up match text
 const cleanMatchText = (text: string) => {
@@ -2095,18 +2109,18 @@ const MatchResultsSheet: React.FC<{
 
   return (
     <Animated.View style={[styles.matchSheet, sheetStyle]}>
-      <ScrollView 
-          style={[
-            styles.itemsScrollContainer, 
-          ]}
-          showsVerticalScrollIndicator={true}
-          contentContainerStyle={[
-            styles.scrollContent,
-            { 
-              flexGrow: 1
-            }
-          ]}
-        >
+      <ScrollView
+        style={[
+          styles.itemsScrollContainer,
+        ]}
+        showsVerticalScrollIndicator={true}
+        contentContainerStyle={[
+          styles.scrollContent,
+          {
+            flexGrow: 1
+          }
+        ]}
+      >
         <View style={styles.sheetHeader}>
           <TouchableOpacity>
             <Icon name="close" size={24} color="#FFF" />
@@ -2118,18 +2132,18 @@ const MatchResultsSheet: React.FC<{
             <Icon name="close" size={24} color="#333" />
           </TouchableOpacity>
         </View>
-        
+
         <Text style={styles.selectionHint}>
           Tap to select matches for generating listings
         </Text>
-        
+
         <View style={styles.matchResults}>
           {matchData.rankedCandidates.map((candidate, index) => {
             const isSelected = selectedMatchIds.has(candidate.id);
-            
+
             return (
-              <TouchableOpacity 
-                key={`match-${candidate.id}-${index}`} 
+              <TouchableOpacity
+                key={`match-${candidate.id}-${index}`}
                 style={[
                   styles.matchCard,
                   isSelected && styles.matchCardSelected
@@ -2150,7 +2164,7 @@ const MatchResultsSheet: React.FC<{
                     </Text>
                   )}
                 </View>
-                
+
                 {/* Selection indicator overlay */}
                 {isSelected && (
                   <View style={styles.matchSelectionOverlay}>
@@ -2163,9 +2177,9 @@ const MatchResultsSheet: React.FC<{
             );
           })}
         </View>
-        
+
         <View style={styles.sheetActions}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={[
               styles.primaryButton,
               selectedMatchIds.size === 0 && styles.primaryButtonDisabled
@@ -2174,13 +2188,13 @@ const MatchResultsSheet: React.FC<{
             disabled={selectedMatchIds.size === 0}
           >
             <Text style={styles.primaryButtonText}>
-              {selectedMatchIds.size > 0 
+              {selectedMatchIds.size > 0
                 ? `Generate from ${selectedMatchIds.size} match${selectedMatchIds.size > 1 ? 'es' : ''}`
                 : 'Select matches to continue'
               }
             </Text>
           </TouchableOpacity>
-          
+
           {/*
           <View style={styles.secondaryActions}>
             <TouchableOpacity style={styles.secondaryButton}>
@@ -2223,7 +2237,7 @@ const BulkItemsSheet: React.FC<{
   itemLoadingStates: Record<string, { isLoading: boolean; stage: string; }>;
   setItemLoadingStates: React.Dispatch<React.SetStateAction<Record<string, { isLoading: boolean; stage: string; }>>>;
 }> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, itemLoadingStates, setItemLoadingStates }) => {
-  
+
   console.log('[SHEET RENDER] ==================');
   console.log('[SHEET RENDER] BulkItemsSheet RE-RENDERED at:', new Date().toISOString());
   console.log('[SHEET RENDER] Props received:');
@@ -2232,18 +2246,18 @@ const BulkItemsSheet: React.FC<{
   console.log('[SHEET RENDER] - bulkItems array:', JSON.stringify(bulkItems, null, 2));
   console.log('[SHEET RENDER] - activeItemId:', activeItemId);
   console.log('[SHEET RENDER] ==================');
-  
+
   // SIMPLIFIED: Always use bulkItems (no more virtual items)
   let displayItems: Array<{ id: string; photos: CapturedPhoto[]; title?: string; isActive?: boolean; }>;
-  
+
   console.log('[DISPLAY LOGIC] ==================');
   console.log('[DISPLAY LOGIC] Using simplified logic - always show bulkItems');
   console.log('[DISPLAY LOGIC] bulkItems.length:', bulkItems.length);
   console.log('[DISPLAY LOGIC] photos (capturedPhotos) length:', photos.length, '(legacy - should be same as total photos in bulkItems)');
-  
+
   // Always use bulkItems - much simpler!
   displayItems = bulkItems;
-  
+
   console.log('[DISPLAY LOGIC] Final displayItems (same as bulkItems):');
   displayItems.forEach((item, index) => {
     console.log(`[DISPLAY LOGIC] Item ${index + 1}:`, {
@@ -2254,9 +2268,9 @@ const BulkItemsSheet: React.FC<{
     });
   });
   console.log('[DISPLAY LOGIC] ==================');
-  
+
   const totalItems = displayItems.length;
-  
+
   console.log('[SHEET DEBUG] ==================');
   console.log('[SHEET DEBUG] isBulkMode:', isBulkMode);
   console.log('[SHEET DEBUG] bulkItems length:', bulkItems.length);
@@ -2266,13 +2280,13 @@ const BulkItemsSheet: React.FC<{
   console.log('[SHEET DEBUG] totalItems:', totalItems);
   console.log('[SHEET DEBUG] Sheet State:', totalItems === 0 ? 'EMPTY' : 'HAS_ITEMS');
   console.log('[SHEET DEBUG] ==================');
-  
+
   // Fixed height at 60% of screen
   const sheetMaxHeight = SCREEN_HEIGHT * 0.6;
   const headerHeight = 160; // Increased for debug sections
   const footerHeight = 120; // Height for fixed bottom actions
   const scrollableHeight = Math.max(200, sheetMaxHeight - headerHeight - footerHeight);
-  
+
   console.log('[SHEET LAYOUT] Heights calculated:', {
     screenHeight: SCREEN_HEIGHT,
     sheetMaxHeight,
@@ -2280,7 +2294,7 @@ const BulkItemsSheet: React.FC<{
     footerHeight,
     scrollableHeight
   });
-  
+
   const dynamicSheetStyle = useAnimatedStyle(() => ({
     transform: sheetStyle.transform,
     height: sheetMaxHeight,
@@ -2295,7 +2309,7 @@ const BulkItemsSheet: React.FC<{
           const minY = SCREEN_HEIGHT * 0.2; // Maximum expanded (80% height)
           const maxY = SCREEN_HEIGHT * 0.6; // Minimum height (40% height)
           const currentY = SCREEN_HEIGHT * 0.4; // Current position (60% height)
-          
+
           // Calculate new position based on drag
           const newY = Math.max(minY, Math.min(maxY, currentY + translationY * 0.5));
           sheetTranslateY.value = newY;
@@ -2303,7 +2317,7 @@ const BulkItemsSheet: React.FC<{
         onHandlerStateChange={(event) => {
           if (event.nativeEvent.state === State.END) {
             const { velocityY } = event.nativeEvent;
-            
+
             // Snap to positions based on velocity
             if (velocityY > 500) {
               // Fast downward swipe - close completely
@@ -2315,7 +2329,7 @@ const BulkItemsSheet: React.FC<{
               // Snap to nearest position
               const currentY = sheetTranslateY.value;
               const midPoint = SCREEN_HEIGHT * 0.4;
-              
+
               if (currentY < midPoint) {
                 // Closer to top - expand
                 sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2);
@@ -2330,45 +2344,45 @@ const BulkItemsSheet: React.FC<{
         <Animated.View style={styles.dragHandle}>
           <TouchableOpacity onPress={onClose} style={styles.dragHandleButton}>
             <View style={styles.dragHandleBar} />
-            </TouchableOpacity>
-          </Animated.View>
+          </TouchableOpacity>
+        </Animated.View>
       </PanGestureHandler>
-      
-          <View style={styles.sheetHeader}>
+
+      <View style={styles.sheetHeader}>
         <TouchableOpacity onPress={onClose}>
-              <Icon name="close" size={24} color="#333" />
-            </TouchableOpacity>
+          <Icon name="close" size={24} color="#333" />
+        </TouchableOpacity>
         <Text style={styles.sheetTitle}>
-          {totalItems === 0 
+          {totalItems === 0
             ? 'Ready to Create Items'
             : `Creating ${totalItems} New Item${totalItems > 1 ? 's' : ''}`
           }
         </Text>
         <View style={{ width: 24 }} />
-          </View>
-          
-          <View style={styles.sheetContent}>
+      </View>
 
-        
+      <View style={styles.sheetContent}>
+
+
         <Text style={styles.sheetSubtitle}>
-          {totalItems === 0 
+          {totalItems === 0
             ? 'Take a photo to automatically create your first item'
             : 'Drag Photos & Create New Items'
           }
         </Text>
-        
+
         {/* Scrollable Items Container */}
-        <ScrollView 
+        <ScrollView
           style={[
-            styles.itemsScrollContainer, 
-            { 
+            styles.itemsScrollContainer,
+            {
               height: scrollableHeight,
             }
           ]}
           showsVerticalScrollIndicator={true}
           contentContainerStyle={[
             styles.scrollContent,
-            { 
+            {
               flexGrow: 1
             }
           ]}
@@ -2403,149 +2417,149 @@ const BulkItemsSheet: React.FC<{
                   loadingStage: loadingState?.stage
                 });
                 return (
-            <TouchableOpacity 
-              key={`bulk-item-${item.id}`} 
-              style={[
-                styles.bulkItemContainer,
-                item.isActive && styles.activeItemContainer,
-    
-                { backgroundColor: item.isActive ? '#e8f5e8' : '#ffffff' }
-              ]}
-              onPress={() => onSelectItem(item.id)}
-            >
-              <View style={styles.itemHeader}>
-                <View style={styles.itemLabelContainer}>
-                  <Text style={[
-                    styles.itemLabel,
-                    item.isActive && styles.activeItemLabel
-                  ]}>
-                    Item {id + 1}
-                  </Text>
-                  {item.isActive && (
-                    <View style={styles.activeItemBadge}>
-                      <Text style={styles.activeItemBadgeText}>ACTIVE</Text>
-                    </View>
-                  )}
-                  {loadingState?.isLoading && (
-                    <View style={styles.loadingBadge}>
-                      <Icon name="loading" size={12} color="#93C822" />
-                      <Text style={styles.loadingBadgeText}>{loadingState.stage}</Text>
-                    </View>
-                  )}
-                </View>
-                {/* Show delete button if there are multiple items OR if in bulk mode */}
-                {(isBulkMode && bulkItems.length > 0) && (
-                  <TouchableOpacity 
-                    style={styles.deleteItemButton}
-                    onPress={(e) => { e.stopPropagation?.(); onDeleteItem(item.id); }}
-                  >
-                    <Icon name="delete-outline" size={18} color="#ff6b6b" />
-                  </TouchableOpacity>
-                )}
-            </View>
-    
+                  <TouchableOpacity
+                    key={`bulk-item-${item.id}`}
+                    style={[
+                      styles.bulkItemContainer,
+                      item.isActive && styles.activeItemContainer,
 
-              <View style={styles.photoSlotsContainer}>
-                {item.photos.map((photo: CapturedPhoto, photoIndex: number) => (
-                  <TapGestureHandler
-                    key={`photo-${item.id}-${photo.id}`}
-                    numberOfTaps={2}
-                    onHandlerStateChange={(event) => {
-                      if (event.nativeEvent.state === State.ACTIVE) {
-                        onSetCoverPhoto(item.id, photo.id);
-                      }
-                    }}
+                      { backgroundColor: item.isActive ? '#e8f5e8' : '#ffffff' }
+                    ]}
+                    onPress={() => onSelectItem(item.id)}
                   >
-                    <Animated.View 
-                      style={[
-                        styles.photoSlot,
-                        photo.isCover && styles.coverPhotoSlot // Green border for cover photo
-                      ]}
-                    >
-                      <TouchableOpacity
-                        onPress={() => {
-                          // Single tap just selects photo (no action for now)
-                          console.log('Selected photo:', photo.id);
-                        }}
-                        onLongPress={() => {
-                          // Long press options
-                          Alert.alert(
-                            'Photo Options',
-                            `Photo ${photoIndex + 1}${photo.isCover ? ' (Cover)' : ''}`,
-                            [
-                              { text: 'Set as Cover', onPress: () => onSetCoverPhoto(item.id, photo.id) },
-                              { text: 'Remove from Item', onPress: () => onRemovePhoto(item.id, photo.id) },
-                              { text: 'Cancel', style: 'cancel' },
-                            ]
-                          );
-                        }}
+                    <View style={styles.itemHeader}>
+                      <View style={styles.itemLabelContainer}>
+                        <Text style={[
+                          styles.itemLabel,
+                          item.isActive && styles.activeItemLabel
+                        ]}>
+                          Item {id + 1}
+                        </Text>
+                        {item.isActive && (
+                          <View style={styles.activeItemBadge}>
+                            <Text style={styles.activeItemBadgeText}>ACTIVE</Text>
+                          </View>
+                        )}
+                        {loadingState?.isLoading && (
+                          <View style={styles.loadingBadge}>
+                            <Icon name="loading" size={12} color="#93C822" />
+                            <Text style={styles.loadingBadgeText}>{loadingState.stage}</Text>
+                          </View>
+                        )}
+                      </View>
+                      {/* Show delete button if there are multiple items OR if in bulk mode */}
+                      {(isBulkMode && bulkItems.length > 0) && (
+                        <TouchableOpacity
+                          style={styles.deleteItemButton}
+                          onPress={(e) => { e.stopPropagation?.(); onDeleteItem(item.id); }}
                         >
-                        <Image source={{ uri: photo.uri }} style={styles.photoSlotImage} />
-                        <View style={[
-                          styles.photoSlotLabel,
-                          photo.isCover && styles.coverPhotoLabel
-                          ]}>
-                          <Text style={styles.photoSlotLabelText}>
-                            {photo.isCover ? 'COVER' : `pic ${photoIndex + 1}`}
-                          </Text>
-                        </View>
-                        {/* Delete button for bulk item photos */}
-                        <TouchableOpacity 
-                          style={styles.bulkPhotoDeleteButton}
-                          onPress={() => onRemovePhoto(item.id, photo.id)}
-                          hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
+                          <Icon name="delete-outline" size={18} color="#ff6b6b" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+
+
+                    <View style={styles.photoSlotsContainer}>
+                      {item.photos.map((photo: CapturedPhoto, photoIndex: number) => (
+                        <TapGestureHandler
+                          key={`photo-${item.id}-${photo.id}`}
+                          numberOfTaps={2}
+                          onHandlerStateChange={(event) => {
+                            if (event.nativeEvent.state === State.ACTIVE) {
+                              onSetCoverPhoto(item.id, photo.id);
+                            }
+                          }}
+                        >
+                          <Animated.View
+                            style={[
+                              styles.photoSlot,
+                              photo.isCover && styles.coverPhotoSlot // Green border for cover photo
+                            ]}
                           >
-                          <Icon name="close-circle" size={14} color="#ff4444" />
-              </TouchableOpacity>
-                      </TouchableOpacity>
-                    </Animated.View>
-                  </TapGestureHandler>
-                ))}
-                
-                {/* Add Photo Button - Only show if less than 12 photos */}
-                {item.photos.length < 12 && (
-                  <TouchableOpacity style={styles.addPhotoButton} onPress={onImageUpload}>
-                    <Icon name="camera-plus-outline" size={20} color="#999" />
-                    <Text style={styles.addPhotoText}>Add Photo</Text>
-              </TouchableOpacity>
-                )}
-            </View>
-            
-            
-              {item.photos.length >= 12 && (
-                <Text style={styles.maxPhotosText}>Maximum 12 photos per item</Text>
-              )}
+                            <TouchableOpacity
+                              onPress={() => {
+                                // Single tap just selects photo (no action for now)
+                                console.log('Selected photo:', photo.id);
+                              }}
+                              onLongPress={() => {
+                                // Long press options
+                                Alert.alert(
+                                  'Photo Options',
+                                  `Photo ${photoIndex + 1}${photo.isCover ? ' (Cover)' : ''}`,
+                                  [
+                                    { text: 'Set as Cover', onPress: () => onSetCoverPhoto(item.id, photo.id) },
+                                    { text: 'Remove from Item', onPress: () => onRemovePhoto(item.id, photo.id) },
+                                    { text: 'Cancel', style: 'cancel' },
+                                  ]
+                                );
+                              }}
+                            >
+                              <Image source={{ uri: photo.uri }} style={styles.photoSlotImage} />
+                              <View style={[
+                                styles.photoSlotLabel,
+                                photo.isCover && styles.coverPhotoLabel
+                              ]}>
+                                <Text style={styles.photoSlotLabelText}>
+                                  {photo.isCover ? 'COVER' : `pic ${photoIndex + 1}`}
+                                </Text>
+                              </View>
+                              {/* Delete button for bulk item photos */}
+                              <TouchableOpacity
+                                style={styles.bulkPhotoDeleteButton}
+                                onPress={() => onRemovePhoto(item.id, photo.id)}
+                                hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
+                              >
+                                <Icon name="close-circle" size={14} color="#ff4444" />
+                              </TouchableOpacity>
+                            </TouchableOpacity>
+                          </Animated.View>
+                        </TapGestureHandler>
+                      ))}
 
-               {/* Optional quick matches reopen button if present */}
-               {(() => {
-                const hasQuickMatches = quickScanStore?.[item.id];
-                console.log(`[RENDER QUICK BUTTON] Item ${id + 1} (${item.id}): hasQuickMatches = ${hasQuickMatches ? 'YES' : 'NO'}`);
-                if (hasQuickMatches) {
-                  console.log(`[RENDER QUICK BUTTON] Item ${id + 1} match count:`, quickScanStore[item.id].matchData.totalMatches);
-                }
-                return hasQuickMatches && (
-                  <TouchableOpacity 
-                    style={[styles.secondaryButton, { marginTop: 10 }]}
-                    onPress={() => onOpenQuickMatches?.(item.id)}
-                  >
-                    <Text style={styles.secondaryButtonText}>View Quick Matches ({quickScanStore[item.id].matchData.totalMatches || 0})</Text>
+                      {/* Add Photo Button - Only show if less than 12 photos */}
+                      {item.photos.length < 12 && (
+                        <TouchableOpacity style={styles.addPhotoButton} onPress={onImageUpload}>
+                          <Icon name="camera-plus-outline" size={20} color="#999" />
+                          <Text style={styles.addPhotoText}>Add Photo</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+
+
+                    {item.photos.length >= 12 && (
+                      <Text style={styles.maxPhotosText}>Maximum 12 photos per item</Text>
+                    )}
+
+                    {/* Optional quick matches reopen button if present */}
+                    {(() => {
+                      const hasQuickMatches = quickScanStore?.[item.id];
+                      console.log(`[RENDER QUICK BUTTON] Item ${id + 1} (${item.id}): hasQuickMatches = ${hasQuickMatches ? 'YES' : 'NO'}`);
+                      if (hasQuickMatches) {
+                        console.log(`[RENDER QUICK BUTTON] Item ${id + 1} match count:`, quickScanStore[item.id].matchData.totalMatches);
+                      }
+                      return hasQuickMatches && (
+                        <TouchableOpacity
+                          style={[styles.secondaryButton, { marginTop: 10 }]}
+                          onPress={() => onOpenQuickMatches?.(item.id)}
+                        >
+                          <Text style={styles.secondaryButtonText}>View Quick Matches ({quickScanStore[item.id].matchData.totalMatches || 0})</Text>
+                        </TouchableOpacity>
+                      );
+                    })()}
+
                   </TouchableOpacity>
-                );
-              })()}
 
-            </TouchableOpacity>
-            
                 );
               });
             })()
           )}
         </ScrollView>
-        
+
         {/* Fixed Bottom Actions */}
         <View style={styles.bottomActions}>
-                    {/* New Item Button */}
-          <TouchableOpacity 
-            style={styles.newItemButton} 
+          {/* New Item Button */}
+          <TouchableOpacity
+            style={styles.newItemButton}
             onPress={() => {
               console.log('[NEW ITEM] Button pressed');
               onAddNewItem();
@@ -2554,9 +2568,9 @@ const BulkItemsSheet: React.FC<{
             <Icon name="plus" size={16} color="#999" />
             <Text style={styles.newItemButtonText}>New Item</Text>
           </TouchableOpacity>
-          
-                    {/* Search Button */}
-          <TouchableOpacity 
+
+          {/* Search Button */}
+          <TouchableOpacity
             style={[
               styles.searchForProductButton,
               totalItems === 0 && styles.disabledButton
@@ -2567,7 +2581,7 @@ const BulkItemsSheet: React.FC<{
 
               // Get all photos from bulkItems (simplified - no more dual system)
               const firstPhotos = bulkItems.map(item => item.photos[0]).filter(Boolean);
-              
+
               if (firstPhotos.length === 0) {
                 Alert.alert('No Photos', 'Please take some photos first before searching.');
                 return;
@@ -2575,7 +2589,7 @@ const BulkItemsSheet: React.FC<{
 
               // Tell parent to close existing sheets and stop any quick scan
               onStartBroadSearch();
-              
+
               // Set loading state for all items
               const loadingStates: Record<string, { isLoading: boolean; stage: string; }> = {};
               bulkItems.forEach(item => {
@@ -2584,16 +2598,16 @@ const BulkItemsSheet: React.FC<{
                 }
               });
               setItemLoadingStates(loadingStates);
-              
+
               try {
-                
+
                 // Call performAnalyze to get the job ID
                 const jobResponseData: JobResponse = await performAnalyze(firstPhotos);
                 console.log('[SEARCH] Job Response:', jobResponseData);
                 setJobResponse(jobResponseData); // Store in state
                 const jobId = jobResponseData?.jobId;
                 console.log('[SEARCH] Job ID:', jobId);
-                
+
                 if (jobId) {
                   // Navigate to loading screen with job ID for polling
                   navigation.navigate("LoadingScreen", {
@@ -2615,7 +2629,7 @@ const BulkItemsSheet: React.FC<{
                       },
                     }
                   });
-                  
+
                   console.log('[SEARCH] Navigating to LoadingScreen with jobId:', jobId);
                 } else {
                   Alert.alert('Error', 'Failed to start analysis. Please try again.');
@@ -2625,7 +2639,7 @@ const BulkItemsSheet: React.FC<{
                 Alert.alert('Error', 'Failed to start analysis. Please try again.');
               }
             }
-          }>
+            }>
             <Icon name="magnify" size={16} color={totalItems === 0 ? "#999" : "white"} />
             <Text style={[
               styles.searchForProductButtonText,
@@ -2634,8 +2648,8 @@ const BulkItemsSheet: React.FC<{
               Search For Product (Broad)
             </Text>
           </TouchableOpacity>
+        </View>
       </View>
-    </View>
     </Animated.View>
   );
 };
@@ -2665,7 +2679,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
   },
-  
+
   // Photo Stack Styles
   photoStackContainer: {
     position: 'absolute',
@@ -2726,7 +2740,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  
+
   // Camera Controls Styles
   cameraControlsContainer: {
     position: 'absolute',
@@ -2747,7 +2761,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  
+
 
   centerOverlay: {
     backgroundColor: 'rgba(0,0,0,0.7)',
@@ -2767,7 +2781,7 @@ const styles = StyleSheet.create({
   processingIndicator: {
     marginLeft: 8,
   },
-  
+
   // Barcode Overlay Styles
   barcodeOverlayContainer: {
     position: 'absolute',
@@ -2806,7 +2820,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
   },
-  
+
   // Photo Frame & Scan Line Styles
   photoFrameOverlay: {
     position: 'absolute',
@@ -2834,7 +2848,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#4CAF50',
     opacity: 0.8,
   },
-  
+
   // Bottom Controls Styles
   bottomControls: {
     position: 'absolute',
@@ -2897,7 +2911,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  
+
   // Sheet Styles
   matchSheet: {
     position: 'absolute',
@@ -2941,7 +2955,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     paddingHorizontal: 20,
   },
-  
+
   // Match Results Styles
   matchResults: {
     paddingHorizontal: 20,
@@ -3055,7 +3069,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
   },
-  
+
   // Deep Search Styles
   searchInputContainer: {
     flexDirection: 'row',
@@ -3154,7 +3168,7 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 8,
   },
-  
+
   // Bulk Items Sheet Styles
   sheetSubtitle: {
     fontSize: 14,
@@ -3268,7 +3282,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  
+
   // New Bulk Sheet Styles
   dragHandle: {
     alignItems: 'center',
@@ -3386,7 +3400,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     marginBottom: 16,
   },
-  
+
   // Progress Bar Styles
   progressBarContainer: {
     position: 'absolute',
@@ -3414,7 +3428,7 @@ const styles = StyleSheet.create({
     width: 20,
     height: 20,
   },
-  
+
   // Notification Bar Styles
   notificationBar: {
     position: 'absolute',
@@ -3436,7 +3450,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontWeight: '500',
   },
-  
+
   // Permission Styles
   permissionContainer: {
     flex: 1,
@@ -3470,7 +3484,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  
+
   // Debug styles
   debugOverlay: {
     position: 'absolute',
@@ -3505,7 +3519,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
   },
-  
+
   // Camera paused overlay styles
   cameraPausedOverlay: {
     position: 'absolute',

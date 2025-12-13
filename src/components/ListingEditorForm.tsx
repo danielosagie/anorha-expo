@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle, useRef, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Modal, Pressable, FlatList, SectionList, Alert } from 'react-native';
+import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
+import { Paths, Directory, File } from 'expo-file-system/next';
 import * as ImagePicker from 'expo-image-picker';
+import VariantInventoryEditor, { InventoryItemData, VariantInventoryEditorProps } from './VariantInventoryEditor';
 import ShopifySvg from '../assets/shopify.svg';
 import AmazonSvg from '../assets/amazon.svg';
 import FacebookSvg from '../assets/facebook.svg';
@@ -137,7 +140,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
 
   // Default to 'all' tab instead of first platform
   const [activeTab, setActiveTab] = useState<string>('all');
-  const [showAdditionalFields, setShowAdditionalFields] = useState<boolean>(true);
+  const [showAdditionalFields, setShowAdditionalFields] = useState<boolean>(false);
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [optionEditorOpen, setOptionEditorOpen] = useState<boolean>(false);
   const [newOptionName, setNewOptionName] = useState<string>('');
@@ -264,42 +267,49 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
     onChangePlatforms({ ...platforms, [activePlatformKey]: nextPlatform });
   };
 
-  // Get locations for the active platform from prop - includes platformType for logo display
+  // Get locations for the active platform - ALWAYS use platformLocations first (properly separated per-platform)
   const locations = useMemo(() => {
-    // If platform has its own locations array, use that
-    if (activeData.locations && activeData.locations.length > 0) {
-      console.log(`[ListingEditorForm] Using locations from activeData for ${activePlatformKey}:`, activeData.locations);
-      const locs = activeData.locations.map((loc: any) => ({
-        ...loc,
-        platformType: loc.platformType || activePlatformKey.toLowerCase()
-      }));
+    const platformKey = activePlatformKey.toLowerCase();
 
-      console.log(`[ListingEditorForm] Locations for ${activePlatformKey}:`, JSON.stringify(locs.map((l: any) => ({ id: l.id, name: l.name }))));
-      return locs;
-    }
+    // FIRST: Try platformLocations prop which is correctly structured per-platform
+    const platformLocs = platformLocations?.[platformKey] || [];
 
-    // Otherwise, get from platformLocations prop for this platform type
-    const platformType = activePlatformKey.toLowerCase();
-    const platformLocs = platformLocations?.[platformType] || [];
-
-    console.log(`[ListingEditorForm] Platform ${activePlatformKey} (${platformType}):`, {
-      hasPlatformLocations: !!platformLocations,
-      platformLocsCount: platformLocs.length,
-      platformLocsKeys: Object.keys(platformLocations || {}),
-      platformLocs: platformLocs
-    });
+    console.log(`[ListingEditorForm LOCS] platform=${platformKey}, platformLocsKeys=${Object.keys(platformLocations || {}).join(',')}, count=${platformLocs.length}`);
 
     if (platformLocs.length > 0) {
-      // Map to expected format with cleaner display name and platform type for logo
-      return platformLocs.map(loc => ({
+      return platformLocs.map((loc: any) => ({
         id: loc.id,
         name: loc.name || 'Unknown Location',
-        platformType: loc.platformType || platformType
+        platformType: loc.platformType || platformKey
       }));
+    }
+
+    // FALLBACK: Only use activeData.locations if platformLocations is empty
+    // But FILTER by platform ID pattern to avoid pollution
+    if (activeData.locations && activeData.locations.length > 0) {
+      const filtered = activeData.locations.filter((loc: any) => {
+        // Shopify IDs start with 'gid://shopify/'
+        // Square IDs are short alphanumeric like 'LY3ETP80S0CFK'
+        if (platformKey === 'shopify') {
+          return loc.id?.startsWith('gid://shopify/');
+        } else if (platformKey === 'square') {
+          return !loc.id?.startsWith('gid://');
+        }
+        // For other platforms, include all
+        return true;
+      });
+
+      if (filtered.length > 0) {
+        console.log(`[ListingEditorForm LOCS] Filtered ${activeData.locations.length} → ${filtered.length} for ${platformKey}`);
+        return filtered.map((loc: any) => ({
+          ...loc,
+          platformType: loc.platformType || platformKey
+        }));
+      }
     }
 
     // Fallback to dummy data if no locations available
-    return [{ id: 'loc-default', name: 'Default Location', platformType: platformType }];
+    return [{ id: 'loc-default', name: 'Default Location', platformType: platformKey }];
   }, [activeData.locations, activePlatformKey, platformLocations]);
   const [selectedLocationId, setSelectedLocationId] = useState<string>(locations[0]?.id || 'loc-1');
 
@@ -1244,16 +1254,26 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
               return null;
             })()}
             {/* Locations only for LOCATION_VARIANT_WITH_OPTIONS; NEVER show for VARIANT_WITH_OPTIONS or BASIC */}
-            {selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all' && (
-              <LocationDropdown
-                locations={locations}
-                selectedId={selectedLocationId}
-                onChange={(id) => {
-                  console.log(`[LOC] Location changed from ${selectedLocationId} to ${id}`);
-                  setSelectedLocationId(id);
-                }}
-              />
-            )}
+            {selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all' && (() => {
+              // Filter locations to only show the active platform's locations
+              const platformLocs = (platformLocations?.[activePlatformKey.toLowerCase()] || []).map((loc: any) => ({
+                id: loc.id,
+                name: loc.name || 'Unknown Location',
+                platformType: activePlatformKey.toLowerCase()
+              }));
+              console.log(`[LocationDropdown FILTERED] platform=${activePlatformKey}, count=${platformLocs.length}`);
+              if (platformLocs.length === 0) return null;
+              return (
+                <LocationDropdown
+                  locations={platformLocs}
+                  selectedId={selectedLocationId}
+                  onChange={(id) => {
+                    console.log(`[LOC] Location changed from ${selectedLocationId} to ${id}`);
+                    setSelectedLocationId(id);
+                  }}
+                />
+              );
+            })()}
           </View>
 
           {/* Copy inventory from another platform */}
@@ -1306,7 +1326,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
               {/* Pricing capability indicator moved here */}
               <View style={{ marginLeft: 'auto', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 4, backgroundColor: activePlatformKey === 'shopify' ? '#E3F2FD' : '#E8F5E9' }}>
                 <Text style={{ fontSize: 11, fontWeight: '600', color: activePlatformKey === 'shopify' ? '#1976D2' : '#388E3C' }}>
-                  {activePlatformKey === 'shopify' ? '🔒 Global Price' : '📍 Per-Location Pricing'}
+                  {activePlatformKey === 'shopify' ? 'Global Price' : 'Per-Location Pricing'}
                 </Text>
               </View>
             </View>
@@ -1317,413 +1337,273 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
           return null;
         })()}
         {supportsVariants ? (
-          activeTab === 'all' ? (
-            // ALL TAB: Show ALL variants with EDITABLE location inventories across ALL platforms
-            <View style={{ gap: 16 }}>
-              {(() => {
-                // Helper function to get readable location name
-                const getLocationName = (locId: string, platformKey: string) => {
-                  const platformType = platformKey.toLowerCase();
-                  const platformLocs = platformLocations?.[platformType] || [];
-                  const loc = platformLocs.find(l => l.id === locId);
-                  if (loc && loc.name && !loc.name.includes('...')) {
-                    return loc.name;
-                  }
-                  // Fallback with cleaner formatting based on platform type
-                  if (locId?.includes('gid://shopify/Location/')) {
-                    const locNumber = locId.split('/').pop();
-                    return `Shopify #${locNumber}`;
-                  }
-                  if (locId && locId.length >= 10 && /^[A-Z0-9]+$/.test(locId)) {
-                    return `${platformKey.charAt(0).toUpperCase() + platformKey.slice(1)} (${locId.substring(0, 6)}...)`;
-                  }
-                  return loc?.connectionName || locId?.slice(0, 15) || 'Unknown';
-                };
+          <>
+            {/* Suggested Price Tag - Apply to All */}
+            {activeTab === 'all' && (() => {
+              // Get suggested price from any platform that has it
+              const suggestedPrice = (() => {
+                for (const pk of platformKeys) {
+                  const pd = platforms[pk] as PlatformState;
+                  if (pd?.aiRecommendedPrice) return pd.aiRecommendedPrice;
+                }
+                return null;
+              })();
 
-                // Aggregate all variants from all platforms - show ALL locations, not just those with data
-                const allVariantsMap = new Map<string, {
-                  variant: Variant;
-                  platformKey: string;
-                  platformData: PlatformState;
-                  locId: string;
-                  readableName: string;
-                }[]>();
-
-                for (const platformKey of platformKeys) {
-                  const platformData = platforms[platformKey] as PlatformState;
-                  const variants = platformData?.variants || [];
-
-                  // Get ALL locations for this platform type from platformLocations
-                  const platformType = platformKey.toLowerCase();
-                  const allPlatformLocs = platformLocations?.[platformType] || [];
-
-                  for (const variant of variants) {
-                    const variantName = Object.values(variant.optionValues || {}).join(' / ') || 'Variant';
-
-                    if (!allVariantsMap.has(variantName)) {
-                      allVariantsMap.set(variantName, []);
-                    }
-
-                    // Show ALL locations for this platform, not just ones with existing data
-                    if (allPlatformLocs.length > 0) {
-                      for (const loc of allPlatformLocs) {
-                        if (loc.id === 'loc-default' || loc.id === 'default') continue;
-
-                        // Use the helper for consistent name resolution
-                        const readableName = loc.name && !loc.name.includes('...')
-                          ? loc.name
-                          : getLocationName(loc.id, platformKey);
-                        allVariantsMap.get(variantName)!.push({
-                          variant,
-                          platformKey,
-                          platformData,
-                          locId: loc.id,
-                          readableName,
-                        });
-                      }
+              // Function to apply suggested price to ALL variants across ALL platforms
+              const applySuggestedPriceToAll = () => {
+                if (!suggestedPrice) return;
+                const nextPlatforms = { ...platforms };
+                for (const pk of platformKeys) {
+                  const pd = nextPlatforms[pk] || {};
+                  const isShopify = pk === 'shopify';
+                  const newVariants = (pd.variants || []).map((v: any) => {
+                    if (isShopify) {
+                      // Shopify: set variant.price (global)
+                      return { ...v, price: suggestedPrice };
                     } else {
-                      // Fallback: use existing inventoryByLocation keys if no platformLocations available
-                      const invByLoc = variant.inventoryByLocation || {};
-                      Object.entries(invByLoc).forEach(([locId, locData]: [string, any]) => {
-                        if (locId === 'loc-default' || locId === 'default') return;
-
-                        const readableName = getLocationName(locId, platformKey);
-                        allVariantsMap.get(variantName)!.push({
-                          variant,
-                          platformKey,
-                          platformData,
-                          locId,
-                          readableName,
-                        });
+                      // Square/Clover: set price in all inventoryByLocation entries
+                      const updatedInv = { ...(v.inventoryByLocation || {}) };
+                      Object.keys(updatedInv).forEach(locId => {
+                        updatedInv[locId] = { ...updatedInv[locId], price: suggestedPrice };
                       });
+                      return { ...v, price: suggestedPrice, inventoryByLocation: updatedInv };
                     }
-                  }
+                  });
+                  nextPlatforms[pk] = { ...pd, price: suggestedPrice, variants: newVariants };
+                }
+                onChangePlatforms(nextPlatforms);
+              };
+
+              return suggestedPrice ? (
+                <TouchableOpacity
+                  onPress={applySuggestedPriceToAll}
+                  style={{ backgroundColor: '#F0F9FF', borderRadius: 8, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#3B82F6', flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                >
+                  <Sparkles size={18} color="#3B82F6" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 12, fontWeight: '600', color: '#1E40AF' }}>AI Suggested Price</Text>
+                    <Text style={{ fontSize: 15, fontWeight: '700', color: '#059669' }}>${suggestedPrice.toFixed(2)}</Text>
+                  </View>
+                  <View style={{ backgroundColor: '#3B82F6', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 }}>
+                    <Text style={{ color: '#FFF', fontWeight: '600', fontSize: 12 }}>Apply to All</Text>
+                  </View>
+                </TouchableOpacity>
+              ) : null;
+            })()}
+
+            {/* Use VariantInventoryEditor for both "All" and Specific Platform tabs */}
+            {(() => {
+              // 1. Build locations list based on active tab
+              let allLocs: Array<{ id: string; name: string; platformKey: string }>;
+
+              if (activeTab === 'all') {
+                // All tab: show all locations from all platforms
+                allLocs = Object.entries(platformLocations || {}).flatMap(([pk, locs]) =>
+                  (locs || []).map((l: any) => ({ ...l, platformKey: pk }))
+                );
+              } else {
+                // Platform tab: filter to only this platform's locations
+                const platformKey = activeTab.toLowerCase();
+                const platformLocs = platformLocations?.[platformKey] || [];
+
+                // If dropdown is active (LOCATION_VARIANT_WITH_OPTIONS) and a location is selected,
+                // filter to just that location
+                if (selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && selectedLocationId) {
+                  const selectedLoc = platformLocs.find((l: any) => l.id === selectedLocationId);
+                  allLocs = selectedLoc
+                    ? [{ id: selectedLoc.id, name: selectedLoc.name || 'Unknown', platformKey }]
+                    : platformLocs.map((l: any) => ({ ...l, platformKey }));
+                } else {
+                  allLocs = platformLocs.map((l: any) => ({ ...l, platformKey }));
+                }
+              }
+
+              console.log(`[VariantInventoryEditor LOCS] activeTab=${activeTab}, selectedLocId=${selectedLocationId}, locsCount=${allLocs.length}`);
+
+              // 2. Prepare Variants based on Active Tab
+              let preparedVariants: VariantInventoryEditorProps['variants'] = [];
+
+              if (activeTab === 'all') {
+                // Aggregate variants from all platforms
+                const variantMap = new Map<string, any>();
+
+                platformKeys.forEach(pk => {
+                  const pData = platforms[pk];
+                  if (!pData || !pData.variants) return;
+
+                  pData.variants.forEach((v: any) => {
+                    const vId = v.id || Object.values(v.optionValues || {}).join('/');
+                    const existing = variantMap.get(vId);
+
+                    const inv: Record<string, { quantity: number; price?: number; image?: string }> = existing ? { ...existing.inventory } : {};
+
+                    // Add this platform's inventory data
+                    const vInv = v.inventoryByLocation || {};
+                    Object.entries(vInv).forEach(([locId, data]: [string, any]) => {
+                      inv[locId] = {
+                        quantity: data.quantity,
+                        price: data.price,
+                        image: data.image
+                      };
+                    });
+
+                    variantMap.set(vId, {
+                      id: vId,
+                      name: Object.values(v.optionValues || {}).join(' / ') || 'Variant',
+                      image: v.image || existing?.image,
+                      defaultPrice: v.price || existing?.defaultPrice,
+                      inventory: inv
+                    });
+                  });
+                });
+                preparedVariants = Array.from(variantMap.values());
+
+              } else {
+                // Specific Platform
+                const pData = activeData; // activeData is platforms[activeTab]
+                if (pData && pData.variants) {
+                  preparedVariants = pData.variants.map((v: any) => ({
+                    id: v.id,
+                    name: Object.values(v.optionValues || {}).join(' / ') || 'Variant',
+                    image: v.image,
+                    defaultPrice: Number(v.price ?? pData.price ?? 0),
+                    inventory: v.inventoryByLocation || {}
+                  }));
+                }
+              }
+
+              // 3. Callback - syncs price across ALL platforms when changed
+              const handleUpdateInventory = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
+                const nextPlatforms = { ...platforms };
+
+                let targetPlatform = activeTab;
+                if (activeTab === 'all') {
+                  const loc = allLocs.find(l => l.id === locationId);
+                  if (loc) targetPlatform = loc.platformKey;
                 }
 
-                if (allVariantsMap.size === 0) {
-                  return <Text style={{ color: '#999', fontStyle: 'italic' }}>No variants configured</Text>;
+                const pData = nextPlatforms[targetPlatform];
+                if (!pData) return;
+
+                const isShopify = targetPlatform === 'shopify';
+
+                // Update the target platform first
+                const newVariants = (pData.variants || []).map((v: any) => {
+                  if (v.id === variantId) {
+
+                    if (field === 'price') {
+                      // ⚡ GLOBAL PRICE: Update price in ALL locations for this variant
+                      // Shopify uses variant-level price, others store in inventoryByLocation
+                      const updatedInv = { ...(v.inventoryByLocation || {}) };
+                      Object.keys(updatedInv).forEach(locId => {
+                        updatedInv[locId] = { ...updatedInv[locId], price: value };
+                      });
+                      return {
+                        ...v,
+                        price: value, // Also set variant-level price
+                        inventoryByLocation: updatedInv
+                      };
+                    }
+
+                    // For quantity, only update the specific location
+                    const oldInv = v.inventoryByLocation || {};
+                    const oldLocData = oldInv[locationId] || {};
+
+                    return {
+                      ...v,
+                      inventoryByLocation: {
+                        ...oldInv,
+                        [locationId]: {
+                          ...oldLocData,
+                          [field]: value
+                        }
+                      }
+                    };
+                  }
+                  return v;
+                });
+
+                nextPlatforms[targetPlatform] = { ...pData, variants: newVariants };
+
+                // ⚡ SYNC PRICE ACROSS ALL PLATFORMS
+                // When price is updated on any platform, sync to all other platforms
+                if (field === 'price') {
+                  platformKeys.forEach(pk => {
+                    if (pk === targetPlatform) return; // Already updated
+
+                    const otherPData = nextPlatforms[pk];
+                    if (!otherPData) return;
+
+                    const isOtherShopify = pk === 'shopify';
+
+                    const syncedVariants = (otherPData.variants || []).map((v: any) => {
+                      if (v.id === variantId) {
+                        if (isOtherShopify) {
+                          // Shopify uses variant-level price
+                          return { ...v, price: value };
+                        } else {
+                          // Other platforms: update price in all location entries
+                          const updatedInv = { ...(v.inventoryByLocation || {}) };
+                          Object.keys(updatedInv).forEach(locId => {
+                            updatedInv[locId] = { ...updatedInv[locId], price: value };
+                          });
+                          return { ...v, price: value, inventoryByLocation: updatedInv };
+                        }
+                      }
+                      return v;
+                    });
+
+                    nextPlatforms[pk] = { ...otherPData, variants: syncedVariants };
+                  });
                 }
 
-                // Get suggested price from any platform that has it
-                const suggestedPrice = (() => {
-                  for (const pk of platformKeys) {
-                    const pd = platforms[pk] as PlatformState;
-                    if (pd?.aiRecommendedPrice) return pd.aiRecommendedPrice;
-                  }
-                  return null;
-                })();
+                onChangePlatforms(nextPlatforms);
+              };
 
-                // Function to apply suggested price to ALL variants across ALL platforms
-                const applySuggestedPriceToAll = () => {
-                  if (!suggestedPrice) return;
-                  const nextPlatforms = { ...platforms };
-                  for (const pk of platformKeys) {
-                    const pd = nextPlatforms[pk] || {};
-                    const isShopify = pk === 'shopify';
-                    const newVariants = (pd.variants || []).map((v: any) => {
-                      if (isShopify) {
-                        // Shopify: set variant.price (global)
-                        return { ...v, price: suggestedPrice };
-                      } else {
-                        // Square/Clover: set price in all inventoryByLocation entries
-                        const updatedInv = { ...(v.inventoryByLocation || {}) };
-                        Object.keys(updatedInv).forEach(locId => {
-                          updatedInv[locId] = { ...updatedInv[locId], price: suggestedPrice };
-                        });
-                        return { ...v, price: suggestedPrice, inventoryByLocation: updatedInv };
+              const handleSelectImage = async (variantId: string) => {
+                try {
+                  const result = await ImagePicker.launchImageLibraryAsync({
+                    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                    allowsEditing: true,
+                    aspect: [1, 1],
+                    quality: 0.8,
+                  });
+                  if (!result.canceled && result.assets[0].uri) {
+                    const uri = result.assets[0].uri;
+                    const nextPlatforms = { ...platforms };
+
+                    platformKeys.forEach(pk => {
+                      const pd = nextPlatforms[pk];
+                      if (pd && pd.variants) {
+                        pd.variants = pd.variants.map((v: any) =>
+                          v.id === variantId ? { ...v, image: uri } : v
+                        );
                       }
                     });
-                    nextPlatforms[pk] = { ...pd, price: suggestedPrice, variants: newVariants };
+                    onChangePlatforms(nextPlatforms);
                   }
-                  onChangePlatforms(nextPlatforms);
-                };
-
-                return (
-                  <>
-                    {/* Suggested Price Tag - Apply to All */}
-                    {suggestedPrice && (
-                      <TouchableOpacity
-                        onPress={applySuggestedPriceToAll}
-                        style={{ backgroundColor: '#F0F9FF', borderRadius: 8, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#3B82F6', flexDirection: 'row', alignItems: 'center', gap: 8 }}
-                      >
-                        <Sparkles size={18} color="#3B82F6" />
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ fontSize: 12, fontWeight: '600', color: '#1E40AF' }}>AI Suggested Price</Text>
-                          <Text style={{ fontSize: 15, fontWeight: '700', color: '#059669' }}>${suggestedPrice.toFixed(2)}</Text>
-                        </View>
-                        <View style={{ backgroundColor: '#3B82F6', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 }}>
-                          <Text style={{ color: '#FFF', fontWeight: '600', fontSize: 12 }}>Apply to All</Text>
-                        </View>
-                      </TouchableOpacity>
-                    )}
-
-                    {Array.from(allVariantsMap.entries()).map(([variantName, locationData]) => (
-                      <View key={variantName} style={{ gap: 8, marginBottom: 16 }}>
-                        <Text style={{ color: '#000', fontWeight: '700', fontSize: 15 }}>{variantName}</Text>
-                        {locationData.length === 0 ? (
-                          <Text style={{ color: '#999', fontSize: 12, fontStyle: 'italic', marginLeft: 12 }}>No inventory set for any location</Text>
-                        ) : (
-                          locationData.map((item, idx) => {
-                            const { variant, platformKey, platformData, locId, readableName } = item;
-                            const isShopify = platformKey === 'shopify';
-                            const currentQty = variant.inventoryByLocation?.[locId]?.quantity ?? 0;
-
-                            // For Shopify: use variant.price (global), for others: use inventoryByLocation price
-                            const currentPriceRaw = isShopify
-                              ? variant.price
-                              : variant.inventoryByLocation?.[locId]?.price;
-                            const currentPrice = (currentPriceRaw !== undefined && currentPriceRaw !== null) ? Number(currentPriceRaw) : undefined;
-                            const defaultPrice = Number(variant.price ?? platformData.price ?? 0) || 0;
-                            const displayPrice = currentPrice ?? defaultPrice;
-                            const isOverride = !isShopify && currentPrice !== undefined && currentPrice !== null && currentPrice !== defaultPrice;
-
-                            // Truncate location name - prioritize location, max 18 chars
-                            const truncatedName = readableName.length > 18 ? readableName.slice(0, 18) + '…' : readableName;
-
-                            return (
-                              <View
-                                key={`${platformKey}-${locId}-${idx}`}
-                                style={{
-                                  flexDirection: 'row',
-                                  alignItems: 'center',
-                                  gap: 8,
-                                  paddingHorizontal: 10,
-                                  paddingVertical: 12,
-                                  borderRadius: 10,
-                                  borderWidth: 1,
-                                  borderColor: isOverride ? '#FFD700' : '#E5E5E5',
-                                  backgroundColor: isOverride ? '#FFFEF0' : '#FFF',
-                                }}
-                              >
-                                {/* Platform Logo + Location Name (truncated) */}
-                                <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                                  {(() => {
-                                    const logoMap: Record<string, any> = { shopify: ShopifySvg, amazon: AmazonSvg, facebook: FacebookSvg, ebay: EbaySvg, clover: CloverSvg, square: SquareSvg };
-                                    const Logo = logoMap[platformKey];
-                                    return Logo ? <Logo width={18} height={18} /> : null;
-                                  })()}
-                                  <Text style={{ color: '#000', fontWeight: '600', fontSize: 12, flexShrink: 1 }} numberOfLines={1} ellipsizeMode="tail">
-                                    {truncatedName}
-                                  </Text>
-                                  {isShopify && (
-                                    <View style={{ backgroundColor: '#E3F2FD', borderRadius: 4, paddingHorizontal: 4, paddingVertical: 2 }}>
-                                      <Text style={{ fontSize: 9, color: '#1976D2', fontWeight: '600' }}>GLOBAL</Text>
-                                    </View>
-                                  )}
-                                </View>
-
-                                {/* Quantity Input with +/- and editable field */}
-                                <View style={{ alignItems: 'center', gap: 2 }}>
-                                  <Text style={{ color: '#666', fontSize: 10 }}>Qty</Text>
-                                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 1, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 6 }}>
-                                    <TouchableOpacity
-                                      onPress={() => {
-                                        const newQty = Math.max(0, currentQty - 1);
-                                        const nextPlatforms = { ...platforms };
-                                        const pData = nextPlatforms[platformKey] || {};
-                                        const newVariants = (pData.variants || []).map((v: any) => {
-                                          if (v.id === variant.id) {
-                                            return {
-                                              ...v,
-                                              inventoryByLocation: {
-                                                ...(v.inventoryByLocation || {}),
-                                                [locId]: { ...((v.inventoryByLocation || {})[locId] || {}), quantity: newQty },
-                                              },
-                                            };
-                                          }
-                                          return v;
-                                        });
-                                        nextPlatforms[platformKey] = { ...pData, variants: newVariants };
-                                        onChangePlatforms(nextPlatforms);
-                                      }}
-                                      style={{ paddingHorizontal: 5, paddingVertical: 4 }}
-                                    >
-                                      <Icon name="minus" size={12} color="#666" />
-                                    </TouchableOpacity>
-                                    <TextInput
-                                      style={{ color: '#000', fontWeight: '600', width: 32, textAlign: 'center', fontSize: 13, paddingVertical: 4 }}
-                                      value={String(currentQty)}
-                                      onChangeText={(text) => {
-                                        const newQty = Math.max(0, parseInt(text.replace(/[^0-9]/g, ''), 10) || 0);
-                                        const nextPlatforms = { ...platforms };
-                                        const pData = nextPlatforms[platformKey] || {};
-                                        const newVariants = (pData.variants || []).map((v: any) => {
-                                          if (v.id === variant.id) {
-                                            return {
-                                              ...v,
-                                              inventoryByLocation: {
-                                                ...(v.inventoryByLocation || {}),
-                                                [locId]: { ...((v.inventoryByLocation || {})[locId] || {}), quantity: newQty },
-                                              },
-                                            };
-                                          }
-                                          return v;
-                                        });
-                                        nextPlatforms[platformKey] = { ...pData, variants: newVariants };
-                                        onChangePlatforms(nextPlatforms);
-                                      }}
-                                      keyboardType="number-pad"
-                                      selectTextOnFocus
-                                    />
-                                    <TouchableOpacity
-                                      onPress={() => {
-                                        const newQty = currentQty + 1;
-                                        const nextPlatforms = { ...platforms };
-                                        const pData = nextPlatforms[platformKey] || {};
-                                        const newVariants = (pData.variants || []).map((v: any) => {
-                                          if (v.id === variant.id) {
-                                            return {
-                                              ...v,
-                                              inventoryByLocation: {
-                                                ...(v.inventoryByLocation || {}),
-                                                [locId]: { ...((v.inventoryByLocation || {})[locId] || {}), quantity: newQty },
-                                              },
-                                            };
-                                          }
-                                          return v;
-                                        });
-                                        nextPlatforms[platformKey] = { ...pData, variants: newVariants };
-                                        onChangePlatforms(nextPlatforms);
-                                      }}
-                                      style={{ paddingHorizontal: 5, paddingVertical: 4 }}
-                                    >
-                                      <Icon name="plus" size={12} color="#666" />
-                                    </TouchableOpacity>
-                                  </View>
-                                </View>
-
-                                {/* Price Input - Shopify is global (updates ALL locations), others are per-location */}
-                                <View style={{ alignItems: 'center', gap: 2 }}>
-                                  <Text style={{ color: '#666', fontSize: 10 }}>{isShopify ? 'Price' : 'Price'}</Text>
-                                  <View style={{ flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: isOverride ? '#FFD700' : (isShopify ? '#1976D2' : '#E5E5E5'), borderRadius: 6, backgroundColor: isOverride ? '#FFFEF0' : (isShopify ? '#F5FAFF' : '#FFF') }}>
-                                    <Text style={{ color: '#666', paddingLeft: 6, fontSize: 13 }}>$</Text>
-                                    <TextInput
-                                      style={{ color: isOverride ? '#B8860B' : (isShopify ? '#1976D2' : '#000'), fontWeight: '600', width: 50, textAlign: 'center', fontSize: 13, paddingVertical: 6, paddingRight: 6 }}
-                                      value={displayPrice.toFixed(2)}
-                                      onChangeText={(text) => {
-                                        const newPrice = Math.max(0, parseFloat(text.replace(/[^0-9.]/g, '')) || 0);
-                                        const nextPlatforms = { ...platforms };
-                                        const pData = nextPlatforms[platformKey] || {};
-
-                                        if (isShopify) {
-                                          // Shopify: Update variant.price (global for this variant)
-                                          const newVariants = (pData.variants || []).map((v: any) => {
-                                            if (v.id === variant.id) {
-                                              return { ...v, price: newPrice };
-                                            }
-                                            return v;
-                                          });
-                                          nextPlatforms[platformKey] = { ...pData, variants: newVariants };
-                                        } else {
-                                          // Square/Clover: Update per-location price
-                                          const newVariants = (pData.variants || []).map((v: any) => {
-                                            if (v.id === variant.id) {
-                                              return {
-                                                ...v,
-                                                inventoryByLocation: {
-                                                  ...(v.inventoryByLocation || {}),
-                                                  [locId]: { ...((v.inventoryByLocation || {})[locId] || {}), price: newPrice },
-                                                },
-                                              };
-                                            }
-                                            return v;
-                                          });
-                                          nextPlatforms[platformKey] = { ...pData, variants: newVariants };
-                                        }
-                                        onChangePlatforms(nextPlatforms);
-                                      }}
-                                      keyboardType="decimal-pad"
-                                      selectTextOnFocus
-                                    />
-                                  </View>
-                                </View>
-                              </View>
-                            );
-                          })
-                        )}
-                      </View>
-                    ))}
-                  </>
-                );
-              })()}
-            </View>
-          ) : (
-            // PLATFORM TAB: Show variants for selected location only
-            (activeData.variants || []).map((variant, variantIdx) => {
-              const variantName = Object.values(variant.optionValues || {}).join(' / ') || 'Variant';
-              const invKey = selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' ? selectedLocationId : 'default';
-              const inv = (variant.inventoryByLocation || {})[invKey] || { quantity: 0, price: undefined };
-              const currentPriceRaw = inv.price;
-              const currentPrice = (currentPriceRaw !== undefined && currentPriceRaw !== null) ? Number(currentPriceRaw) : undefined;
-              const defaultPrice = Number(variant.price ?? activeData.price ?? 0) || 0;
-              const isOverride = currentPrice !== undefined && currentPrice !== defaultPrice;
-
-              console.log(`[INV-RENDER] Variant ${variant.id} at loc ${invKey}: allLocs=${Object.keys(variant.inventoryByLocation || {}).join(',')}, qty=${inv.quantity}, price=${currentPrice}`);
+                } catch (e) {
+                  console.error('Pick image error', e);
+                }
+              };
 
               return (
-                <View key={`${variant.id}-${variantIdx}`} style={{ marginBottom: 12 }}>
-                  {/* Location-specific row with quantity and price below */}
-                  <VariantInventoryRow
-                    variantName={variantName}
-                    variantId={variant.id}
-                    invKey={invKey}
-                    quantity={inv.quantity ?? 0}
-                    price={currentPrice ?? defaultPrice}
-                    isOverride={isOverride}
-                    isGenerationMode={isGenerationMode}
-                    onChangeQuantity={(qty) => setVariantAtLocation(variant.id, invKey, 'quantity', qty)}
-                    onChangePrice={(p) => {
-                      // Update variant global price (Shopify) or per-location price (Square/Clover)
-                      if (activePlatformKey === 'shopify') {
-                        setVariantPrice(variant.id, p);
-                      } else {
-                        setVariantAtLocation(variant.id, invKey, 'price', p);
-                      }
-                    }}
-                    onSelectImage={() => setVariantImagePicker({ variantId: variant.id, open: true })}
-                    platformKey={activePlatformKey}
-                  />
-                </View>
+                <VariantInventoryEditor
+                  variants={preparedVariants}
+                  locations={allLocs}
+                  activeTab={activeTab === 'all' ? 'all' : activeTab}
+                  isGenerationMode={true} // This is the GenerateDetailsScreen context
+                  onUpdateInventory={handleUpdateInventory}
+                  onSelectImage={handleSelectImage}
+                />
               );
-            })
-          )
+            })()}
+          </>
         ) : (
-          activeTab === 'all' ? (
-            // Show all platform locations in "all" tab with logos and truncation
-            <View style={{ gap: 8 }}>
-              {aggregatedLocations.length > 0 ? (
-                aggregatedLocations.map((loc: any) => {
-                  const key = `${loc.platformKey}:${loc.id}`;
-                  const qty = aggregatedLocationQuantities[key]?.quantity || 0;
-                  const truncatedName = loc.name.length > 20 ? loc.name.slice(0, 20) + '…' : loc.name;
-                  const logoMap: Record<string, any> = { shopify: ShopifySvg, amazon: AmazonSvg, facebook: FacebookSvg, ebay: EbaySvg, clover: CloverSvg, square: SquareSvg };
-                  const Logo = logoMap[loc.platformKey];
-                  return (
-                    <View key={key} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, paddingHorizontal: 12, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, backgroundColor: '#FFF' }}>
-                      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                        {Logo && <Logo width={18} height={18} />}
-                        <Text style={{ color: '#000', fontWeight: '600', fontSize: 13, flexShrink: 1 }} numberOfLines={1} ellipsizeMode="tail">
-                          {truncatedName}
-                        </Text>
-                      </View>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <Text style={{ color: '#666', fontSize: 12 }}>Qty:</Text>
-                        <Text style={{ color: '#000', fontWeight: '700', fontSize: 14 }}>{qty}</Text>
-                      </View>
-                    </View>
-                  );
-                })
-              ) : (
-                <Text style={{ color: '#999', fontStyle: 'italic' }}>No locations available across platforms</Text>
-              )}
-            </View>
-          ) : (
-            // Show simple quantity for single platform
-            <SimpleQuantityInput
-              quantity={(activeData.locationQuantities || {})['default'] ?? 0}
-              onChangeQuantity={(qty) => setLocationQuantity('default', qty)}
-            />
-          )
+          <SimpleQuantityInput
+            quantity={(activeData.locationQuantities || {})['default'] ?? 0}
+            onChangeQuantity={(qty) => setLocationQuantity('default', qty)}
+          />
         )}
 
       </View>
@@ -1898,128 +1778,7 @@ function SimpleQuantityInput({ quantity, onChangeQuantity }: { quantity: number;
   );
 }
 
-function VariantInventoryRow({ variantName, variantId, invKey, quantity, price, isOverride, onChangeQuantity, onChangePrice, onSelectImage, platformKey, isGenerationMode }: {
-  variantName: string;
-  variantId: string;
-  invKey: string;
-  quantity: number;
-  price: number;
-  isOverride?: boolean;
-  onChangeQuantity: (qty: number) => void;
-  onChangePrice: (price: number) => void;
-  onSelectImage: () => void;
-  platformKey?: string;
-  isGenerationMode?: boolean;
-}) {
-  const [localQty, setLocalQty] = useState(String(quantity));
-  const [localPrice, setLocalPrice] = useState(String(price));
-  const qtyTimeoutRef = React.useRef<any>(null);
-  const priceTimeoutRef = React.useRef<any>(null);
 
-  // Determine if platform supports per-location pricing
-  const isShopify = platformKey === 'shopify';
-  const supportsPerLocationPricing = platformKey === 'square' || platformKey === 'clover';
-
-  // Sync from parent when values change externally
-  useEffect(() => {
-    if (String(quantity) !== localQty) {
-      setLocalQty(String(quantity));
-    }
-  }, [quantity]);
-
-  useEffect(() => {
-    if (String(price) !== localPrice) {
-      setLocalPrice(String(price));
-    }
-  }, [price]);
-
-  const handleQtyChange = (text: string) => {
-    const num = text.replace(/[^0-9]/g, ''); // Only allow numbers
-    setLocalQty(num);
-
-    if (qtyTimeoutRef.current) clearTimeout(qtyTimeoutRef.current);
-    qtyTimeoutRef.current = setTimeout(() => {
-      onChangeQuantity(Number(num || '0'));
-    }, 300);
-  };
-
-  const handlePriceChange = (text: string) => {
-    const num = text.replace(/[^0-9.]/g, ''); // Allow numbers and decimal
-    setLocalPrice(num);
-
-    if (priceTimeoutRef.current) clearTimeout(priceTimeoutRef.current);
-    priceTimeoutRef.current = setTimeout(() => {
-      onChangePrice(Number(num || '0'));
-    }, 300);
-  };
-
-  return (
-    <View style={[
-      styles.inventoryRow,
-      isOverride && isGenerationMode && {
-        borderWidth: 4,
-        borderColor: '#FFD700',
-        borderTopWidth: 6,
-        backgroundColor: '#FFFEF0',
-        borderRadius: 10,
-        position: 'relative',
-        marginTop: 12,
-      }
-    ]}>
-      {isOverride && isGenerationMode && (
-        <View style={{ position: 'absolute', top: -12, left: 12, backgroundColor: '#FFD700', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, zIndex: 10 }}>
-          <Text style={{ color: '#FFF', fontSize: 10, fontWeight: '700' }}>OVERRIDE</Text>
-        </View>
-      )}
-      <View style={{ flexDirection: "column", gap: 12, alignSelf: 'flex-start' }}>
-        <Text style={{ backgroundColor: '#F8F9FB', alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12, color: '#000', fontWeight: '600' }}>{variantName}</Text>
-
-        {/* Platform indicator - Redesigned tag */}
-        {platformKey && (
-          <View style={{
-            alignSelf: 'flex-start',
-            paddingVertical: 4,
-            paddingHorizontal: 8,
-            backgroundColor: isShopify ? '#F0F9FF' : '#F0FDF4',
-            borderRadius: 6,
-            borderWidth: 1,
-            borderColor: isShopify ? '#BAE6FD' : '#BBF7D0',
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 4
-          }}>
-            <Text style={{ fontSize: 10 }}>{isShopify ? '🔒' : '📍'}</Text>
-            <Text style={{ fontSize: 11, color: isShopify ? '#0369A1' : '#15803D', fontWeight: '600' }}>
-              {isShopify ? 'Global Price' : 'Per-Location'}
-            </Text>
-          </View>
-        )}
-
-        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 9, alignItems: 'center', alignSelf: 'flex-end' }}>
-          <Text style={{ color: '#000' }}>Quantity:</Text>
-          <TextInput
-            style={styles.qtyInput}
-            value={localQty}
-            onChangeText={handleQtyChange}
-            keyboardType={'decimal-pad'}
-          />
-        </View>
-
-        {/* Price input under quantity */}
-        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 9, alignItems: 'center', alignSelf: 'flex-end' }}>
-          <Text style={{ color: isOverride ? '#FFD700' : '#000', fontWeight: isOverride ? '700' : '400' }}>Price:</Text>
-          <TextInput
-            style={styles.qtyInput}
-            value={localPrice}
-            onChangeText={handlePriceChange}
-            keyboardType={'decimal-pad'}
-            editable={true}
-          />
-        </View>
-      </View>
-    </View>
-  );
-}
 
 function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, required, onRegenerate, refilled, error }: { label: string; value?: string; onChangeText?: (t: string) => void; multiline?: boolean; keyboardType?: any; onInfo?: () => void; required?: boolean; onRegenerate?: () => void; refilled?: boolean; error?: boolean }) {
   // Use local state with uncontrolled input to prevent re-render issues

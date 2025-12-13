@@ -13,14 +13,15 @@ import {
   ScrollView,
 } from 'react-native';
 import DropDownPicker from 'react-native-dropdown-picker';
-import { supabase } from '../lib/supabase';
+import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { AuthContext } from '../context/AuthContext';
 import { useNavigation } from '@react-navigation/native';
 import { Image } from 'react-native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useOrganizationList } from '@clerk/clerk-expo';
+import { useOrganizationList, useUser } from '@clerk/clerk-expo';
 import { useOrg } from '../context/OrgContext';
+import * as Crypto from 'expo-crypto';
 
 type AppStackParamList = {
   CreateAccountScreen: undefined;
@@ -49,6 +50,7 @@ const CreateAccountScreen = () => {
   const navigation = useNavigation<CreateAccountScreenNavigationProp>();
   const { createOrganization } = useOrganizationList();
   const { refreshOrgs } = useOrg();
+  const { user: clerkUser } = useUser();
 
   const [regionItems, setRegionItems] = useState([
     { label: 'United States', value: 'US' },
@@ -72,37 +74,47 @@ const CreateAccountScreen = () => {
 
     setLoading(true);
     try {
-      // 1. Get current user
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
-      if (userError || !user) {
-        throw userError || new Error("User not found. Please log in again.");
+      // 1. Get current user from Clerk
+      if (!clerkUser?.id) {
+        throw new Error("User not found. Please log in again.");
+      }
+      const userId = clerkUser.id;
+      const userEmail = clerkUser.primaryEmailAddress?.emailAddress || '';
+
+      // Resolve/Generate UUID to satisfy "exactly as expects" (Users.Id is UUID)
+      let dbUserId = '';
+
+      // Check if user already exists in legacy Users table by Email to reuse UUID
+      const { data: existingUser } = await supabase
+        .from('Users')
+        .select('Id')
+        .eq('Email', userEmail)
+        .maybeSingle();
+
+      if (existingUser?.Id) {
+        dbUserId = existingUser.Id;
+      } else {
+        // Generate a new random UUID if no record exists
+        dbUserId = Crypto.randomUUID();
       }
 
-      // 2. Save profile to Supabase
-      const { error: userUpdateError } = await supabase
-        .from('Users')
-        .update({
-          PhoneNumber: phoneNumber.startsWith('+') ? phoneNumber : `+1${phoneNumber}`,
-          Region: region,
-          Occupation: occupation,
-          Currency: currency,
-        })
-        .eq('Id', user.id);
+      // 2. Save profile to Supabase with strict UUID
+      const { error: upsertError } = await supabase.from('Users').upsert({
+        Id: dbUserId, // Using strict UUID
+        Email: userEmail,
+        PhoneNumber: phoneNumber.startsWith('+') ? phoneNumber : `+1${phoneNumber}`,
+        Region: region,
+        Occupation: occupation,
+        Currency: currency,
+      }, { onConflict: 'Id' });
 
-      if (userUpdateError) {
-        const { error: upsertError } = await supabase.from('Users').upsert({
-          Id: user.id,
-          Email: user.email!,
-          PhoneNumber: phoneNumber.startsWith('+') ? phoneNumber : `+1${phoneNumber}`,
-          Region: region,
-          Occupation: occupation,
-          Currency: currency,
-        }, { onConflict: 'Id' });
-        if (upsertError) throw upsertError;
+      if (upsertError) {
+        console.error('[CreateAccountScreen] Users table upsert error:', upsertError);
+        throw upsertError;
       }
 
       await supabase.from('UserProfiles').upsert({
-        UserId: user.id,
+        UserId: dbUserId, // Using strict UUID
         DisplayName: businessName,
       }, { onConflict: 'UserId' });
 
@@ -121,7 +133,7 @@ const CreateAccountScreen = () => {
       // 4. Mark onboarding as complete
       await supabase.from('Users').update({
         isOnboardingComplete: true,
-      }).eq('Id', user.id);
+      }).eq('Id', dbUserId);
 
       // 5. Refresh org context to pick up new org
       if (refreshOrgs) {

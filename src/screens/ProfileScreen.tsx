@@ -1615,16 +1615,7 @@ const ProfileScreen = () => {
 
                     return (
                       <View key={connection.Id} style={styles.integrationItem}>
-                        {/* Delete Button (Edit Mode) */}
-                        {isEditMode && (
-                          <TouchableOpacity
-                            style={styles.deleteButton}
-                            onPress={() => handleDisconnectPlatform(connection.Id, platformConfig.name)}
-                          >
-                            <Icon name="minus-circle-outline" size={24} color={theme.colors.error} />
-                            <Text style={{ color: "red", fontSize: 14 }}>Disconnect</Text>
-                          </TouchableOpacity>
-                        )}
+                        
 
                         {/* Left column: icon + name + status/timestamp */}
                         <View style={styles.integrationLeft}>
@@ -1694,6 +1685,7 @@ const ProfileScreen = () => {
 
                         {/* Right column: action buttons (non-edit mode only) */}
                         {!isEditMode && connection && (
+                          
                           <View style={styles.connectionActions}>
                             {/* Pending: Start Scan */}
                             {connection.Status === CONNECTION_STATUS.PENDING && (
@@ -1791,6 +1783,16 @@ const ProfileScreen = () => {
                             )}
                           </View>
                         )}
+                        {/* Delete Button (Edit Mode) */}
+                        {isEditMode && (
+                          <TouchableOpacity
+                            style={styles.deleteButton}
+                            onPress={() => handleDisconnectPlatform(connection.Id, platformConfig.name)}
+                          >
+                            <Icon name="minus-circle-outline" size={24} color={theme.colors.error} />
+                            <Text style={{ color: "red", fontSize: 14 }}>Disconnect</Text>
+                          </TouchableOpacity>
+                        )}
                       </View>
                     );
                   });
@@ -1835,6 +1837,7 @@ const ProfileScreen = () => {
             <LocationsManagerV2
               orgId={currentOrg?.id}
               platformConnections={platformConnections}
+              disableScroll={true}
             />
           )}
         </Card>

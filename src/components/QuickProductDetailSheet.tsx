@@ -12,8 +12,17 @@ import {
   TextInput,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import VariantInventoryEditor, { VariantInventoryEditorProps } from './VariantInventoryEditor';
 import { useTheme } from '../context/ThemeContext';
 import { supabase } from '../lib/supabase';
+// Platform logo imports
+import SquareSvg from '../assets/square.svg';
+import ShopifySvg from '../assets/shopify.svg';
+import CloverSvg from '../assets/clover.svg';
+import AmazonSvg from '../assets/amazon.svg';
+import EbaySvg from '../assets/ebay.svg';
+import FacebookSvg from '../assets/facebook.svg';
+import PlatformFilterChips from './PlatformFilterChips';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -22,7 +31,18 @@ interface LocationInventory {
   name: string;
   quantity: number;
   price?: number;
+  platformType?: string; // For showing platform logo
 }
+
+// Platform logo map for location dropdown
+const platformLogoMap: Record<string, any> = {
+  square: SquareSvg,
+  shopify: ShopifySvg,
+  clover: CloverSvg,
+  amazon: AmazonSvg,
+  ebay: EbaySvg,
+  facebook: FacebookSvg,
+};
 
 interface VariantInventory {
   id: string;
@@ -37,7 +57,7 @@ interface QuickProductDetailSheetProps {
   onClose: () => void;
   onSave: (updates: { variantId: string; location: string; quantity: number; price?: number }[]) => Promise<void>;
   onOpenDetail?: () => void;
-  platformLocations?: { id: string; name: string }[];
+  platformLocations?: { id: string; name: string; platformType?: string }[];
 }
 
 const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
@@ -55,6 +75,8 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [inventoryUpdates, setInventoryUpdates] = useState<Record<string, { quantity: number; price?: number }>>({});
+  // Note: Keys are composite: `${variantId}:${locationId}`
+  const [selectedPlatformFilter, setSelectedPlatformFilter] = useState<string | null>(null);
 
   // Load variant and location data
   useEffect(() => {
@@ -62,13 +84,13 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
       try {
         setIsLoading(true);
         console.log('[QUICK DETAIL] Loading data for product:', product.variant?.Id || 'unknown');
-        
+
         let loadedVariants: VariantInventory[] = [];
-        
+
         // Handle backend format: { variant, inventoryLevels, images }
         if (product.variant && product.inventoryLevels) {
           console.log('[QUICK DETAIL] Backend format detected, transforming data');
-          
+
           // Transform inventoryLevels to inventoryByLocation format
           const inventoryByLocation: Record<string, { quantity: number; price?: number }> = {};
           (product.inventoryLevels || []).forEach((level: any) => {
@@ -79,59 +101,69 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
               };
             }
           });
-          
+
           // Check if we have the base variant or need to fetch all variants for the product
           const baseVariant = product.variant;
-          
-          // If this variant has no options, treat it as a single variant
-          if (!baseVariant.Options || Object.keys(baseVariant.Options).length === 0) {
-            loadedVariants = [{
-              id: baseVariant.Id,
-              name: baseVariant.Title || 'Default',
-              optionValues: {},
-              inventoryByLocation,
-              image: product.images?.[0]?.ImageUrl,
-            }];
-          } else {
-            // This variant has options - try to fetch all variants for this product
+
+          console.log('[QUICK DETAIL] Base variant:', {
+            id: baseVariant.Id,
+            productId: baseVariant.ProductId,
+            title: baseVariant.Title,
+            options: baseVariant.Options,
+          });
+
+          // Always try to fetch all variants for this product from DB
+          if (baseVariant.ProductId) {
             try {
-              const { data: allVariants } = await supabase
+              const { data: allVariants, error: variantsError } = await supabase
                 .from('ProductVariants')
                 .select('*')
                 .eq('ProductId', baseVariant.ProductId);
-              
+
+              console.log('[QUICK DETAIL] DB Query result:', {
+                productId: baseVariant.ProductId,
+                variantCount: allVariants?.length || 0,
+                error: variantsError?.message,
+                variants: allVariants?.map((v: any) => ({ id: v.Id, title: v.Title, options: v.Options })),
+              });
+
               // Also fetch inventory for all variants
               const variantIds = (allVariants || []).map((v: any) => v.Id);
               const { data: allInventory } = await supabase
                 .from('InventoryLevels')
                 .select('*')
                 .in('ProductVariantId', variantIds);
-              
+
               // Transform all variants with their inventory
-              loadedVariants = (allVariants || [])
-                .filter((v: any) => v.Options && Object.keys(v.Options).length > 0)
-                .map((v: any) => {
-                  const variantInventory: Record<string, { quantity: number; price?: number }> = {};
-                  (allInventory || [])
-                    .filter((inv: any) => inv.ProductVariantId === v.Id)
-                    .forEach((inv: any) => {
-                      if (inv.PlatformLocationId) {
-                        variantInventory[inv.PlatformLocationId] = {
-                          quantity: inv.Quantity || 0,
-                          price: inv.Price,
-                        };
-                      }
-                    });
-                  
-                  return {
-                    id: v.Id,
-                    name: Object.values(v.Options || {}).join(' / ') || v.Title,
-                    optionValues: v.Options || {},
-                    inventoryByLocation: variantInventory,
-                    image: v.PrimaryImageUrl,
-                  };
-                });
-              
+              loadedVariants = (allVariants || []).map((v: any) => {
+                const variantInventory: Record<string, { quantity: number; price?: number }> = {};
+                (allInventory || [])
+                  .filter((inv: any) => inv.ProductVariantId === v.Id)
+                  .forEach((inv: any) => {
+                    if (inv.PlatformLocationId) {
+                      variantInventory[inv.PlatformLocationId] = {
+                        quantity: inv.Quantity || 0,
+                        price: inv.Price,
+                      };
+                    }
+                  });
+
+                // Build variant name from Options or Title
+                const optionValues = v.Options || {};
+                const hasOptions = Object.keys(optionValues).length > 0;
+                const variantName = hasOptions
+                  ? Object.values(optionValues).join(' / ')
+                  : (v.Title || 'Default');
+
+                return {
+                  id: v.Id,
+                  name: variantName,
+                  optionValues: optionValues,
+                  inventoryByLocation: variantInventory,
+                  image: v.PrimaryImageUrl,
+                };
+              });
+
               // If no option-based variants found, use the base variant
               if (loadedVariants.length === 0) {
                 loadedVariants = [{
@@ -142,8 +174,13 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
                   image: product.images?.[0]?.ImageUrl,
                 }];
               }
-              
+
               console.log(`[QUICK DETAIL] Loaded ${loadedVariants.length} variants from DB`);
+              console.log('[QUICK DETAIL] Loaded variants:', loadedVariants.map(v => ({
+                id: v.id,
+                name: v.name,
+                inventoryLocCount: Object.keys(v.inventoryByLocation).length
+              })));
             } catch (dbError) {
               console.warn('[QUICK DETAIL] Could not fetch variants from DB:', dbError);
               // Fallback to single variant
@@ -155,6 +192,16 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
                 image: product.images?.[0]?.ImageUrl,
               }];
             }
+          } else {
+            // No ProductId - use single base variant with inventoryLevels
+            console.log('[QUICK DETAIL] No ProductId, using single base variant');
+            loadedVariants = [{
+              id: baseVariant.Id,
+              name: baseVariant.Title || 'Default',
+              optionValues: baseVariant.Options || {},
+              inventoryByLocation,
+              image: product.images?.[0]?.ImageUrl,
+            }];
           }
         }
         // Handle frontend format: { variants: [...] }
@@ -162,19 +209,20 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
           console.log('[QUICK DETAIL] Frontend format detected');
           loadedVariants = product.variants;
         }
-        
+
         setVariants(loadedVariants);
         console.log(`[QUICK DETAIL] Set ${loadedVariants.length} variants`);
-        
+
         // Determine locations list
         let locationsList: LocationInventory[] = [];
-        
+
         if (platformLocations && platformLocations.length > 0) {
           // Use provided platform locations as the source of truth
           locationsList = platformLocations.map(pl => ({
             id: pl.id,
             name: pl.name,
             quantity: 0, // Placeholder, actual quantity is in variants
+            platformType: pl.platformType, // For platform logo
           }));
         } else {
           // Extract unique locations from all variants (fallback)
@@ -192,10 +240,10 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
           });
           locationsList = Array.from(locationsMap.values());
         }
-        
+
         setLocations(locationsList);
         console.log(`[QUICK DETAIL] Set ${locationsList.length} locations`);
-        
+
         if (locationsList.length > 0) {
           setSelectedLocationId(locationsList[0].id);
         }
@@ -210,31 +258,59 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
     loadData();
   }, [product]);
 
-  const handleQuantityChange = (variantId: string, quantity: number) => {
+  // Auto-swap to first location of selected platform when filter changes
+  useEffect(() => {
+    if (!locations.length) return;
+
+    if (selectedPlatformFilter) {
+      // Find first location matching the selected platform
+      const matchingLocation = locations.find(
+        l => l.platformType?.toLowerCase() === selectedPlatformFilter.toLowerCase()
+      );
+      if (matchingLocation && matchingLocation.id !== selectedLocationId) {
+        setSelectedLocationId(matchingLocation.id);
+      }
+    } else {
+      // "All" selected - keep current or use first
+      if (!selectedLocationId || !locations.find(l => l.id === selectedLocationId)) {
+        setSelectedLocationId(locations[0].id);
+      }
+    }
+  }, [selectedPlatformFilter, locations]);
+
+  // Use composite key: variantId:locationId for proper per-location tracking
+  const getInventoryKey = (variantId: string, locationId: string) => `${variantId}:${locationId}`;
+
+  const handleQuantityChange = (variantId: string, locationId: string, quantity: number) => {
+    const key = getInventoryKey(variantId, locationId);
     setInventoryUpdates(prev => ({
       ...prev,
-      [variantId]: { ...prev[variantId], quantity },
+      [key]: { ...prev[key], quantity },
     }));
   };
 
-  const handlePriceChange = (variantId: string, price: number) => {
+  const handlePriceChange = (variantId: string, locationId: string, price: number) => {
+    const key = getInventoryKey(variantId, locationId);
     setInventoryUpdates(prev => ({
       ...prev,
-      [variantId]: { ...prev[variantId], price },
+      [key]: { ...prev[key], price },
     }));
   };
 
   const handleSave = async () => {
     try {
       setIsSaving(true);
-      
-      // Prepare updates array
-      const updates = Object.entries(inventoryUpdates).map(([variantId, data]) => ({
-        variantId,
-        location: selectedLocationId,
-        quantity: data.quantity || 0,
-        price: data.price,
-      }));
+
+      // Prepare updates array - parse composite keys
+      const updates = Object.entries(inventoryUpdates).map(([key, data]) => {
+        const [variantId, locationId] = key.split(':');
+        return {
+          variantId,
+          location: locationId,
+          quantity: data.quantity || 0,
+          price: data.price,
+        };
+      });
 
       if (updates.length === 0) {
         Alert.alert('No Changes', 'Update at least one variant quantity');
@@ -276,11 +352,11 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
   return (
     <View style={styles.backdrop}>
 
-  
-      
+
+
       {/* Modal Sheet Card */}
       <View style={[styles.modalSheet]}>
-        <ScrollView 
+        <ScrollView
           style={styles.scrollContent}
           showsVerticalScrollIndicator={false}
           bounces={false}
@@ -316,11 +392,11 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
               <Text style={[styles.productTitle, { color: theme.colors.text }]} numberOfLines={2}>
                 {title}
               </Text>
-              
+
               <Text style={[styles.productPrice, { color: theme.colors.textSecondary }]}>
                 ${typeof price === 'number' ? price.toFixed(2) : '0.00'}
               </Text>
-              
+
               <Text style={[styles.productSku, { color: theme.colors.textSecondary }]}>
                 SKU: {sku}
               </Text>
@@ -350,6 +426,31 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
             <Text style={[styles.viewDetailsText, { color: theme.colors.text }]}>Open Product Detail</Text>
           </TouchableOpacity>
 
+          {/* Platform Filter Chips */}
+          {(() => {
+            // Build unique platforms from locations
+            const uniquePlatforms = Array.from(
+              new Set(locations.map(l => l.platformType).filter(Boolean))
+            ).map(platformType => ({
+              name: platformType || 'Unknown',
+              type: platformType || 'unknown',
+            }));
+
+            if (uniquePlatforms.length > 0) {
+              return (
+                <View style={{ marginTop: 16, marginBottom: 8 }}>
+                  <PlatformFilterChips
+                    platforms={uniquePlatforms}
+                    selectedPlatform={selectedPlatformFilter}
+                    onSelectPlatform={setSelectedPlatformFilter}
+                    activeColor={theme.colors.primary}
+                  />
+                </View>
+              );
+            }
+            return null;
+          })()}
+
           {/* Inventory Section */}
           <View style={[styles.inventorySection, { backgroundColor: theme.colors.surface }]}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, zIndex: 10 }}>
@@ -370,8 +471,15 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
                     }}
                     onPress={() => setShowLocationPicker(!showLocationPicker)}
                   >
-                    <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#FACC15', marginRight: 8 }} />
-                    <Text style={{ fontWeight: '600', color: '#000', marginRight: 4, maxWidth: 150 }} numberOfLines={1}>
+                    {/* Platform logo */}
+                    {(() => {
+                      const selectedLoc = locations.find(l => l.id === selectedLocationId);
+                      const Logo = selectedLoc?.platformType ? platformLogoMap[selectedLoc.platformType.toLowerCase()] : null;
+                      return Logo ? <Logo width={16} height={16} style={{ marginRight: 6 }} /> : (
+                        <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#FACC15', marginRight: 8 }} />
+                      );
+                    })()}
+                    <Text style={{ fontWeight: '600', color: '#000', marginRight: 4, maxWidth: 150, flexShrink: 1 }} numberOfLines={1}>
                       {locations.find(l => l.id === selectedLocationId)?.name || 'Select Location'}
                     </Text>
                     <Icon name={showLocationPicker ? "chevron-up" : "chevron-down"} size={20} color="#666" />
@@ -392,181 +500,147 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
                       shadowOffset: { width: 0, height: 2 },
                       shadowOpacity: 0.1,
                       shadowRadius: 4,
-                      width: 200,
+                      width: 220,
                       zIndex: 1000,
                     }}>
-                      {locations.map(loc => (
-                        <TouchableOpacity
-                          key={loc.id}
-                          style={{
-                            paddingVertical: 12,
-                            paddingHorizontal: 16,
-                            borderBottomWidth: 1,
-                            borderBottomColor: '#F0F0F0',
-                            backgroundColor: selectedLocationId === loc.id ? '#F9F9F9' : '#FFF',
-                          }}
-                          onPress={() => {
-                            setSelectedLocationId(loc.id);
-                            setShowLocationPicker(false);
-                          }}
-                        >
-                          <Text style={{
-                            fontWeight: selectedLocationId === loc.id ? '600' : '400',
-                            color: '#000',
-                          }}>
-                            {loc.name}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
+                      {locations
+                        .filter(loc => !selectedPlatformFilter || loc.platformType?.toLowerCase() === selectedPlatformFilter.toLowerCase())
+                        .map(loc => {
+                          const LocLogo = loc.platformType ? platformLogoMap[loc.platformType.toLowerCase()] : null;
+                          return (
+                            <TouchableOpacity
+                              key={loc.id}
+                              style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                paddingVertical: 12,
+                                paddingHorizontal: 12,
+                                borderBottomWidth: 1,
+                                borderBottomColor: '#F0F0F0',
+                                backgroundColor: selectedLocationId === loc.id ? '#F9F9F9' : '#FFF',
+                              }}
+                              onPress={() => {
+                                setSelectedLocationId(loc.id);
+                                setShowLocationPicker(false);
+                              }}
+                            >
+                              {LocLogo && <LocLogo width={16} height={16} style={{ marginRight: 8 }} />}
+                              <Text style={{
+                                fontWeight: selectedLocationId === loc.id ? '600' : '400',
+                                color: '#000',
+                                flexShrink: 1,
+                              }} numberOfLines={1}>
+                                {loc.name}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
                     </View>
                   )}
                 </View>
               )}
             </View>
 
+            {/* Global Pricing Message */}
+            {(() => {
+              const selectedLoc = locations.find(l => l.id === selectedLocationId);
+              const platformType = selectedLoc?.platformType?.toLowerCase() || '';
+              const isGlobalPricing = platformType === 'shopify';
+              if (isGlobalPricing) {
+                return (
+                  <Text style={{ color: '#666', fontSize: 13, marginBottom: 12 }}>
+                    Price must be same everywhere
+                  </Text>
+                );
+              }
+              return null;
+            })()}
+
             {/* Variants List */}
-            <View style={{ gap: 12, zIndex: 1 }}>
-              {variants.length === 0 ? (
-                <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
-                  No variants available
-                </Text>
-              ) : (
-                variants.map((variant) => {
-                  const variantName = Object.values(variant.optionValues || {}).join(' / ') || 'Variant';
+            <View style={{ gap: 12, zIndex: 1, paddingBottom: 24 }}>
+              {(() => {
+                // Debug: Log what we're passing
+                console.log('[QUICK DETAIL] Rendering VariantInventoryEditor');
+                console.log('[QUICK DETAIL] variants:', variants.length, variants.map(v => v.id));
+                console.log('[QUICK DETAIL] locations:', locations.length, locations.map(l => ({ id: l.id, name: l.name, platformType: l.platformType })));
+                console.log('[QUICK DETAIL] selectedPlatformFilter:', selectedPlatformFilter);
 
-                  // Get values for selected location
-                  const currentQty = inventoryUpdates[variant.id]?.quantity !== undefined
-                    ? inventoryUpdates[variant.id]?.quantity
-                    : (variant.inventoryByLocation?.[selectedLocationId]?.quantity ?? 0);
+                // Adapt QuickProductDetailSheet state to VariantInventoryEditor props
 
-                  const currentPrice = inventoryUpdates[variant.id]?.price !== undefined
-                    ? inventoryUpdates[variant.id]?.price
-                    : (variant.inventoryByLocation?.[selectedLocationId]?.price ?? 0);
+                // 1. Locations - map platformType to platformKey
+                const editorLocations = locations.map(l => ({
+                  id: l.id,
+                  name: l.name,
+                  platformKey: l.platformType?.toLowerCase() || 'unknown'
+                }));
 
-                  return (
-                    <View key={variant.id} style={{
-                      padding: 12,
-                      borderWidth: 1,
-                      borderColor: '#E5E5E5',
-                      borderRadius: 12,
-                      backgroundColor: '#FFF',
-                    }}>
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                        <View style={{ flex: 1, marginRight: 12 }}>
-                          {/* Variant Name Badge */}
-                          <View style={{
-                            alignSelf: 'flex-start',
-                            paddingHorizontal: 12,
-                            paddingVertical: 6,
-                            borderWidth: 1,
-                            borderColor: '#E5E5E5',
-                            borderRadius: 8,
-                            marginBottom: 16,
-                          }}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                              <Text style={{ fontWeight: '600', color: '#000', fontSize: 13 }}>{variantName}</Text>
-                              <Icon name="chevron-down" size={14} color="#666" style={{ marginLeft: 4 }} />
-                            </View>
-                          </View>
+                console.log('[QUICK DETAIL] editorLocations:', editorLocations);
 
-                          {/* Inputs */}
-                          <View style={{ gap: 12 }}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                              <Text style={{ width: 70, fontSize: 13, fontWeight: '500', color: '#000' }}>Quantity:</Text>
-                              <TextInput
-                                style={{
-                                  flex: 1,
-                                  height: 40,
-                                  paddingHorizontal: 12,
-                                  borderWidth: 1,
-                                  borderColor: '#E5E5E5',
-                                  borderRadius: 8,
-                                  textAlign: 'center',
-                                  fontWeight: '600',
-                                  color: '#000',
-                                  backgroundColor: '#FFF',
-                                }}
-                                value={String(currentQty)}
-                                onChangeText={(text) => {
-                                  const qty = parseInt(text, 10);
-                                  if (!isNaN(qty)) {
-                                    setInventoryUpdates(prev => ({
-                                      ...prev,
-                                      [variant.id]: { ...prev[variant.id], quantity: qty },
-                                    }));
-                                  } else if (text === '') {
-                                     setInventoryUpdates(prev => ({
-                                      ...prev,
-                                      [variant.id]: { ...prev[variant.id], quantity: 0 },
-                                    }));
-                                  }
-                                }}
-                                keyboardType="number-pad"
-                                placeholder="0"
-                              />
-                            </View>
+                // 2. Variants - Merge local variants state with un-saved inventoryUpdates
+                const editorVariants = variants.map(v => {
+                  const mergedInventory: any = {};
 
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                              <Text style={{ width: 70, fontSize: 13, fontWeight: '500', color: '#000' }}>Price:</Text>
-                              <TextInput
-                                style={{
-                                  flex: 1,
-                                  height: 40,
-                                  paddingHorizontal: 12,
-                                  borderWidth: 1,
-                                  borderColor: '#E5E5E5',
-                                  borderRadius: 8,
-                                  textAlign: 'center',
-                                  fontWeight: '600',
-                                  color: '#000',
-                                  backgroundColor: '#FFF',
-                                }}
-                                value={String(currentPrice)} // Simplify to allow editing
-                                onChangeText={(text) => {
-                                  const price = parseFloat(text);
-                                  if (!isNaN(price)) {
-                                    setInventoryUpdates(prev => ({
-                                      ...prev,
-                                      [variant.id]: { ...prev[variant.id], price },
-                                    }));
-                                  }
-                                }}
-                                keyboardType="decimal-pad"
-                                placeholder="0.00"
-                              />
-                            </View>
-                          </View>
-                        </View>
+                  // Start with existing inventory
+                  Object.entries(v.inventoryByLocation || {}).forEach(([locId, data]) => {
+                    mergedInventory[locId] = { ...data };
+                  });
 
-                        {/* Image Slot */}
-                        <View>
-                          {variant.image ? (
-                            <Image
-                              source={{ uri: variant.image }}
-                              style={{ width: 100, height: 100, borderRadius: 8, backgroundColor: '#F0F0F0' }}
-                              resizeMode="cover"
-                            />
-                          ) : (
-                            <View style={{
-                              width: 100,
-                              height: 100,
-                              borderRadius: 8,
-                              borderWidth: 1,
-                              borderColor: '#E5E5E5',
-                              borderStyle: 'dashed',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              backgroundColor: '#FAFAFA'
-                            }}>
-                              <Icon name="plus" size={24} color="#CCC" />
-                            </View>
-                          )}
-                        </View>
-                      </View>
-                    </View>
-                  );
-                })
-              )}
+                  // Apply updates
+                  Object.entries(inventoryUpdates).forEach(([key, update]) => {
+                    const [vId, locId] = key.split(':');
+                    if (vId === v.id) {
+                      mergedInventory[locId] = {
+                        ...(mergedInventory[locId] || {}),
+                        ...update
+                      };
+                    }
+                  });
+
+                  return {
+                    id: v.id,
+                    name: Object.values(v.optionValues || {}).join(' / ') || 'Variant',
+                    inventory: mergedInventory,
+                    defaultPrice: undefined,
+                    image: v.image
+                  };
+                });
+
+                console.log('[QUICK DETAIL] editorVariants:', editorVariants);
+
+                // 3. Callback
+                const handleUpdateInventory = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
+                  console.log(`[QUICK DETAIL] Update: ${variantId} @ ${locationId}, ${field} = ${value}`);
+                  const key = `${variantId}:${locationId}`;
+                  setInventoryUpdates(prev => {
+                    const existingUpdate = prev[key] || {};
+                    return {
+                      ...prev,
+                      [key]: {
+                        ...existingUpdate,
+                        [field]: value
+                      }
+                    };
+                  });
+                };
+
+                // If no variants or locations, show message
+                if (variants.length === 0) {
+                  return <Text style={{ color: '#999', fontStyle: 'italic' }}>No variants found</Text>;
+                }
+                if (locations.length === 0) {
+                  return <Text style={{ color: '#999', fontStyle: 'italic' }}>No locations found</Text>;
+                }
+
+                return (
+                  <VariantInventoryEditor
+                    variants={editorVariants}
+                    locations={editorLocations}
+                    activeTab={selectedPlatformFilter || 'all'}
+                    isGenerationMode={false}
+                    onUpdateInventory={handleUpdateInventory}
+                  />
+                );
+              })()}
             </View>
           </View>
         </ScrollView>
@@ -596,8 +670,8 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
             <Text style={[styles.cancelButtonText, { color: theme.colors.text }]}>Cancel</Text>
           </TouchableOpacity>
         </View>
-      </View>
-    </View>
+      </View >
+    </View >
   );
 };
 
@@ -607,7 +681,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     justifyContent: 'center',
     alignItems: 'flex-start',
-    
+
   },
 
   modalSheet: {
@@ -660,7 +734,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
   },
-  
+
   // Product Card (like InventoryListCard)
   productCard: {
     flexDirection: 'row',

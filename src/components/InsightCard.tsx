@@ -44,6 +44,8 @@ export interface DashboardInsight {
     }>;
     suggestionOnly?: boolean;
     suggestionText?: string;
+    timeframe?: 'short_term' | 'medium_term' | 'long_term';
+    insights?: DashboardInsight[];
 }
 
 interface InsightCardProps {
@@ -139,7 +141,12 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
             <View style={styles.headerRow}>
                 <View style={styles.headerLeft}>
                     <Icon name="sprout-outline" size={20} color="#647653" />
-                    <Text style={styles.headerTitle}>Sprout's Insight</Text>
+                    <Text style={styles.headerTitle}>
+                        {insight.timeframe === 'short_term' ? 'This Week' :
+                            insight.timeframe === 'medium_term' ? 'This Month' :
+                                insight.timeframe === 'long_term' ? 'This Quarter' :
+                                    "Sprout's Insight"}
+                    </Text>
                 </View>
 
                 <View style={styles.headerRight}>

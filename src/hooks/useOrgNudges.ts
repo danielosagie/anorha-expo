@@ -45,6 +45,8 @@ export interface DashboardInsight {
   }>;
   suggestionOnly?: boolean;
   suggestionText?: string;
+  timeframe?: 'short_term' | 'medium_term' | 'long_term';
+  insights?: DashboardInsight[]; // If present, this is a multi-insight container (carousel)
 }
 
 export interface NudgesResponse {
@@ -136,7 +138,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
         throw new Error('Invalid response: missing insight');
       }
 
-      console.log(`[useOrgNudges] ✅ Received insight: ${data.insight.severity} - ${data.insight.title}`);
+      console.log(`[useOrgNudges] ✅ Received insight: ${data.insight.severity} - ${data.insight.topDIN.headline}`);
 
       setInsight(data.insight);
       setLastUpdated(data.timestamp);

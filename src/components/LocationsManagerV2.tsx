@@ -9,6 +9,10 @@ import {
   TextInput,
   Alert,
   Modal,
+  Dimensions,
+  Clipboard,
+  Image,
+  Switch,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import DraggableFlatList, { RenderItemParams, ScaleDecorator } from 'react-native-draggable-flatlist';
@@ -28,8 +32,38 @@ const PLATFORM_LOGOS: Record<string, any> = {
   clover: CloverSvg,
 };
 
-type ViewMode = 'default' | 'managePools' | 'createLocation' | 'createPool';
+
+type ViewMode = 'default' | 'managePools' | 'createLocation' | 'createPool' | 'partners' | 'invitePartner';
 type ManageTab = 'location' | 'pool';
+
+interface Partnership {
+  id: string;
+  partnerOrgName: string;
+  partnerEmail: string;
+  poolName: string;
+  productCount: number;
+  status: 'active' | 'pending';
+  createdAt: string;
+}
+
+interface PendingInvite {
+  id: string;
+  email: string;
+  poolName: string;
+  expiresAt: string;
+  inviteLink: string;
+}
+
+interface TeamMember {
+  userId: string;
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  imageUrl?: string;
+  role: 'org:admin' | 'org:member' | 'partner';
+  assignedPoolIds: string[];
+}
+
 
 interface LocationsManagerV2Props {
   orgId?: string;
@@ -40,6 +74,7 @@ interface LocationsManagerV2Props {
     Status?: string;
     IsEnabled?: boolean;
   }>;
+  disableScroll?: boolean;
 }
 
 interface LocationPool {
@@ -114,17 +149,22 @@ interface DeletePoolState {
   loading: boolean;
 }
 
-const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platformConnections }) => {
+const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platformConnections, disableScroll = false }) => {
   const theme = useTheme();
 
   // View mode state machine
   const [viewMode, setViewMode] = useState<ViewMode>('default');
   const [manageTab, setManageTab] = useState<ManageTab>('pool');
+  // Sub-tab for default view: 'locations' | 'partners' | 'team'
+  const [activeTab, setActiveTab] = useState<'locations' | 'partners' | 'team'>('locations');
 
   // List state (top card)
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [pools, setPools] = useState<LocationPool[]>([]);
   const [singleLocations, setSingleLocations] = useState<DbPlatformLocation[]>([]);
+  const [partnerships, setPartnerships] = useState<Partnership[]>([]);
+  const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [selectedListItem, setSelectedListItem] = useState<{ kind: 'pool' | 'single' | null; id?: string | null }>({ kind: null, id: null });
   const [resolvedOrgId, setResolvedOrgId] = useState<string | null>(orgId || null);
 
@@ -137,6 +177,12 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
   // For create new location/pool
   const [newPoolName, setNewPoolName] = useState('');
   const [newPoolLocations, setNewPoolLocations] = useState<Record<string, string[]>>({});
+
+  // Invite state
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [invitePoolId, setInvitePoolId] = useState('');
+  const [inviteCanRevoke, setInviteCanRevoke] = useState(true); // Default: consignment mode
+  const [isInviting, setIsInviting] = useState(false);
 
   // Loading and saving states
   const [loadingManage, setLoadingManage] = useState(false);
@@ -186,22 +232,70 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
   }, [platformConnections]);
 
   const loadList = useCallback(async () => {
+    // If no org ID yet, just ensure we're not loading forever
+    if (!resolvedOrgId) {
+      if (isLoading) setIsLoading(false);
+      return;
+    }
+
     setIsLoading(true);
     try {
       const token = await ensureSupabaseJwt();
 
-      if (!resolvedOrgId) {
+      // Load pools, partnerships, invites, and members in parallel
+      const headers = { Authorization: `Bearer ${token}` };
+
+      console.log('[LocationsManagerV2] Fetching data for org:', resolvedOrgId);
+
+      const [poolsRes, partnersRes, invitesRes, membersRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/pools/org/${resolvedOrgId}`, { headers }),
+        fetch(`${API_BASE_URL}/api/cross-org/partnerships?orgId=${resolvedOrgId}`, { headers }).catch(e => { console.error('Partners fetch failed', e); return null; }),
+        fetch(`${API_BASE_URL}/api/cross-org/invites/pending?orgId=${resolvedOrgId}`, { headers }).catch(e => { console.error('Invites fetch failed', e); return null; }),
+        fetch(`${API_BASE_URL}/api/organizations/${resolvedOrgId}/members`, { headers }).catch(e => { console.error('Members fetch failed', e); return null; })
+      ]);
+
+      // Handle Pools
+      if (poolsRes.ok) {
+        const poolData = await poolsRes.json();
+        setPools(Array.isArray(poolData) ? poolData : []);
+      } else {
+        console.error('[LocationsManagerV2] Pools fetch failed', poolsRes.status, await poolsRes.text());
         setPools([]);
-        setSingleLocations([]);
-        return;
       }
 
-      // Load pools
-      const res = await fetch(`${API_BASE_URL}/api/pools/org/${resolvedOrgId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const poolData = res.ok ? ((await res.json()) as LocationPool[]) : [];
-      setPools(Array.isArray(poolData) ? poolData : []);
+      // Handle Partnerships
+      if (partnersRes?.ok) {
+        const data = await partnersRes.json();
+        setPartnerships(data.partnerships || []);
+      } else {
+        if (partnersRes) console.error('[LocationsManagerV2] Partners fetch failed', partnersRes.status);
+        setPartnerships([]);
+      }
+
+      // Handle Invites
+      if (invitesRes?.ok) {
+        const data = await invitesRes.json();
+        setPendingInvites(data.sent || []);
+      } else {
+        if (invitesRes) console.error('[LocationsManagerV2] Invites fetch failed', invitesRes.status);
+        setPendingInvites([]);
+      }
+
+      // Handle Team Members (if available endpoint exists on backend/mobile bridge)
+      // Note: Mobile might not have the full Clerk-based member list endpoint. 
+      // We'll try to use a generic one or skip if fails.
+      if (membersRes?.ok) {
+        // This endpoint might not exist yet on backend for mobile. 
+        // If it fails, teamMembers will be empty.
+        // For now, we assume standard array of members.
+        try {
+          const membersData = await membersRes.json();
+          // Map to TeamMember if needed, or assume backend returns correct shape
+          // If backend returns Clerk shape, we might need transformation.
+          // For now, simple set.
+          setTeamMembers(Array.isArray(membersData) ? membersData : []);
+        } catch (e) { console.error('Error parsing members', e); }
+      }
 
       // Load single platform locations directly from DB (fast path)
       if (connectionIds.length > 0) {
@@ -223,30 +317,60 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
     }
   }, [resolvedOrgId, connectionIds]);
 
+  // Sync prop to state
+  useEffect(() => {
+    if (orgId && orgId !== resolvedOrgId) {
+      setResolvedOrgId(orgId);
+    }
+  }, [orgId, resolvedOrgId]);
+
+  // Trigger load on change
   useEffect(() => {
     loadList();
-  }, [resolvedOrgId, loadList]);
+  }, [loadList]);
 
-  // Resolve org id on mount if not provided
-  useEffect(() => {
-    (async () => {
-      if (resolvedOrgId) return;
-      try {
-        const token = await ensureSupabaseJwt();
-        const r = await fetch(`${API_BASE_URL}/api/organizations/me/active`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (r.ok) {
-          const j = await r.json();
-          setResolvedOrgId(j?.id || j?.orgId || null);
-        } else {
-          setResolvedOrgId(null);
-        }
-      } catch {
-        setResolvedOrgId(null);
+  const sendPartnerInvite = async () => {
+    if (!inviteEmail || !invitePoolId || !resolvedOrgId) {
+      Alert.alert('Error', 'Please fill in all fields');
+      return;
+    }
+
+    setIsInviting(true);
+    try {
+      const token = await ensureSupabaseJwt();
+      const res = await fetch(`${API_BASE_URL}/api/cross-org/invites`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          inviteeEmail: inviteEmail,
+          poolId: invitePoolId,
+          shareType: inviteCanRevoke ? 'consignment' : 'sync',
+          syncDirection: 'bidirectional',
+          canRevoke: inviteCanRevoke,
+        })
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error('[LocationsManagerV2] Invite failed:', res.status, errText);
+        throw new Error(`Failed to send invite: ${errText || res.status}`);
       }
-    })();
-  }, []);
+
+      const { inviteLink } = await res.json();
+      Clipboard.setString(inviteLink);
+      Alert.alert('Success', 'Invite sent! Link copied to clipboard.');
+      setInviteEmail('');
+      setInvitePoolId('');
+      setInviteCanRevoke(true); // Reset to default
+      setViewMode('default');
+      loadList(); // Refresh
+    } catch (e: any) {
+      console.error('[LocationsManagerV2] sendPartnerInvite error', e);
+      Alert.alert('Error', e.message || 'Failed to send invite');
+    } finally {
+      setIsInviting(false);
+    }
+  };
 
   // Transform API response from Record<connId, {...}> to the grouped format we need
   const transformAvailableLocations = (record: Record<string, any>): TransformedLocationGroup[] => {
@@ -733,6 +857,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
     );
   }, [available, allSelectedLocationIds]);
 
+
   // Render the appropriate view based on viewMode
   const renderView = () => {
     if (viewMode === 'default') {
@@ -743,26 +868,290 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
       return renderCreateLocationView();
     } else if (viewMode === 'createPool') {
       return renderCreatePoolView();
+    } else if (viewMode === 'invitePartner') {
+      return renderInvitePartnerView();
     }
     return null;
   };
 
-  // Default view: list of pools and locations
+  // Render invite partner screen
+  const renderInvitePartnerView = () => (
+    <View style={styles.card}>
+      <View style={styles.headerRow}>
+        <TouchableOpacity onPress={() => setViewMode('default')} style={styles.backBtn}>
+          <Icon name="arrow-left" size={24} color={theme.colors.text} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Invite Partner</Text>
+      </View>
+
+      <View style={{ padding: 16 }}>
+        <Text style={{ marginBottom: 8, fontWeight: '600', color: theme.colors.text }}>Partner Email</Text>
+        <TextInput
+          style={[styles.input, { color: theme.colors.text, borderColor: '#E5E7EB' }]}
+          placeholder="partner@example.com"
+          placeholderTextColor="#999"
+          value={inviteEmail}
+          onChangeText={setInviteEmail}
+          keyboardType="email-address"
+          autoCapitalize="none"
+        />
+
+        <Text style={{ marginTop: 16, marginBottom: 8, fontWeight: '600', color: theme.colors.text }}>Share Pool</Text>
+        <Text style={{ fontSize: 12, color: '#666', marginBottom: 8 }}>
+          Select which pool to share with this partner. They will receive a copy of all locations in the pool.
+        </Text>
+
+        <View style={{ maxHeight: 300 }}>
+          <ScrollView
+            style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8 }}
+            scrollEnabled={!disableScroll}
+          >
+            {pools.map(pool => (
+              <TouchableOpacity
+                key={pool.id}
+                style={{
+                  padding: 12,
+                  borderBottomWidth: 1,
+                  borderBottomColor: '#E5E7EB',
+                  backgroundColor: invitePoolId === pool.id ? theme.colors.primary + '15' : 'transparent',
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between'
+                }}
+                onPress={() => setInvitePoolId(pool.id)}
+              >
+                <View>
+                  <Text style={{ fontWeight: '500', color: theme.colors.text }}>{pool.name}</Text>
+                  <Text style={{ fontSize: 12, color: '#666' }}>
+                    {(pool.locationIds?.length || 0)} locations
+                  </Text>
+                </View>
+                {invitePoolId === pool.id && <Icon name="check" size={20} color={theme.colors.primary} />}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+
+        {/* Sharing Mode Toggle */}
+        <View style={{ marginTop: 20, padding: 12, backgroundColor: theme.colors.surface, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB' }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <View style={{ flex: 1, marginRight: 12 }}>
+              <Text style={{ fontWeight: '600', color: theme.colors.text, marginBottom: 4 }}>
+                Consignment Mode
+              </Text>
+              <Text style={{ fontSize: 12, color: '#666' }}>
+                {inviteCanRevoke
+                  ? 'You retain control. Can revoke products anytime.'
+                  : 'Partner gets permanent copies. Cannot revoke.'}
+              </Text>
+            </View>
+            <Switch
+              value={inviteCanRevoke}
+              onValueChange={setInviteCanRevoke}
+              trackColor={{ false: '#E5E7EB', true: theme.colors.primary + '60' }}
+              thumbColor={inviteCanRevoke ? theme.colors.primary : '#f4f4f4'}
+            />
+          </View>
+        </View>
+
+        <TouchableOpacity
+          style={[
+            styles.primaryBtn,
+            { marginTop: 24, opacity: (!inviteEmail || !invitePoolId || isInviting) ? 0.6 : 1 }
+          ]}
+          onPress={sendPartnerInvite}
+          disabled={!inviteEmail || !invitePoolId || isInviting}
+        >
+          {isInviting ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.primaryBtnText}>Send Invite</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    </View>
+
+  );
+
+  // Default view: list of pools and locations OR partners OR team
   const renderDefaultView = () => (
     <View style={styles.card}>
       <View style={styles.headerRow}>
         <Text style={styles.headerTitle}>Locations</Text>
-        <TouchableOpacity onPress={enterManageMode} style={styles.manageBtn}>
-          <Text style={styles.manageBtnText}>Manage</Text>
-        </TouchableOpacity>
+
+        <View style={{ flexDirection: 'row', backgroundColor: '#f0f0f0', borderRadius: 8, padding: 2, marginRight: 8 }}>
+          <TouchableOpacity
+            onPress={() => setActiveTab('locations')}
+            style={{
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              borderRadius: 6,
+              backgroundColor: activeTab === 'locations' ? '#fff' : 'transparent',
+              shadowColor: activeTab === 'locations' ? '#000' : 'transparent',
+              shadowOpacity: activeTab === 'locations' ? 0.1 : 0,
+              shadowRadius: 2,
+            }}
+          >
+            <Text style={{ fontSize: 13, fontWeight: activeTab === 'locations' ? '600' : '400', color: '#333' }}>Pools</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setActiveTab('team')}
+            style={{
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              borderRadius: 6,
+              backgroundColor: activeTab === 'team' ? '#fff' : 'transparent',
+              shadowColor: activeTab === 'team' ? '#000' : 'transparent',
+              shadowOpacity: activeTab === 'team' ? 0.1 : 0,
+              shadowRadius: 2,
+            }}
+          >
+            <Text style={{ fontSize: 13, fontWeight: activeTab === 'team' ? '600' : '400', color: '#333' }}>Team</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setActiveTab('partners')}
+            style={{
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              borderRadius: 6,
+              backgroundColor: activeTab === 'partners' ? '#fff' : 'transparent',
+              shadowColor: activeTab === 'partners' ? '#000' : 'transparent',
+              shadowOpacity: activeTab === 'partners' ? 0.1 : 0,
+              shadowRadius: 2,
+            }}
+          >
+            <Text style={{ fontSize: 13, fontWeight: activeTab === 'partners' ? '600' : '400', color: '#333' }}>Partners</Text>
+          </TouchableOpacity>
+        </View>
+
+        {activeTab === 'locations' ? (
+          <TouchableOpacity onPress={enterManageMode} style={styles.manageBtn}>
+            <Text style={styles.manageBtnText}>Manage</Text>
+          </TouchableOpacity>
+        ) : activeTab === 'partners' ? (
+          <TouchableOpacity
+            onPress={() => setViewMode('invitePartner')}
+            style={[styles.manageBtn, { backgroundColor: theme.colors.primary }]}
+          >
+            <Text style={[styles.manageBtnText, { color: '#fff' }]}>+ Invite</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       {(!resolvedOrgId || isLoading) ? (
         <View style={{ paddingVertical: 24 }}>
           <ActivityIndicator size="large" color={theme.colors.primary} />
         </View>
+      ) : activeTab === 'partners' ? (
+        <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
+          {/* Pending Invites Section */}
+          {pendingInvites.length > 0 && (
+            <View style={{ marginBottom: 20 }}>
+              <Text style={styles.sectionTitle}>Pending Invites</Text>
+              {pendingInvites.map((invite) => (
+                <View key={invite.id} style={styles.listItem}>
+                  <View>
+                    <Text style={styles.listItemText}>{invite.email}</Text>
+                    <Text style={{ fontSize: 12, color: '#666' }}>
+                      Pool: {invite.poolName}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => {
+                      Clipboard.setString(invite.inviteLink);
+                      Alert.alert('Link Copied');
+                    }}
+                    style={{ padding: 8, backgroundColor: '#f0f0f0', borderRadius: 6 }}
+                  >
+                    <Icon name="content-copy" size={16} color="#666" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {/* Active Partnerships Section */}
+          <Text style={styles.sectionTitle}>Active Partners</Text>
+          {partnerships.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Icon name="account-group-outline" size={48} color="#ccc" />
+              <Text style={styles.emptyStateTitle}>No Partners Yet</Text>
+              <Text style={styles.emptyStateSubtitle}>
+                Invite partners to share inventory pools with them. They will get a synced copy.
+              </Text>
+              <TouchableOpacity
+                onPress={() => setViewMode('invitePartner')}
+                style={[styles.primaryBtn, { marginTop: 16, alignSelf: 'center', width: 'auto', paddingHorizontal: 24 }]}
+              >
+                <Text style={styles.primaryBtnText}>Invite a Partner</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            partnerships.map((p) => (
+              <View key={p.id} style={styles.listItem}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.primary + '20', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ color: theme.colors.primary, fontWeight: 'bold' }}>
+                      {p.partnerOrgName?.[0] || 'P'}
+                    </Text>
+                  </View>
+                  <View>
+                    <Text style={styles.listItemText}>{p.partnerOrgName || p.partnerEmail}</Text>
+                    <Text style={{ fontSize: 12, color: '#999' }}>
+                      Pool: {p.poolName} • {p.productCount} products
+                    </Text>
+                  </View>
+                </View>
+                <View style={{ backgroundColor: '#e6f4ea', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 }}>
+                  <Text style={{ fontSize: 10, color: '#1e7e34', fontWeight: 'bold' }}>ACTIVE</Text>
+                </View>
+              </View>
+            ))
+          )}
+        </ScrollView>
+      ) : activeTab === 'team' ? (
+        <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <Text style={styles.sectionTitle}>Team Members</Text>
+            <TouchableOpacity style={{ padding: 4 }} onPress={loadList}>
+              <Icon name="refresh" size={20} color={theme.colors.primary} />
+            </TouchableOpacity>
+          </View>
+
+          {teamMembers.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Icon name="account-group" size={48} color="#ccc" />
+              <Text style={styles.emptyStateTitle}>No Members Found</Text>
+              <Text style={styles.emptyStateSubtitle}>
+                Members of your organization will appear here.
+              </Text>
+            </View>
+          ) : (
+            teamMembers.map((m) => (
+              <View key={m.userId} style={styles.listItem}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  {m.imageUrl ? (
+                    <Image source={{ uri: m.imageUrl }} style={{ width: 32, height: 32, borderRadius: 16 }} />
+                  ) : (
+                    <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#eee', alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ fontWeight: 'bold', color: '#666' }}>{m.firstName?.[0] || m.email[0]}</Text>
+                    </View>
+                  )}
+                  <View>
+                    <Text style={styles.listItemText}>{m.firstName} {m.lastName}</Text>
+                    <Text style={{ fontSize: 12, color: '#999' }}>{m.email}</Text>
+                  </View>
+                </View>
+                <View style={{ backgroundColor: '#f0f0f0', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 }}>
+                  <Text style={{ fontSize: 10, color: '#666' }}>{m.role?.replace('org:', '')}</Text>
+                </View>
+              </View>
+            ))
+          )}
+        </ScrollView>
+
       ) : pools.length === 0 && groupedSingleLocations.length === 0 ? (
-        // Empty state
+        // Empty state for Locations
         <View style={styles.emptyState}>
           <Icon name="map-marker-off" size={48} color="#ccc" />
           <Text style={styles.emptyStateTitle}>No Locations Yet</Text>
@@ -771,7 +1160,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
           </Text>
         </View>
       ) : (
-        <ScrollView>
+        <ScrollView scrollEnabled={!disableScroll}>
           {/* Pools section */}
           {pools.length > 0 && (
             <>
@@ -829,7 +1218,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
         <Icon name="plus-circle" size={18} color="#fff" />
         <Text style={styles.confirmBtnText}>Create Location/Group</Text>
       </TouchableOpacity>
-    </View>
+    </View >
   );
 
   // Manage pools view: inline card with all pools expanded
@@ -890,6 +1279,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                       <>
                         <Text style={styles.label}>Selected Locations</Text>
                         <DraggableFlatList
+                          scrollEnabled={!disableScroll}
                           data={draft.locationIds.map((locId) => ({ key: locId, id: locId }))}
                           onDragBegin={(params: any) => {
                             const item = params.item;
@@ -1882,17 +2272,23 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
               </View>
 
               <View style={styles.footerRow}>
-                <Button
-
+                <TouchableOpacity
                   onPress={() => setDeleteState((prev) => ({ ...prev, visible: false }))}
-                  style={{ flex: 1 }}
-                ><Text style={{ color: "white" }}>Cancel</Text></Button>
-                <Button
+                  style={[styles.primaryBtn, { flex: 1, backgroundColor: '#f0f0f0', marginRight: 8 }]}
+                >
+                  <Text style={{ color: '#666', fontWeight: '700' }}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
                   onPress={confirmDeletePool}
-                  loading={deleteState.loading}
                   disabled={deleteState.loading || deleteState.mergeTarget === null}
-                  style={{ flex: 1 }}
-                ><Text style={{ color: "white" }}>Delete Pool</Text></Button>
+                  style={[styles.primaryBtn, { flex: 1, backgroundColor: '#ff4444' }]}
+                >
+                  {deleteState.loading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.primaryBtnText}>Delete Pool</Text>
+                  )}
+                </TouchableOpacity>
               </View>
             </View>
           </View>
@@ -2343,17 +2739,50 @@ const styles = StyleSheet.create({
   },
   emptyStateTitle: {
     fontSize: 18,
-    fontWeight: '600',
-    color: '#666',
+    fontWeight: 'bold',
+    color: '#333',
     marginTop: 16,
-    textAlign: 'center',
+    marginBottom: 8,
   },
   emptyStateSubtitle: {
     fontSize: 14,
     color: '#999',
     marginTop: 8,
+    maxWidth: 300,
     textAlign: 'center',
     lineHeight: 20,
+  },
+  backBtn: {
+    marginRight: 10,
+    padding: 4,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 15,
+  },
+  primaryBtn: {
+    backgroundColor: '#8BC34A',
+    borderRadius: 8,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+  },
+  primaryBtnText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  secondaryBtn: {
+    backgroundColor: '#f0f0f0',
+    borderRadius: 8,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
   },
 });
 

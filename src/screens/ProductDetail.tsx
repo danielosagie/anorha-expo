@@ -2082,146 +2082,148 @@ const ProductDetailScreen = observer(
               }}
               onOpenImageCapture={() => pickImagesFromLibrary()}
             />
-          </Card>
 
-          {/* Active Listings */}
-          <Card style={styles.platformsSection}>
-            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Active Listings</Text>
+            {/* Active Listings */}
+            <Card style={styles.platformsSection}>
+              <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Active Listings</Text>
 
-            {mappings.length > 0 ? (
-              <>
-                {mappings.map((mapping) => {
-                  const connection = connections.find(c => c.Id === mapping.PlatformConnectionId);
-                  const platformName = connection?.DisplayName || `${connection?.PlatformType || 'Unknown'} Account`;
-                  const platformType = connection?.PlatformType || 'unknown';
-                  const Logo = getPlatformLogoComponent(platformType);
-                  return (
-                    <View key={mapping.Id} style={styles.platformRow}>
-                      <View style={styles.platformInfo}>
-                        <View style={styles.platformLogoContainer}>
-                          {Logo ? (
-                            <Logo width={18} height={18} />
-                          ) : (
-                            <Icon name="store" size={18} color={'#666'} />
-                          )}
+              {mappings.length > 0 ? (
+                <>
+                  {mappings.map((mapping) => {
+                    const connection = connections.find(c => c.Id === mapping.PlatformConnectionId);
+                    const platformName = connection?.DisplayName || `${connection?.PlatformType || 'Unknown'} Account`;
+                    const platformType = connection?.PlatformType || 'unknown';
+                    const Logo = getPlatformLogoComponent(platformType);
+                    return (
+                      <View key={mapping.Id} style={styles.platformRow}>
+                        <View style={styles.platformInfo}>
+                          <View style={styles.platformLogoContainer}>
+                            {Logo ? (
+                              <Logo width={18} height={18} />
+                            ) : (
+                              <Icon name="store" size={18} color={'#666'} />
+                            )}
+                          </View>
+                          <View style={styles.platformDetails}>
+                            <Text style={[styles.platformName, { color: theme.colors.text }]}>{platformName}</Text>
+                            <Text style={[styles.platformStatus, { color: theme.colors.text }]}>Status: {mapping.SyncStatus || 'Connected'}</Text>
+                          </View>
                         </View>
-                        <View style={styles.platformDetails}>
-                          <Text style={[styles.platformName, { color: theme.colors.text }]}>{platformName}</Text>
-                          <Text style={[styles.platformStatus, { color: theme.colors.text }]}>Status: {mapping.SyncStatus || 'Connected'}</Text>
-                        </View>
+                        <TouchableOpacity
+                          style={styles.delistButton}
+                          onPress={() => {
+                            Alert.alert('Delist', `Remove listing from ${platformName}?`, [
+                              { text: 'Cancel', style: 'cancel' },
+                              { text: 'Delist', style: 'destructive', onPress: () => console.log('Delist from', platformName) }
+                            ]);
+                          }}
+                        >
+                          <Icon name="archive-outline" size={16} color={theme.colors.text} style={{ marginRight: 6 }} />
+                          <Text style={[styles.delistButtonText, { color: theme.colors.text }]}>Delist</Text>
+                        </TouchableOpacity>
                       </View>
-                      <TouchableOpacity
-                        style={styles.delistButton}
-                        onPress={() => {
-                          Alert.alert('Delist', `Remove listing from ${platformName}?`, [
-                            { text: 'Cancel', style: 'cancel' },
-                            { text: 'Delist', style: 'destructive', onPress: () => console.log('Delist from', platformName) }
-                          ]);
-                        }}
-                      >
-                        <Icon name="archive-outline" size={16} color={theme.colors.text} style={{ marginRight: 6 }} />
-                        <Text style={[styles.delistButtonText, { color: theme.colors.text }]}>Delist</Text>
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })}
+                    );
+                  })}
+                  <TouchableOpacity
+                    style={styles.addPlatformRow}
+                    onPress={() => listingEditorRef.current?.openPlatformPicker?.()}
+                  >
+                    <Icon name="plus" size={16} color={theme.colors.textSecondary} style={{ marginRight: 8 }} />
+                    <Text style={[styles.addPlatformText, { color: theme.colors.textSecondary }]}>Add Platform</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <View style={styles.noPlatformsContainer}>
+                  <Text style={[styles.noPlatformsText, { color: theme.colors.textSecondary }]}>No active listings</Text>
+                  <TouchableOpacity onPress={() => listingEditorRef.current?.openPlatformPicker?.()} style={[styles.syncButton, { backgroundColor: theme.colors.primary, marginTop: 8 }]}>
+                    <Text style={{ color: '#fff', fontWeight: '600' }}>+ Add Platform</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </Card>
+
+            {/* Danger Zone */}
+            <Card style={[
+              styles.dangerZoneSection,
+              {
+                borderColor: "#F12C2D",
+                backgroundColor: '#FAFBFC',
+                borderWidth: 1.5,
+                borderRadius: 10,
+                marginTop: 24,
+                marginBottom: 24,
+                padding: 0,
+                overflow: 'hidden'
+              }
+            ]}>
+              <View style={{
+                padding: 16,
+                borderBottomWidth: 0,
+                backgroundColor: 'transparent'
+              }}>
+                <Text style={[
+                  styles.dangerZoneTitle,
+                  { color: theme.colors.text, fontWeight: '600', fontSize: 20, marginBottom: 0 }
+                ]}>
+                  Danger Zone
+                </Text>
+              </View>
+              <View style={{ paddingHorizontal: 8, paddingBottom: 16 }}>
+                {/* Archive Product */}
                 <TouchableOpacity
-                  style={styles.addPlatformRow}
-                  onPress={() => listingEditorRef.current?.openPlatformPicker?.()}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    borderWidth: 1.5,
+                    borderColor: "#FFBC13",
+                    borderRadius: 8,
+                    paddingVertical: 12,
+                    paddingHorizontal: 12,
+                    marginBottom: 12,
+                    backgroundColor: '#fff',
+                    justifyContent: 'center'
+                  }}
+                  onPress={() => {
+                    Alert.alert(
+                      'Archive Product',
+                      'Are you sure you want to archive this product? You can restore it later.',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Archive', style: 'default', onPress: () => console.log('Archive product') }
+                      ]
+                    );
+                  }}
                 >
-                  <Icon name="plus" size={16} color={theme.colors.textSecondary} style={{ marginRight: 8 }} />
-                  <Text style={[styles.addPlatformText, { color: theme.colors.textSecondary }]}>Add Platform</Text>
+                  <Icon name="archive" size={20} color={theme.colors.warning} style={{ marginRight: 8 }} />
+                  <Text style={{ color: "#FFBC13", fontWeight: '400', fontSize: 16 }}>
+                    Archive Product
+                  </Text>
                 </TouchableOpacity>
-              </>
-            ) : (
-              <View style={styles.noPlatformsContainer}>
-                <Text style={[styles.noPlatformsText, { color: theme.colors.textSecondary }]}>No active listings</Text>
-                <TouchableOpacity onPress={() => listingEditorRef.current?.openPlatformPicker?.()} style={[styles.syncButton, { backgroundColor: theme.colors.primary, marginTop: 8 }]}>
-                  <Text style={{ color: '#fff', fontWeight: '600' }}>+ Add Platform</Text>
+                {/* Delete Product */}
+                <TouchableOpacity
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    borderWidth: 1.25,
+                    borderColor: "#F12C2D",
+                    borderRadius: 8,
+                    paddingVertical: 12,
+                    paddingHorizontal: 12,
+                    backgroundColor: '#fff',
+                    justifyContent: 'center'
+                  }}
+                  onPress={handleDelete}
+                >
+                  <Icon name="delete" size={20} color={theme.colors.error} style={{ marginRight: 8 }} />
+                  <Text style={{ color: theme.colors.error, fontWeight: '500', fontSize: 16 }}>
+                    Delete Product
+                  </Text>
                 </TouchableOpacity>
               </View>
-            )}
+            </Card>
           </Card>
 
-          {/* Danger Zone */}
-          <Card style={[
-            styles.dangerZoneSection,
-            {
-              borderColor: "#F12C2D",
-              backgroundColor: '#FAFBFC',
-              borderWidth: 1.5,
-              borderRadius: 10,
-              marginTop: 24,
-              marginBottom: 24,
-              padding: 0,
-              overflow: 'hidden'
-            }
-          ]}>
-            <View style={{
-              padding: 16,
-              borderBottomWidth: 0,
-              backgroundColor: 'transparent'
-            }}>
-              <Text style={[
-                styles.dangerZoneTitle,
-                { color: theme.colors.text, fontWeight: '600', fontSize: 20, marginBottom: 0 }
-              ]}>
-                Danger Zone
-              </Text>
-            </View>
-            <View style={{ paddingHorizontal: 8, paddingBottom: 16 }}>
-              {/* Archive Product */}
-              <TouchableOpacity
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  borderWidth: 1.5,
-                  borderColor: "#FFBC13",
-                  borderRadius: 8,
-                  paddingVertical: 12,
-                  paddingHorizontal: 12,
-                  marginBottom: 12,
-                  backgroundColor: '#fff',
-                  justifyContent: 'center'
-                }}
-                onPress={() => {
-                  Alert.alert(
-                    'Archive Product',
-                    'Are you sure you want to archive this product? You can restore it later.',
-                    [
-                      { text: 'Cancel', style: 'cancel' },
-                      { text: 'Archive', style: 'default', onPress: () => console.log('Archive product') }
-                    ]
-                  );
-                }}
-              >
-                <Icon name="archive" size={20} color={theme.colors.warning} style={{ marginRight: 8 }} />
-                <Text style={{ color: "#FFBC13", fontWeight: '400', fontSize: 16 }}>
-                  Archive Product
-                </Text>
-              </TouchableOpacity>
-              {/* Delete Product */}
-              <TouchableOpacity
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  borderWidth: 1.25,
-                  borderColor: "#F12C2D",
-                  borderRadius: 8,
-                  paddingVertical: 12,
-                  paddingHorizontal: 12,
-                  backgroundColor: '#fff',
-                  justifyContent: 'center'
-                }}
-                onPress={handleDelete}
-              >
-                <Icon name="delete" size={20} color={theme.colors.error} style={{ marginRight: 8 }} />
-                <Text style={{ color: theme.colors.error, fontWeight: '500', fontSize: 16 }}>
-                  Delete Product
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </Card>
+          
         </ScrollView>
 
         {/* Sync Status Indicator */}
@@ -2409,7 +2411,7 @@ const styles = StyleSheet.create({
 
   // Form Sections
   basicSection: {
-    margin: 16,
+    margin: 0,
     marginTop: 0,
   },
   identitySection: {
@@ -2523,7 +2525,7 @@ const styles = StyleSheet.create({
 
   // Platform Connections
   platformsSection: {
-    margin: 16,
+    margin: 0,
     marginTop: 0,
   },
   platformRow: {

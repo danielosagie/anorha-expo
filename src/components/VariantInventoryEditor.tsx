@@ -1,393 +1,392 @@
-import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  TextInput,
-  Image,
-  ScrollView,
-  Modal,
-  FlatList,
-  ActivityIndicator,
-} from 'react-native';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
+import VariantInventoryRow from './VariantInventoryRow';
 import { useTheme } from '../context/ThemeContext';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+// Platform logo imports
+import SquareSvg from '../assets/square.svg';
+import ShopifySvg from '../assets/shopify.svg';
+import CloverSvg from '../assets/clover.svg';
+import AmazonSvg from '../assets/amazon.svg';
+import EbaySvg from '../assets/ebay.svg';
+import FacebookSvg from '../assets/facebook.svg';
 
-export interface VariantInventoryEditorProps {
-  variant: {
-    id: string;
-    name: string;
-    optionValues?: Record<string, string>;
-    price?: number;
-    inventoryByLocation: Record<string, { quantity: number; price?: number; image?: string }>;
-    image?: string;
-  };
-  locations: Array<{ id: string; name: string }>;
-  selectedLocationId: string;
-  platformKey?: string;
-  supportsPerLocationPricing?: boolean;
-  onQuantityChange: (quantity: number) => void;
-  onPriceChange: (price: number) => void;
-  onLocationChange?: (locationId: string) => void;
-  onVariantImageSelect?: () => void;
-  readonly?: boolean;
+const platformLogoMap: Record<string, any> = {
+  square: SquareSvg,
+  shopify: ShopifySvg,
+  clover: CloverSvg,
+  amazon: AmazonSvg,
+  ebay: EbaySvg,
+  facebook: FacebookSvg,
+};
+
+export interface InventoryItemData {
+  quantity: number;
+  price?: number;
+  image?: string;
 }
 
-const VariantInventoryEditor: React.FC<VariantInventoryEditorProps> = ({
-  variant,
-  locations,
-  selectedLocationId,
-  platformKey = 'shopify',
-  supportsPerLocationPricing = true,
-  onQuantityChange,
-  onPriceChange,
-  onLocationChange,
-  onVariantImageSelect,
-  readonly = false,
-}) => {
-  const theme = useTheme();
-  const [showLocationPicker, setShowLocationPicker] = useState(false);
-  const [quantityStr, setQuantityStr] = useState(
-    String((variant.inventoryByLocation?.[selectedLocationId]?.quantity) ?? 0)
-  );
-  const [priceStr, setPriceStr] = useState(
-    String((variant.inventoryByLocation?.[selectedLocationId]?.price) ?? variant.price ?? 0)
-  );
+export interface VariantInventoryEditorProps {
+  // Data Source
+  variants: Array<{
+    id: string;
+    name: string;
+    image?: string;
+    // Map of locationId -> Inventory Data. Using generic Record to be flexible
+    inventory: Record<string, InventoryItemData>;
+    defaultPrice?: number;
+  }>;
 
-  React.useEffect(() => {
-    setQuantityStr(String((variant.inventoryByLocation?.[selectedLocationId]?.quantity) ?? 0));
-    setPriceStr(String((variant.inventoryByLocation?.[selectedLocationId]?.price) ?? variant.price ?? 0));
-  }, [selectedLocationId, variant]);
+  // Context
+  activeTab: string; // 'all' or platformKey
+  locations: Array<{
+    id: string;
+    name: string;
+    platformKey: string;
+    connectionName?: string;
+  }>;
 
-  const selectedLocation = locations.find(l => l.id === selectedLocationId);
-  const currentInventory = variant.inventoryByLocation?.[selectedLocationId] || { quantity: 0, price: undefined };
-  const variantImage = currentInventory.image || variant.image;
+  // Configuration
+  isGenerationMode?: boolean; // If true, enables override styling
 
-  const handleQuantityChange = (value: string) => {
-    setQuantityStr(value);
-    const qty = parseInt(value, 10);
-    if (!isNaN(qty)) {
-      onQuantityChange(qty);
-    }
+  // Callbacks
+  onUpdateInventory: (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => void;
+  onSelectImage?: (variantId: string) => void;
+}
+
+// Inline editable price/qty row for "All" tab
+const AllTabRow: React.FC<{
+  variantId: string;
+  locId: string;
+  locName: string;
+  platformKey: string;
+  quantity: number;
+  price: number;
+  onUpdateInventory: (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => void;
+}> = ({ variantId, locId, locName, platformKey, quantity, price, onUpdateInventory }) => {
+  const Logo = platformLogoMap[platformKey] || null;
+  const isShopify = platformKey === 'shopify';
+  const displayName = locName?.length > 18 ? locName.slice(0, 18) + '…' : locName;
+
+  // Local state for smooth typing
+  const [localQty, setLocalQty] = useState(String(quantity));
+  const [localPrice, setLocalPrice] = useState(String(price));
+  const qtyTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const priceTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sync from props when they change externally
+  useEffect(() => {
+    setLocalQty(String(quantity));
+  }, [quantity]);
+
+  useEffect(() => {
+    setLocalPrice(String(price));
+  }, [price]);
+
+  const handleQtyChange = (text: string) => {
+    const num = text.replace(/[^0-9]/g, '');
+    setLocalQty(num);
+    if (qtyTimeout.current) clearTimeout(qtyTimeout.current);
+    qtyTimeout.current = setTimeout(() => {
+      onUpdateInventory(variantId, locId, 'quantity', Number(num || '0'));
+    }, 400);
   };
 
-  const handlePriceChange = (value: string) => {
-    setPriceStr(value);
-    const price = parseFloat(value);
-    if (!isNaN(price)) {
-      onPriceChange(price);
-    }
-  };
-
-  const handleQuantityIncrement = () => {
-    const current = parseInt(quantityStr, 10) || 0;
-    handleQuantityChange(String(current + 1));
-  };
-
-  const handleQuantityDecrement = () => {
-    const current = parseInt(quantityStr, 10) || 0;
-    if (current > 0) {
-      handleQuantityChange(String(current - 1));
-    }
-  };
-
-  const handlePriceIncrement = () => {
-    const current = parseFloat(priceStr) || 0;
-    handlePriceChange(String((current + 0.5).toFixed(2)));
-  };
-
-  const handlePriceDecrement = () => {
-    const current = parseFloat(priceStr) || 0;
-    if (current > 0) {
-      handlePriceChange(String(Math.max(0, current - 0.5).toFixed(2)));
-    }
+  const handlePriceChange = (text: string) => {
+    // Allow digits and single decimal point
+    const num = text.replace(/[^0-9.]/g, '');
+    setLocalPrice(num);
+    if (priceTimeout.current) clearTimeout(priceTimeout.current);
+    priceTimeout.current = setTimeout(() => {
+      onUpdateInventory(variantId, locId, 'price', Number(num || '0'));
+    }, 400);
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
-      {/* Variant Header with Image */}
-      <View style={styles.variantHeader}>
-        {variantImage ? (
-          <Image source={{ uri: variantImage }} style={styles.variantImage} />
-        ) : (
-          <View style={[styles.variantImage, { backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' }]}>
-            <Icon name="image-off" size={24} color="#CCC" />
+    <View style={styles.allRowCard}>
+      {/* Platform Logo + Location Name */}
+      <View style={styles.allRowHeader}>
+        {Logo && <Logo width={18} height={18} />}
+        <Text style={styles.locationName} numberOfLines={1}>{displayName}</Text>
+        {isShopify && (
+          <View style={styles.globalBadge}>
+            <Text style={styles.globalBadgeText}>GLOBAL</Text>
           </View>
-        )}
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={[styles.variantName, { color: theme.colors.text }]}>{variant.name}</Text>
-          {Object.keys(variant.optionValues || {}).length > 0 && (
-            <Text style={[styles.variantOptions, { color: theme.colors.textSecondary }]}>
-              {Object.entries(variant.optionValues || {})
-                .map(([key, val]) => `${key}: ${val}`)
-                .join(' • ')}
-            </Text>
-          )}
-        </View>
-        {onVariantImageSelect && !readonly && (
-          <TouchableOpacity onPress={onVariantImageSelect} style={styles.editImageBtn}>
-            <Icon name="pencil" size={16} color="#666" />
-          </TouchableOpacity>
         )}
       </View>
 
-      {/* Location Selector */}
-      {locations.length > 0 && (
-        <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary }]}>Location</Text>
-          {readonly ? (
-            <View style={[styles.locationDisplay, { borderColor: theme.colors.border, backgroundColor: theme.colors.background }]}>
-              <Icon name="map-marker" size={16} color={theme.colors.textSecondary} />
-              <Text style={[styles.locationDisplayText, { color: theme.colors.text }]}>
-                {selectedLocation?.name || 'Select Location'}
-              </Text>
-            </View>
-          ) : (
-            <TouchableOpacity
-              onPress={() => setShowLocationPicker(!showLocationPicker)}
-              style={[styles.locationDropdown, { borderColor: theme.colors.border }]}
-            >
-              <Icon name="map-marker" size={16} color={theme.colors.textSecondary} />
-              <Text style={[styles.locationDropdownText, { color: theme.colors.text }]}>
-                {selectedLocation?.name || 'Select Location'}
-              </Text>
-              <Icon name={showLocationPicker ? 'chevron-up' : 'chevron-down'} size={18} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
-          )}
-
-          {showLocationPicker && locations.length > 1 && (
-            <View style={[styles.locationPickerDropdown, { backgroundColor: theme.colors.background, borderColor: theme.colors.border }]}>
-              {locations.map(loc => (
-                <TouchableOpacity
-                  key={loc.id}
-                  onPress={() => {
-                    onLocationChange?.(loc.id);
-                    setShowLocationPicker(false);
-                  }}
-                  style={[
-                    styles.locationOption,
-                    selectedLocationId === loc.id && [styles.locationOptionActive, { backgroundColor: '#93C822' }],
-                  ]}
-                >
-                  <Text style={[styles.locationOptionText, { color: selectedLocationId === loc.id ? '#FFF' : theme.colors.text }]}>
-                    {loc.name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
+      {/* Quantity Input */}
+      <View style={styles.inputGroup}>
+        <Text style={styles.inputLabel}>Qty</Text>
+        <View style={styles.qtyContainer}>
+          <TouchableOpacity
+            onPress={() => handleQtyChange(String(Math.max(0, Number(localQty || 0) - 1)))}
+            style={styles.qtyBtn}
+          >
+            <Icon name="minus" size={12} color="#666" />
+          </TouchableOpacity>
+          <TextInput
+            style={styles.qtyInput}
+            value={localQty}
+            onChangeText={handleQtyChange}
+            keyboardType="number-pad"
+            selectTextOnFocus
+          />
+          <TouchableOpacity
+            onPress={() => handleQtyChange(String(Number(localQty || 0) + 1))}
+            style={styles.qtyBtn}
+          >
+            <Icon name="plus" size={12} color="#666" />
+          </TouchableOpacity>
         </View>
-      )}
+      </View>
 
-      {/* Quantity and Price Row */}
-      <View style={styles.section}>
-        <View style={styles.inputRow}>
-          {/* Quantity */}
-          <View style={{ flex: 1, marginRight: 12 }}>
-            <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary }]}>Quantity</Text>
-            {readonly ? (
-              <View style={[styles.inputReadonly, { borderColor: theme.colors.border, backgroundColor: theme.colors.background }]}>
-                <Text style={[styles.inputText, { color: theme.colors.text }]}>{quantityStr}</Text>
-              </View>
-            ) : (
-              <View style={[styles.quantityControl, { borderColor: theme.colors.border }]}>
-                <TouchableOpacity onPress={handleQuantityDecrement} style={styles.quantityBtn}>
-                  <Icon name="minus" size={18} color="#666" />
-                </TouchableOpacity>
-                <TextInput
-                  style={[styles.quantityInput, { color: theme.colors.text }]}
-                  value={quantityStr}
-                  onChangeText={handleQuantityChange}
-                  keyboardType="number-pad"
-                  editable={!readonly}
-                />
-                <TouchableOpacity onPress={handleQuantityIncrement} style={styles.quantityBtn}>
-                  <Icon name="plus" size={18} color="#666" />
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-
-          {/* Price */}
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary }]}>
-              Price {!supportsPerLocationPricing && platformKey === 'shopify' ? '(Global)' : ''}
-            </Text>
-            {readonly ? (
-              <View style={[styles.inputReadonly, { borderColor: theme.colors.border, backgroundColor: theme.colors.background }]}>
-                <Text style={[styles.inputText, { color: theme.colors.text }]}>
-                  ${parseFloat(priceStr).toFixed(2)}
-                </Text>
-              </View>
-            ) : (
-              <View style={[styles.priceControl, { borderColor: theme.colors.border }]}>
-                <TouchableOpacity onPress={handlePriceDecrement} style={styles.priceBtn}>
-                  <Icon name="minus" size={18} color="#666" />
-                </TouchableOpacity>
-                <TextInput
-                  style={[styles.priceInput, { color: theme.colors.text }]}
-                  value={priceStr}
-                  onChangeText={handlePriceChange}
-                  keyboardType="decimal-pad"
-                  placeholder="0.00"
-                  editable={!readonly}
-                />
-                <TouchableOpacity onPress={handlePriceIncrement} style={styles.priceBtn}>
-                  <Icon name="plus" size={18} color="#666" />
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
+      {/* Price Input - Blue for Shopify global */}
+      <View style={styles.inputGroup}>
+        <Text style={styles.inputLabel}>Price</Text>
+        <View style={[styles.priceInputContainer, isShopify && styles.priceInputShopify]}>
+          <Text style={[styles.currencySymbol, isShopify && { color: '#1976D2' }]}>$</Text>
+          <TextInput
+            style={[styles.priceInput, isShopify && styles.priceInputTextShopify]}
+            value={localPrice}
+            onChangeText={handlePriceChange}
+            keyboardType="decimal-pad"
+            selectTextOnFocus
+          />
         </View>
       </View>
     </View>
   );
 };
 
+const VariantInventoryEditor: React.FC<VariantInventoryEditorProps> = ({
+  variants,
+  activeTab,
+  locations,
+  isGenerationMode = false,
+  onUpdateInventory,
+  onSelectImage,
+}) => {
+  const theme = useTheme();
+
+  // --- "All" Tab View ---
+  // Shows ALL locations across ALL platforms with editable rows
+  if (activeTab === 'all') {
+    return (
+      <View style={styles.container}>
+        {variants.length === 0 ? (
+          <Text style={styles.emptyText}>No variants available</Text>
+        ) : (
+          variants.map((variant) => (
+            <View key={variant.id} style={styles.variantSection}>
+              <Text style={styles.sectionTitle}>{variant.name}</Text>
+
+              {locations.length === 0 ? (
+                <Text style={styles.emptyText}>No locations available</Text>
+              ) : (
+                locations.map((loc) => {
+                  const invKey = loc.id;
+                  const data = variant.inventory[invKey] || { quantity: 0, price: undefined };
+
+                  // Use per-location price, fallback to default only if not set
+                  const currentPrice = data.price ?? variant.defaultPrice ?? 0;
+
+                  return (
+                    <AllTabRow
+                      key={`${variant.id}-${loc.id}`}
+                      variantId={variant.id}
+                      locId={loc.id}
+                      locName={loc.name}
+                      platformKey={loc.platformKey}
+                      quantity={data.quantity}
+                      price={currentPrice}
+                      onUpdateInventory={onUpdateInventory}
+                    />
+                  );
+                })
+              )}
+            </View>
+          ))
+        )}
+      </View>
+    );
+  }
+
+  // --- Platform Specific View ---
+  // FILTER locations for THIS platform only (case-insensitive)
+  const activeTabLower = activeTab.toLowerCase();
+  const platformLocations = locations.filter(l => l.platformKey.toLowerCase() === activeTabLower);
+  const isShopify = activeTabLower === 'shopify';
+
+  return (
+    <View style={styles.container}>
+      {variants.length === 0 ? (
+        <Text style={styles.emptyText}>No variants available</Text>
+      ) : (
+        variants.map((variant) => (
+          <View key={variant.id} style={styles.variantGroup}>
+            {platformLocations.length === 0 ? (
+              <Text style={styles.emptyText}>No locations for {activeTab}</Text>
+            ) : (
+              platformLocations.map((loc) => {
+                const invKey = loc.id;
+                const data = variant.inventory[invKey] || { quantity: 0, price: undefined };
+
+                // Use per-location price, fallback to default only if not set
+                const currentPrice = data.price ?? variant.defaultPrice ?? 0;
+
+                // Override Logic: ONLY in generation mode
+                const isOverride = false; // Never show override in editor - only GenerateDetails sets this
+
+                return (
+                  <View key={`${variant.id}-${loc.id}`} style={{ marginBottom: 10 }}>
+                    <VariantInventoryRow
+                      variantName={variant.name}
+                      variantId={variant.id}
+                      invKey={invKey}
+                      quantity={data.quantity}
+                      price={currentPrice}
+                      image={data.image || variant.image}
+
+                      // Flags - Blue styling for Shopify
+                      isGlobalPrice={isShopify}
+                      isOverride={isOverride}
+                      isGenerationMode={isGenerationMode}
+
+                      // Handlers
+                      onChangeQuantity={(q) => onUpdateInventory(variant.id, invKey, 'quantity', q)}
+                      onChangePrice={(p) => onUpdateInventory(variant.id, invKey, 'price', p)}
+                      onSelectImage={() => onSelectImage?.(variant.id)}
+                    />
+                  </View>
+                );
+              })
+            )}
+          </View>
+        ))
+      )}
+    </View>
+  );
+};
+
 const styles = StyleSheet.create({
   container: {
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
+    gap: 16,
   },
-  variantHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  variantSection: {
     marginBottom: 16,
+    gap: 8,
   },
-  variantImage: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    backgroundColor: '#F5F5F5',
-  },
-  variantName: {
-    fontWeight: '600',
-    fontSize: 14,
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#000',
     marginBottom: 4,
   },
-  variantOptions: {
-    fontSize: 12,
+  variantGroup: {
+    marginBottom: 4,
   },
-  editImageBtn: {
-    padding: 8,
-    marginLeft: 8,
-  },
-  section: {
-    marginBottom: 12,
-  },
-  sectionLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 6,
-    textTransform: 'uppercase',
-  },
-  locationDisplay: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    gap: 8,
-  },
-  locationDisplayText: {
-    fontSize: 14,
-    fontWeight: '500',
-    flex: 1,
-  },
-  locationDropdown: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    gap: 8,
-  },
-  locationDropdownText: {
-    fontSize: 14,
-    fontWeight: '500',
-    flex: 1,
-  },
-  locationPickerDropdown: {
-    borderRadius: 8,
-    borderWidth: 1,
-    marginTop: 8,
-    overflow: 'hidden',
-  },
-  locationOption: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E5E5',
-  },
-  locationOptionActive: {
-    borderBottomColor: '#93C822',
-  },
-  locationOptionText: {
+  emptyText: {
+    color: '#999',
+    fontStyle: 'italic',
     fontSize: 13,
-    fontWeight: '500',
   },
-  inputRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  quantityControl: {
+  // All Tab Styles - Editable Rows
+  allRowCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  quantityBtn: {
+    justifyContent: 'space-between',
     paddingHorizontal: 10,
-    paddingVertical: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+    borderRadius: 10,
+    backgroundColor: '#FFF',
+    marginBottom: 8,
+    gap: 8,
   },
-  quantityInput: {
+  allRowHeader: {
     flex: 1,
-    paddingHorizontal: 8,
-    fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: 0,
   },
-  priceControl: {
+  locationName: {
+    fontWeight: '600',
+    fontSize: 12,
+    color: '#000',
+    flexShrink: 1,
+  },
+  globalBadge: {
+    backgroundColor: '#E3F2FD',
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+  },
+  globalBadgeText: {
+    fontSize: 9,
+    color: '#1976D2',
+    fontWeight: '600',
+  },
+  // Input Groups
+  inputGroup: {
+    alignItems: 'center',
+    gap: 2,
+  },
+  inputLabel: {
+    color: '#666',
+    fontSize: 10,
+  },
+  qtyContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 1,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+    borderRadius: 6,
+  },
+  qtyBtn: {
+    paddingHorizontal: 5,
+    paddingVertical: 4,
+  },
+  qtyInput: {
+    color: '#000',
+    fontWeight: '600',
+    width: 32,
+    textAlign: 'center',
+    fontSize: 13,
+    paddingVertical: 4,
+  },
+  priceInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    borderRadius: 8,
-    overflow: 'hidden',
+    borderColor: '#E5E5E5',
+    borderRadius: 6,
+    backgroundColor: '#FFF',
   },
-  priceBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
+  priceInputShopify: {
+    borderColor: '#1976D2',
+    backgroundColor: '#E3F2FD',
+  },
+  currencySymbol: {
+    color: '#666',
+    paddingLeft: 6,
+    fontSize: 13,
   },
   priceInput: {
-    flex: 1,
-    paddingHorizontal: 8,
-    fontSize: 14,
+    color: '#000',
     fontWeight: '600',
+    width: 60,
     textAlign: 'center',
+    fontSize: 13,
+    paddingVertical: 6,
+    paddingRight: 6,
   },
-  inputReadonly: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    justifyContent: 'center',
-    minHeight: 40,
-  },
-  inputText: {
-    fontSize: 14,
-    fontWeight: '600',
+  priceInputTextShopify: {
+    color: '#1976D2',
   },
 });
 
 export default VariantInventoryEditor;
-
