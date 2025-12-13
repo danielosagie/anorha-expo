@@ -1546,13 +1546,37 @@ const ProductDetailScreen = observer(
           const validVariants = (hydratedVariants || []).filter(v => Object.keys(v.optionValues || {}).length > 0);
           const freshVariants = validVariants.length > 0 ? validVariants : (hydratedVariants || []);
 
+          // ⚡ CRITICAL FIX: Extract ONLY non-inventory/price fields from platformData
+          // platformData comes from stale ProductVariants.Metadata.platformSpecificData
+          // We want to use it for SEO, descriptions, titles etc. but NOT for prices/quantities
+          // which should come from LIVE InventoryLevels data
+          const {
+            price: _stalePlatformPrice,
+            compareAtPrice: _staleCompareAtPrice,
+            variants: _staleVariants,
+            locations: _staleLocations,
+            locationQuantities: _staleLocationQty,
+            ...safePlatformData
+          } = platformData;
+
+          // Get the LIVE price from InventoryLevels if available
+          // Use the first inventory level's price for this platform as the "base" price
+          const platformInventory = rawInventoryLevels?.filter(lvl =>
+            connectionToPlatform.get(lvl.PlatformConnectionId) === platformKeyLower
+          ) || [];
+          const livePrice = platformInventory[0]?.Price;
+          const liveCompareAtPrice = platformInventory[0]?.CompareAtPrice;
+
           allPlatforms[platformKey] = {
-            ...canonicalBase,
-            ...platformData,
-            options: platformData.options || (detailedItem.Options && typeof detailedItem.Options === 'object'
+            ...canonicalBase,           // Base canonical data (includes ProductVariants.Price as fallback)
+            ...safePlatformData,        // Platform-specific SEO, titles, descriptions (NO price/inventory)
+            // ⚡ OVERRIDE: Use LIVE InventoryLevels prices if available
+            price: livePrice ?? canonicalBase.price,
+            compareAtPrice: liveCompareAtPrice ?? canonicalBase.compareAtPrice,
+            options: safePlatformData.options || (detailedItem.Options && typeof detailedItem.Options === 'object'
               ? Object.entries(detailedItem.Options).map(([name, values]) => ({ name, values: Array.isArray(values) ? values : [values] }))
               : []),
-            variants: freshVariants, // ALWAYS use fresh DB variants
+            variants: freshVariants, // ALWAYS use fresh DB variants with live inventory
             locations: perPlatformLocs, // Use per-platform locations
             locationQuantities: perPlatformLocQty,
           };
@@ -2223,7 +2247,7 @@ const ProductDetailScreen = observer(
             </Card>
           </Card>
 
-          
+
         </ScrollView>
 
         {/* Sync Status Indicator */}

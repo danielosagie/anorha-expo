@@ -1472,7 +1472,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                 }
               }
 
-              // 3. Callback - syncs price across ALL platforms when changed
+              // 3. Callback - per-location pricing for non-Shopify, global for Shopify
               const handleUpdateInventory = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
                 const nextPlatforms = { ...platforms };
 
@@ -1487,25 +1487,39 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
 
                 const isShopify = targetPlatform === 'shopify';
 
-                // Update the target platform first
+                // Update the target platform
                 const newVariants = (pData.variants || []).map((v: any) => {
                   if (v.id === variantId) {
-
                     if (field === 'price') {
-                      // ⚡ GLOBAL PRICE: Update price in ALL locations for this variant
-                      // Shopify uses variant-level price, others store in inventoryByLocation
-                      const updatedInv = { ...(v.inventoryByLocation || {}) };
-                      Object.keys(updatedInv).forEach(locId => {
-                        updatedInv[locId] = { ...updatedInv[locId], price: value };
-                      });
-                      return {
-                        ...v,
-                        price: value, // Also set variant-level price
-                        inventoryByLocation: updatedInv
-                      };
+                      if (isShopify) {
+                        // Shopify: GLOBAL price - update all locations
+                        const updatedInv = { ...(v.inventoryByLocation || {}) };
+                        Object.keys(updatedInv).forEach(locId => {
+                          updatedInv[locId] = { ...updatedInv[locId], price: value };
+                        });
+                        return {
+                          ...v,
+                          price: value,
+                          inventoryByLocation: updatedInv
+                        };
+                      } else {
+                        // Non-Shopify (Square, Clover): PER-LOCATION price - only update THIS location
+                        const oldInv = v.inventoryByLocation || {};
+                        const oldLocData = oldInv[locationId] || {};
+                        return {
+                          ...v,
+                          inventoryByLocation: {
+                            ...oldInv,
+                            [locationId]: {
+                              ...oldLocData,
+                              price: value
+                            }
+                          }
+                        };
+                      }
                     }
 
-                    // For quantity, only update the specific location
+                    // For quantity, only update the specific location (same for all platforms)
                     const oldInv = v.inventoryByLocation || {};
                     const oldLocData = oldInv[locationId] || {};
 
@@ -1525,37 +1539,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
 
                 nextPlatforms[targetPlatform] = { ...pData, variants: newVariants };
 
-                // ⚡ SYNC PRICE ACROSS ALL PLATFORMS
-                // When price is updated on any platform, sync to all other platforms
-                if (field === 'price') {
-                  platformKeys.forEach(pk => {
-                    if (pk === targetPlatform) return; // Already updated
-
-                    const otherPData = nextPlatforms[pk];
-                    if (!otherPData) return;
-
-                    const isOtherShopify = pk === 'shopify';
-
-                    const syncedVariants = (otherPData.variants || []).map((v: any) => {
-                      if (v.id === variantId) {
-                        if (isOtherShopify) {
-                          // Shopify uses variant-level price
-                          return { ...v, price: value };
-                        } else {
-                          // Other platforms: update price in all location entries
-                          const updatedInv = { ...(v.inventoryByLocation || {}) };
-                          Object.keys(updatedInv).forEach(locId => {
-                            updatedInv[locId] = { ...updatedInv[locId], price: value };
-                          });
-                          return { ...v, price: value, inventoryByLocation: updatedInv };
-                        }
-                      }
-                      return v;
-                    });
-
-                    nextPlatforms[pk] = { ...otherPData, variants: syncedVariants };
-                  });
-                }
+                // NOTE: Removed cross-platform price sync - prices are now independent per platform
+                // Each platform manages its own pricing (Shopify=global, others=per-location)
 
                 onChangePlatforms(nextPlatforms);
               };

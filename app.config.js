@@ -16,7 +16,8 @@ export default {
     buildNumber: "1",
     icon: "./src/assets/anorha_logo.png",
     infoPlist: {
-      ITSAppUsesNonExemptEncryption: false
+      ITSAppUsesNonExemptEncryption: false,
+      NSLocationWhenInUseUsageDescription: "Anorha may access your location to provide enhanced features through third-party services. Location access is optional and can be disabled in your device settings."
     }
   },
   assetBundlePatterns: [
@@ -36,10 +37,6 @@ export default {
       {
         enableCodeScanner: true
       }
-    ],
-    [
-      "@react-native-google-signin/google-signin",
-      { iosUrlScheme: "com.googleusercontent.apps._some_id_here_" }
     ],
     [
       "expo-splash-screen",

@@ -32,6 +32,18 @@ export interface DashboardInsight {
       link: string;
       count?: number;
     };
+    // Product-level evidence for actionable insights
+    affectedProducts?: Array<{
+      id: string;
+      name: string;
+      sku?: string;
+      quantity: number;
+      price: number;
+      daysSinceSale?: number;
+      estimatedValue?: number;
+      suggestedPrice?: number;
+      discountPercent?: number;
+    }>;
   };
   severity: 'good' | 'neutral' | 'warning' | 'critical';
   urgency?: InsightUrgency;
@@ -47,7 +59,21 @@ export interface DashboardInsight {
   suggestionText?: string;
   timeframe?: 'short_term' | 'medium_term' | 'long_term';
   insights?: DashboardInsight[]; // If present, this is a multi-insight container (carousel)
+  // Confidence and transparency fields
+  confidence?: 'high' | 'medium' | 'low';
+  confidenceReasons?: string[];
+  caveats?: string[];
+  dataQuality?: {
+    queriesRun?: number;
+    searchesRun?: number;
+    queries?: Array<{
+      description: string;
+      rowsReturned: number;
+      timestamp?: string;
+    }>;
+  };
 }
+
 
 export interface NudgesResponse {
   insight: DashboardInsight;

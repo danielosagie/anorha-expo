@@ -30,7 +30,13 @@ export interface DashboardInsight {
         affectedProducts?: Array<{
             id: string;
             name: string;
+            sku?: string;
             quantity: number;
+            price: number;
+            daysSinceSale?: number;
+            estimatedValue?: number;
+            suggestedPrice?: number;
+            discountPercent?: number;
         }>;
     };
     severity: 'good' | 'neutral' | 'warning' | 'critical';
@@ -46,6 +52,10 @@ export interface DashboardInsight {
     suggestionText?: string;
     timeframe?: 'short_term' | 'medium_term' | 'long_term';
     insights?: DashboardInsight[];
+    // Confidence and transparency
+    confidence?: 'high' | 'medium' | 'low';
+    confidenceReasons?: string[];
+    caveats?: string[];
 }
 
 interface InsightCardProps {
@@ -172,7 +182,12 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                         <View style={styles.metricColumn}>
                             <Text style={styles.metricLabel}>{primaryMetric?.label || 'Current'}</Text>
                             <Text style={styles.metricValueMain}>{primaryMetric?.value}</Text>
-                            <Text style={styles.metricSub}>idle for 90d</Text>
+                            <Text style={styles.metricSub}>
+                                {/* Dynamic idle days from first affected product, or fallback */}
+                                {bottomDIN.affectedProducts?.[0]?.daysSinceSale
+                                    ? `idle for ${bottomDIN.affectedProducts[0].daysSinceSale}d`
+                                    : (primaryMetric as any)?.status === 'warning' ? 'needs attention' : ''}
+                            </Text>
                         </View>
 
                         {/* Vertical Divider */}
@@ -183,10 +198,15 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                             <Text style={styles.metricLabel}>{secondaryMetric?.label || 'Projected'}</Text>
                             <View style={styles.metricValueRow}>
                                 <Text style={styles.metricValueMain}>{secondaryMetric?.value}</Text>
-                                <Text style={styles.metricGainText}> (+{
-                                    // Quick hack to show gain if both are currency strings
-                                    '30%' // Placeholder or derive
-                                })</Text>
+                                {/* Dynamic discount % from products, or derive from labels */}
+                                {(() => {
+                                    const discountPct = bottomDIN.affectedProducts?.[0]?.discountPercent;
+                                    if (discountPct) return <Text style={styles.metricGainText}> (@{discountPct}% off)</Text>;
+                                    // Try to extract from label like "Expected recovery @30%"
+                                    const labelMatch = secondaryMetric?.label?.match(/@(\d+)%/);
+                                    if (labelMatch) return <Text style={styles.metricGainText}> (@{labelMatch[1]}%)</Text>;
+                                    return null;
+                                })()}
                             </View>
                             <Text style={[styles.metricSub, { color: '#84CC16' }]}>Recoverable</Text>
                         </View>
@@ -330,8 +350,10 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                                             )}
                                         </View>
                                         <View style={{ flex: 1 }}>
-                                            <Text style={styles.sourceName} numberOfLines={1}>{src.title || new URL(src.url || '').hostname || 'External Data'}</Text>
-                                            <Text style={styles.sourceDetail} numberOfLines={2}>{src.snippet || src.url}</Text>
+                                            <Text style={styles.sourceName} numberOfLines={1}>
+                                                {src.title || (src.url ? (() => { try { return new URL(src.url).hostname; } catch { return 'External Data'; } })() : (src.type === 'database' ? 'Database Query' : 'Data Source'))}
+                                            </Text>
+                                            <Text style={styles.sourceDetail} numberOfLines={2}>{src.snippet || src.query || src.url || 'Internal database query'}</Text>
                                             {src.url && (
                                                 <TouchableOpacity onPress={() => Linking.openURL(src.url!)}>
                                                     <Text style={styles.linkText}>View Source</Text>
@@ -353,8 +375,19 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                                         </View>
                                         {bottomDIN.affectedProducts.slice(0, 5).map((prod, i) => (
                                             <View key={i} style={styles.productRow}>
-                                                <Text style={styles.productName} numberOfLines={1}>{prod.name}</Text>
-                                                <Text style={styles.productQty}>x{prod.quantity}</Text>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={styles.productName} numberOfLines={1}>{prod.name}</Text>
+                                                    {prod.sku && <Text style={{ fontSize: 11, color: '#9CA3AF' }}>SKU: {prod.sku}</Text>}
+                                                </View>
+                                                <View style={{ alignItems: 'flex-end' }}>
+                                                    <Text style={styles.productQty}>x{prod.quantity} @ ${prod.price?.toLocaleString() || '—'}</Text>
+                                                    {prod.estimatedValue && (
+                                                        <Text style={{ fontSize: 11, color: '#65A30D' }}>
+                                                            ${prod.estimatedValue.toLocaleString()} value
+                                                            {prod.discountPercent ? ` → ${prod.discountPercent}% off` : ''}
+                                                        </Text>
+                                                    )}
+                                                </View>
                                             </View>
                                         ))}
                                     </View>
@@ -603,7 +636,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#fff',
         borderTopLeftRadius: 28,
         borderTopRightRadius: 28,
-        height: '65%', // Taller
+        height: '95%', // Taller
         paddingBottom: 30,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: -4 },
@@ -643,7 +676,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 24,
     },
     sectionBlock: {
-        marginBottom: 32,
+        marginBottom: 8,
     },
     sectionHeader: {
         flexDirection: 'row',

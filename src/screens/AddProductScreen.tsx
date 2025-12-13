@@ -546,31 +546,40 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   }, [isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity]);
 
-  // Handle barcode scan
+  // Handle barcode scan - with debouncing to prevent duplicates
+  const barcodeLastScannedRef = useRef<string | null>(null);
+  const barcodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
   const handleBarCodeScanned = useCallback((scanningResult: BarcodeScanningResult) => {
-    if (cameraMode === 'barcode' && scanningResult.data && scannedBarcode !== scanningResult.data) {
-      setScannedBarcode(scanningResult.data);
-      setCurrentInstruction('barcode_scanned');
-      setBarcodeNotificationCount(prev => prev + 1);
+    if (cameraMode !== 'barcode' || !scanningResult.data) return;
 
-      console.log('Barcode scanned:', scanningResult.data);
-
-      // Search backend for this barcode
-      searchBarcodeOnBackend(scanningResult.data);
-
-      // Show multiple notifications as requested
-      for (let i = 0; i < 30; i++) {
-        setTimeout(() => {
-          console.log(`Barcode notification ${i + 1}: ${scanningResult.data}`);
-        }, i * 100);
-      }
-
-      // Reset after some time
-      setTimeout(() => {
-        setCurrentInstruction('ready');
-      }, 3000);
+    // Debounce: Ignore if same barcode scanned within last 2 seconds
+    if (barcodeLastScannedRef.current === scanningResult.data) {
+      return; // Same barcode, ignore duplicate
     }
-  }, [cameraMode, scannedBarcode]);
+
+    // Clear any existing debounce timer
+    if (barcodeDebounceRef.current) {
+      clearTimeout(barcodeDebounceRef.current);
+    }
+
+    // Set the barcode and lock it for 2 seconds
+    barcodeLastScannedRef.current = scanningResult.data;
+    setScannedBarcode(scanningResult.data);
+    setCurrentInstruction('barcode_scanned');
+    setBarcodeNotificationCount(prev => prev + 1);
+
+    console.log('Barcode scanned:', scanningResult.data);
+
+    // Search backend for this barcode (once only)
+    searchBarcodeOnBackend(scanningResult.data);
+
+    // Reset the lock after 2 seconds to allow same barcode to be scanned again
+    barcodeDebounceRef.current = setTimeout(() => {
+      barcodeLastScannedRef.current = null;
+      setCurrentInstruction('ready');
+    }, 2000);
+  }, [cameraMode]);
 
   // Search backend for product by barcode
   const searchBarcodeOnBackend = useCallback(async (barcode: string) => {
