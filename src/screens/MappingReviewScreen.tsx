@@ -47,7 +47,7 @@ interface MappingSuggestion {
   // This is the key part for your UI:
   // Default this to `true` for 'CREATE_NEW' and 'LINK_EXISTING'
   // Your UI should have a checkbox bound to this property.
-  isSelected: boolean; 
+  isSelected: boolean;
   // NEW metadata for classification
   matchType?: 'BARCODE' | 'SKU' | 'TITLE' | 'NONE';
   confidence?: number;
@@ -88,13 +88,13 @@ interface ExistingMapping {
 
 // What you SEND to the backend after user review
 interface FinalizedMapping {
-    action: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE'; // Update to include all possible actions
-    platformProduct: {
-      id: string; // The platform's unique ID for the product/variant
-    };
-    sssyncProduct?: {  // Optional field for LINK_EXISTING action
-      id: string;
-    };
+  action: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE'; // Update to include all possible actions
+  platformProduct: {
+    id: string; // The platform's unique ID for the product/variant
+  };
+  sssyncProduct?: {  // Optional field for LINK_EXISTING action
+    id: string;
+  };
 }
 
 interface FinalizedMappingPayload {
@@ -130,7 +130,7 @@ const waitForSupabaseToken = async (maxWaitMs: number = 8000, stepMs: number = 2
       const sessionResp = await supabase.auth.getSession();
       const token = sessionResp?.data?.session?.access_token || null;
       if (token) return token;
-    } catch {}
+    } catch { }
     await new Promise(r => setTimeout(r, stepMs));
   }
   return null;
@@ -140,7 +140,7 @@ const waitForSupabaseToken = async (maxWaitMs: number = 8000, stepMs: number = 2
 const ensureBridge = async (getClerkToken: () => Promise<string | null>) => {
   try {
     await configureClerkSupabaseBridge({ getClerkToken, autoRefreshMinutes: 9 });
-  } catch {}
+  } catch { }
 };
 
 type ActiveTab = 'matched' | 'review' | 'ignore';
@@ -199,7 +199,7 @@ const MappingReviewScreen = () => {
   // --- NEW: Sync Rules State ---
   type SyncDirection = 'two-way' | 'push-only' | 'pull-only';
   type SourceOfTruth = 'sssync' | 'platform';
-  
+
   const [syncDirection, setSyncDirection] = useState<SyncDirection>('two-way');
   const [sourceOfTruth, setSourceOfTruth] = useState<SourceOfTruth>('sssync');
   const [autoCreate, setAutoCreate] = useState(true);
@@ -223,14 +223,21 @@ const MappingReviewScreen = () => {
   const [wizardStep, setWizardStep] = useState(0); // 0 platforms, 1 sync mode, 2 delist, 3 buffer, 4 review
   const [selectedPlatformsState, setSelectedPlatformsState] = useState<string[]>([]);
   const [inventoryMergeMode, setInventoryMergeMode] = useState<'merged' | 'separate' | null>('merged');
-  
+
+  // NEW: Product creation mode - controls how unLinked products are handled
+  // 'sync_everywhere' = Create missing products on all platforms (single source of truth)
+  // 'keep_separate' = Only sync products that are already linked
+  type ProductCreationMode = 'sync_everywhere' | 'keep_separate';
+  const [productCreationMode, setProductCreationMode] = useState<ProductCreationMode>('sync_everywhere');
+
+
   // Pools Selection State
   const [pools, setPools] = useState<any[]>([]);
   const [selectedPool, setSelectedPool] = useState<string | null>(null);
   const [isLoadingPools, setIsLoadingPools] = useState(false);
   const [isCreatingPool, setIsCreatingPool] = useState(false);
   const [poolNameInput, setPoolNameInput] = useState('');
-  
+
   // Location Assignment State (for mapping locations to pools)
   interface ConnectionLocation {
     platformLocationId: string;
@@ -253,7 +260,7 @@ const MappingReviewScreen = () => {
   const renderProgressCard = () => {
     // If job completed or no progress, don't show card
     if (!syncProgress || syncProgress.status === 'completed') return null;
-    
+
     const progress = (syncProgress.progress || 0) / 100;
     return (
       <Animated.View entering={FadeInUp}>
@@ -295,7 +302,7 @@ const MappingReviewScreen = () => {
             }
           }
         );
-        
+
         if (response.ok) {
           const conn = await response.json();
           setConnection(conn);  // Store full connection object
@@ -304,7 +311,7 @@ const MappingReviewScreen = () => {
         console.error('Error loading connection:', error);
       }
     };
-    
+
     if (connectionId) {
       loadConnection();
     }
@@ -319,7 +326,7 @@ const MappingReviewScreen = () => {
 
         let orgId = connection?.OrgId;
         console.log('[MappingReviewScreen] Initial orgId from connection:', orgId);
-        
+
         // If connection doesn't have orgId, fetch user's active org
         if (!orgId) {
           console.log('[MappingReviewScreen] No orgId from connection, fetching active org...');
@@ -344,15 +351,15 @@ const MappingReviewScreen = () => {
         }
 
         console.log('[MappingReviewScreen] Fetching pools for orgId:', orgId);
-        
-        const response = await fetch(`https://api.sssync.app/api/pools/org/${orgId}`, 
-        {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          }
-        });
+
+        const response = await fetch(`https://api.sssync.app/api/pools/org/${orgId}`,
+          {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            }
+          });
 
         console.log('[MappingReviewScreen] Pools API response status:', response.status);
 
@@ -391,32 +398,32 @@ const MappingReviewScreen = () => {
   useEffect(() => {
     const fetchConnectionLocations = async () => {
       if (!connectionId) return;
-      
+
       try {
         setIsLoadingLocations(true);
         const token = await ensureSupabaseJwt();
-        
+
         // Fetch locations from PlatformLocations table for this connection
         const { data: locations, error } = await supabase
           .from('PlatformLocations')
           .select('PlatformLocationId, Name, Timezone')
           .eq('PlatformConnectionId', connectionId);
-        
+
         if (error) {
           console.error('[MappingReviewScreen] Error fetching locations:', error);
           setConnectionLocations([]);
           return;
         }
-        
+
         const formattedLocations: ConnectionLocation[] = (locations || []).map(loc => ({
           platformLocationId: loc.PlatformLocationId,
           locationName: loc.Name || 'Unnamed Location',
           timezone: loc.Timezone || undefined,
         }));
-        
+
         setConnectionLocations(formattedLocations);
         console.log('[MappingReviewScreen] ✅ Loaded connection locations:', formattedLocations.length);
-        
+
         // Initialize all locations to the selected pool (if any)
         if (selectedPool && formattedLocations.length > 0) {
           const initialAssignments: Record<string, string> = {};
@@ -432,7 +439,7 @@ const MappingReviewScreen = () => {
         setIsLoadingLocations(false);
       }
     };
-    
+
     fetchConnectionLocations();
   }, [connectionId, selectedPool]);
 
@@ -484,7 +491,7 @@ const MappingReviewScreen = () => {
     try {
       setIsCreatingPool(true);
       const token = await ensureSupabaseJwt();
-      
+
       // ✅ FIX: Get orgId from connection OR fetch user's active org
       let orgId = connection?.OrgId;
       if (!orgId) {
@@ -540,7 +547,7 @@ const MappingReviewScreen = () => {
       }
 
       const newPool = await response.json();
-      
+
       // Refresh pools list from API to ensure consistency
       const poolsResponse = await fetch(`https://api.sssync.app/api/pools/org/${orgId}`, {
         method: 'GET',
@@ -549,12 +556,12 @@ const MappingReviewScreen = () => {
           'Content-Type': 'application/json',
         }
       });
-      
+
       if (poolsResponse.ok) {
         const poolsData = await poolsResponse.json();
         const poolsList = Array.isArray(poolsData) ? poolsData : [];
         setPools(poolsList);
-        
+
         // Select the newly created pool
         const createdPool = poolsList.find((p: any) => p.id === newPool.id) || newPool;
         setSelectedPool(createdPool.id);
@@ -563,7 +570,7 @@ const MappingReviewScreen = () => {
         setPools([...pools, newPool]);
         setSelectedPool(newPool.id);
       }
-      
+
       setPoolNameInput('');
       setWizardStep(1); // Move to next step
     } catch (error) {
@@ -573,7 +580,7 @@ const MappingReviewScreen = () => {
       setIsCreatingPool(false);
     }
   };
-  
+
 
   // Effect to load platform connections
   useEffect(() => {
@@ -593,14 +600,14 @@ const MappingReviewScreen = () => {
 
           const connections = data as PlatformConnection[];
           setPlatformConnections(connections);
-          
+
           // Check if we have multiple platform types connected
           const platformTypes = new Set(connections.map(conn => conn.PlatformType));
           setMultiPlatformMode(platformTypes.size > 1);
-          
+
           // Pre-select the current connection
           setSelectedConnectionIds([connectionId]);
-          
+
         } catch (err) {
           console.error('[MappingReviewScreen] Error in loadConnections:', err);
         }
@@ -652,7 +659,7 @@ const MappingReviewScreen = () => {
           // Determine action based on matchType and confidence
           let action: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE';
           let isSelected = true;
-          
+
           if (item.matchType === 'NONE' || item.confidence === 0) {
             // No match found - these are new products to create
             action = 'CREATE_NEW';
@@ -696,14 +703,14 @@ const MappingReviewScreen = () => {
         const perfectMatches = Array.isArray(data.perfectMatches) ? data.perfectMatches : [];
         const newFromPlatform = Array.isArray(data.newFromPlatform) ? data.newFromPlatform : [];
         const needsReview = Array.isArray(data.needsReview) ? data.needsReview : [];
-        
+
         // Combine all suggestion types into a single array for our UI
         suggestionsArray = [
           ...perfectMatches.map((item: any) => ({ ...item, action: 'LINK_EXISTING', isSelected: true })),
           ...newFromPlatform.map((item: any) => ({ ...item, action: 'CREATE_NEW', isSelected: true })),
           ...needsReview.map((item: any) => ({ ...item, action: 'IGNORE', isSelected: false }))
         ];
-        
+
         // Keep the summary data for backward compatibility
         setSummaryData(data.summary || null);
         console.log(`[MappingReviewScreen] Processed legacy format: ${perfectMatches.length} matches, ${newFromPlatform.length} new, ${needsReview.length} review`);
@@ -718,20 +725,20 @@ const MappingReviewScreen = () => {
           const sumResp = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${currentConnectionId}/scan-summary`, { headers: { 'Authorization': `Bearer ${token2}` } });
           if (sumResp.ok) setScanSummary(await sumResp.json());
         }
-      } catch {}
-      
+      } catch { }
+
       // Add detailed logging for debugging empty suggestions
       console.log(`[MappingReviewScreen] Final suggestions count: ${suggestionsArray.length}`);
       if (suggestionsArray.length === 0) {
         console.log('[MappingReviewScreen] No mapping suggestions found. Checking connection status...');
-        
+
         // Check connection status to understand why no suggestions
         try {
           const connectionResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections/${currentConnectionId}`, {
             method: 'GET',
             headers: { 'Authorization': `Bearer ${token}` },
           });
-          
+
           if (connectionResponse.ok) {
             const connectionData = await connectionResponse.json();
             console.log(`[MappingReviewScreen] Connection status: ${connectionData.Status}, PlatformSpecificData:`, connectionData.PlatformSpecificData);
@@ -739,18 +746,18 @@ const MappingReviewScreen = () => {
         } catch (connErr) {
           console.error('[MappingReviewScreen] Error checking connection status:', connErr);
         }
-        
+
         console.log('[MappingReviewScreen] Fetching existing mappings from Supabase as fallback...');
         await fetchExistingMappingsFromSupabase(currentConnectionId);
       } else {
-        console.log(`[MappingReviewScreen] Successfully loaded ${suggestionsArray.length} suggestions:`, 
+        console.log(`[MappingReviewScreen] Successfully loaded ${suggestionsArray.length} suggestions:`,
           suggestionsArray.map(s => ({ action: s.action, title: s.platformProduct.title })));
       }
-      
+
     } catch (err: any) {
       console.error('[MappingReviewScreen] Error fetching mapping suggestions:', err);
       setError(err.message || 'An unexpected error occurred.');
-      
+
       // If there was an error fetching suggestions, try to get existing mappings as fallback
       console.log('[MappingReviewScreen] Error fetching suggestions, trying to get existing mappings as fallback...');
       await fetchExistingMappingsFromSupabase(currentConnectionId);
@@ -790,7 +797,7 @@ const MappingReviewScreen = () => {
             };
           }));
         }
-      } catch {}
+      } catch { }
       setHasLoadedDraft(true);
     })();
   }, [connectionId, suggestions, hasLoadedDraft]);
@@ -812,7 +819,7 @@ const MappingReviewScreen = () => {
           headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ confirmedMatches }),
         });
-      } catch {}
+      } catch { }
     }, 600);
     return () => clearTimeout(handle);
   }, [suggestions, connectionId]);
@@ -823,14 +830,14 @@ const MappingReviewScreen = () => {
   const fetchExistingMappingsFromSupabase = useCallback(async (connectionId: string) => {
     console.log(`[MappingReviewScreen] Fetching existing mappings from Supabase for connection: ${connectionId}`);
     setLoadingExistingMappings(true);
-    
+
     try {
       // First get user ID to filter query
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         throw new Error("User not authenticated");
       }
-      
+
       // Fetch existing mappings from Supabase - simplified query to avoid SQL alias issues
       const { data, error } = await supabase
         .from('PlatformProductMappings')
@@ -845,18 +852,18 @@ const MappingReviewScreen = () => {
           )
         `)
         .eq('PlatformConnectionId', connectionId);
-        
+
       if (error) {
         console.error('[MappingReviewScreen] Error fetching existing mappings:', error);
         throw new Error(`Failed to fetch existing mappings: ${error.message}`);
       }
-      
+
       console.log(`[MappingReviewScreen] Fetched ${data?.length || 0} existing mappings from Supabase`);
       console.log('[MappingReviewScreen] First mapping sample:', data && data.length > 0 ? JSON.stringify(data[0]).substring(0, 300) : 'No mappings');
-      
+
       if (data && data.length > 0) {
         setExistingMappings(data as any); // Cast as any to handle Supabase type complexities
-        
+
         // Convert existing mappings to suggestion format for display compatibility
         // This allows us to reuse the existing UI components
         const mappingsAsSuggestions: MappingSuggestion[] = data.map((mapping: any) => ({
@@ -875,10 +882,10 @@ const MappingReviewScreen = () => {
             title: mapping.ProductVariants?.Title || 'Unknown Product',
           }
         }));
-        
+
         console.log(`[MappingReviewScreen] Converted ${mappingsAsSuggestions.length} mappings to suggestions format`);
         setSuggestions(mappingsAsSuggestions);
-        
+
         // Set summary data with counts
         setSummaryData({
           totalPlatformProducts: data.length,
@@ -898,7 +905,7 @@ const MappingReviewScreen = () => {
   // Effect to trigger initial data loading
   useEffect(() => {
     console.log(`[MappingReviewScreen] Effect triggered - isPolling: ${isPolling}, connectionId: ${connectionId}, jobId: ${jobId}`);
-    
+
     // If not polling, fetch suggestions immediately (legacy or post-polling behavior)
     if (!isPolling && connectionId) {
       console.log(`[MappingReviewScreen] Not polling, fetching suggestions directly for connection: ${connectionId}`);
@@ -916,7 +923,7 @@ const MappingReviewScreen = () => {
   useEffect(() => {
     if (syncProgress) {
       console.log('[MappingReviewScreen] Received sync progress:', syncProgress);
-      
+
       // Update progress for UI
       if (syncProgress.progress !== undefined) {
         setJobProgress({
@@ -928,7 +935,7 @@ const MappingReviewScreen = () => {
           isFailed: syncProgress.status === 'error',
         });
       }
-      
+
       // When scan completes (status = 'review'), fetch suggestions and move to review
       if (syncProgress.status === 'review') {
         console.log('[MappingReviewScreen] Scan completed successfully');
@@ -954,7 +961,7 @@ const MappingReviewScreen = () => {
   }, [syncProgress, connectionId, fetchMappingSuggestions]);
 
   useEffect(() => {
-    navigation.setOptions({ 
+    navigation.setOptions({
       title: `Review ${platformName} Sync`,
       headerBackTitle: 'Profile', // Adds a back button with a label
     });
@@ -962,9 +969,9 @@ const MappingReviewScreen = () => {
 
   // Toggle selection of a connection for multi-platform sync
   const toggleConnectionSelection = (connId: string) => {
-    setSelectedConnectionIds(prev => 
-      prev.includes(connId) 
-        ? prev.filter(id => id !== connId) 
+    setSelectedConnectionIds(prev =>
+      prev.includes(connId)
+        ? prev.filter(id => id !== connId)
         : [...prev, connId]
     );
   };
@@ -982,7 +989,7 @@ const MappingReviewScreen = () => {
     }
 
     const approvedItems = suggestions.filter(s => s.isSelected && s.action === 'CREATE_NEW');
-    
+
     if (approvedItems.length === 0) {
       Alert.alert("Nothing to Sync", "No new products were selected for creation.");
       return;
@@ -1046,7 +1053,7 @@ const MappingReviewScreen = () => {
     try {
       setLoading(true);
       setError(null);
-      
+
       const token = await ensureSupabaseJwt();
       if (!token) throw new Error("Authentication token not found. Please log in again.");
 
@@ -1058,7 +1065,7 @@ const MappingReviewScreen = () => {
       }));
 
       console.log(`[MappingReviewScreen] Approving ${mappingsPayload.length} perfect match links for ${platformName}`);
-      
+
       const response = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/confirm-mappings`, {
         method: 'POST',
         headers: {
@@ -1075,21 +1082,21 @@ const MappingReviewScreen = () => {
 
       const result = await response.json();
       console.log('[MappingReviewScreen] Perfect match links confirmed successfully:', result);
-      
+
       // Success notification
       Alert.alert(
-        "Links Approved", 
+        "Links Approved",
         `Successfully linked ${mappingsPayload.length} products.`,
-        [{ 
-          text: "OK", 
+        [{
+          text: "OK",
           onPress: () => {
             if (connectionId) {
               fetchMappingSuggestions(connectionId);
             }
-          } 
+          }
         }]
       );
-      
+
     } catch (err: any) {
       console.error('[MappingReviewScreen] Error confirming perfect match links:', err);
       setError(err.message || 'An unexpected error occurred while confirming links.');
@@ -1109,10 +1116,10 @@ const MappingReviewScreen = () => {
     try {
       setLoading(true);
       setError(null);
-      
+
       const session = await supabase.auth.getSession();
       const token = session?.data.session?.access_token;
-      
+
       if (!token) {
         throw new Error("Authentication token not found. Please log in again.");
       }
@@ -1125,7 +1132,7 @@ const MappingReviewScreen = () => {
       }));
 
       console.log(`[MappingReviewScreen] Creating ${mappingsPayload.length} new products from ${platformName}`);
-      
+
       const response = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/confirm-mappings`, {
         method: 'POST',
         headers: {
@@ -1142,21 +1149,21 @@ const MappingReviewScreen = () => {
 
       const result = await response.json();
       console.log('[MappingReviewScreen] New product creations confirmed successfully:', result);
-      
+
       // Success notification
       Alert.alert(
-        "New Products Approved", 
+        "New Products Approved",
         `Successfully queued ${mappingsPayload.length} new products for creation in SSSync.`,
-        [{ 
-          text: "OK", 
+        [{
+          text: "OK",
           onPress: () => {
             if (connectionId) {
               fetchMappingSuggestions(connectionId);
             }
-          } 
+          }
         }]
       );
-      
+
     } catch (err: any) {
       console.error('[MappingReviewScreen] Error confirming new product creations:', err);
       setError(err.message || 'An unexpected error occurred while creating new products.');
@@ -1191,7 +1198,7 @@ const MappingReviewScreen = () => {
         const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
         throw new Error(errorData.message || `Failed to confirm mappings. Status: ${response.status}`);
       }
-      
+
       console.log("[MappingReviewScreen] Mappings confirmed successfully. Now activating sync...");
 
       // ✅ Step 2: Automatically activate sync so status moves: ready_to_sync → syncing → active
@@ -1210,7 +1217,7 @@ const MappingReviewScreen = () => {
 
       console.log("[MappingReviewScreen] Sync activated successfully!");
       Alert.alert("Success", "Mappings confirmed and sync activated. Processing has started.");
-      
+
       // Optionally refresh suggestions or navigate
       fetchMappingSuggestions(connectionId);
     } catch (err: any) {
@@ -1230,29 +1237,29 @@ const MappingReviewScreen = () => {
       Alert.alert("Error", "No products selected for sync. Please select some items first.");
       return;
     }
-    
+
     setSyncing(true);
     setError(null);
-    
+
     try {
       const session = await supabase.auth.getSession();
       const token = session?.data.session?.access_token;
-      
+
       if (!token) {
         throw new Error("Authentication token not found.");
       }
-      
+
       // Prepare the mappings from selected suggestions
       const selectedSuggestions = suggestions.filter(s => s.isSelected);
       console.log(`[MappingReviewScreen] Activating sync with ${selectedSuggestions.length} selected items...`);
-      
+
       // Group the mappings by action type for the payload
       const mappingsPayload = selectedSuggestions.map(s => ({
-          platformProductId: s.platformProduct.id,
-          sssyncVariantId: s.action === 'LINK_EXISTING' ? s.suggestedCanonicalProduct?.id : null,
-          action: s.action === 'LINK_EXISTING' ? 'link' : (s.action === 'CREATE_NEW' ? 'create' : 'ignore')
+        platformProductId: s.platformProduct.id,
+        sssyncVariantId: s.action === 'LINK_EXISTING' ? s.suggestedCanonicalProduct?.id : null,
+        action: s.action === 'LINK_EXISTING' ? 'link' : (s.action === 'CREATE_NEW' ? 'create' : 'ignore')
       }));
-      
+
       // Step 1: Confirm all mappings (mappings only, no sync rules)
       const confirmResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/confirm-mappings`, {
         method: 'POST',
@@ -1313,19 +1320,19 @@ const MappingReviewScreen = () => {
           'Content-Type': 'application/json',
         }
       });
-      
+
       if (!activateResponse.ok) {
         const errorData = await activateResponse.json().catch(() => ({ message: `HTTP error! Status: ${activateResponse.status}` }));
         throw new Error(errorData.message || `Failed to activate sync. Status: ${activateResponse.status}`);
       }
-      
+
       const { jobId: activationJobId } = await activateResponse.json();
       console.log(`[MappingReviewScreen] Sync activated successfully. New Job ID: ${activationJobId}`);
-      
+
       // Show custom success notification and navigate back properly
       setNotificationMessage(`Your ${platformName} connection is now active and syncing!`);
       setShowSuccessNotification(true);
-      
+
       // Navigate back to the root of the stack (Profile screen) after a short delay
       setTimeout(() => {
         setShowSuccessNotification(false);
@@ -1335,7 +1342,7 @@ const MappingReviewScreen = () => {
           routes: [{ name: 'TabNavigator', params: { refresh: Date.now() } }],
         });
       }, 2500);
-      
+
     } catch (err: any) {
       console.error('[MappingReviewScreen] Error during activation:', err);
       setError(err.message || 'An unexpected error occurred during activation.');
@@ -1383,10 +1390,10 @@ const MappingReviewScreen = () => {
     });
     const filtered = listQuery
       ? base.filter(item =>
-          (item.platformProduct.title || '').toLowerCase().includes(listQuery.toLowerCase()) ||
-          (item.platformProduct.sku || '').toLowerCase().includes(listQuery.toLowerCase()) ||
-          (item.suggestedCanonicalProduct?.title || '').toLowerCase().includes(listQuery.toLowerCase())
-        )
+        (item.platformProduct.title || '').toLowerCase().includes(listQuery.toLowerCase()) ||
+        (item.platformProduct.sku || '').toLowerCase().includes(listQuery.toLowerCase()) ||
+        (item.suggestedCanonicalProduct?.title || '').toLowerCase().includes(listQuery.toLowerCase())
+      )
       : base;
     const sorted = [...filtered].sort((a, b) => {
       if (sortBy === 'title') {
@@ -1478,7 +1485,7 @@ const MappingReviewScreen = () => {
           {item.action === 'IGNORE' && <Icon name="cancel" size={24} color={theme.colors.error} />}
         </View>
 
-    
+
         {/* Anorha Product Side */}
         <View style={styles.reviewItemSection}>
           <PlaceholderImage uri={'/src/assets/rounded_anorha.png'} size={40} borderRadius={6} />
@@ -1515,22 +1522,22 @@ const MappingReviewScreen = () => {
     <View style={styles.suggestionContainer}>
       <View style={[styles.suggestionCard, !item.isSelected && styles.suggestionCardUnselected]}>
         {/* Selection indicator */}
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.selectionIndicator}
           onPress={() => updateSuggestionAction(item.platformProduct.id, item.isSelected ? 'IGNORE' : item.action)}
         >
-          <Icon 
-            name={item.isSelected ? "checkbox-marked-circle" : "checkbox-blank-circle-outline"} 
-            size={20} 
-            color={item.isSelected ? theme.colors.primary : theme.colors.textSecondary} 
+          <Icon
+            name={item.isSelected ? "checkbox-marked-circle" : "checkbox-blank-circle-outline"}
+            size={20}
+            color={item.isSelected ? theme.colors.primary : theme.colors.textSecondary}
           />
         </TouchableOpacity>
 
         {/* Platform Product (Left) */}
         <View style={[styles.miniCard, styles.platformMiniCard]}>
-          <PlaceholderImage 
-            size={40} 
-            borderRadius={6} 
+          <PlaceholderImage
+            size={40}
+            borderRadius={6}
             type={item.platformProduct.imageUrl ? "image" : "icon"}
             uri={item.platformProduct.imageUrl}
             icon={getIconForPlatformType(platformName)}
@@ -1542,11 +1549,11 @@ const MappingReviewScreen = () => {
           </View>
         </View>
 
-        <Icon name="arrow-right-thin" size={24} color={theme.colors.textSecondary} style={{ marginHorizontal: 8 }}/>
+        <Icon name="arrow-right-thin" size={24} color={theme.colors.textSecondary} style={{ marginHorizontal: 8 }} />
 
         {/* Anorha Product (Right) */}
         {item.action === 'LINK_EXISTING' && item.suggestedCanonicalProduct ? (
-          <TouchableOpacity 
+          <TouchableOpacity
             style={[styles.miniCard, styles.sssyncMiniCard, styles.linkedMiniCard]}
             onPress={() => {
               setShowSearchResults(true);
@@ -1554,10 +1561,10 @@ const MappingReviewScreen = () => {
               (global as any).currentPlatformProduct = item.platformProduct;
             }}
           >
-            <PlaceholderImage 
-              size={40} 
-              borderRadius={6} 
-              type="image" 
+            <PlaceholderImage
+              size={40}
+              borderRadius={6}
+              type="image"
               uri={'/src/assets/rounded_anorha.png'}
               color={theme.colors.success}
             />
@@ -1571,7 +1578,7 @@ const MappingReviewScreen = () => {
             </View>
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity 
+          <TouchableOpacity
             style={[styles.emptyMiniCard, item.action === 'IGNORE' && styles.ignoredMiniCard]}
             onPress={() => {
               setShowSearchResults(true);
@@ -1579,10 +1586,10 @@ const MappingReviewScreen = () => {
               (global as any).currentPlatformProduct = item.platformProduct;
             }}
           >
-            <Icon 
-              name={item.action === 'IGNORE' ? "help-circle-outline" : "plus-circle-outline"} 
-              size={24} 
-              color={item.action === 'IGNORE' ? theme.colors.warning : theme.colors.textSecondary} 
+            <Icon
+              name={item.action === 'IGNORE' ? "help-circle-outline" : "plus-circle-outline"}
+              size={24}
+              color={item.action === 'IGNORE' ? theme.colors.warning : theme.colors.textSecondary}
             />
             <Text style={[styles.emptyMiniCardText, item.action === 'IGNORE' && styles.ignoredText]}>
               {item.action === 'IGNORE' ? 'Needs Review' : 'Link Product'}
@@ -1618,9 +1625,9 @@ const MappingReviewScreen = () => {
   const renderConnectionItem = (connection: PlatformConnection) => {
     const isSelected = selectedConnectionIds.includes(connection.Id);
     const isCurrentConnection = connection.Id === connectionId;
-    
+
     return (
-      <TouchableOpacity 
+      <TouchableOpacity
         key={connection.Id}
         style={[
           styles.connectionItem,
@@ -1630,25 +1637,25 @@ const MappingReviewScreen = () => {
         onPress={() => toggleConnectionSelection(connection.Id)}
       >
         <View style={styles.connectionItemContent}>
-          <Icon 
-            name={getIconForPlatformType(connection.PlatformType)} 
-            size={24} 
-            color={isSelected ? theme.colors.primary : theme.colors.textSecondary} 
+          <Icon
+            name={getIconForPlatformType(connection.PlatformType)}
+            size={24}
+            color={isSelected ? theme.colors.primary : theme.colors.textSecondary}
           />
           <View style={styles.connectionTextContainer}>
             <Text style={[
               styles.connectionName,
-              isSelected && {color: theme.colors.primary}
+              isSelected && { color: theme.colors.primary }
             ]}>
               {connection.DisplayName}
             </Text>
             <Text style={styles.connectionPlatformType}>{connection.PlatformType}</Text>
           </View>
         </View>
-        <Icon 
-          name={isSelected ? "checkbox-marked-circle" : "checkbox-blank-circle-outline"} 
-          size={22} 
-          color={isSelected ? theme.colors.primary : theme.colors.textSecondary} 
+        <Icon
+          name={isSelected ? "checkbox-marked-circle" : "checkbox-blank-circle-outline"}
+          size={22}
+          color={isSelected ? theme.colors.primary : theme.colors.textSecondary}
         />
       </TouchableOpacity>
     );
@@ -1674,12 +1681,12 @@ const MappingReviewScreen = () => {
             <Text style={styles.progressTitle}>Syncing Products</Text>
             <Text style={styles.progressPercentage}>{`${Math.round(syncProgress.progress)}%`}</Text>
           </View>
-          <Progress.Bar 
-            progress={syncProgress.progress / 100} 
+          <Progress.Bar
+            progress={syncProgress.progress / 100}
             width={null}
             height={12}
             borderRadius={8}
-            color={theme.colors.primary} 
+            color={theme.colors.primary}
             unfilledColor={theme.colors.surface}
             borderWidth={0}
           />
@@ -1693,15 +1700,15 @@ const MappingReviewScreen = () => {
     // Fallback to summary data progress
     if (!summaryData) return null;
 
-    const { 
-      totalPlatformProducts = 0, 
-      perfectMatchCount = 0, 
-      newFromPlatformCount = 0, 
-      needsReviewCount = 0 
+    const {
+      totalPlatformProducts = 0,
+      perfectMatchCount = 0,
+      newFromPlatformCount = 0,
+      needsReviewCount = 0
     } = summaryData;
 
     if (totalPlatformProducts === 0) return null;
-    
+
     // Items that are "done" are those that are perfect matches or newly created. 
     // We assume items needing review are not yet "done".
     const completedItems = (totalPlatformProducts - needsReviewCount);
@@ -1716,12 +1723,12 @@ const MappingReviewScreen = () => {
           </Text>
           <Text style={styles.progressPercentage}>{`${progressPercent}%`}</Text>
         </View>
-        <Progress.Bar 
-          progress={progress} 
+        <Progress.Bar
+          progress={progress}
           width={null} // null so it takes up the full container width
           height={12}
           borderRadius={8}
-          color={theme.colors.primary} 
+          color={theme.colors.primary}
           unfilledColor={theme.colors.surface}
           borderWidth={0}
         />
@@ -1751,7 +1758,7 @@ const MappingReviewScreen = () => {
     try {
       const session = await supabase.auth.getSession();
       const { data: { user } } = await supabase.auth.getUser();
-      
+
       if (!user) {
         throw new Error("User not authenticated");
       }
@@ -1808,12 +1815,12 @@ const MappingReviewScreen = () => {
         return suggestion;
       });
     });
-    
+
     // Close search
     setShowSearchResults(false);
     setSearchQuery('');
     setSearchResults([]);
-    
+
     Alert.alert('Product Linked', `${platformProduct.title} has been linked to ${searchResult.Title}`);
   };
 
@@ -1829,7 +1836,7 @@ const MappingReviewScreen = () => {
               <Icon name="close" size={24} color={theme.colors.text} />
             </TouchableOpacity>
           </View>
-          
+
           <TextInput
             style={styles.searchInput}
             placeholder="Search by SKU, name, or barcode..."
@@ -1837,7 +1844,7 @@ const MappingReviewScreen = () => {
             onChangeText={handleSearchChange}
             autoFocus
           />
-          
+
           {isSearching ? (
             <View style={styles.searchSpinner}>
               <ActivityIndicator size="large" color={theme.colors.primary} />
@@ -1848,7 +1855,7 @@ const MappingReviewScreen = () => {
               data={searchResults}
               keyExtractor={(item) => item.Id}
               renderItem={({ item }) => (
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.searchResultItem}
                   onPress={() => {
                     const platformProduct = (global as any).currentPlatformProduct;
@@ -1896,7 +1903,7 @@ const MappingReviewScreen = () => {
     console.log(`[MappingReviewScreen] Resetting connection ${connectionId} and fetching suggestions directly`);
     setLoading(true);
     setError(null);
-    
+
     try {
       const token = await waitForSupabaseToken();
       if (!token) throw new Error("Authentication token not found. Please log in again.");
@@ -1920,7 +1927,7 @@ const MappingReviewScreen = () => {
 
       // Now try to fetch mapping suggestions directly
       await fetchMappingSuggestions(connectionId);
-      
+
     } catch (err: any) {
       console.error('[MappingReviewScreen] Error in resetConnectionAndFetch:', err);
       setError(err.message || 'Failed to reset connection and fetch suggestions.');
@@ -1935,20 +1942,20 @@ const MappingReviewScreen = () => {
       style={[syncRulesStyles.optionButton, syncDirection === option && syncRulesStyles.optionButtonSelected]}
       onPress={() => setSyncDirection(option)}
     >
-      <Icon 
-        name={icon} 
-        size={24} 
-        color={syncDirection === option ? theme.colors.primary : theme.colors.textSecondary} 
+      <Icon
+        name={icon}
+        size={24}
+        color={syncDirection === option ? theme.colors.primary : theme.colors.textSecondary}
         style={syncRulesStyles.optionIcon}
       />
       <View style={{ flex: 1 }}>
         <Text style={[syncRulesStyles.optionTitle, syncDirection === option && syncRulesStyles.optionTitleSelected]}>{title}</Text>
         <Text style={[syncRulesStyles.optionSubtitle, syncDirection === option && syncRulesStyles.optionSubtitleSelected]}>{subtitle}</Text>
       </View>
-      <Icon 
-        name={syncDirection === option ? 'radiobox-marked' : 'radiobox-blank'} 
-        size={20} 
-        color={syncDirection === option ? theme.colors.primary : theme.colors.textSecondary} 
+      <Icon
+        name={syncDirection === option ? 'radiobox-marked' : 'radiobox-blank'}
+        size={20}
+        color={syncDirection === option ? theme.colors.primary : theme.colors.textSecondary}
       />
     </TouchableOpacity>
   );
@@ -1958,20 +1965,20 @@ const MappingReviewScreen = () => {
       style={[syncRulesStyles.optionButton, sourceOfTruth === option && syncRulesStyles.optionButtonSelected]}
       onPress={() => setSourceOfTruth(option)}
     >
-      <Icon 
-        name={icon} 
-        size={24} 
-        color={sourceOfTruth === option ? theme.colors.primary : theme.colors.textSecondary} 
+      <Icon
+        name={icon}
+        size={24}
+        color={sourceOfTruth === option ? theme.colors.primary : theme.colors.textSecondary}
         style={syncRulesStyles.optionIcon}
       />
       <View style={{ flex: 1 }}>
         <Text style={[syncRulesStyles.optionTitle, sourceOfTruth === option && syncRulesStyles.optionTitleSelected]}>{title}</Text>
         <Text style={[syncRulesStyles.optionSubtitle, sourceOfTruth === option && syncRulesStyles.optionSubtitleSelected]}>{subtitle}</Text>
       </View>
-      <Icon 
-        name={sourceOfTruth === option ? 'radiobox-marked' : 'radiobox-blank'} 
-        size={20} 
-        color={sourceOfTruth === option ? theme.colors.primary : theme.colors.textSecondary} 
+      <Icon
+        name={sourceOfTruth === option ? 'radiobox-marked' : 'radiobox-blank'}
+        size={20}
+        color={sourceOfTruth === option ? theme.colors.primary : theme.colors.textSecondary}
       />
     </TouchableOpacity>
   );
@@ -2169,7 +2176,7 @@ const MappingReviewScreen = () => {
       justifyContent: 'center',
       alignItems: 'center',
       padding: 20,
-      backgroundColor: theme.colors.background, 
+      backgroundColor: theme.colors.background,
     },
     loadingText: {
       marginTop: 10,
@@ -2179,14 +2186,14 @@ const MappingReviewScreen = () => {
     errorText: {
       marginTop: 10,
       fontSize: 16,
-      color: theme.colors.error, 
+      color: theme.colors.error,
       textAlign: 'center',
-      marginBottom:15,
+      marginBottom: 15,
     },
     emptyText: {
       marginTop: 10,
       fontSize: 16,
-      color: theme.colors.textSecondary, 
+      color: theme.colors.textSecondary,
       textAlign: 'center',
       marginBottom: 15,
     },
@@ -2195,7 +2202,7 @@ const MappingReviewScreen = () => {
       marginTop: 50,
       paddingTop: 10,
       paddingBottom: 20,
-      backgroundColor: theme.colors.surface, 
+      backgroundColor: theme.colors.surface,
       borderBottomWidth: 1,
       borderBottomColor: theme.colors.background,
     },
@@ -2246,8 +2253,8 @@ const MappingReviewScreen = () => {
       paddingVertical: 10,
       flexDirection: 'column',
       borderBottomWidth: 1,
-      borderBottomColor: '#ddd', 
-      backgroundColor: theme.colors.surface, 
+      borderBottomColor: '#ddd',
+      backgroundColor: theme.colors.surface,
       gap: 10,
     },
     actionHubTitle: {
@@ -2272,7 +2279,7 @@ const MappingReviewScreen = () => {
       lineHeight: 20,
     },
     batchButton: {
-      width: '100%', 
+      width: '100%',
     },
     sectionTitle: {
       fontSize: 18,
@@ -2295,7 +2302,7 @@ const MappingReviewScreen = () => {
     itemTitle: {
       fontSize: 16,
       fontWeight: '500',
-      flex: 1, 
+      flex: 1,
       color: theme.colors.text,
     },
     itemSku: {
@@ -2307,15 +2314,15 @@ const MappingReviewScreen = () => {
       paddingHorizontal: 8,
       paddingVertical: 3,
       borderRadius: 10,
-      marginLeft: 10, 
+      marginLeft: 10,
     },
-    confidence_high: { backgroundColor: theme.colors.success + '30' }, 
-    confidence_medium: { backgroundColor: theme.colors.warning + '30' }, 
-    confidence_low: { backgroundColor: theme.colors.error + '30' }, 
+    confidence_high: { backgroundColor: theme.colors.success + '30' },
+    confidence_medium: { backgroundColor: theme.colors.warning + '30' },
+    confidence_low: { backgroundColor: theme.colors.error + '30' },
     confidenceText: {
       fontSize: 10,
       fontWeight: 'bold',
-      color: theme.colors.text, 
+      color: theme.colors.text,
     },
     itemActions: {
       flexDirection: 'row',
@@ -2345,24 +2352,24 @@ const MappingReviewScreen = () => {
       fontStyle: 'italic',
       textAlign: 'center',
       paddingVertical: 20,
-      color: theme.colors.textSecondary, 
+      color: theme.colors.textSecondary,
     },
     footerActions: {
       padding: 20,
       borderTopWidth: 1,
-      borderTopColor: '#ddd', 
+      borderTopColor: '#ddd',
       marginTop: 20,
     },
     actionButton: {
       paddingHorizontal: 12,
-      paddingVertical: 6, 
+      paddingVertical: 6,
       marginLeft: 10,
     },
     linkButton: {
-      backgroundColor: theme.colors.success + '20', 
+      backgroundColor: theme.colors.success + '20',
     },
     createButton: {
-      backgroundColor: theme.colors.secondary + '20', 
+      backgroundColor: theme.colors.secondary + '20',
     },
     connectionsContainer: {
       backgroundColor: theme.colors.surface,
@@ -2578,8 +2585,8 @@ const MappingReviewScreen = () => {
       fontWeight: '600',
     },
     listContainer: {
-      marginHorizontal: 15, 
-      marginBottom: 15, 
+      marginHorizontal: 15,
+      marginBottom: 15,
       marginTop: 15
     },
     progressMainTitle: {
@@ -2974,7 +2981,7 @@ const MappingReviewScreen = () => {
       paddingHorizontal: 20,
       paddingTop: 10,
       paddingBottom: 20,
-      backgroundColor: theme.colors.surface, 
+      backgroundColor: theme.colors.surface,
       borderBottomWidth: 1,
       borderBottomColor: theme.colors.background,
     },
@@ -3004,8 +3011,8 @@ const MappingReviewScreen = () => {
       paddingVertical: 10,
       flexDirection: 'column',
       borderBottomWidth: 1,
-      borderBottomColor: '#ddd', 
-      backgroundColor: theme.colors.surface, 
+      borderBottomColor: '#ddd',
+      backgroundColor: theme.colors.surface,
       gap: 10,
     },
     modernSearchBar: {
@@ -3121,7 +3128,7 @@ const MappingReviewScreen = () => {
       textAlign: 'center',
     },
     suggestionContainer: {
-      paddingHorizontal: 5, 
+      paddingHorizontal: 5,
     },
     suggestionCard: {
       flexDirection: 'row',
@@ -3292,14 +3299,14 @@ const MappingReviewScreen = () => {
           <Text style={styles.progressDescription}>
             {jobProgress?.description || `Connecting to ${platformName}...`}
           </Text>
-          
+
           <View style={styles.progressBarContainer}>
-            <Progress.Bar 
-              progress={progressValue} 
+            <Progress.Bar
+              progress={progressValue}
               width={null} // Full width
               height={12}
               borderRadius={8}
-              color={isStalled ? theme.colors.warning : theme.colors.primary} 
+              color={isStalled ? theme.colors.warning : theme.colors.primary}
               unfilledColor={theme.colors.surface}
               borderWidth={0}
             />
@@ -3345,7 +3352,7 @@ const MappingReviewScreen = () => {
           <Text style={[styles.loadingText, { marginTop: 20, textAlign: 'center' }]}>
             This usually takes 1-2 minutes depending on your store size.
           </Text>
-          
+
           {/* Debug information in development */}
           {__DEV__ && (
             <View style={styles.debugInfo}>
@@ -3395,22 +3402,22 @@ const MappingReviewScreen = () => {
       </View>
     );
   }
-  
+
   // --- MODIFIED: If we have existing mappings but no API suggestions, show them ---
   if (existingMappings.length > 0 && (!suggestions || (Array.isArray(suggestions) && suggestions.length === 0))) {
-  return (
-    <View style={styles.container}>
+    return (
+      <View style={styles.container}>
         <ScrollView style={styles.container}>
-        <View style={styles.headerContainer}>
+          <View style={styles.headerContainer}>
             <Text style={styles.title}>Existing {platformName} Products</Text>
             <Text style={styles.platformText}>These products are already synced</Text>
-                </View>
-          
+          </View>
+
           <Card style={{ margin: 15 }}>
             {existingMappings.map((mapping: any) => (
               <View key={mapping.Id} style={styles.suggestionCard}>
                 <View style={styles.itemContent}>
-                  <PlaceholderImage 
+                  <PlaceholderImage
                     size={48}
                     borderRadius={8}
                     color="#f0f0f0"
@@ -3425,41 +3432,41 @@ const MappingReviewScreen = () => {
                     <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 4 }}>
                       Last synced: {mapping.LastSyncedAt ? new Date(mapping.LastSyncedAt).toLocaleString() : 'Never'}
                     </Text>
+                  </View>
                 </View>
-              </View>
-                
+
                 <View style={styles.itemActions}>
                   <View style={[styles.actionBadge, { backgroundColor: theme.colors.success }]}>
                     <Icon name="check-circle" size={12} color="#fff" />
                     <Text style={styles.actionBadgeText}>Synced</Text>
-                </View>
+                  </View>
                 </View>
               </View>
             ))}
           </Card>
         </ScrollView>
-            </View>
+      </View>
     );
   }
 
-  
+
 
   return (
     <View style={styles.container}>
       {/* Show the final review UI when in that state */}
       {/* {showFinalReview && renderFinalReview()} */}
-      
+
       <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
         <Icon name="arrow-left" size={22} color={theme.colors.text} />
       </TouchableOpacity>
-      
+
       {/* Search Modal */}
       {renderSearchResults()}
-      
+
       {/* Sync Rules Modal 
       {renderSyncRulesModal()}
       */}
-      
+
       <Modal
         transparent={true}
         visible={!!previewingItem}
@@ -3469,7 +3476,7 @@ const MappingReviewScreen = () => {
         <Pressable style={styles.modalOverlay} onPress={() => setPreviewingItem(null)}>
           <Pressable style={styles.modalContent}>
             <Text style={styles.modalTitle}>{previewingItem?.platformProduct.title}</Text>
-            
+
             <Text style={styles.modalText}>SKU: {previewingItem?.platformProduct.sku || 'N/A'}</Text>
             <Text style={styles.modalText}>Price: ${previewingItem?.platformProduct.price || 'N/A'}</Text>
 
@@ -3478,8 +3485,8 @@ const MappingReviewScreen = () => {
                 <Text style={styles.modalSectionTitle}>Suggested Match in SSSync</Text>
                 <Text style={styles.modalText}>Title: {previewingItem.suggestedCanonicalProduct.title}</Text>
                 <Text style={styles.modalText}>SKU: {previewingItem.suggestedCanonicalProduct.sku}</Text>
-          </>
-        )}
+              </>
+            )}
 
             <Text style={styles.modalSectionTitle}>Action</Text>
             <Text style={styles.modalText}>Suggested Action: {previewingItem?.action}</Text>
@@ -3492,7 +3499,7 @@ const MappingReviewScreen = () => {
       {/* Content */}
       {!loading && !error && suggestions && (
         <>
-       
+
           <PillTabs
             tabs={[
               { key: 'matched', label: 'Matches', count: counts.matched, tone: 'success' },
@@ -3507,25 +3514,25 @@ const MappingReviewScreen = () => {
 
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 12, marginTop: 4, }}>
             {activeTab === 'matched' && (
-               <Text style={{fontWeight: "600", color: theme.colors.textSecondary}}>
+              <Text style={{ fontWeight: "600", color: theme.colors.textSecondary }}>
                 Review Instant Matches
               </Text>
             )}
             {activeTab === 'review' && (
-              <Text style={{fontWeight: "600", color: theme.colors.textSecondary}}>
+              <Text style={{ fontWeight: "600", color: theme.colors.textSecondary }}>
                 Verify & Review
               </Text>
             )}
             {activeTab === 'ignore' && (
-              <Text style={{fontWeight: "600", color: theme.colors.textSecondary}}>
+              <Text style={{ fontWeight: "600", color: theme.colors.textSecondary }}>
                 Ignoring These Products
               </Text>
             )}
 
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8}}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               {activeTab === 'review' && (
                 <TouchableOpacity
-                  style={{ flexDirection: 'row', backgroundColor:"rgb(94, 41, 11, .8)", alignItems: 'center', paddingVertical: 6, paddingHorizontal: 12, borderWidth: 1, borderColor: 'rgb(94, 41, 11)', borderRadius: 8 }}
+                  style={{ flexDirection: 'row', backgroundColor: "rgb(94, 41, 11, .8)", alignItems: 'center', paddingVertical: 6, paddingHorizontal: 12, borderWidth: 1, borderColor: 'rgb(94, 41, 11)', borderRadius: 8 }}
                   onPress={() => {
                     setSuggestions(prev => (prev || []).map(s => {
                       const isReview = s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved;
@@ -3541,8 +3548,8 @@ const MappingReviewScreen = () => {
                 </TouchableOpacity>
               )}
               <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8 }} onPress={() => setSortBy(sortBy === 'title' ? 'sku' : 'title')} accessibilityLabel="Sort by">
-              <Icon name="sort" size={18} color={theme.colors.textSecondary} />
-              <Text style={{ marginLeft: 6, color: theme.colors.textSecondary, fontWeight: '600' }}>Sort By: {sortBy === 'title' ? 'Title' : 'SKU'}</Text>
+                <Icon name="sort" size={18} color={theme.colors.textSecondary} />
+                <Text style={{ marginLeft: 6, color: theme.colors.textSecondary, fontWeight: '600' }}>Sort By: {sortBy === 'title' ? 'Title' : 'SKU'}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -3611,13 +3618,13 @@ const MappingReviewScreen = () => {
 
           {/* Inline Bottom-Sheet Wizard */}
           <Modal visible={wizardVisible} transparent animationType="fade" onRequestClose={() => setWizardVisible(false)}>
-            <View style={{ flex: 1, justifyContent: 'flex-end',  backgroundColor: 'rgba(0, 0, 0, 0.7)' }}>
+            <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0, 0, 0, 0.7)' }}>
               <Pressable style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0)' }} onPress={() => setWizardVisible(false)} />
-              <KeyboardAvoidingView 
+              <KeyboardAvoidingView
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                 style={{ maxHeight: '90%' }}
               >
-                <ScrollView 
+                <ScrollView
                   contentContainerStyle={{ flexGrow: 1 }}
                   scrollEnabled={true}
                   nestedScrollEnabled={true}
@@ -3626,11 +3633,99 @@ const MappingReviewScreen = () => {
                     {/* Stepper header aligning to mock */}
                     <View style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#E5E5E5', alignItems: 'center' }}>
                       <Text style={{ fontWeight: '700', color: theme.colors.text, fontSize: 18 }}>{
-                      wizardStep===0?'Add Platform To Which Pool':wizardStep===1?'Set Sync Settings':wizardStep===2?'Set Sync Settings':wizardStep===3?'Set Sync Settings':wizardStep===4?'Set Sync Settings':'Is This Right?'}</Text>
+                        wizardStep === 0 ? 'How Should Products Sync?' : wizardStep === 1 ? 'Add Platform To Pool' : wizardStep === 2 ? 'Set Sync Settings' : wizardStep === 3 ? 'Set Sync Settings' : wizardStep === 4 ? 'Set Sync Settings' : wizardStep === 5 ? 'Set Sync Settings' : 'Is This Right?'}</Text>
                     </View>
 
-                    {/* Steps */}
+                    {/* NEW Step 0: Product Creation Mode */}
                     {wizardStep === 0 && (
+                      <View style={{ paddingHorizontal: 0, paddingTop: 20 }}>
+                        <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>
+                          Choose how Anorha handles products that don't exist on other platforms
+                        </Text>
+
+                        {/* Option 1: Sync Everywhere */}
+                        <TouchableOpacity
+                          style={{
+                            borderWidth: 2,
+                            borderColor: productCreationMode === 'sync_everywhere' ? theme.colors.primary : '#E5E7EB',
+                            borderRadius: 16,
+                            padding: 20,
+                            marginBottom: 12,
+                            backgroundColor: productCreationMode === 'sync_everywhere' ? theme.colors.primary + '10' : '#fff',
+                          }}
+                          onPress={() => setProductCreationMode('sync_everywhere')}
+                        >
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                            <Boxes size={24} color={productCreationMode === 'sync_everywhere' ? theme.colors.primary : '#6B7280'} />
+                            <Text style={{ fontSize: 17, fontWeight: '700', color: theme.colors.text, marginLeft: 12, flex: 1 }}>
+                              Create Missing Everywhere
+                            </Text>
+                            <View style={{
+                              width: 24, height: 24, borderRadius: 12, borderWidth: 2,
+                              borderColor: productCreationMode === 'sync_everywhere' ? theme.colors.primary : '#E5E7EB',
+                              backgroundColor: productCreationMode === 'sync_everywhere' ? theme.colors.primary : 'transparent',
+                              alignItems: 'center', justifyContent: 'center'
+                            }}>
+                              {productCreationMode === 'sync_everywhere' && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' }} />}
+                            </View>
+                          </View>
+                          <Text style={{ color: theme.colors.textSecondary, fontSize: 14, lineHeight: 20 }}>
+                            Products on {platformName} will be created on all your other platforms automatically. One catalog, synced everywhere.
+                          </Text>
+                        </TouchableOpacity>
+
+                        {/* Option 2: Keep Separate */}
+                        <TouchableOpacity
+                          style={{
+                            borderWidth: 2,
+                            borderColor: productCreationMode === 'keep_separate' ? theme.colors.primary : '#E5E7EB',
+                            borderRadius: 16,
+                            padding: 20,
+                            marginBottom: 12,
+                            backgroundColor: productCreationMode === 'keep_separate' ? theme.colors.primary + '10' : '#fff',
+                          }}
+                          onPress={() => setProductCreationMode('keep_separate')}
+                        >
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                            <Unlink size={24} color={productCreationMode === 'keep_separate' ? theme.colors.primary : '#6B7280'} />
+                            <Text style={{ fontSize: 17, fontWeight: '700', color: theme.colors.text, marginLeft: 12, flex: 1 }}>
+                              Keep Separate
+                            </Text>
+                            <View style={{
+                              width: 24, height: 24, borderRadius: 12, borderWidth: 2,
+                              borderColor: productCreationMode === 'keep_separate' ? theme.colors.primary : '#E5E7EB',
+                              backgroundColor: productCreationMode === 'keep_separate' ? theme.colors.primary : 'transparent',
+                              alignItems: 'center', justifyContent: 'center'
+                            }}>
+                              {productCreationMode === 'keep_separate' && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' }} />}
+                            </View>
+                          </View>
+                          <Text style={{ color: theme.colors.textSecondary, fontSize: 14, lineHeight: 20 }}>
+                            Only sync products that already exist on both platforms. Unlinked products stay independent.
+                          </Text>
+                        </TouchableOpacity>
+
+                        {/* Continue button for step 0 */}
+                        <TouchableOpacity
+                          style={{
+                            backgroundColor: theme.colors.primary,
+                            borderRadius: 12,
+                            paddingVertical: 16,
+                            paddingHorizontal: 24,
+                            marginTop: 20,
+                            alignItems: 'center',
+                          }}
+                          onPress={() => setWizardStep(1)}
+                        >
+                          <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>
+                            Continue
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+
+                    {/* Step 1: Pool Assignment (was Step 0) */}
+                    {wizardStep === 1 && (
                       <View style={{ paddingHorizontal: 0, paddingTop: 20 }}>
                         <Text style={{ color: theme.colors.textSecondary, marginBottom: 16, textAlign: 'center' }}>
                           Assign each location to an inventory pool
@@ -3686,13 +3781,13 @@ const MappingReviewScreen = () => {
                               <Text style={{ fontWeight: '700', fontSize: 14, color: theme.colors.text, marginBottom: 12, textTransform: 'uppercase' }}>
                                 {connection?.DisplayName || platformName} Locations ({connectionLocations.length})
                               </Text>
-                              
+
                               {connectionLocations.map((location) => {
                                 const assignedPoolId = locationPoolAssignments[location.platformLocationId] || selectedPool;
                                 const assignedPool = pools.find(p => p.id === assignedPoolId);
-                                
+
                                 return (
-                                  <View 
+                                  <View
                                     key={location.platformLocationId}
                                     style={{
                                       borderWidth: 1,
@@ -3716,7 +3811,7 @@ const MappingReviewScreen = () => {
                                         )}
                                       </View>
                                     </View>
-                                    
+
                                     {/* Pool selector for this location */}
                                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                                       {pools.map((pool) => (
@@ -3737,16 +3832,16 @@ const MappingReviewScreen = () => {
                                             }));
                                           }}
                                         >
-                                          <Text style={{ 
-                                            fontSize: 13, 
+                                          <Text style={{
+                                            fontSize: 13,
                                             fontWeight: '600',
-                                            color: assignedPoolId === pool.id ? theme.colors.primary : theme.colors.textSecondary 
+                                            color: assignedPoolId === pool.id ? theme.colors.primary : theme.colors.textSecondary
                                           }}>
                                             {pool.name}
                                           </Text>
                                         </TouchableOpacity>
                                       ))}
-                                      
+
                                       {/* Create New Pool option */}
                                       <TouchableOpacity
                                         style={{
@@ -3770,10 +3865,10 @@ const MappingReviewScreen = () => {
                                         }}
                                       >
                                         <Icon name="plus" size={14} color={assignedPoolId === 'create-new' ? theme.colors.primary : theme.colors.textSecondary} />
-                                        <Text style={{ 
-                                          fontSize: 13, 
+                                        <Text style={{
+                                          fontSize: 13,
                                           fontWeight: '600',
-                                          color: assignedPoolId === 'create-new' ? theme.colors.primary : theme.colors.textSecondary 
+                                          color: assignedPoolId === 'create-new' ? theme.colors.primary : theme.colors.textSecondary
                                         }}>
                                           New Pool
                                         </Text>
@@ -3786,10 +3881,10 @@ const MappingReviewScreen = () => {
 
                             {/* Create New Pool Name Input - Show when any location assigned to create-new */}
                             {(selectedPool === 'create-new' || Object.values(locationPoolAssignments).includes('create-new')) && (
-                              <View style={{ 
-                                marginBottom: 16, 
-                                padding: 16, 
-                                backgroundColor: theme.colors.primary + '10', 
+                              <View style={{
+                                marginBottom: 16,
+                                padding: 16,
+                                backgroundColor: theme.colors.primary + '10',
                                 borderRadius: 12,
                                 borderWidth: 1,
                                 borderColor: theme.colors.primary + '30',
@@ -3877,7 +3972,7 @@ const MappingReviewScreen = () => {
                                       if (!poolLocationMap[poolId]) poolLocationMap[poolId] = [];
                                       poolLocationMap[poolId].push(locId);
                                     });
-                                    
+
                                     // Update each pool with its assigned locations
                                     const token = await ensureSupabaseJwt();
                                     for (const [poolId, locationIds] of Object.entries(poolLocationMap)) {
@@ -3907,23 +4002,23 @@ const MappingReviewScreen = () => {
                       </View>
                     )}
 
-                    {wizardStep === 1 && (
+                    {wizardStep === 2 && (
                       <View style={{ paddingTop: 20 }}>
                         <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Sync updates automatically or only on approval</Text>
                         <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
                           <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: syncMode === 'auto' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setSyncMode('auto')}>
-                            
-                            <View style={{marginBottom: 12}}>
+
+                            <View style={{ marginBottom: 12 }}>
                               <Sparkles width={32} height={32}></Sparkles>
                             </View>
                             <Text style={{ fontWeight: '600', color: theme.colors.text }}>Auto</Text>
                             <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>(timestamp-based)</Text>
                           </TouchableOpacity>
-                          <TouchableOpacity style={{ flex: 1,flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: syncMode === 'manual' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setSyncMode('manual')}>
-                            <View style={{marginBottom: 12}}>
+                          <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: syncMode === 'manual' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setSyncMode('manual')}>
+                            <View style={{ marginBottom: 12 }}>
                               <Hammer width={32} height={32}></Hammer>
                             </View>
-                        
+
                             <Text style={{ fontWeight: '600', color: theme.colors.text }}>Manual</Text>
                             <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>(Manual Approval)</Text>
                           </TouchableOpacity>
@@ -3931,20 +4026,20 @@ const MappingReviewScreen = () => {
                       </View>
                     )}
 
-                    {wizardStep === 2 && (
+                    {wizardStep === 3 && (
                       <View style={{ paddingTop: 20 }}>
                         <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Choose how auction listings behave (FB & Ebay) </Text>
                         <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
                           <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: delistMode === 'auto' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setDelistMode('auto')}>
-                            <View style={{marginBottom: 12}}>
-                              <Unlink width={32} height={32}></Unlink>  
+                            <View style={{ marginBottom: 12 }}>
+                              <Unlink width={32} height={32}></Unlink>
                             </View>
                             <Text style={{ fontWeight: '600', color: theme.colors.text }}>Auto Delist</Text>
                             <Text style={{ textAlign: 'center', color: theme.colors.textSecondary, marginTop: 4 }}>Sold listings are automatically removed</Text>
                           </TouchableOpacity>
                           <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: delistMode === 'manual' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setDelistMode('manual')}>
-                            <View style={{marginBottom: 12}}>
-                              <Link width={32} height={32}></Link>  
+                            <View style={{ marginBottom: 12 }}>
+                              <Link width={32} height={32}></Link>
                             </View>
                             <Text style={{ fontWeight: '600', color: theme.colors.text }}>Manual Delist</Text>
                             <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>Sold listings stay up</Text>
@@ -3953,7 +4048,7 @@ const MappingReviewScreen = () => {
                       </View>
                     )}
 
-                    {wizardStep === 3 && (
+                    {wizardStep === 4 && (
                       <View style={{ paddingTop: 20 }}>
                         <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Adjust prices by % per platform (Optional)</Text>
                         <View style={{ marginBottom: 24 }}>
@@ -3989,7 +4084,7 @@ const MappingReviewScreen = () => {
                       </View>
                     )}
 
-                    {wizardStep === 4 && (
+                    {wizardStep === 5 && (
                       <View style={{ paddingTop: 20 }}>
                         <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Adjust inventory buffer per platform (Optional)</Text>
                         <View style={{ marginBottom: 24 }}>
@@ -4003,8 +4098,8 @@ const MappingReviewScreen = () => {
                                 </View>
                               </View>
                               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                                <TouchableOpacity style={{ padding: 8 }} onPress={() => 
-                                  setInventoryBuffer(prev => ({ ...prev, [connection.Id]: Math.max(0, (prev[connection.Id] || 0) - 1) }))}> 
+                                <TouchableOpacity style={{ padding: 8 }} onPress={() =>
+                                  setInventoryBuffer(prev => ({ ...prev, [connection.Id]: Math.max(0, (prev[connection.Id] || 0) - 1) }))}>
                                   <Icon name="minus" size={18} />
                                 </TouchableOpacity>
                                 <TextInput
@@ -4017,8 +4112,8 @@ const MappingReviewScreen = () => {
                                   keyboardType="numeric"
                                   placeholder="0"
                                 />
-                                <TouchableOpacity style={{ padding: 8 }} onPress={() => 
-                                  setInventoryBuffer(prev => ({ ...prev, [connection.Id]: (prev[connection.Id] || 0) + 1 }))}> 
+                                <TouchableOpacity style={{ padding: 8 }} onPress={() =>
+                                  setInventoryBuffer(prev => ({ ...prev, [connection.Id]: (prev[connection.Id] || 0) + 1 }))}>
                                   <Icon name="plus" size={18} />
                                 </TouchableOpacity>
                               </View>
@@ -4028,18 +4123,18 @@ const MappingReviewScreen = () => {
                       </View>
                     )}
 
-                    {wizardStep === 5 && (
+                    {wizardStep === 6 && (
                       <View style={{ paddingTop: 20 }}>
                         <View style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 24 }}>
                           <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Matched/New/Ignored</Text>
                           <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>{counts.matched} matched • {counts.review} review → new • {counts.ignore} ignored</Text>
-                          
+
                           <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Selected Platforms</Text>
                           <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>{selectedPlatformsState.join(', ') || 'None'}</Text>
-                          
+
                           <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Sync Settings</Text>
                           <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>Mode: {syncMode === 'auto' ? 'Auto' : 'Manual'} • Delist: {delistMode === 'auto' ? 'Auto' : 'Manual'}</Text>
-                          
+
                           {Object.keys(priceBuffer).length > 0 && (
                             <>
                               <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Price Adjustments</Text>
@@ -4053,8 +4148,8 @@ const MappingReviewScreen = () => {
                           )}
                         </View>
                         <View style={{ marginTop: 20 }}>
-                          <Button 
-                            title="Complete Import" 
+                          <Button
+                            title="Complete Import"
                             loading={isSubmitting}
                             onPress={async () => {
                               setIsSubmitting(true);
@@ -4073,7 +4168,7 @@ const MappingReviewScreen = () => {
                                   }));
 
                                 console.log('[MappingReview] Confirming mappings:', confirmedMappings.length);
-                                
+
                                 // Call the confirm-mappings endpoint (mappings only, no sync rules)
                                 const token = await ensureSupabaseJwt();
                                 const confirmResponse = await fetch(`https://api.sssync.app/api/sync/connections/${connectionId}/confirm-mappings`, {
@@ -4096,20 +4191,22 @@ const MappingReviewScreen = () => {
 
                                 // Step 2: Update quick settings with wizard selections
                                 // CRITICAL: Include propagateCreates and propagateChanges to enable cross-platform sync
+                                // productCreationMode controls whether products sync to other platforms
                                 const quickSettings = {
                                   poolId: selectedPool || undefined,
                                   autoSyncMode: syncMode === 'auto',
                                   autoDelist: delistMode === 'auto',
                                   priceAdjustment: priceBuffer,
                                   inventoryBuffer: inventoryBuffer,
-                                  // Enable cross-platform product propagation by default
+                                  // Cross-platform product propagation based on wizard Step 0 choice
                                   syncRules: {
-                                    propagateCreates: true,  // Sync new products to other platforms
+                                    propagateCreates: productCreationMode === 'sync_everywhere',  // Create products on all platforms
                                     propagateUpdates: true,  // Sync updates to other platforms
                                     propagateDeletes: false, // Don't auto-delete (safer default)
                                     propagateInventory: true, // Sync inventory changes
                                     syncInventory: true,
                                     syncPricing: true,
+                                    productCreationMode: productCreationMode, // Store the raw choice too
                                   }
                                 };
 
@@ -4162,27 +4259,28 @@ const MappingReviewScreen = () => {
                               } finally {
                                 setIsSubmitting(false);
                               }
-                            }} 
+                            }}
                           />
                         </View>
                       </View>
                     )}
 
-                    {/* Nav controls - only show for steps 1-5 */}
+                    {/* Nav controls - only show for steps 1-6 */}
                     {wizardStep > 0 && (
                       <>
                         <Text style={{ color: theme.colors.textSecondary, textAlign: 'center', marginTop: 20, marginBottom: 8 }}>
-                          {wizardStep === 1 && 'Auto/Manual'}
-                          {wizardStep === 2 && 'Auto Delist'}
-                          {wizardStep === 3 && 'Price Buffer'}
-                          {wizardStep === 4 && 'Inventory Buffer'}
-                          {wizardStep === 5 && 'Review'}
+                          {wizardStep === 1 && 'Pool Assignment'}
+                          {wizardStep === 2 && 'Auto/Manual Sync'}
+                          {wizardStep === 3 && 'Auto Delist'}
+                          {wizardStep === 4 && 'Price Buffer'}
+                          {wizardStep === 5 && 'Inventory Buffer'}
+                          {wizardStep === 6 && 'Review'}
                         </Text>
                         <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 20 }}>
                           <TouchableOpacity
                             onPress={() => {
                               if (wizardStep === 1) {
-                                // If going back from step 1, allow reselecting platforms
+                                // If going back from step 1 (pool), go to step 0 (product creation mode)
                                 setWizardStep(0);
                               } else {
                                 setWizardStep((s) => Math.max(1, s - 1));
@@ -4193,7 +4291,7 @@ const MappingReviewScreen = () => {
                             <Icon name="chevron-left" size={22} />
                           </TouchableOpacity>
                           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                            {[1, 2, 3, 4, 5].map(i => (
+                            {[1, 2, 3, 4, 5, 6].map(i => (
                               <View
                                 key={`dot-${i}`}
                                 style={{
@@ -4206,9 +4304,9 @@ const MappingReviewScreen = () => {
                             ))}
                           </View>
                           <TouchableOpacity
-                            disabled={wizardStep === 5}
-                            onPress={() => setWizardStep((s) => Math.min(5, s + 1))}
-                            style={{ padding: 10, opacity: wizardStep === 5 ? 0.5 : 1 }}
+                            disabled={wizardStep === 6}
+                            onPress={() => setWizardStep((s) => Math.min(6, s + 1))}
+                            style={{ padding: 10, opacity: wizardStep === 6 ? 0.5 : 1 }}
                           >
                             <Icon name="chevron-right" size={22} />
                           </TouchableOpacity>

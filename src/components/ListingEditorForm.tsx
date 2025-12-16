@@ -39,6 +39,9 @@ type Props = {
   // Optional publish-ignore controls
   onToggleIgnorePlatform?: (platformKey: string, ignored: boolean) => void;
   isPlatformIgnored?: (platformKey: string) => boolean;
+  // Live external updates (green indicator for values changed while editing)
+  externalUpdates?: Record<string, { value?: any; quantity?: number; price?: number; updatedAt: number }>;
+  onAdoptExternalUpdate?: (key: string, value: any) => void;
 };
 
 export type ListingEditorFormRef = { openPlatformPicker: () => void };
@@ -125,7 +128,7 @@ export const PRESET_OPTIONS = [
   }
 ];
 
-function ListingEditorFormInner({ platforms, updateCounter, images, platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false }: Props, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, updateCounter, images, platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate }: Props, ref: React.Ref<ListingEditorFormRef>) {
   const platformKeys = useMemo(() => {
     const keys = Object.keys(platforms || {}).filter((k) => typeof k === 'string' && k.trim().length > 0);
     console.log('[ListingEditorForm] platformKeys:', keys);

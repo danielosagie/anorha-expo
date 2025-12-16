@@ -11,7 +11,6 @@ import {
   Modal,
   Dimensions,
   Clipboard,
-  Image,
   Switch,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -54,15 +53,6 @@ interface PendingInvite {
   inviteLink: string;
 }
 
-interface TeamMember {
-  userId: string;
-  email: string;
-  firstName?: string;
-  lastName?: string;
-  imageUrl?: string;
-  role: 'org:admin' | 'org:member' | 'partner';
-  assignedPoolIds: string[];
-}
 
 
 interface LocationsManagerV2Props {
@@ -75,6 +65,7 @@ interface LocationsManagerV2Props {
     IsEnabled?: boolean;
   }>;
   disableScroll?: boolean;
+  onPressConnect?: () => void;
 }
 
 interface LocationPool {
@@ -149,14 +140,112 @@ interface DeletePoolState {
   loading: boolean;
 }
 
-const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platformConnections, disableScroll = false }) => {
+const PartnerWelcomeOverlay: React.FC<{
+  visible: boolean;
+  partnerName: string;
+  onConnect: () => void;
+}> = ({ visible, partnerName, onConnect }) => {
   const theme = useTheme();
+
+  return (
+    <Modal visible={visible} transparent animationType="fade">
+      <View style={{
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.7)',
+        justifyContent: 'center',
+        padding: 20,
+      }}>
+        <View style={{
+          backgroundColor: '#fff',
+          borderRadius: 24,
+          padding: 32,
+          alignItems: 'center',
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.3,
+          shadowRadius: 10,
+          elevation: 10,
+        }}>
+          <View style={{
+            width: 80,
+            height: 80,
+            borderRadius: 40,
+            backgroundColor: '#e6f4ea',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginBottom: 24,
+          }}>
+            <Icon name="handshake" size={40} color="#647653" />
+          </View>
+
+          <Text style={{
+            fontSize: 24,
+            fontWeight: 'bold',
+            textAlign: 'center',
+            marginBottom: 12,
+            color: '#111',
+          }}>
+            Welcome to {partnerName}'s Network!
+          </Text>
+
+          <Text style={{
+            fontSize: 16,
+            color: '#666',
+            textAlign: 'center',
+            lineHeight: 24,
+            marginBottom: 32,
+          }}>
+            To start selling these products, you need to connect your own POS or E-commerce platform.
+          </Text>
+
+          <TouchableOpacity
+            onPress={onConnect}
+            style={{
+              backgroundColor: '#93C822',
+              paddingVertical: 16,
+              paddingHorizontal: 32,
+              borderRadius: 12,
+              width: '100%',
+              alignItems: 'center',
+              shadowColor: '#93C822',
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.3,
+              shadowRadius: 8,
+              elevation: 4,
+            }}
+          >
+            <Text style={{
+              color: '#fff',
+              fontSize: 18,
+              fontWeight: 'bold',
+            }}>
+              Connect Platform
+            </Text>
+          </TouchableOpacity>
+
+          <View style={{ marginTop: 24, flexDirection: 'row', gap: 12, opacity: 0.6 }}>
+            <ShopifySvg width={24} height={24} />
+            <SquareSvg width={24} height={24} />
+            <CloverSvg width={24} height={24} />
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platformConnections, disableScroll = false, onPressConnect }) => {
+  const theme = useTheme();
+  const [showWelcomeOverlay, setShowWelcomeOverlay] = useState(false);
+  const [partnerNameForOverlay, setPartnerNameForOverlay] = useState('');
+
+
 
   // View mode state machine
   const [viewMode, setViewMode] = useState<ViewMode>('default');
   const [manageTab, setManageTab] = useState<ManageTab>('pool');
-  // Sub-tab for default view: 'locations' | 'partners' | 'team'
-  const [activeTab, setActiveTab] = useState<'locations' | 'partners' | 'team'>('locations');
+  // Sub-tab for default view: 'locations' | 'partners'
+  const [activeTab, setActiveTab] = useState<'locations' | 'partners'>('locations');
 
   // List state (top card)
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -164,9 +253,26 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
   const [singleLocations, setSingleLocations] = useState<DbPlatformLocation[]>([]);
   const [partnerships, setPartnerships] = useState<Partnership[]>([]);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [selectedListItem, setSelectedListItem] = useState<{ kind: 'pool' | 'single' | null; id?: string | null }>({ kind: null, id: null });
   const [resolvedOrgId, setResolvedOrgId] = useState<string | null>(orgId || null);
+
+  // Implicit Detection of FTUX Partner
+  useEffect(() => {
+    // Only run if we have loaded partnerships and it's not empty
+    if (!isLoading && partnerships.length > 0) {
+      // Check if user has NO active working connections
+      const hasWorkingConnection = platformConnections.some(c =>
+        ['active', 'ready_to_sync', 'scanning', 'syncing'].includes(c.Status?.toLowerCase() || '')
+      );
+
+      if (!hasWorkingConnection) {
+        // Get the partner name from the first partnership
+        const firstPartner = partnerships[0];
+        setPartnerNameForOverlay(firstPartner.partnerOrgName || firstPartner.partnerEmail);
+        setShowWelcomeOverlay(true);
+      }
+    }
+  }, [isLoading, partnerships, platformConnections]);
 
   // Available locations for creating/editing pools
   const [available, setAvailable] = useState<TransformedLocationGroup[]>([]);
@@ -247,11 +353,10 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
 
       console.log('[LocationsManagerV2] Fetching data for org:', resolvedOrgId);
 
-      const [poolsRes, partnersRes, invitesRes, membersRes] = await Promise.all([
+      const [poolsRes, partnersRes, invitesRes] = await Promise.all([
         fetch(`${API_BASE_URL}/api/pools/org/${resolvedOrgId}`, { headers }),
         fetch(`${API_BASE_URL}/api/cross-org/partnerships?orgId=${resolvedOrgId}`, { headers }).catch(e => { console.error('Partners fetch failed', e); return null; }),
         fetch(`${API_BASE_URL}/api/cross-org/invites/pending?orgId=${resolvedOrgId}`, { headers }).catch(e => { console.error('Invites fetch failed', e); return null; }),
-        fetch(`${API_BASE_URL}/api/organizations/${resolvedOrgId}/members`, { headers }).catch(e => { console.error('Members fetch failed', e); return null; })
       ]);
 
       // Handle Pools
@@ -279,22 +384,6 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
       } else {
         if (invitesRes) console.error('[LocationsManagerV2] Invites fetch failed', invitesRes.status);
         setPendingInvites([]);
-      }
-
-      // Handle Team Members (if available endpoint exists on backend/mobile bridge)
-      // Note: Mobile might not have the full Clerk-based member list endpoint. 
-      // We'll try to use a generic one or skip if fails.
-      if (membersRes?.ok) {
-        // This endpoint might not exist yet on backend for mobile. 
-        // If it fails, teamMembers will be empty.
-        // For now, we assume standard array of members.
-        try {
-          const membersData = await membersRes.json();
-          // Map to TeamMember if needed, or assume backend returns correct shape
-          // If backend returns Clerk shape, we might need transformation.
-          // For now, simple set.
-          setTeamMembers(Array.isArray(membersData) ? membersData : []);
-        } catch (e) { console.error('Error parsing members', e); }
       }
 
       // Load single platform locations directly from DB (fast path)
@@ -995,20 +1084,6 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
             <Text style={{ fontSize: 13, fontWeight: activeTab === 'locations' ? '600' : '400', color: '#333' }}>Pools</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            onPress={() => setActiveTab('team')}
-            style={{
-              paddingHorizontal: 12,
-              paddingVertical: 6,
-              borderRadius: 6,
-              backgroundColor: activeTab === 'team' ? '#fff' : 'transparent',
-              shadowColor: activeTab === 'team' ? '#000' : 'transparent',
-              shadowOpacity: activeTab === 'team' ? 0.1 : 0,
-              shadowRadius: 2,
-            }}
-          >
-            <Text style={{ fontSize: 13, fontWeight: activeTab === 'team' ? '600' : '400', color: '#333' }}>Team</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
             onPress={() => setActiveTab('partners')}
             style={{
               paddingHorizontal: 12,
@@ -1109,47 +1184,6 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
             ))
           )}
         </ScrollView>
-      ) : activeTab === 'team' ? (
-        <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-            <Text style={styles.sectionTitle}>Team Members</Text>
-            <TouchableOpacity style={{ padding: 4 }} onPress={loadList}>
-              <Icon name="refresh" size={20} color={theme.colors.primary} />
-            </TouchableOpacity>
-          </View>
-
-          {teamMembers.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Icon name="account-group" size={48} color="#ccc" />
-              <Text style={styles.emptyStateTitle}>No Members Found</Text>
-              <Text style={styles.emptyStateSubtitle}>
-                Members of your organization will appear here.
-              </Text>
-            </View>
-          ) : (
-            teamMembers.map((m) => (
-              <View key={m.userId} style={styles.listItem}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                  {m.imageUrl ? (
-                    <Image source={{ uri: m.imageUrl }} style={{ width: 32, height: 32, borderRadius: 16 }} />
-                  ) : (
-                    <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#eee', alignItems: 'center', justifyContent: 'center' }}>
-                      <Text style={{ fontWeight: 'bold', color: '#666' }}>{m.firstName?.[0] || m.email[0]}</Text>
-                    </View>
-                  )}
-                  <View>
-                    <Text style={styles.listItemText}>{m.firstName} {m.lastName}</Text>
-                    <Text style={{ fontSize: 12, color: '#999' }}>{m.email}</Text>
-                  </View>
-                </View>
-                <View style={{ backgroundColor: '#f0f0f0', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 }}>
-                  <Text style={{ fontSize: 10, color: '#666' }}>{m.role?.replace('org:', '')}</Text>
-                </View>
-              </View>
-            ))
-          )}
-        </ScrollView>
-
       ) : pools.length === 0 && groupedSingleLocations.length === 0 ? (
         // Empty state for Locations
         <View style={styles.emptyState}>
@@ -1218,6 +1252,16 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
         <Icon name="plus-circle" size={18} color="#fff" />
         <Text style={styles.confirmBtnText}>Create Location/Group</Text>
       </TouchableOpacity>
+
+      <PartnerWelcomeOverlay
+        visible={showWelcomeOverlay}
+        partnerName={partnerNameForOverlay}
+        onConnect={() => {
+          setShowWelcomeOverlay(false);
+          if (onPressConnect) onPressConnect();
+          else Alert.alert('Connection', 'Please go to Settings > Connections to connect a platform.');
+        }}
+      />
     </View >
   );
 

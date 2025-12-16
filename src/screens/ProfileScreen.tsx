@@ -705,7 +705,7 @@ const ProfileScreen = () => {
         return;
       }
 
-      const response = await fetch(`${SSSYNC_API_BASE_URL}/auth/billing/login-link`, {
+      const response = await fetch(`${SSSYNC_API_BASE_URL}/api/auth/billing/login-link`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -732,9 +732,41 @@ const ProfileScreen = () => {
     }
   };
 
-  const handleOpenTeams = () => {
-    // Navigate to the Team screen for managing team members and invites
-    (navigation as any).navigate('Team');
+  const handleOpenTeams = async () => {
+    // Open the webapp's team page in a browser for managing team members and invites
+    try {
+      const token = await getApiToken();
+      if (!token) {
+        Alert.alert('Error', 'Not authenticated. Please log in again.');
+        return;
+      }
+
+      // Generate a magic login link that redirects to /team after sign-in
+      const response = await fetch(`${SSSYNC_API_BASE_URL}/api/auth/billing/login-link`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to get login link: ${response.status}`);
+      }
+
+      const { url } = await response.json();
+      if (!url) {
+        throw new Error('No URL received from server');
+      }
+
+      // Replace /billing with /team in the redirect URL
+      const teamUrl = url.replace('/billing', '/team');
+
+      await WebBrowser.openBrowserAsync(teamUrl);
+    } catch (error: any) {
+      console.error('Failed to open team page:', error);
+      Alert.alert('Error', `Failed to open team page: ${error.message}`);
+    }
   };
 
   // --- NEW: Logic for Guided Shopify Flow Step 4 (Open Browser) ---
@@ -1220,7 +1252,7 @@ const ProfileScreen = () => {
     {
       icon: 'credit-card',
       title: 'Subscription & Billing',
-      badge: entitlements?.planName || 'Free',
+
       onPress: () => handleOpenBilling()
     },
     {
@@ -1615,7 +1647,7 @@ const ProfileScreen = () => {
 
                     return (
                       <View key={connection.Id} style={styles.integrationItem}>
-                        
+
 
                         {/* Left column: icon + name + status/timestamp */}
                         <View style={styles.integrationLeft}>
@@ -1685,7 +1717,7 @@ const ProfileScreen = () => {
 
                         {/* Right column: action buttons (non-edit mode only) */}
                         {!isEditMode && connection && (
-                          
+
                           <View style={styles.connectionActions}>
                             {/* Pending: Start Scan */}
                             {connection.Status === CONNECTION_STATUS.PENDING && (
@@ -1838,6 +1870,7 @@ const ProfileScreen = () => {
               orgId={currentOrg?.id}
               platformConnections={platformConnections}
               disableScroll={true}
+              onPressConnect={() => overlay.show()}
             />
           )}
         </Card>

@@ -54,6 +54,7 @@ export interface DashboardInsight {
     title?: string;
     url?: string;
     snippet?: string;
+    query?: string; // SQL query for database sources
   }>;
   suggestionOnly?: boolean;
   suggestionText?: string;
@@ -85,6 +86,7 @@ interface UseOrgNudgesReturn {
   loading: boolean;
   error: string | null;
   lastUpdated: string | null;
+  cacheExpiresAt: string | null; // ISO timestamp for refresh timer
   refetch: () => Promise<void>;
   forceRefresh: () => Promise<void>;
 }
@@ -98,6 +100,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [cacheExpiresAt, setCacheExpiresAt] = useState<string | null>(null);
   const prevOrgIdRef = useRef<string | undefined>(undefined);
 
   const fetchNudges = useCallback(async () => {
@@ -168,6 +171,10 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
 
       setInsight(data.insight);
       setLastUpdated(data.timestamp);
+      // Calculate cache expiration (6 hours from insight timestamp)
+      const cacheMs = 6 * 60 * 60 * 1000; // 6 hours
+      const expiresAt = new Date(new Date(data.timestamp).getTime() + cacheMs);
+      setCacheExpiresAt(expiresAt.toISOString());
       setError(null);
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : 'Failed to fetch insights';
@@ -244,6 +251,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
     loading,
     error,
     lastUpdated,
+    cacheExpiresAt,
     refetch: fetchNudges,
     forceRefresh,
   };

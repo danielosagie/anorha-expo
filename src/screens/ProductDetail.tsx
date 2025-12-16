@@ -219,6 +219,13 @@ const ProductDetailScreen = observer(
     const allProductVariantsRef = useRef<any[]>([]);
     // ⚡ Store platform location names map for consistent location name resolution
     const [platformLocationNames, setPlatformLocationNames] = useState<Map<string, string>>(new Map());
+    // ⚡ CRITICAL FIX: Store ALL platform locations (not just those with inventory)
+    // This ensures locations without inventory still appear in the UI
+    const [allPlatformLocations, setAllPlatformLocations] = useState<Array<{
+      PlatformConnectionId: string;
+      PlatformLocationId: string;
+      Name: string | null;
+    }>>([]);
 
     // Keep ref in sync with state
     useEffect(() => {
@@ -394,6 +401,8 @@ const ProductDetailScreen = observer(
             console.log('[ProductDetail] ✅ Loaded', platformLocs?.length || 0, 'location names from DB');
             // ⚡ Store in state for access by buildPlatformLocations
             setPlatformLocationNames(new Map(locationNameMap));
+            // ⚡ CRITICAL FIX: Also store full location records for building locations list
+            setAllPlatformLocations(platformLocs || []);
           }
         }
 
@@ -688,83 +697,116 @@ const ProductDetailScreen = observer(
 
     // Helper to build platform locations from connections
     const buildPlatformLocations = useCallback(() => {
-      // ⚡ OPTIMIZED: Build from already-loaded grouped inventory state
-      // No additional Supabase query needed - data was already fetched in loadPlatformData
+      // ⚡ CRITICAL FIX: Start with ALL platform locations from PlatformLocations table
+      // Not just those with inventory records - this ensures new locations show up immediately
       const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string; platformType: string }>> = {};
 
-      // Helper to get best available location name (without platform prefix - logos will show platform)
-      const resolveName = (locationId: string, connectionId: string, fallbackName: string): string => {
-        // Try full key first (most specific)
-        const fullKey = `${connectionId}-${locationId}`;
-        if (platformLocationNames.has(fullKey)) {
-          return platformLocationNames.get(fullKey)!;
+      // Build from allPlatformLocations which contains ALL locations for all connections
+      // This is the source of truth for which locations exist
+      allPlatformLocations.forEach(loc => {
+        const connection = connections.find(c => c.Id === loc.PlatformConnectionId);
+        if (!connection) {
+          console.warn('[ProductDetail] No connection found for location:', loc.PlatformConnectionId);
+          return;
         }
-        // Try just location ID
-        if (platformLocationNames.has(locationId)) {
-          return platformLocationNames.get(locationId)!;
-        }
-        // Use provided fallback (from groupedInventory)
-        if (fallbackName && fallbackName !== 'Unnamed Location' && !fallbackName.includes('...')) {
-          return fallbackName;
-        }
-        // Last resort fallbacks - cleaner without platform prefix (logo will show platform)
-        if (locationId?.includes('gid://shopify/Location/')) {
-          const locNumber = locationId.split('/').pop();
-          return `#${locNumber}`;
-        }
-        if (locationId && locationId.length >= 10 && /^[A-Z0-9]+$/.test(locationId)) {
-          return `(${locationId.substring(0, 6)}...)`;
-        }
-        return fallbackName || locationId || 'Default Location';
-      };
 
-      // Build from groupedInventory which contains all locations already loaded from DB
+        const platform = connection.PlatformType?.toLowerCase();
+        if (!platform) return;
+
+        if (!locsByPlatform[platform]) locsByPlatform[platform] = [];
+
+        const locationId = loc.PlatformLocationId;
+
+        // STRICT FILTERING: Prevent cross-contamination of locations
+        if (platform === 'shopify') {
+          // Shopify IDs are either numeric string or GID
+          const isLikeSquare = /^[A-Z0-9]{8,}$/.test(locationId) && !/^\d+$/.test(locationId);
+          if (isLikeSquare) {
+            console.warn(`[ProductDetail] Filtered out likely-Square location from Shopify list: ${locationId}`);
+            return;
+          }
+        } else if (platform === 'square') {
+          // Square IDs shouldn't look like Shopify GIDs
+          if (locationId.includes('gid://shopify/')) {
+            console.warn(`[ProductDetail] Filtered out likely-Shopify location from Square list: ${locationId}`);
+            return;
+          }
+        }
+
+        // Check if already exists
+        const exists = locsByPlatform[platform].some(l => l.id === locationId);
+        if (!exists) {
+          // Get name from stored location name map first, then fallback
+          const fullKey = `${loc.PlatformConnectionId}-${locationId}`;
+          let name = loc.Name || platformLocationNames.get(fullKey) || platformLocationNames.get(locationId) || 'Unnamed Location';
+
+          // Clean up generic fallback names
+          if (name === 'Unnamed Location' || name.includes('...')) {
+            if (locationId?.includes('gid://shopify/Location/')) {
+              const locNumber = locationId.split('/').pop();
+              name = `#${locNumber}`;
+            } else if (locationId && locationId.length >= 10 && /^[A-Z0-9]+$/.test(locationId)) {
+              name = `(${locationId.substring(0, 6)}...)`;
+            }
+          }
+
+          const connectionName = connection.DisplayName || `${connection.PlatformType} Account`;
+
+          locsByPlatform[platform].push({
+            id: locationId,
+            name,
+            connectionId: loc.PlatformConnectionId,
+            connectionName,
+            platformType: platform
+          });
+        }
+      });
+
+      // Also add any locations from groupedInventory that might not be in allPlatformLocations
+      // (edge case: inventory exists but location sync hasn't happened yet)
+      // CRITICAL: Apply STRICT platform ID filtering here too!
       Object.values(groupedInventory).forEach(platformGroup => {
         const platform = platformGroup.platformType?.toLowerCase();
         if (!platform) return;
 
         if (!locsByPlatform[platform]) locsByPlatform[platform] = [];
 
-
         platformGroup.locations.forEach(loc => {
-          // STRICT FILTERING: Prevent cross-contamination of locations
-          // Sometimes connections might be mislabeled or data mixed
-          const locId = loc.locationId || '';
+          const locationId = loc.locationId || '';
 
+          // STRICT FILTERING - Same as primary loop
           if (platform === 'shopify') {
-            // Shopify IDs are either numeric string or GID
-            // If it looks like a Square ID (alphanumeric, long, no slashes), skip it
-            const isLikeSquare = /^[A-Z0-9]{8,}$/.test(locId) && !/^\d+$/.test(locId);
+            const isLikeSquare = /^[A-Z0-9]{8,}$/.test(locationId) && !/^\d+$/.test(locationId);
             if (isLikeSquare) {
-              console.warn(`[ProductDetail] Filtered out likely-Square location from Shopify list: ${locId}`);
+              console.warn(`[ProductDetail] Fallback: Filtered out likely-Square location from Shopify: ${locationId}`);
               return;
             }
           } else if (platform === 'square') {
-            // Square IDs shouldn't look like Shopify GIDs
-            if (locId.includes('gid://shopify/')) {
-              console.warn(`[ProductDetail] Filtered out likely-Shopify location from Square list: ${locId}`);
+            if (locationId.includes('gid://shopify/')) {
+              console.warn(`[ProductDetail] Fallback: Filtered out likely-Shopify location from Square: ${locationId}`);
               return;
             }
           }
 
-          // CRITICAL: Use locationId (PlatformLocationId) not id (InventoryLevel UUID)
-          // This must match the keys in variant.inventoryByLocation
-          const exists = locsByPlatform[platform].some(l => l.id === loc.locationId);
+          const exists = locsByPlatform[platform].some(l => l.id === locationId);
           if (!exists) {
-            const resolvedName = resolveName(loc.locationId, loc.platformConnectionId, loc.locationName);
+            console.log('[ProductDetail] Adding location from inventory that was missing from PlatformLocations:', locationId);
             locsByPlatform[platform].push({
-              id: loc.locationId,  // Use PlatformLocationId, not InventoryLevel ID
-              name: resolvedName,
+              id: locationId,
+              name: loc.locationName,
               connectionId: loc.platformConnectionId,
               connectionName: platformGroup.displayName,
-              platformType: platform  // Include platform type for logo rendering
+              platformType: platform
             });
           }
         });
       });
 
+      console.log('[ProductDetail] buildPlatformLocations result:',
+        Object.entries(locsByPlatform).map(([p, locs]) => `${p}: ${locs.length} locations`).join(', '));
+
       return locsByPlatform;
-    }, [groupedInventory, platformLocationNames]);
+    }, [allPlatformLocations, connections, groupedInventory, platformLocationNames]);
 
     // Auto-save function with proper API call
     // Note: Pricing validation is flexible - either flat price OR all variants have prices
@@ -1368,8 +1410,25 @@ const ProductDetailScreen = observer(
       // and allProductVariants (loaded from ProductVariants table)
       // NOT variantPricing which comes from non-existent VariantPricing table
 
+      // ⚡ CRITICAL FIX: Filter out 'base' variants - they don't have inventory
+      // Only 'option' variants (or 'flat' products without options) have actual inventory
+      // Base variants are just metadata containers for the product structure
+      const displayableVariants = (allProductVariants || []).filter((v: any) => {
+        // Keep 'option' variants (have inventory)
+        if (v.VariantType === 'option') return true;
+        // Keep 'flat' variants (single-variant products)
+        if (v.VariantType === 'flat' || !v.VariantType) return true;
+        // Filter out 'base' variants (no inventory, just a container)
+        if (v.VariantType === 'base') {
+          console.log('[ProductDetail] Filtering out base variant:', v.Sku || v.Id);
+          return false;
+        }
+        return true;
+      });
+      console.log('[ProductDetail] Filtered variants: all=', allProductVariants?.length, 'displayable=', displayableVariants.length);
+
       // Hydrate variants with inventory data from REAL database data
-      const hydratedVariants = hydrateInventoryFromDB(allProductVariants || [], rawInventoryLevels || []);
+      const hydratedVariants = hydrateInventoryFromDB(displayableVariants, rawInventoryLevels || []);
 
       // Build per-platform locations from rawInventoryLevels + connections
       // ⚡ CRITICAL FIX: Don't use groupedInventory (may not be populated yet)

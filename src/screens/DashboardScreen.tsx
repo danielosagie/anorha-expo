@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useContext } from 'react';
+import React, { useMemo, useState, useEffect, useContext, useCallback } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, Dimensions, Image, Modal, Pressable } from 'react-native';
 import PagerView from 'react-native-pager-view';
 import Animated, { FadeInUp } from 'react-native-reanimated';
@@ -160,7 +160,14 @@ const DashboardScreen = () => {
   const [sourcesVisible, setSourcesVisible] = useState(false);
 
   // AI-generated insights
-  const { insight, loading: loadingInsight, error: insightError, refetch: refetchInsight, forceRefresh: forceRefreshInsight } = useOrgNudges(currentOrg?.id);
+  const { insight, loading: loadingInsight, error: insightError, cacheExpiresAt: insightCacheExpiresAt, refetch: refetchInsight, forceRefresh: forceRefreshInsight } = useOrgNudges(currentOrg?.id);
+
+  // Handle insight feedback (thumbs up/down) - log for now, can extend to API
+  const handleInsightFeedback = useCallback((feedback: 'up' | 'down', insightHeadline: string) => {
+    console.log(`[Dashboard] Insight feedback: ${feedback} for "${insightHeadline}"`);
+    // TODO: Send to API to affect future insight generation
+    // Example: POST /api/insights/feedback { orgId, feedback, insightHeadline }
+  }, []);
 
   // Guard against legacy insight shape without DIN fields
   const safeInsight = useMemo(() => {
@@ -518,7 +525,9 @@ const DashboardScreen = () => {
     fetchActivity();
     fetchPoolPerformance();
     fetchLocationPerformance();
-  }, [currentOrg?.id, isOrgLoading]);
+    // Ensure insights are fetched when org becomes available
+    refetchInsight();
+  }, [currentOrg?.id, isOrgLoading, refetchInsight]);
 
   // Check for connections ready to sync
   const readyConnection = useMemo(() => {
@@ -690,6 +699,8 @@ const DashboardScreen = () => {
                         error={insightError}
                         onAction={handleInsightAction}
                         onRefresh={forceRefreshInsight}
+                        onFeedback={handleInsightFeedback}
+                        cacheExpiresAt={insightCacheExpiresAt || undefined}
                       />
                     </View>
                   ))}
@@ -714,6 +725,8 @@ const DashboardScreen = () => {
                 error={insightError}
                 onAction={handleInsightAction}
                 onRefresh={forceRefreshInsight}
+                onFeedback={handleInsightFeedback}
+                cacheExpiresAt={insightCacheExpiresAt || undefined}
               />
             )
           ) : (
@@ -723,7 +736,7 @@ const DashboardScreen = () => {
                 style={styles.insightCardGreen}
                 onPress={forceRefreshInsight}
               >
-                <View style={{...styles.insightGreenHeader, marginBottom: 0}}>
+                <View style={{ ...styles.insightGreenHeader, marginBottom: 0 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
                     <Icon name="sprout-outline" size={20} color="#647653" />
                     <Text style={[styles.todayTitle, { color: '#647653' }]}>Sprout's Insight</Text>
@@ -767,7 +780,7 @@ const DashboardScreen = () => {
                     <Text style={styles.insightGreenBtnText}>
                       {loadingInsight ? 'Analyzing...' : 'Generate Insight'}
                     </Text>
-                    <Icon name={loadingInsight ? "loading" : <Sparkles />} size={20} color="#fff" />
+                    <Icon name={loadingInsight ? "loading" : "auto-fix"} size={20} color="#fff" />
                   </TouchableOpacity>
 
                   {/* Footer */}

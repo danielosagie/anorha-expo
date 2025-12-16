@@ -548,7 +548,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Handle barcode scan - with debouncing to prevent duplicates
   const barcodeLastScannedRef = useRef<string | null>(null);
-  const barcodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const barcodeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleBarCodeScanned = useCallback((scanningResult: BarcodeScanningResult) => {
     if (cameraMode !== 'barcode' || !scanningResult.data) return;

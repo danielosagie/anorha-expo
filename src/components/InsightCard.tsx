@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, Linking, ActivityIndicator, Image } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, Linking, ActivityIndicator, Image, Alert } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 
@@ -47,6 +48,7 @@ export interface DashboardInsight {
         title?: string;
         url?: string;
         snippet?: string;
+        query?: string; // SQL query for database sources
     }>;
     suggestionOnly?: boolean;
     suggestionText?: string;
@@ -64,10 +66,84 @@ interface InsightCardProps {
     error: string | null;
     onAction: (link: string, title?: string) => void;
     onRefresh: () => void;
+    onFeedback?: (feedback: 'up' | 'down', insightHeadline: string) => void;
+    cacheExpiresAt?: string; // ISO timestamp when insight cache expires (for refresh timer)
 }
 
-const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAction, onRefresh }) => {
+const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAction, onRefresh, onFeedback, cacheExpiresAt }) => {
     const [sourcesVisible, setSourcesVisible] = useState(false);
+    const [feedbackGiven, setFeedbackGiven] = useState<'up' | 'down' | null>(null);
+    const [copied, setCopied] = useState(false);
+
+    // Copy insight + sources to clipboard
+    const handleCopy = useCallback(async () => {
+        if (!insight) return;
+
+        const { topDIN, bottomDIN, reasoning, sources } = insight;
+
+        // Build copy text with insight details and sources
+        let copyText = `📊 ${topDIN.headline}\n\n`;
+        copyText += `${bottomDIN.description}\n\n`;
+
+        if (bottomDIN.affectedProducts?.length) {
+            copyText += `📦 Products:\n`;
+            bottomDIN.affectedProducts.forEach(p => {
+                copyText += `• ${p.name} (${p.sku}) - ${p.quantity} units @ $${p.price}\n`;
+                if (p.suggestedPrice) copyText += `  → Suggested: $${p.suggestedPrice} (${p.discountPercent}% off)\n`;
+            });
+            copyText += `\n`;
+        }
+
+        if (reasoning) {
+            copyText += `💡 Why: ${reasoning}\n\n`;
+        }
+
+        if (sources?.length) {
+            copyText += `📚 Sources:\n`;
+            sources.forEach(s => {
+                if (s.type === 'web' && s.url) {
+                    copyText += `• ${s.title || 'Web'}: ${s.url}\n`;
+                } else if (s.type === 'database') {
+                    copyText += `• Database query (${s.query?.slice(0, 50)}...)\n`;
+                }
+            });
+        }
+
+        await Clipboard.setStringAsync(copyText);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    }, [insight]);
+
+    // Handle thumbs feedback
+    const handleFeedback = useCallback((type: 'up' | 'down') => {
+        if (feedbackGiven) return; // Already gave feedback
+        setFeedbackGiven(type);
+
+        if (onFeedback && insight?.topDIN?.headline) {
+            onFeedback(type, insight.topDIN.headline);
+        }
+
+        Alert.alert(
+            type === 'up' ? '👍 Thanks!' : '👎 Got it',
+            type === 'up'
+                ? 'We\'ll find more insights like this.'
+                : 'We\'ll improve future recommendations.',
+            [{ text: 'OK' }]
+        );
+    }, [feedbackGiven, onFeedback, insight]);
+
+    // Calculate refresh timer
+    const getRefreshTimeText = useCallback(() => {
+        if (!cacheExpiresAt) return null;
+        const expiresAt = new Date(cacheExpiresAt);
+        const now = new Date();
+        const diffMs = expiresAt.getTime() - now.getTime();
+        if (diffMs <= 0) return 'Ready';
+        const hours = Math.floor(diffMs / (1000 * 60 * 60));
+        const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+        if (hours > 0) return `${hours}h ${mins}m`;
+        return `${mins}m`;
+    }, [cacheExpiresAt]);
 
     // -------------------------------------------------------------------------
     // LOADING STATE
@@ -231,17 +307,38 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                 <View style={styles.footerRow}>
                     {/* Feedback Actions */}
                     <View style={styles.leftActions}>
-                        <TouchableOpacity style={styles.iconBtn}>
-                            <Icon name="content-copy" size={18} color="#9CA3AF" />
+                        <TouchableOpacity style={styles.iconBtn} onPress={handleCopy}>
+                            <Icon name={copied ? "check" : "content-copy"} size={18} color={copied ? "#22C55E" : "#9CA3AF"} />
                         </TouchableOpacity>
-                        <TouchableOpacity style={styles.iconBtn}>
-                            <Icon name="thumb-up-outline" size={18} color="#9CA3AF" />
+                        <TouchableOpacity
+                            style={styles.iconBtn}
+                            onPress={() => handleFeedback('up')}
+                            disabled={feedbackGiven !== null}
+                        >
+                            <Icon
+                                name={feedbackGiven === 'up' ? "thumb-up" : "thumb-up-outline"}
+                                size={18}
+                                color={feedbackGiven === 'up' ? "#22C55E" : "#9CA3AF"}
+                            />
                         </TouchableOpacity>
-                        <TouchableOpacity style={styles.iconBtn}>
-                            <Icon name="thumb-down-outline" size={18} color="#9CA3AF" />
+                        <TouchableOpacity
+                            style={styles.iconBtn}
+                            onPress={() => handleFeedback('down')}
+                            disabled={feedbackGiven !== null}
+                        >
+                            <Icon
+                                name={feedbackGiven === 'down' ? "thumb-down" : "thumb-down-outline"}
+                                size={18}
+                                color={feedbackGiven === 'down' ? "#EF4444" : "#9CA3AF"}
+                            />
                         </TouchableOpacity>
                         <TouchableOpacity onPress={onRefresh} style={styles.refreshBtnHeader}>
                             <Icon name="refresh" size={18} color="#9CA3AF" />
+                            {getRefreshTimeText() && (
+                                <Text style={{ fontSize: 10, color: '#9CA3AF', marginLeft: 2 }}>
+                                    {getRefreshTimeText()}
+                                </Text>
+                            )}
                         </TouchableOpacity>
                     </View>
 
@@ -515,7 +612,7 @@ const styles = StyleSheet.create({
         gap: 6,
     },
     metricGainText: {
-        fontSize: 15,
+        fontSize: 12,
         fontWeight: '700',
         color: '#65A30D', // lime-600
     },

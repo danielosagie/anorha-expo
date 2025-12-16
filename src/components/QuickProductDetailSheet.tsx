@@ -124,7 +124,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
                 productId: baseVariant.ProductId,
                 variantCount: allVariants?.length || 0,
                 error: variantsError?.message,
-                variants: allVariants?.map((v: any) => ({ id: v.Id, title: v.Title, options: v.Options })),
+                variants: allVariants?.map((v: any) => ({ id: v.Id, title: v.Title, options: v.Options, variantType: v.VariantType })),
               });
 
               // Also fetch inventory for all variants
@@ -134,8 +134,30 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
                 .select('*')
                 .in('ProductVariantId', variantIds);
 
-              // Transform all variants with their inventory
-              loadedVariants = (allVariants || []).map((v: any) => {
+              // CRITICAL FIX: Filter out base variant when option variants exist
+              // Base variants have VariantType='base' or no Options - they're the parent container
+              // Option variants are the actual sellable items with specific options (Size=S, Color=Red, etc.)
+              const optionVariants = (allVariants || []).filter((v: any) => {
+                const hasOptions = v.Options && Object.keys(v.Options).length > 0;
+                const isBaseType = v.VariantType === 'base';
+                // Include if: has options OR is not marked as base type
+                // This handles both new products (with VariantType) and legacy products (checking Options)
+                return hasOptions || !isBaseType;
+              });
+
+              // If we have option variants, use those. Otherwise use all variants (single-variant products)
+              const variantsToUse = optionVariants.length > 0
+                ? optionVariants
+                : (allVariants || []);
+
+              console.log('[QUICK DETAIL] Filtered variants:', {
+                total: allVariants?.length || 0,
+                optionVariants: optionVariants.length,
+                usingVariants: variantsToUse.length,
+              });
+
+              // Transform filtered variants with their inventory
+              loadedVariants = variantsToUse.map((v: any) => {
                 const variantInventory: Record<string, { quantity: number; price?: number }> = {};
                 (allInventory || [])
                   .filter((inv: any) => inv.ProductVariantId === v.Id)
@@ -226,14 +248,26 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
           }));
         } else {
           // Extract unique locations from all variants (fallback)
+          // CRITICAL FIX: Also try to determine platformType from location ID patterns
           const locationsMap = new Map<string, LocationInventory>();
           loadedVariants.forEach((variant) => {
             Object.entries(variant.inventoryByLocation || {}).forEach(([locId, locData]: [string, any]) => {
               if (locId !== 'default' && locId !== 'loc-default' && !locationsMap.has(locId)) {
+                // Determine platformType from location ID patterns
+                let platformType: string | undefined = undefined;
+                if (locId.includes('gid://shopify/Location/')) {
+                  platformType = 'shopify';
+                } else if (/^[A-Z0-9]{10,}$/.test(locId)) {
+                  // Square location IDs are alphanumeric uppercase strings
+                  platformType = 'square';
+                }
+                // Note: clover and other platforms would need their patterns added here
+
                 locationsMap.set(locId, {
                   id: locId,
                   name: locData.name || locId.slice(0, 20),
                   quantity: locData.quantity || 0,
+                  platformType,
                 });
               }
             });
@@ -561,74 +595,116 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
               {(() => {
                 // Debug: Log what we're passing
                 console.log('[QUICK DETAIL] Rendering VariantInventoryEditor');
-                console.log('[QUICK DETAIL] variants:', variants.length, variants.map(v => v.id));
-                console.log('[QUICK DETAIL] locations:', locations.length, locations.map(l => ({ id: l.id, name: l.name, platformType: l.platformType })));
-                console.log('[QUICK DETAIL] selectedPlatformFilter:', selectedPlatformFilter);
+                console.log('[QUICK DETAIL] variants:', variants.length, 'selectedLocationId:', selectedLocationId);
+                console.log('[QUICK DETAIL] locations:', locations.length, 'selectedPlatformFilter:', selectedPlatformFilter);
 
-                // Adapt QuickProductDetailSheet state to VariantInventoryEditor props
+                // MATCH ListingEditorForm EXACTLY:
+                // 1. Build locations list based on active tab/filter
+                let editorLocations: Array<{ id: string; name: string; platformKey: string }>;
 
-                // 1. Locations - map platformType to platformKey
-                const editorLocations = locations.map(l => ({
-                  id: l.id,
-                  name: l.name,
-                  platformKey: l.platformType?.toLowerCase() || 'unknown'
-                }));
+                if (!selectedPlatformFilter || selectedPlatformFilter === 'all') {
+                  // "All" tab: show all locations across all platforms
+                  const seenIds = new Set<string>();
+                  editorLocations = locations
+                    .filter(l => {
+                      if (seenIds.has(l.id)) return false;
+                      seenIds.add(l.id);
+                      return true;
+                    })
+                    .map(l => ({
+                      id: l.id,
+                      name: l.name,
+                      platformKey: l.platformType?.toLowerCase() || 'unknown'
+                    }));
+                } else {
+                  // Platform tab: filter to only this platform's locations
+                  const platformKey = selectedPlatformFilter.toLowerCase();
+                  const platformLocs = locations.filter(l =>
+                    l.platformType?.toLowerCase() === platformKey
+                  );
 
-                console.log('[QUICK DETAIL] editorLocations:', editorLocations);
+                  // If a location is selected (via dropdown), filter to just that location
+                  // This matches ListingEditorForm's behavior with selectedLocationId
+                  if (selectedLocationId) {
+                    const selectedLoc = platformLocs.find(l => l.id === selectedLocationId);
+                    editorLocations = selectedLoc
+                      ? [{ id: selectedLoc.id, name: selectedLoc.name, platformKey }]
+                      : platformLocs.map(l => ({ id: l.id, name: l.name, platformKey }));
+                  } else {
+                    editorLocations = platformLocs.map(l => ({ id: l.id, name: l.name, platformKey }));
+                  }
+                }
 
-                // 2. Variants - Merge local variants state with un-saved inventoryUpdates
-                const editorVariants = variants.map(v => {
-                  const mergedInventory: any = {};
+                console.log(`[QUICK DETAIL] editorLocations: ${editorLocations.length} locations`);
 
-                  // Start with existing inventory
-                  Object.entries(v.inventoryByLocation || {}).forEach(([locId, data]) => {
-                    mergedInventory[locId] = { ...data };
+                // 2. Prepare Variants - MATCH ListingEditorForm EXACTLY
+                // Deduplicate variants by ID using a Map (same as ListingEditorForm)
+                const variantMap = new Map<string, any>();
+
+                variants.forEach(v => {
+                  const vId = v.id;
+                  if (variantMap.has(vId)) return; // Skip duplicates
+
+                  const inv: Record<string, { quantity: number; price?: number; image?: string }> = {};
+
+                  // Only include inventory for locations that will be displayed
+                  Object.entries(v.inventoryByLocation || {}).forEach(([locId, data]: [string, any]) => {
+                    const isLocationShown = editorLocations.some(l => l.id === locId);
+                    if (isLocationShown) {
+                      inv[locId] = {
+                        quantity: data.quantity || 0,
+                        price: data.price,
+                        image: data.image
+                      };
+                    }
                   });
 
-                  // Apply updates
+                  // Apply any unsaved updates for this variant
                   Object.entries(inventoryUpdates).forEach(([key, update]) => {
-                    const [vId, locId] = key.split(':');
-                    if (vId === v.id) {
-                      mergedInventory[locId] = {
-                        ...(mergedInventory[locId] || {}),
+                    const [updateVId, locId] = key.split(':');
+                    if (updateVId === vId && editorLocations.some(l => l.id === locId)) {
+                      inv[locId] = {
+                        ...(inv[locId] || { quantity: 0 }),
                         ...update
                       };
                     }
                   });
 
-                  return {
-                    id: v.id,
+                  variantMap.set(vId, {
+                    id: vId,
                     name: Object.values(v.optionValues || {}).join(' / ') || 'Variant',
-                    inventory: mergedInventory,
+                    image: v.image,
                     defaultPrice: undefined,
-                    image: v.image
-                  };
+                    inventory: inv
+                  });
                 });
 
-                console.log('[QUICK DETAIL] editorVariants:', editorVariants);
+                const editorVariants = Array.from(variantMap.values());
+
+                console.log('[QUICK DETAIL] editorVariants:', editorVariants.length, 'variants');
+                editorVariants.forEach(v => {
+                  console.log(`  - ${v.name}: ${Object.keys(v.inventory).length} location(s)`);
+                });
 
                 // 3. Callback
                 const handleUpdateInventory = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
                   console.log(`[QUICK DETAIL] Update: ${variantId} @ ${locationId}, ${field} = ${value}`);
                   const key = `${variantId}:${locationId}`;
-                  setInventoryUpdates(prev => {
-                    const existingUpdate = prev[key] || {};
-                    return {
-                      ...prev,
-                      [key]: {
-                        ...existingUpdate,
-                        [field]: value
-                      }
-                    };
-                  });
+                  setInventoryUpdates(prev => ({
+                    ...prev,
+                    [key]: {
+                      ...(prev[key] || {}),
+                      [field]: value
+                    }
+                  }));
                 };
 
                 // If no variants or locations, show message
-                if (variants.length === 0) {
+                if (editorVariants.length === 0) {
                   return <Text style={{ color: '#999', fontStyle: 'italic' }}>No variants found</Text>;
                 }
-                if (locations.length === 0) {
-                  return <Text style={{ color: '#999', fontStyle: 'italic' }}>No locations found</Text>;
+                if (editorLocations.length === 0) {
+                  return <Text style={{ color: '#999', fontStyle: 'italic' }}>No locations for {selectedPlatformFilter || 'this platform'}</Text>;
                 }
 
                 return (
@@ -687,6 +763,7 @@ const styles = StyleSheet.create({
   modalSheet: {
     width: '100%',
     minHeight: '100%',
+    maxHeight: '95%',
     borderRadius: 16,
     backgroundColor: 'transparent',
     overflow: 'hidden',
@@ -696,7 +773,7 @@ const styles = StyleSheet.create({
     shadowRadius: 1,
     elevation: 2,
     zIndex: 1000,
-    paddingBottom: 80,
+    paddingBottom: 40,
   },
   scrollContent: {
     paddingHorizontal: 0,
