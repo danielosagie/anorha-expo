@@ -154,7 +154,7 @@ const styles = StyleSheet.create({
   cardContainer: {
     marginBottom: 12,
     marginHorizontal: 8,
-    backgroundColor: 'rgba(228, 228, 228, 0.01)',
+    backgroundColor: 'rgba(228, 228, 228, 0.07)',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,

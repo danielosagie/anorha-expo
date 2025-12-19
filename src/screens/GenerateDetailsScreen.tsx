@@ -15,6 +15,7 @@ import { hydratePlatformsFromBackend, normalizeForListingEditor, isEmpty } from 
 import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
 import { Paths, Directory, File } from 'expo-file-system/next';
 import * as ImagePicker from 'expo-image-picker';
+import { useJobsOptional } from '../context/JobsContext';
 
 // Feature flag to hide AI refill functionality
 const ENABLE_AI_REFILL_FEATURES = false;
@@ -749,13 +750,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   // Try to pull items list from params if provided; fallback to single
   const items = useMemo(() => {
+    const contextMatchJobId = jobsContext?.matchJobId;
+    const effectiveMatchJobId = matchJobId || contextMatchJobId;
     const raw = ((route.params as any)?.items || []) as Array<{ index: number; title?: string; thumb?: string; matchesCount?: number; matchJobId?: string }>;
     const normalized = (Array.isArray(raw) ? raw : []).map((it, i) => ({
       index: it.index ?? i,
       title: it.title ?? `Item ${i + 1}`,
       thumb: it.thumb ?? '',
       matchesCount: it.matchesCount ?? 0,
-      matchJobId: it.matchJobId ?? matchJobId, // Fallback to global matchJobId if not specified per item
+      matchJobId: it.matchJobId ?? effectiveMatchJobId, // Fallback to effective matchJobId
     }));
     if (normalized.length) return normalized;
     // Build from results if items not passed
@@ -764,7 +767,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       title: `Item ${i + 1}`,
       thumb: r.sourceImageUrl || '',
       matchesCount: 0,
-      matchJobId: matchJobId // Use global matchJobId for fallback items
+      matchJobId: effectiveMatchJobId // Use effective matchJobId for fallback items
     })) : [];
     if (fallback.length) return fallback;
     return [{
@@ -788,6 +791,55 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const [bottomNavState, setBottomNavState] = useState<'empty' | 'selection' | 'template' | 'platform'>('empty');
   const [itemGenerateJobs, setItemGenerateJobs] = useState<Record<number, { jobId: string; status?: string }>>(jobMap || {});
+
+  // Get shared JobsContext for cross-screen state sync
+  const jobsContext = useJobsOptional();
+
+  // Initialize from generate job to load all items from parent match job
+  useEffect(() => {
+    if (!jobsContext || !jobId) return;
+    // If we don't have items yet, fetch from the generate job
+    if (jobsContext.items.length === 0) {
+      jobsContext.initializeFromGenerateJob(jobId);
+    }
+  }, [jobsContext, jobId]);
+
+  // Sync with JobsContext - merge context state into local state on mount
+  useEffect(() => {
+    if (!jobsContext || !matchJobId) return;
+
+    // If context has generate jobs, merge into local state
+    if (Object.keys(jobsContext.generateJobs).length > 0) {
+      setItemGenerateJobs(prev => {
+        const merged = { ...prev };
+        Object.entries(jobsContext.generateJobs).forEach(([indexStr, genJob]) => {
+          const idx = parseInt(indexStr, 10);
+          if (!merged[idx] || (genJob.status === 'completed' && merged[idx].status !== 'completed')) {
+            merged[idx] = { jobId: genJob.jobId, status: genJob.status };
+          }
+        });
+        return merged;
+      });
+    }
+  }, [jobsContext, matchJobId]);
+
+  // Sync local itemGenerateJobs changes to context
+  useEffect(() => {
+    if (!jobsContext) return;
+    Object.entries(itemGenerateJobs).forEach(([indexStr, job]) => {
+      const idx = parseInt(indexStr, 10);
+      const contextJob = jobsContext.generateJobs[idx];
+      // Update context if local has newer/different state
+      if (!contextJob || contextJob.jobId !== job.jobId || contextJob.status !== job.status) {
+        if (!contextJob) {
+          jobsContext.startGenerateJob(idx, job.jobId);
+        }
+        if (job.status) {
+          jobsContext.updateGenerateJob(idx, { status: job.status as any });
+        }
+      }
+    });
+  }, [itemGenerateJobs, jobsContext]);
 
   // Decide which platforms to publish and compute inventory per platform for confirmation
   const platformsToPublish = useMemo<string[]>(() => {
@@ -2232,11 +2284,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           }}
           onQuickGenerate={async (idx) => {
             try {
-              // TODO: Implement quick generate for this specific item
-              // For now, navigate back to match selection to start the flow
+              // Navigate back to match selection to start the generate flow
               setCurrentProductIndex(idx);
               setJobsModalVisible(false);
-              (route as any).navigation?.navigate?.('MatchSelectionScreen', { focusIndex: idx, items, jobMap: itemGenerateJobs } as any);
+              navigation.navigate('MatchSelectionScreen' as any, {
+                focusIndex: idx,
+                items,
+                jobMap: itemGenerateJobs,
+                jobId: matchJobId
+              });
             } catch (e) {
               console.error('Quick generate failed:', e);
             }
@@ -2252,15 +2308,20 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           onPickMatch={(idx) => {
             // Jump to match selection for this item, use specific match job id for that item
             const selectedItem = items.find(item => item.index === idx);
-            const itemMatchJobId = selectedItem?.matchJobId || matchJobId; // Fallback to global if not found
+            // Fallback chain: item's matchJobId -> route param matchJobId -> context matchJobId
+            const itemMatchJobId = selectedItem?.matchJobId || matchJobId || jobsContext?.matchJobId;
+            if (!itemMatchJobId) {
+              console.warn('[GEN-DETAILS] No matchJobId available for navigation');
+              return;
+            }
             setCurrentProductIndex(idx);
             setJobsModalVisible(false);
-            (route as any).navigation?.navigate?.('MatchSelectionScreen', {
+            navigation.navigate('MatchSelectionScreen' as any, {
               jobId: itemMatchJobId,
               focusIndex: idx,
               items,
               jobMap: itemGenerateJobs
-            } as any);
+            });
           }}
           onPickDetails={(idx) => {
             const jid = itemGenerateJobs[idx]?.jobId;
@@ -2268,7 +2329,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               setCurrentProductIndex(idx);
               setJobsModalVisible(false);
               // Navigate via LoadingScreen to show proper loading state
-              (route as any).navigation?.navigate?.('LoadingScreen', {
+              navigation.navigate('LoadingScreen' as any, {
                 processType: 'generate',
                 payload: { jobId: jid, firstPhotos: [] },
                 onCompleteRoute: {
@@ -2280,7 +2341,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                     focusIndex: idx
                   }
                 }
-              } as any);
+              });
             }
           }}
         />

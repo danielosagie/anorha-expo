@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { RouteProp, useNavigation } from '@react-navigation/native';
-import { 
-    View, Text, StyleSheet, Image, Dimensions, ActivityIndicator, 
+import {
+    View, Text, StyleSheet, Image, Dimensions, ActivityIndicator,
     Pressable, Modal, TouchableOpacity, SafeAreaView, ScrollView, TextInput, Alert
 } from 'react-native';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -14,6 +14,7 @@ import BottomNav from '../components/BottomNav';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { PackageCheck } from 'lucide-react';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useJobsOptional } from '../context/JobsContext';
 
 // --- 1. Define Comprehensive Types (from previous step) ---
 interface Price {
@@ -43,26 +44,26 @@ interface Result {
     variantId: string;
     serpApiData: SerpApiData[]; // Array of SerpAPI results
     rerankedResults: Array<{
-      rank: number;
-      score: number;
-      serpApiIndex: number; // Index in original SerpAPI results
-      title: string;
-      link: string;
-      imageUrl?: string;
-      snippet?: string;
-      embeddingId?: string; // Reference to stored embedding
+        rank: number;
+        score: number;
+        serpApiIndex: number; // Index in original SerpAPI results
+        title: string;
+        link: string;
+        imageUrl?: string;
+        snippet?: string;
+        embeddingId?: string; // Reference to stored embedding
     }>;
     confidence: 'high' | 'medium' | 'low';
     vectorSearchFoundResults: boolean;
     originalTargetImage: string;
     processingTimeMs: number;
     timing: {
-      quickScanMs: number;
-      serpApiMs: number;
-      embeddingMs: number;
-      vectorSearchMs: number;
-      rerankingMs: number;
-      totalMs: number;
+        quickScanMs: number;
+        serpApiMs: number;
+        embeddingMs: number;
+        vectorSearchMs: number;
+        rerankingMs: number;
+        totalMs: number;
     };
     error?: string;
 }
@@ -130,17 +131,17 @@ async function getToken() {
 // --- Reusable Components ---
 
 // Optimized ProductGridItem with instant feedback
-const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: { 
-    item: SerpApiData, 
-    isSelected: boolean, 
+const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
+    item: SerpApiData,
+    isSelected: boolean,
     onSelect: () => void,
     isBest?: boolean,
 }) => {
     return (
-        <Pressable 
-            onPress={onSelect} 
+        <Pressable
+            onPress={onSelect}
             style={({ pressed }) => [
-                styles.itemContainer, 
+                styles.itemContainer,
                 isSelected && styles.itemSelected,
                 pressed && styles.itemPressed
             ]}
@@ -169,7 +170,7 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
 
 // --- Main Screen Component ---
 
- function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, 'MatchSelectionScreen'> }) {
+function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, 'MatchSelectionScreen'> }) {
     const navigation = useNavigation<any>();
     // Accept jobId from response or directly, and optional focusIndex/items/jobMap
     const jobId: string | undefined = (route.params as any)?.response?.jobId || (route.params as any)?.jobId;
@@ -178,6 +179,9 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
     const initialJobMap: Record<number, { jobId: string; status?: string }> = (route.params as any)?.jobMap || {};
     const { isConnected } = usePlatformConnections();
     const isNewScan = Boolean((route.params as any)?.isNewScan === true);
+
+    // Get shared JobsContext for cross-screen state sync
+    const jobsContext = useJobsOptional();
 
     // --- State Management ---
     const [analysisData, setAnalysisData] = useState<Analysis | null>(null);
@@ -188,11 +192,11 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
 
     // State for the new UI flow
     const [
-        selectedIndices, 
+        selectedIndices,
         setSelectedIndices
     ] = useState<number[]>([]);
     const [
-        selectedProducts, 
+        selectedProducts,
         setSelectedProducts
     ] = useState<SerpApiData[]>([]);
     const [bottomNavState, setBottomNavState] = useState<'empty' | 'selection' | 'template' | 'platform'>('empty');
@@ -219,14 +223,84 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
     const [hiddenDefaults, setHiddenDefaults] = useState<Set<string>>(new Set());
     const [unfavoritedDefaults, setUnfavoritedDefaults] = useState<Set<string>>(new Set());
     const [genResponse, setGenResponse] = useState<JobResponse | null>(null);
-  // Global jobs modal
-  const [jobsModalVisible, setJobsModalVisible] = useState(false);
+    // Global jobs modal
+    const [jobsModalVisible, setJobsModalVisible] = useState(false);
     const [itemGenerateJobs, setItemGenerateJobs] = useState<Record<number, { jobId: string; status?: string }>>(initialJobMap || {});
     const [externalItems, setExternalItems] = useState<Array<{ index: number; title?: string; thumb?: string; matchesCount?: number }>>(initialItems || []);
     const [userImagesByIndex, setUserImagesByIndex] = useState<Record<number, string[]>>(() => {
-      const fromParams = (route.params as any)?.userImagesByIndex;
-      return (fromParams && typeof fromParams === 'object') ? fromParams : {};
+        const fromParams = (route.params as any)?.userImagesByIndex;
+        return (fromParams && typeof fromParams === 'object') ? fromParams : {};
     });
+
+    // Memoized items for ItemJobsModal - avoids recalculating on every render
+    // IMPORTANT: Must be declared BEFORE useEffects that reference it
+    const modalItems = useMemo(() => {
+        const built = (analysisData?.results || []).map((res, idx) => {
+            const first = res?.serpApiData?.[0];
+            return {
+                index: idx,
+                title: first?.title || `Item ${idx + 1}`,
+                thumb: first?.image || first?.thumbnail || '',
+                matchesCount: res?.serpApiData?.length || 0,
+            };
+        });
+        if (built.length > 0) return built;
+        // Fallback to external items passed from other screens
+        return (externalItems || []).map((it, i) => ({
+            index: it.index ?? i,
+            title: it.title || `Item ${i + 1}`,
+            thumb: it.thumb || '',
+            matchesCount: it.matchesCount || 0,
+        }));
+    }, [analysisData?.results, externalItems]);
+
+    // Sync with JobsContext - initialize from context if available
+    useEffect(() => {
+        if (!jobsContext || !jobId) return;
+
+        // Initialize context with this match job's items when modalItems are ready
+        if (modalItems.length > 0 && jobsContext.matchJobId !== jobId) {
+            jobsContext.initializeFromMatchJob(jobId, modalItems.map((item, idx) => ({
+                index: item.index,
+                title: item.title,
+                thumb: item.thumb,
+                matchesCount: item.matchesCount,
+                matchJobId: jobId,
+            })));
+        }
+
+        // If context has generate jobs for items in this job, merge into local state
+        if (Object.keys(jobsContext.generateJobs).length > 0) {
+            setItemGenerateJobs(prev => {
+                const merged = { ...prev };
+                Object.entries(jobsContext.generateJobs).forEach(([indexStr, genJob]) => {
+                    const idx = parseInt(indexStr, 10);
+                    if (!merged[idx] || (genJob.status === 'completed' && merged[idx].status !== 'completed')) {
+                        merged[idx] = { jobId: genJob.jobId, status: genJob.status };
+                    }
+                });
+                return merged;
+            });
+        }
+    }, [jobsContext, jobId, modalItems]);
+
+    // Sync local itemGenerateJobs changes to context
+    useEffect(() => {
+        if (!jobsContext) return;
+        Object.entries(itemGenerateJobs).forEach(([indexStr, job]) => {
+            const idx = parseInt(indexStr, 10);
+            const contextJob = jobsContext.generateJobs[idx];
+            // Update context if local has newer/different state
+            if (!contextJob || contextJob.jobId !== job.jobId || contextJob.status !== job.status) {
+                if (!contextJob) {
+                    jobsContext.startGenerateJob(idx, job.jobId);
+                }
+                if (job.status) {
+                    jobsContext.updateGenerateJob(idx, { status: job.status as any });
+                }
+            }
+        });
+    }, [itemGenerateJobs, jobsContext]);
 
     // Dropdown options with icons
     const PLATFORM_OPTIONS = [
@@ -304,21 +378,23 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
         try {
             Alert.alert('Delete Templates', `Delete ${selectedTemplateIds.size} selected template(s)?`, [
                 { text: 'Cancel', style: 'cancel' },
-                { text: 'Delete', style: 'destructive', onPress: async () => {
-                    // Split defaults vs real ids
-                    const defaultIds = Array.from(selectedTemplateIds).filter(id => id.startsWith('default-'));
-                    const realIds = Array.from(selectedTemplateIds).filter(id => !id.startsWith('default-'));
-                    if (realIds.length > 0) {
-                        await supabase.from('SearchTemplates').delete().in('Id', realIds);
+                {
+                    text: 'Delete', style: 'destructive', onPress: async () => {
+                        // Split defaults vs real ids
+                        const defaultIds = Array.from(selectedTemplateIds).filter(id => id.startsWith('default-'));
+                        const realIds = Array.from(selectedTemplateIds).filter(id => !id.startsWith('default-'));
+                        if (realIds.length > 0) {
+                            await supabase.from('SearchTemplates').delete().in('Id', realIds);
+                        }
+                        if (defaultIds.length > 0) {
+                            setHiddenDefaults(prev => new Set([...Array.from(prev), ...defaultIds]));
+                        }
+                        setUserTemplates(prev => prev.filter(t => !selectedTemplateIds.has(getTplId(t))));
+                        setSelectedTemplateIds(new Set());
                     }
-                    if (defaultIds.length > 0) {
-                        setHiddenDefaults(prev => new Set([...Array.from(prev), ...defaultIds]));
-                    }
-                    setUserTemplates(prev => prev.filter(t => !selectedTemplateIds.has(getTplId(t))));
-                    setSelectedTemplateIds(new Set());
-                }},
+                },
             ]);
-        } catch {}
+        } catch { }
     }, [selectedTemplateIds]);
 
     // --- Data Fetching ---
@@ -367,7 +443,7 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
                             const finalData = await res2.json();
                             setAnalysisData({ jobId: finalData?.jobId, results: finalData?.results || [] });
                         }
-                    } catch {}
+                    } catch { }
                     return; // stop polling
                 }
 
@@ -386,7 +462,7 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
             try {
                 const { data } = await supabase.auth.getUser();
                 setCurrentUserId(data.user?.id || null);
-            } catch {}
+            } catch { }
         })();
 
         // Initialize focus index and any shared state coming from other screens
@@ -419,7 +495,7 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
             if (!data || data.length < pageSize) {
                 setHasMoreTemplates(false);
             }
-        } catch {}
+        } catch { }
     }, [pageSize]);
 
     // Fetch user's templates when modal opens and when switching to picker
@@ -439,7 +515,7 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
         setIsLoadingMoreTemplates(false);
     }, [hasMoreTemplates, isLoadingMoreTemplates, templateOffset, pageSize, fetchTemplatesPage]);
 
-  // No tabs/jobs list; ItemJobsModal shows items by default.
+    // No tabs/jobs list; ItemJobsModal shows items by default.
 
     // Helpers for template
     const parseDomain = (input: string): string | null => {
@@ -523,7 +599,7 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
             const newSelection = prev.includes(index)
                 ? prev.filter(i => i !== index)
                 : [...prev, index];
-            
+
             // Reset flow when items are deselected
             if (newSelection.length === 0) {
                 setBottomNavState('empty');
@@ -557,19 +633,19 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
         setBottomNavState('selection');
     }, []);
 
-    const handleBackToSelection = useCallback (() =>{
+    const handleBackToSelection = useCallback(() => {
         setBottomNavState('selection');
-        }, [bottomNavState]);
+    }, [bottomNavState]);
 
     const handleTemplateSelect = useCallback((template: string | null) => {
         setSelectedTemplate(template);
         setTemplateModalVisible(false);
         setBottomNavState('platform'); // Move to platform selection
     }, []);
-    
+
 
     const handlePlatformSelect = useCallback((platform: string) => {
-        setSelectedPlatforms(prev => 
+        setSelectedPlatforms(prev =>
             prev.includes(platform)
                 ? prev.filter(p => p !== platform)
                 : [...prev, platform]
@@ -748,38 +824,38 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
         }
         // No results and not processing -> offer rescan
         return (
-          <View style={styles.centerContainer}>
-            <Text style={styles.infoText}>We couldn't find matches for this item.</Text>
-            <TouchableOpacity
-              style={[styles.mainEmptyButton, { marginTop: 16 }]}
-              onPress={() => {
-                navigation.navigate('AddProduct' as never, { focusItemIndex: currentProductIndex, message: 'Retake core photo to improve results', resumeJobId: jobId } as never);
-              }}
-            >
-              <Icon name="camera" size={20} color="#000" style={{ marginRight: 8 }} />
-              <Text style={styles.secondaryButtonText}>Rescan This Item</Text>
-            </TouchableOpacity>
-          </View>
+            <View style={styles.centerContainer}>
+                <Text style={styles.infoText}>We couldn't find matches for this item.</Text>
+                <TouchableOpacity
+                    style={[styles.mainEmptyButton, { marginTop: 16 }]}
+                    onPress={() => {
+                        navigation.navigate('AddProduct' as never, { focusItemIndex: currentProductIndex, message: 'Retake core photo to improve results', resumeJobId: jobId } as never);
+                    }}
+                >
+                    <Icon name="camera" size={20} color="#000" style={{ marginRight: 8 }} />
+                    <Text style={styles.secondaryButtonText}>Rescan This Item</Text>
+                </TouchableOpacity>
+            </View>
         );
     }
 
     return (
         <View style={styles.container}>
-            
-            <View style={{ flex: 1, position: 'absolute', top: 70, left: 16, zIndex: 1, flexDirection: 'row', gap: 8, minWidth: 100, minHeight: 34, alignContent: "flex-end"}}>
-                <TouchableOpacity 
+
+            <View style={{ flex: 1, position: 'absolute', top: 70, left: 16, zIndex: 1, flexDirection: 'row', gap: 8, minWidth: 100, minHeight: 34, alignContent: "flex-end" }}>
+                <TouchableOpacity
                     onPress={() => {
                         // Navigate back to past scans page
                         navigation.goBack();
-                    }} 
+                    }}
                     style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, maxHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}
-                    >
+                >
                     <Icon name="arrow-left" size={18} color={'#000'} />
                     <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Back</Text>
                 </TouchableOpacity>
 
                 {/* Tiny bulk button top-left */}
-                <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center'  as any }}>
+                <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' as any }}>
                     <Boxes size={18} color="#000" />
                     <Text style={{ color: '#000', fontWeight: '600' }}>Current Jobs</Text>
                 </TouchableOpacity>
@@ -831,65 +907,56 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
             )}
 
             {/* --- Enhanced Bottom Navigation Bar (reusable) --- */}
-            <LinearGradient colors={["rgba(255, 255, 255, 0)", "rgb(255, 255, 255)", "rgb(255, 255, 255)",]} style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 1000, paddingBottom: 35}} pointerEvents="box-none">
+            <LinearGradient colors={["rgba(255, 255, 255, 0)", "rgb(255, 255, 255)", "rgb(255, 255, 255)",]} style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 1000, paddingBottom: 35 }} pointerEvents="box-none">
                 <BottomNav
-                state={bottomNavState}
-                selectedCount={selectedCount}
-                selectedTemplate={selectedTemplate}
-                selectedPlatforms={selectedPlatforms}
-                isConnected={isConnected}
-                onShowSelection={handleShowSelection}
-                onShowTemplates={handleShowTemplates}
-                onBackToEmpty={handleBackToEmpty}
-                onBackToSelection={handleBackToSelection}
-                onOpenTemplateModal={() => setTemplateModalVisible(true)}
-                onTemplateSelect={handleTemplateSelect}
-                onPlatformToggle={handlePlatformSelect}
-                onBack={() => navigation.goBack()}
-                onGeneratePress={async () => {
-                    try {
-                    const submitResult: JobResponse = await handleGenerate();
-                    const jobId = submitResult?.jobId;
-                    if (jobId) {
-                        setItemGenerateJobs(prev => ({ ...prev, [currentProductIndex]: { jobId } }));
-                        const itemsForModal = (analysisData?.results || []).map((res, idx) => {
-                        const first = res?.serpApiData?.[0];
-                        return {
-                            index: idx,
-                            title: first?.title || `Item ${idx + 1}`,
-                            thumb: first?.image || first?.thumbnail || '',
-                            matchesCount: res?.serpApiData?.length || 0,
-                        };
-                        });
-                        const jobMap = { ...itemGenerateJobs, [currentProductIndex]: { jobId } };
-                        const selectedMatches = selectedIndices.map(i => serpApiData[i]).filter(Boolean);
-                        const firstPhotos = selectedMatches.map(item => item.image || item.thumbnail || '').filter(Boolean);
-                        navigation.navigate('LoadingScreen' as never, {
-                        processType: 'generate',
-                        payload: {
-                            jobId,
-                            firstPhotos,
-                        },
-                        onCompleteRoute: {
-                            screen: 'GenerateDetailsScreen',
-                            params: {
-                            jobResponse: submitResult,
-                            jobId: jobId,
-                            matchJobId: analysisData?.jobId,
-                            items: itemsForModal,
-                            jobMap,
-                            userImagesByIndex,
-                            },
-                        },
-                        });
-                    } else {
-                        Alert.alert('Error', 'Failed to get valid jobId, try again later');
-                    }
-                    } catch (error) {
-                    console.log('Error starting generation');
-                    Alert.alert('Error starting generation');
-                    }
-                }}
+                    state={bottomNavState}
+                    selectedCount={selectedCount}
+                    selectedTemplate={selectedTemplate}
+                    selectedPlatforms={selectedPlatforms}
+                    isConnected={isConnected}
+                    onShowSelection={handleShowSelection}
+                    onShowTemplates={handleShowTemplates}
+                    onBackToEmpty={handleBackToEmpty}
+                    onBackToSelection={handleBackToSelection}
+                    onOpenTemplateModal={() => setTemplateModalVisible(true)}
+                    onTemplateSelect={handleTemplateSelect}
+                    onPlatformToggle={handlePlatformSelect}
+                    onBack={() => navigation.goBack()}
+                    onGeneratePress={async () => {
+                        try {
+                            const submitResult: JobResponse = await handleGenerate();
+                            const jobId = submitResult?.jobId;
+                            if (jobId) {
+                                setItemGenerateJobs(prev => ({ ...prev, [currentProductIndex]: { jobId } }));
+                                const jobMap = { ...itemGenerateJobs, [currentProductIndex]: { jobId } };
+                                const selectedMatches = selectedIndices.map(i => serpApiData[i]).filter(Boolean);
+                                const firstPhotos = selectedMatches.map(item => item.image || item.thumbnail || '').filter(Boolean);
+                                navigation.navigate('LoadingScreen' as never, {
+                                    processType: 'generate',
+                                    payload: {
+                                        jobId,
+                                        firstPhotos,
+                                    },
+                                    onCompleteRoute: {
+                                        screen: 'GenerateDetailsScreen',
+                                        params: {
+                                            jobResponse: submitResult,
+                                            jobId: jobId,
+                                            matchJobId: analysisData?.jobId,
+                                            items: modalItems,
+                                            jobMap,
+                                            userImagesByIndex,
+                                        },
+                                    },
+                                });
+                            } else {
+                                Alert.alert('Error', 'Failed to get valid jobId, try again later');
+                            }
+                        } catch (error) {
+                            console.log('Error starting generation');
+                            Alert.alert('Error starting generation');
+                        }
+                    }}
                 />
             </LinearGradient>
 
@@ -904,18 +971,18 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
                     <View style={[styles.modalContent, { maxHeight: '80%', height: '80%' }]}>
                         <View style={styles.modalHeader}>
                             {templateModalView === 'create' ? (
-                                <TouchableOpacity 
-                                    style={styles.modalCloseButton} 
+                                <TouchableOpacity
+                                    style={styles.modalCloseButton}
                                     onPress={() => setTemplateModalView('picker')}
                                 >
                                     <Icon name="arrow-left" size={24} color="#000" />
                                 </TouchableOpacity>
                             ) : (
-                                <View style={{width:24}} />
+                                <View style={{ width: 24 }} />
                             )}
                             <Text style={styles.modalTitle}>{templateModalView === 'picker' ? 'Templates' : 'Create New Template'}</Text>
-                            <TouchableOpacity 
-                                style={styles.modalCloseButton} 
+                            <TouchableOpacity
+                                style={styles.modalCloseButton}
                                 onPress={() => setTemplateModalVisible(false)}
                             >
                                 <Icon name="close" size={24} color="#000" />
@@ -924,390 +991,396 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
 
                         <ScrollView style={styles.templateScrollView} contentContainerStyle={{ paddingBottom: 120 }}>
                             {templateModalView === 'picker' && (
-                            <>
-                            {/* Favorites */}
-                            <View style={styles.templateSection}>
-                                <View style={{flexDirection:'row', alignItems:'center', justifyContent:'space-between'}}>
-                                <Text style={styles.sectionTitle}>Favorites</Text>
-                                    <View style={{flexDirection:'row', gap:8}}>
-                                        <TouchableOpacity onPress={toggleManageMode} style={{borderWidth:1, borderColor:'#E5E5E5', borderRadius:8, paddingVertical:6, paddingHorizontal:10}}>
-                                            <Text style={{color:'#000'}}>{manageMode ? 'Done' : 'Manage'}</Text>
-                                        </TouchableOpacity>
-                                        {manageMode && (
-                                            <TouchableOpacity onPress={bulkDeleteSelected} style={{borderWidth:1, borderColor:'#e11d48', borderRadius:8, paddingVertical:6, paddingHorizontal:10}}>
-                                                <Text style={{color:'#e11d48'}}>Delete</Text>
+                                <>
+                                    {/* Favorites */}
+                                    <View style={styles.templateSection}>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                                            <Text style={styles.sectionTitle}>Favorites</Text>
+                                            <View style={{ flexDirection: 'row', gap: 8 }}>
+                                                <TouchableOpacity onPress={toggleManageMode} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 10 }}>
+                                                    <Text style={{ color: '#000' }}>{manageMode ? 'Done' : 'Manage'}</Text>
+                                                </TouchableOpacity>
+                                                {manageMode && (
+                                                    <TouchableOpacity onPress={bulkDeleteSelected} style={{ borderWidth: 1, borderColor: '#e11d48', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 10 }}>
+                                                        <Text style={{ color: '#e11d48' }}>Delete</Text>
+                                                    </TouchableOpacity>
+                                                )}
+                                            </View>
+                                        </View>
+                                        {[{ Id: 'default-amazon', Name: 'Amazon Default', SuggestedSites: ['amazon.com'] }, { Id: 'default-ebay', Name: 'eBay Default', SuggestedSites: ['ebay.com'] }]
+                                            .filter(def => !hiddenDefaults.has(def.Id))
+                                            .map(def => (
+                                                <TouchableOpacity key={def.Name} style={styles.templateOption} onPress={() => {
+                                                    const autoName = generateNameFromSources(def.SuggestedSites);
+                                                    setSelectedTemplate(autoName);
+                                                    setTemplateDraft({ sources: def.SuggestedSites, fieldRows: [] });
+                                                    setTemplateName(autoName);
+                                                    setEditingTemplateId(null);
+                                                    setTemplateModalView('create');
+                                                }}>
+                                                    <View style={[styles.templateRow, { alignItems: 'center', paddingRight: 20, justifyContent: 'space-between' }]}>
+                                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                            {def.SuggestedSites.slice(0, 2).map(s => (
+                                                                <Image key={s} source={{ uri: faviconFor(s) }} style={{ width: 18, height: 18 }} />
+                                                            ))}
+                                                        </View>
+                                                        <Text style={styles.templateOptionText}>{generateNameFromSources(def.SuggestedSites)}</Text>
+                                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                                                            {!manageMode && (
+                                                                <TouchableOpacity hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                                                    onPress={async () => {
+                                                                        try {
+                                                                            const name = generateNameFromSources(def.SuggestedSites);
+                                                                            const insert = await supabase.from('SearchTemplates').insert({
+                                                                                Name: name,
+                                                                                Category: 'General',
+                                                                                Description: 'Default starter template',
+                                                                                SearchPrompt: 'User-defined',
+                                                                                SuggestedSites: def.SuggestedSites,
+                                                                                ExtractionSchema: { fieldSourceMappings: {} },
+                                                                                IsDefault: false,
+                                                                                IsPublic: false,
+                                                                                isFavorite: false
+                                                                            }).select('*').single();
+                                                                            if (!insert.error && insert.data) {
+                                                                                setUserTemplates(prev => [insert.data, ...prev]);
+                                                                                setHiddenDefaults(prev => new Set([...Array.from(prev), def.Id]));
+                                                                            }
+                                                                        } catch { }
+                                                                    }}>
+                                                                    <Icon name="star-outline" size={22} color="#71717A" />
+                                                                </TouchableOpacity>
+                                                            )}
+                                                            {manageMode && (
+                                                                <TouchableOpacity hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} onPress={() => {
+                                                                    setHiddenDefaults(prev => new Set([...Array.from(prev), def.Id]));
+                                                                }}>
+                                                                    <Icon name="delete-outline" size={22} color="#e11d48" />
+                                                                </TouchableOpacity>
+                                                            )}
+                                                        </View>
+                                                    </View>
+                                                </TouchableOpacity>
+                                            ))}
+                                        {favorites.map((tpl) => (
+                                            <TouchableOpacity key={tpl.Id || tpl.id || tpl.Name} style={[styles.templateOption, manageMode && { backgroundColor: selectedTemplateIds.has(getTplId(tpl)) ? 'rgba(147,200,34,0.1)' : '#fff' }]} onPress={() => {
+                                                if (manageMode) { toggleSelectTemplate(getTplId(tpl)); return; }
+                                                // Use template
+                                                setSelectedTemplate(tpl.Name || tpl.name || 'Template');
+                                                const sources = tpl.SuggestedSites || tpl.suggestedSites || [];
+                                                const mappings = tpl.FieldSourceMappings || (tpl.ExtractionSchema && tpl.ExtractionSchema.fieldSourceMappings) || {};
+                                                const rows: PlatformFieldRow[] = [];
+                                                Object.entries(mappings).forEach(([platform, fsObj]: any) => {
+                                                    Object.entries(fsObj as Record<string, string[]>).forEach(([field, srcs]) => {
+                                                        rows.push({ id: `${platform}-${field}`, platform, field, sources: srcs as string[] });
+                                                    });
+                                                });
+                                                setTemplateDraft({ sources, fieldRows: rows });
+                                                setTemplateModalVisible(false);
+                                                setBottomNavState('platform');
+                                            }}>
+                                                <View style={[styles.templateItems]}>
+                                                    <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
+                                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 8 }}>
+                                                            {Array.isArray(tpl.SuggestedSites) && tpl.SuggestedSites.slice(0, 2).map((s: string) => (
+                                                                <Image key={s} source={{ uri: faviconFor(s) }} style={{ width: 18, height: 18 }} />
+                                                            ))}
+                                                        </View>
+                                                        <Text style={styles.templateOptionText} numberOfLines={1}>
+                                                            {(tpl.Name && tpl.Name.trim().length > 0) ? tpl.Name : generateNameFromSources(tpl.SuggestedSites || [])}
+                                                        </Text>
+                                                    </View>
+                                                    {/* Buttons */}
+                                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                                                        {!manageMode && (
+                                                            <TouchableOpacity hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} onPress={async () => { try { await supabase.from('SearchTemplates').update({ isFavorite: false }).eq('Id', tpl.Id); setUserTemplates(prev => prev.map(p => p.Id === tpl.Id ? { ...p, isFavorite: false } : p)); } catch { } }}>
+                                                                <Icon name="star" size={24} color="#FFD700" />
+                                                            </TouchableOpacity>)}
+                                                        {!manageMode && (
+                                                            <TouchableOpacity hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} onPress={() => {
+                                                                // Edit template (update if owned else copy)
+                                                                const sources = tpl.SuggestedSites || [];
+                                                                const mappings = tpl.FieldSourceMappings || (tpl.ExtractionSchema && tpl.ExtractionSchema.fieldSourceMappings) || {};
+                                                                const rows: PlatformFieldRow[] = [];
+                                                                Object.entries(mappings).forEach(([platform, fsObj]: any) => {
+                                                                    Object.entries(fsObj as Record<string, string[]>).forEach(([field, srcs]) => {
+                                                                        rows.push({ id: `${platform}-${field}`, platform, field, sources: srcs as string[] });
+                                                                    });
+                                                                });
+                                                                setTemplateDraft({ sources, fieldRows: rows });
+                                                                setSelectedTemplate(tpl.Name || '');
+                                                                setTemplateName(tpl.Name || '');
+                                                                setEditingTemplateId(tpl.Id || tpl.id || null);
+                                                                setTemplateModalView('create');
+                                                            }}>
+                                                                <Icon name="pencil" size={22} color="#71717A" />
+                                                            </TouchableOpacity>)}
+                                                        {/* Reordering disabled per latest request (manage = delete only) */}
+                                                        {manageMode && (
+                                                            <TouchableOpacity hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} onPress={async () => {
+                                                                try {
+                                                                    Alert.alert('Delete Template', 'Are you sure you want to delete this template?', [
+                                                                        { text: 'Cancel', style: 'cancel' },
+                                                                        {
+                                                                            text: 'Delete', style: 'destructive', onPress: async () => {
+                                                                                await supabase.from('SearchTemplates').delete().eq('Id', tpl.Id);
+                                                                                setUserTemplates(prev => prev.filter(p => p.Id !== tpl.Id));
+                                                                            }
+                                                                        }
+                                                                    ]);
+                                                                } catch { }
+                                                            }}>
+                                                                <Icon name="delete-outline" size={22} color="#e11d48" />
+                                                            </TouchableOpacity>)}
+                                                    </View>
+                                                </View>
+                                            </TouchableOpacity>
+                                        ))}
+
+                                    </View>
+
+                                    {/* Recents + Load More */}
+                                    <View style={styles.templateSection}>
+                                        <Text style={styles.sectionTitle}>Recents</Text>
+                                        {recents.map((tpl) => (
+                                            <TouchableOpacity key={tpl.Id || tpl.id || tpl.Name} style={[styles.templateOption, manageMode && { backgroundColor: selectedTemplateIds.has(getTplId(tpl)) ? 'rgba(147,200,34,0.1)' : '#fff' }]} onPress={() => {
+                                                if (manageMode) { toggleSelectTemplate(getTplId(tpl)); return; }
+                                                setSelectedTemplate(tpl.Name || tpl.name || 'Template');
+                                                const sources = tpl.SuggestedSites || tpl.suggestedSites || [];
+                                                const mappings = tpl.FieldSourceMappings || (tpl.ExtractionSchema && tpl.ExtractionSchema.fieldSourceMappings) || {};
+                                                const rows: PlatformFieldRow[] = [];
+                                                Object.entries(mappings).forEach(([platform, fsObj]: any) => {
+                                                    Object.entries(fsObj as Record<string, string[]>).forEach(([field, srcs]) => {
+                                                        rows.push({ id: `${platform}-${field}`, platform, field, sources: srcs as string[] });
+                                                    });
+                                                });
+                                                setTemplateDraft({ sources, fieldRows: rows });
+                                                setTemplateModalVisible(false);
+                                                setBottomNavState('platform');
+                                            }}>
+                                                <View style={[styles.templateItems]}>
+                                                    <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
+                                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 8 }}>
+                                                            {Array.isArray(tpl.SuggestedSites) && tpl.SuggestedSites.slice(0, 2).map((s: string) => (
+                                                                <Image key={s} source={{ uri: faviconFor(s) }} style={{ width: 18, height: 18 }} />
+                                                            ))}
+                                                        </View>
+                                                        <Text style={styles.templateOptionText} numberOfLines={1}>
+                                                            {(tpl.Name && tpl.Name.trim().length > 0) ? tpl.Name : generateNameFromSources(tpl.SuggestedSites || [])}
+                                                        </Text>
+                                                    </View>
+                                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                                                        {!manageMode && (
+                                                            <TouchableOpacity hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} onPress={() => {
+                                                                const sources = tpl.SuggestedSites || [];
+                                                                const mappings = tpl.FieldSourceMappings || (tpl.ExtractionSchema && tpl.ExtractionSchema.fieldSourceMappings) || {};
+                                                                const rows: PlatformFieldRow[] = [];
+                                                                Object.entries(mappings).forEach(([platform, fsObj]: any) => {
+                                                                    Object.entries(fsObj as Record<string, string[]>).forEach(([field, srcs]) => {
+                                                                        rows.push({ id: `${platform}-${field}`, platform, field, sources: srcs as string[] });
+                                                                    });
+                                                                });
+                                                                setTemplateDraft({ sources, fieldRows: rows });
+                                                                setSelectedTemplate(tpl.Name || '');
+                                                                setTemplateName(tpl.Name || '');
+                                                                setEditingTemplateId(tpl.Id || tpl.id || null);
+                                                                setTemplateModalView('create');
+                                                            }}>
+                                                                <Icon name="pencil" size={22} color="#71717A" />
+                                                            </TouchableOpacity>)}
+                                                        {!manageMode && (
+                                                            <TouchableOpacity hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} onPress={async () => { try { await supabase.from('SearchTemplates').update({ isFavorite: true }).eq('Id', tpl.Id); setUserTemplates(prev => prev.map(p => p.Id === tpl.Id ? { ...p, isFavorite: true } : p)); } catch { } }}>
+                                                                <Icon name="star-outline" size={24} color="#71717A" />
+                                                            </TouchableOpacity>)}
+                                                        {manageMode && (
+                                                            <TouchableOpacity hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} onPress={async () => {
+                                                                try {
+                                                                    Alert.alert('Delete Template', 'Delete this template?', [
+                                                                        { text: 'Cancel', style: 'cancel' },
+                                                                        {
+                                                                            text: 'Delete', style: 'destructive', onPress: async () => {
+                                                                                await supabase.from('SearchTemplates').delete().eq('Id', tpl.Id);
+                                                                                setUserTemplates(prev => prev.filter(p => p.Id !== tpl.Id));
+                                                                            }
+                                                                        }
+                                                                    ]);
+                                                                } catch { }
+                                                            }}>
+                                                                <Icon name="delete-outline" size={22} color="#e11d48" />
+                                                            </TouchableOpacity>)}
+                                                    </View>
+                                                </View>
+                                            </TouchableOpacity>
+                                        ))}
+                                        {hasMoreTemplates && (
+                                            <TouchableOpacity onPress={loadMoreTemplates} style={{ marginTop: 10, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }}>
+                                                <Text style={{ color: '#000' }}>{isLoadingMoreTemplates ? 'Loading...' : 'Load More'}</Text>
                                             </TouchableOpacity>
                                         )}
                                     </View>
-                                </View>
-                                {[{Id:'default-amazon', Name:'Amazon Default', SuggestedSites:['amazon.com']}, {Id:'default-ebay', Name:'eBay Default', SuggestedSites:['ebay.com']}]
-                                  .filter(def => !hiddenDefaults.has(def.Id))
-                                  .map(def => (
-                                    <TouchableOpacity key={def.Name} style={styles.templateOption} onPress={() => {
-                                        const autoName = generateNameFromSources(def.SuggestedSites);
-                                        setSelectedTemplate(autoName);
-                                        setTemplateDraft({ sources: def.SuggestedSites, fieldRows: [] });
-                                        setTemplateName(autoName);
-                                        setEditingTemplateId(null);
-                                        setTemplateModalView('create');
-                                    }}>
-                                        <View style={[styles.templateRow, {alignItems:'center', paddingRight: 20, justifyContent:'space-between'}]}>
-                                            <View style={{flexDirection:'row', alignItems:'center', gap:8}}>
-                                                {def.SuggestedSites.slice(0,2).map(s => (
-                                                    <Image key={s} source={{ uri: faviconFor(s) }} style={{ width:18, height:18 }} />
-                                                ))}
-                                            </View>
-                                            <Text style={styles.templateOptionText}>{generateNameFromSources(def.SuggestedSites)}</Text>
-                                            <View style={{flexDirection:'row', alignItems:'center', gap:16}}>
-                                                {!manageMode && (
-                                                    <TouchableOpacity hitSlop={{top:8,bottom:8,left:8,right:8}}
-                                                        onPress={async ()=>{ try {
-                                                            const name = generateNameFromSources(def.SuggestedSites);
-                                                            const insert = await supabase.from('SearchTemplates').insert({
-                                                                Name: name,
-                                                                Category: 'General',
-                                                                Description: 'Default starter template',
-                                                                SearchPrompt: 'User-defined',
-                                                                SuggestedSites: def.SuggestedSites,
-                                                                ExtractionSchema: { fieldSourceMappings: {} },
-                                                                IsDefault: false,
-                                                                IsPublic: false,
-                                                                isFavorite: false
-                                                            }).select('*').single();
-                                                            if (!insert.error && insert.data) {
-                                                                setUserTemplates(prev => [insert.data, ...prev]);
-                                                                setHiddenDefaults(prev => new Set([...Array.from(prev), def.Id]));
-                                                            }
-                                                        } catch {} }}>
-                                                        <Icon name="star-outline" size={22} color="#71717A" />
-                                                    </TouchableOpacity>
-                                                )}
-                                                {manageMode && (
-                                                    <TouchableOpacity hitSlop={{top:8,bottom:8,left:8,right:8}} onPress={() => {
-                                                        setHiddenDefaults(prev => new Set([...Array.from(prev), def.Id]));
-                                                    }}>
-                                                        <Icon name="delete-outline" size={22} color="#e11d48" />
-                                                    </TouchableOpacity>
-                                                )}
-                                            </View>
-                                        </View>
-                                    </TouchableOpacity>
-                                ))}
-                                {favorites.map((tpl) => (
-                                    <TouchableOpacity key={tpl.Id || tpl.id || tpl.Name} style={[styles.templateOption, manageMode && {backgroundColor: selectedTemplateIds.has(getTplId(tpl))? 'rgba(147,200,34,0.1)': '#fff'}]} onPress={() => {
-                                        if (manageMode) { toggleSelectTemplate(getTplId(tpl)); return; }
-                                        // Use template
-                                        setSelectedTemplate(tpl.Name || tpl.name || 'Template');
-                                        const sources = tpl.SuggestedSites || tpl.suggestedSites || [];
-                                        const mappings = tpl.FieldSourceMappings || (tpl.ExtractionSchema && tpl.ExtractionSchema.fieldSourceMappings) || {};
-                                        const rows: PlatformFieldRow[] = [];
-                                        Object.entries(mappings).forEach(([platform, fsObj]: any) => {
-                                            Object.entries(fsObj as Record<string,string[]>).forEach(([field, srcs])=>{
-                                                rows.push({ id: `${platform}-${field}`, platform, field, sources: srcs as string[] });
-                                            });
-                                        });
-                                        setTemplateDraft({ sources, fieldRows: rows });
-                                        setTemplateModalVisible(false);
-                                        setBottomNavState('platform');
-                                    }}>
-                                        <View style={[styles.templateItems]}>
-                                            <View style={{flex:1, flexDirection:'row', alignItems:'center'}}>
-                                                <View style={{flexDirection:'row', alignItems:'center', gap:6, marginRight:8}}>
-                                                {Array.isArray(tpl.SuggestedSites) && tpl.SuggestedSites.slice(0,2).map((s:string) => (
-                                                    <Image key={s} source={{ uri: faviconFor(s) }} style={{ width:18, height:18 }} />
-                                ))}
-                            </View>
-                                                <Text style={styles.templateOptionText} numberOfLines={1}>
-                                                    {(tpl.Name && tpl.Name.trim().length>0) ? tpl.Name : generateNameFromSources(tpl.SuggestedSites || [])}
-                                                </Text>
-                                            </View>
-                                            {/* Buttons */}
-                                            <View style={{flexDirection:'row', alignItems:'center', gap:16}}>
-                                                {!manageMode && (
-                                                <TouchableOpacity hitSlop={{top:8,bottom:8,left:8,right:8}} onPress={async ()=>{ try { await supabase.from('SearchTemplates').update({ isFavorite: false }).eq('Id', tpl.Id); setUserTemplates(prev=>prev.map(p=>p.Id===tpl.Id?{...p,isFavorite:false}:p)); } catch {} }}>
-                                                    <Icon name="star" size={24} color="#FFD700" />
-                                                </TouchableOpacity>)}
-                                                {!manageMode && (
-                                                <TouchableOpacity hitSlop={{top:8,bottom:8,left:8,right:8}} onPress={() => {
-                                                    // Edit template (update if owned else copy)
-                                                    const sources = tpl.SuggestedSites || [];
-                                                    const mappings = tpl.FieldSourceMappings || (tpl.ExtractionSchema && tpl.ExtractionSchema.fieldSourceMappings) || {};
-                                                    const rows: PlatformFieldRow[] = [];
-                                                    Object.entries(mappings).forEach(([platform, fsObj]: any) => {
-                                                        Object.entries(fsObj as Record<string,string[]>).forEach(([field, srcs])=>{
-                                                            rows.push({ id: `${platform}-${field}`, platform, field, sources: srcs as string[] });
-                                                        });
-                                                    });
-                                                    setTemplateDraft({ sources, fieldRows: rows });
-                                                    setSelectedTemplate(tpl.Name || '');
-                                                    setTemplateName(tpl.Name || '');
-                                                    setEditingTemplateId(tpl.Id || tpl.id || null);
-                                                    setTemplateModalView('create');
-                                                }}>
-                                                    <Icon name="pencil" size={22} color="#71717A" />
-                                                </TouchableOpacity>)}
-                                                {/* Reordering disabled per latest request (manage = delete only) */}
-                                                {manageMode && (
-                                                <TouchableOpacity hitSlop={{top:8,bottom:8,left:8,right:8}} onPress={async ()=>{
-                                                    try {
-                                                        Alert.alert('Delete Template', 'Are you sure you want to delete this template?', [
-                                                            { text: 'Cancel', style: 'cancel' },
-                                                            { text: 'Delete', style: 'destructive', onPress: async () => {
-                                                                await supabase.from('SearchTemplates').delete().eq('Id', tpl.Id);
-                                                                setUserTemplates(prev => prev.filter(p => p.Id !== tpl.Id));
-                                                            } }
-                                                        ]);
-                                                    } catch {}
-                                                }}>
-                                                    <Icon name="delete-outline" size={22} color="#e11d48" />
-                                                </TouchableOpacity>)}
-                            </View>
-                                        </View>
-                                    </TouchableOpacity>
-                                ))}
-
-                            </View>
-
-                            {/* Recents + Load More */}
-                            <View style={styles.templateSection}>
-                                <Text style={styles.sectionTitle}>Recents</Text>
-                                {recents.map((tpl) => (
-                                    <TouchableOpacity key={tpl.Id || tpl.id || tpl.Name} style={[styles.templateOption, manageMode && {backgroundColor: selectedTemplateIds.has(getTplId(tpl))? 'rgba(147,200,34,0.1)': '#fff'}]} onPress={() => {
-                                        if (manageMode) { toggleSelectTemplate(getTplId(tpl)); return; }
-                                        setSelectedTemplate(tpl.Name || tpl.name || 'Template');
-                                        const sources = tpl.SuggestedSites || tpl.suggestedSites || [];
-                                        const mappings = tpl.FieldSourceMappings || (tpl.ExtractionSchema && tpl.ExtractionSchema.fieldSourceMappings) || {};
-                                        const rows: PlatformFieldRow[] = [];
-                                        Object.entries(mappings).forEach(([platform, fsObj]: any) => {
-                                            Object.entries(fsObj as Record<string,string[]>).forEach(([field, srcs])=>{
-                                                rows.push({ id: `${platform}-${field}`, platform, field, sources: srcs as string[] });
-                                            });
-                                        });
-                                        setTemplateDraft({ sources, fieldRows: rows });
-                                        setTemplateModalVisible(false);
-                                        setBottomNavState('platform');
-                                    }}>
-                                        <View style={[styles.templateItems]}>
-                                            <View style={{flex:1, flexDirection:'row', alignItems:'center'}}>
-                                                <View style={{flexDirection:'row', alignItems:'center', gap:6, marginRight:8}}>
-                                                {Array.isArray(tpl.SuggestedSites) && tpl.SuggestedSites.slice(0,2).map((s:string) => (
-                                                    <Image key={s} source={{ uri: faviconFor(s) }} style={{ width:18, height:18 }} />
-                                                ))}
-                                                </View>
-                                                <Text style={styles.templateOptionText} numberOfLines={1}>
-                                                    {(tpl.Name && tpl.Name.trim().length>0) ? tpl.Name : generateNameFromSources(tpl.SuggestedSites || [])}
-                                                </Text>
-                                            </View>
-                                            <View style={{flexDirection:'row', alignItems:'center', gap:16}}>
-                                                {!manageMode && (
-                                                <TouchableOpacity hitSlop={{top:8,bottom:8,left:8,right:8}} onPress={() => {
-                                                    const sources = tpl.SuggestedSites || [];
-                                                    const mappings = tpl.FieldSourceMappings || (tpl.ExtractionSchema && tpl.ExtractionSchema.fieldSourceMappings) || {};
-                                                    const rows: PlatformFieldRow[] = [];
-                                                    Object.entries(mappings).forEach(([platform, fsObj]: any) => {
-                                                        Object.entries(fsObj as Record<string,string[]>).forEach(([field, srcs])=>{
-                                                            rows.push({ id: `${platform}-${field}`, platform, field, sources: srcs as string[] });
-                                                        });
-                                                    });
-                                                    setTemplateDraft({ sources, fieldRows: rows });
-                                                    setSelectedTemplate(tpl.Name || '');
-                                                    setTemplateName(tpl.Name || '');
-                                                    setEditingTemplateId(tpl.Id || tpl.id || null);
-                                                    setTemplateModalView('create');
-                                                }}>
-                                                    <Icon name="pencil" size={22} color="#71717A" />
-                                                </TouchableOpacity>)}
-                                                {!manageMode && (
-                                                <TouchableOpacity hitSlop={{top:8,bottom:8,left:8,right:8}} onPress={async ()=>{ try { await supabase.from('SearchTemplates').update({ isFavorite: true }).eq('Id', tpl.Id); setUserTemplates(prev=>prev.map(p=>p.Id===tpl.Id?{...p,isFavorite:true}:p)); } catch {} }}>
-                                                    <Icon name="star-outline" size={24} color="#71717A" />
-                                                </TouchableOpacity>)}
-                                                {manageMode && (
-                                                <TouchableOpacity hitSlop={{top:8,bottom:8,left:8,right:8}} onPress={async ()=>{
-                                                    try {
-                                                        Alert.alert('Delete Template', 'Delete this template?', [
-                                                            { text: 'Cancel', style: 'cancel' },
-                                                            { text: 'Delete', style: 'destructive', onPress: async () => {
-                                                                await supabase.from('SearchTemplates').delete().eq('Id', tpl.Id);
-                                                                setUserTemplates(prev => prev.filter(p => p.Id !== tpl.Id));
-                                                            } }
-                                                        ]);
-                                                    } catch {}
-                                                }}>
-                                                    <Icon name="delete-outline" size={22} color="#e11d48" />
-                                                </TouchableOpacity>)}
-                                            </View>
-                                        </View>
-                                    </TouchableOpacity>
-                                ))}
-                                {hasMoreTemplates && (
-                                    <TouchableOpacity onPress={loadMoreTemplates} style={{marginTop:10, borderWidth:1, borderColor:'#E5E5E5', borderRadius:10, paddingVertical:10, alignItems:'center'}}>
-                                        <Text style={{color:'#000'}}>{isLoadingMoreTemplates ? 'Loading...' : 'Load More'}</Text>
-                                    </TouchableOpacity>
-                                )}
-                            </View>
-                            </>
+                                </>
                             )}
 
                             {templateModalView === 'create' && (
-                            <View style={{flex:1, minHeight: 700}}>
+                                <View style={{ flex: 1, minHeight: 700 }}>
 
-                            {/* Template name */}
-                            <View style={styles.templateSection}>
-                                <Text style={styles.sectionTitle}>Template Name</Text>
-                                <View style={{}}>
-                                    <TextInput
-                                        style={{borderWidth:1, borderColor:'#E5E5E5', borderRadius:12, paddingHorizontal:12, paddingVertical:10, color:'#000'}}
-                                        placeholder="Template name"
-                                        placeholderTextColor="#888"
-                                        value={templateName}
-                                        onChangeText={setTemplateName}
-                                    />
-                                </View>
-                            </View>
-                            {/* Sources input */}
-                            <View style={styles.templateSection}>
-                                <Text style={styles.sectionTitle}>Sources</Text>
-                                <View style={{flexDirection:'row', alignItems:'center', gap:8}}>
-                                    <TextInput
-                                        style={{flex:1, borderWidth:1, borderColor:'#E5E5E5', borderRadius:12, paddingHorizontal:12, paddingVertical:10}}
-                                        placeholder="Enter a site name or link"
-                                        placeholderTextColor="#888"
-                                        value={sourceInput}
-                                        onChangeText={setSourceInput}
-                                        autoCapitalize="none"
-                                        autoCorrect={false}
-                                    />
-                                    <TouchableOpacity onPress={addSource} style={{backgroundColor:'#93C822', borderRadius:10, padding:10}}>
-                                        <Icon name="arrow-right" size={20} color="#fff"/>
-                                    </TouchableOpacity>
-                                </View>
-                                <View style={{marginTop:10, gap:8}}>
-                                    {templateDraft.sources.map((domain) => (
-                                        <View key={domain} style={{flexDirection:'row', alignItems:'center', justifyContent:'space-between', borderWidth:1, borderColor:'#E5E5E5', borderRadius:12, padding:12}}>
-                                            <View style={{flexDirection:'row', alignItems:'center', gap:10}}>
-                                                <Image source={{ uri: faviconFor(domain) }} style={{ width:20, height:20 }} />
-                                                <Text style={{color:'#000'}}>{domain}</Text>
-                                            </View>
-                                            <TouchableOpacity onPress={() => removeSource(domain)}>
-                                                <Icon name="trash-can-outline" size={20} color="#e11d48"/>
-                                            </TouchableOpacity>
-                                        </View>
-                                    ))}
-                                </View>
-                            </View>
-
-                            {/* Field mappings */}
-                            <View style={[styles.templateSection]}>
-                                <Text style={styles.sectionTitle}>Fields</Text>
-                                {templateDraft.fieldRows.map(row => (
-                                    <View key={row.id} style={{borderWidth:1, borderColor:'#E5E5E5', borderRadius:12, padding:12, gap:8}}>
-                                        <View style={{flexDirection:'row', alignItems:'center', justifyContent:'space-between'}}>
-                                            <Text style={{fontWeight:'600', color:'#000'}}>Sourcing Request</Text>
-                                            <TouchableOpacity onPress={()=>deleteFieldRow(row.id)}>
-                                                <Icon name="trash-can-outline" size={18} color="#e11d48" />
-                                            </TouchableOpacity>
-                                        </View>
-                                        <View style={{flexDirection:'row', gap:8}}>
-                                            <View style={{flex:1}}>
-                                    <TouchableOpacity 
-                                                    style={{borderWidth:1, borderColor:'#E5E5E5', borderRadius:8, paddingHorizontal:8, paddingVertical:10, flexDirection:'row', alignItems:'center', justifyContent:'space-between'}}
-                                                    onPress={()=> setOpenDropdown(prev => ({ rowId: prev.rowId===row.id && prev.type==='platform' ? null : row.id, type: 'platform' }))}
-                                                >
-                                                    <View style={{flexDirection:'row', alignItems:'center', gap:8}}>
-                                                        <Icon name={PLATFORM_OPTIONS.find(p=>p.key===row.platform)?.icon || 'store'} size={18} color="#555" />
-                                                        <Text style={{color:'#000'}}>{PLATFORM_OPTIONS.find(p=>p.key===row.platform)?.label || 'Platform'}</Text>
-                                        </View>
-                                                    <Icon name="chevron-down" size={18} color="#000" />
-                                                </TouchableOpacity>
-                                                {openDropdown.rowId===row.id && openDropdown.type==='platform' && (
-                                                    <View style={{position:'absolute', top:48, left:0, right:0, zIndex:1000}}>
-                                                        <View style={{backgroundColor:'#fff', borderWidth:1, borderColor:'#E5E5E5', borderRadius:8, maxHeight:260}}>
-                                                            <View style={{padding:8, borderBottomWidth:1, borderBottomColor:'#E5E5E5'}}>
-                                                                <TextInput
-                                                                    style={{borderWidth:1, borderColor:'#E5E5E5', borderRadius:6, paddingHorizontal:8, color:'#000'}}
-                                                                    placeholder="Search platform..."
-                                                                    placeholderTextColor="#888"
-                                                                    value={dropdownSearchQuery}
-                                                                    onChangeText={setDropdownSearchQuery}
-                                                                />
-                                                            </View>
-                                                            <ScrollView style={{maxHeight:210}}>
-                                                                {PLATFORM_OPTIONS.filter(opt=>opt.label.toLowerCase().includes(dropdownSearchQuery.toLowerCase())).map(opt => (
-                                                                    <TouchableOpacity key={opt.key} style={{padding:10, flexDirection:'row', alignItems:'center', gap:8}} onPress={()=>{updateFieldRow(row.id,{platform: opt.key}); setOpenDropdown({rowId:null,type:null}); setDropdownSearchQuery('');}}>
-                                                                        <Icon name={opt.icon} size={18} color="#555" />
-                                                                        <Text style={{color:'#000'}}>{opt.label}</Text>
-                                    </TouchableOpacity>
-                                ))}
-                                                            </ScrollView>
-                            </View>
-                                                    </View>
-                                                )}
-                                            </View>
-                                            <View style={{flex:1}}>
-                                                <TouchableOpacity
-                                                    style={{borderWidth:1, borderColor:'#E5E5E5', borderRadius:8, paddingHorizontal:8, paddingVertical:10, flexDirection:'row', alignItems:'center', justifyContent:'space-between'}}
-                                                    onPress={()=> setOpenDropdown(prev => ({ rowId: prev.rowId===row.id && prev.type==='field' ? null : row.id, type: 'field' }))}
-                                                >
-                                                    <Text style={{color:'#000', fontWeight:'500'}}>{FIELD_OPTIONS.find(f=>f.key===row.field)?.label || 'Field'}</Text>
-                                                    <Icon name="chevron-down" size={18} color="#000" />
-                                                </TouchableOpacity>
-                                                {openDropdown.rowId===row.id && openDropdown.type==='field' && (
-                                                    <View style={{position:'absolute', top:48, left:0, right:0, zIndex:1000}}>
-                                                        <View style={{backgroundColor:'#fff', borderWidth:1, borderColor:'#E5E5E5', borderRadius:8, maxHeight:260}}>
-                                                            <View style={{padding:8, borderBottomWidth:1, borderBottomColor:'#E5E5E5'}}>
-                                                                <TextInput
-                                                                    style={{paddingHorizontal:8, color:'#000'}}
-                                                                    placeholder="Search field..."
-                                                                    placeholderTextColor="#888"
-                                                                    value={dropdownSearchQuery}
-                                                                    onChangeText={setDropdownSearchQuery}
-                                                                />
-                                                            </View>
-                                                            <ScrollView style={{maxHeight:210}}>
-                                                                {FIELD_OPTIONS.filter(opt=>opt.label.toLowerCase().includes(dropdownSearchQuery.toLowerCase())).map(opt => (
-                                                                    <TouchableOpacity key={opt.key} style={{padding:10}} onPress={()=>{updateFieldRow(row.id,{field: opt.key}); setOpenDropdown({rowId:null,type:null}); setDropdownSearchQuery('');}}>
-                                                                        <Text style={{color:'#000'}}>{opt.label}</Text>
-                                                                    </TouchableOpacity>
-                                                                ))}
-                                                            </ScrollView>
-                                                        </View>
-                                                    </View>
-                                                )}
-                                            </View>
-                                        </View>
-                                        <View style={{flexDirection:'row', alignItems:'center', justifyContent:'space-between'}}>
-                                            <Text style={{color:'#71717A'}}>Tap to enable a source</Text>
-                                        </View>
-                                        <View style={{flexDirection:'row', flexWrap:'wrap', gap:8}}>
-                                            {templateDraft.sources.map((domain)=>{
-                                                const active = row.sources.includes(domain);
-                                                return (
-                                                    <TouchableOpacity key={`${row.id}-${domain}`} onPress={()=>toggleRowSource(row.id, domain)} style={{borderWidth:1, borderColor: active? '#93C822':'#E5E5E5', backgroundColor: active? 'rgba(147,200,34,0.1)':'#fff', borderRadius:20, paddingVertical:6, paddingHorizontal:10, flexDirection:'row', alignItems:'center', gap:6}}>
-                                                        <Image source={{ uri: faviconFor(domain) }} style={{ width:16, height:16 }} />
-                                                        <Text style={{color:'#000'}}>{domain}</Text>
-                                                    </TouchableOpacity>
-                                                );
-                                            })}
+                                    {/* Template name */}
+                                    <View style={styles.templateSection}>
+                                        <Text style={styles.sectionTitle}>Template Name</Text>
+                                        <View style={{}}>
+                                            <TextInput
+                                                style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, color: '#000' }}
+                                                placeholder="Template name"
+                                                placeholderTextColor="#888"
+                                                value={templateName}
+                                                onChangeText={setTemplateName}
+                                            />
                                         </View>
                                     </View>
-                                ))}
-                            </View>
-                            </View>
+                                    {/* Sources input */}
+                                    <View style={styles.templateSection}>
+                                        <Text style={styles.sectionTitle}>Sources</Text>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                            <TextInput
+                                                style={{ flex: 1, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10 }}
+                                                placeholder="Enter a site name or link"
+                                                placeholderTextColor="#888"
+                                                value={sourceInput}
+                                                onChangeText={setSourceInput}
+                                                autoCapitalize="none"
+                                                autoCorrect={false}
+                                            />
+                                            <TouchableOpacity onPress={addSource} style={{ backgroundColor: '#93C822', borderRadius: 10, padding: 10 }}>
+                                                <Icon name="arrow-right" size={20} color="#fff" />
+                                            </TouchableOpacity>
+                                        </View>
+                                        <View style={{ marginTop: 10, gap: 8 }}>
+                                            {templateDraft.sources.map((domain) => (
+                                                <View key={domain} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12 }}>
+                                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                                                        <Image source={{ uri: faviconFor(domain) }} style={{ width: 20, height: 20 }} />
+                                                        <Text style={{ color: '#000' }}>{domain}</Text>
+                                                    </View>
+                                                    <TouchableOpacity onPress={() => removeSource(domain)}>
+                                                        <Icon name="trash-can-outline" size={20} color="#e11d48" />
+                                                    </TouchableOpacity>
+                                                </View>
+                                            ))}
+                                        </View>
+                                    </View>
+
+                                    {/* Field mappings */}
+                                    <View style={[styles.templateSection]}>
+                                        <Text style={styles.sectionTitle}>Fields</Text>
+                                        {templateDraft.fieldRows.map(row => (
+                                            <View key={row.id} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, gap: 8 }}>
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                    <Text style={{ fontWeight: '600', color: '#000' }}>Sourcing Request</Text>
+                                                    <TouchableOpacity onPress={() => deleteFieldRow(row.id)}>
+                                                        <Icon name="trash-can-outline" size={18} color="#e11d48" />
+                                                    </TouchableOpacity>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', gap: 8 }}>
+                                                    <View style={{ flex: 1 }}>
+                                                        <TouchableOpacity
+                                                            style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+                                                            onPress={() => setOpenDropdown(prev => ({ rowId: prev.rowId === row.id && prev.type === 'platform' ? null : row.id, type: 'platform' }))}
+                                                        >
+                                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                                <Icon name={PLATFORM_OPTIONS.find(p => p.key === row.platform)?.icon || 'store'} size={18} color="#555" />
+                                                                <Text style={{ color: '#000' }}>{PLATFORM_OPTIONS.find(p => p.key === row.platform)?.label || 'Platform'}</Text>
+                                                            </View>
+                                                            <Icon name="chevron-down" size={18} color="#000" />
+                                                        </TouchableOpacity>
+                                                        {openDropdown.rowId === row.id && openDropdown.type === 'platform' && (
+                                                            <View style={{ position: 'absolute', top: 48, left: 0, right: 0, zIndex: 1000 }}>
+                                                                <View style={{ backgroundColor: '#fff', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, maxHeight: 260 }}>
+                                                                    <View style={{ padding: 8, borderBottomWidth: 1, borderBottomColor: '#E5E5E5' }}>
+                                                                        <TextInput
+                                                                            style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 6, paddingHorizontal: 8, color: '#000' }}
+                                                                            placeholder="Search platform..."
+                                                                            placeholderTextColor="#888"
+                                                                            value={dropdownSearchQuery}
+                                                                            onChangeText={setDropdownSearchQuery}
+                                                                        />
+                                                                    </View>
+                                                                    <ScrollView style={{ maxHeight: 210 }}>
+                                                                        {PLATFORM_OPTIONS.filter(opt => opt.label.toLowerCase().includes(dropdownSearchQuery.toLowerCase())).map(opt => (
+                                                                            <TouchableOpacity key={opt.key} style={{ padding: 10, flexDirection: 'row', alignItems: 'center', gap: 8 }} onPress={() => { updateFieldRow(row.id, { platform: opt.key }); setOpenDropdown({ rowId: null, type: null }); setDropdownSearchQuery(''); }}>
+                                                                                <Icon name={opt.icon} size={18} color="#555" />
+                                                                                <Text style={{ color: '#000' }}>{opt.label}</Text>
+                                                                            </TouchableOpacity>
+                                                                        ))}
+                                                                    </ScrollView>
+                                                                </View>
+                                                            </View>
+                                                        )}
+                                                    </View>
+                                                    <View style={{ flex: 1 }}>
+                                                        <TouchableOpacity
+                                                            style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+                                                            onPress={() => setOpenDropdown(prev => ({ rowId: prev.rowId === row.id && prev.type === 'field' ? null : row.id, type: 'field' }))}
+                                                        >
+                                                            <Text style={{ color: '#000', fontWeight: '500' }}>{FIELD_OPTIONS.find(f => f.key === row.field)?.label || 'Field'}</Text>
+                                                            <Icon name="chevron-down" size={18} color="#000" />
+                                                        </TouchableOpacity>
+                                                        {openDropdown.rowId === row.id && openDropdown.type === 'field' && (
+                                                            <View style={{ position: 'absolute', top: 48, left: 0, right: 0, zIndex: 1000 }}>
+                                                                <View style={{ backgroundColor: '#fff', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, maxHeight: 260 }}>
+                                                                    <View style={{ padding: 8, borderBottomWidth: 1, borderBottomColor: '#E5E5E5' }}>
+                                                                        <TextInput
+                                                                            style={{ paddingHorizontal: 8, color: '#000' }}
+                                                                            placeholder="Search field..."
+                                                                            placeholderTextColor="#888"
+                                                                            value={dropdownSearchQuery}
+                                                                            onChangeText={setDropdownSearchQuery}
+                                                                        />
+                                                                    </View>
+                                                                    <ScrollView style={{ maxHeight: 210 }}>
+                                                                        {FIELD_OPTIONS.filter(opt => opt.label.toLowerCase().includes(dropdownSearchQuery.toLowerCase())).map(opt => (
+                                                                            <TouchableOpacity key={opt.key} style={{ padding: 10 }} onPress={() => { updateFieldRow(row.id, { field: opt.key }); setOpenDropdown({ rowId: null, type: null }); setDropdownSearchQuery(''); }}>
+                                                                                <Text style={{ color: '#000' }}>{opt.label}</Text>
+                                                                            </TouchableOpacity>
+                                                                        ))}
+                                                                    </ScrollView>
+                                                                </View>
+                                                            </View>
+                                                        )}
+                                                    </View>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                    <Text style={{ color: '#71717A' }}>Tap to enable a source</Text>
+                                                </View>
+                                                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                                                    {templateDraft.sources.map((domain) => {
+                                                        const active = row.sources.includes(domain);
+                                                        return (
+                                                            <TouchableOpacity key={`${row.id}-${domain}`} onPress={() => toggleRowSource(row.id, domain)} style={{ borderWidth: 1, borderColor: active ? '#93C822' : '#E5E5E5', backgroundColor: active ? 'rgba(147,200,34,0.1)' : '#fff', borderRadius: 20, paddingVertical: 6, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                                                <Image source={{ uri: faviconFor(domain) }} style={{ width: 16, height: 16 }} />
+                                                                <Text style={{ color: '#000' }}>{domain}</Text>
+                                                            </TouchableOpacity>
+                                                        );
+                                                    })}
+                                                </View>
+                                            </View>
+                                        ))}
+                                    </View>
+                                </View>
                             )}
                         </ScrollView>
 
                         {templateModalView === 'create' && (
-                            <View style={{flexDirection:'row', justifyContent:'center', alignItems:'center', paddingVertical:10}}>
-                                <TouchableOpacity onPress={addFieldRow} style={{borderWidth:1, borderColor:'#93C822', borderRadius:12, paddingVertical:12, paddingHorizontal:10, width:'90%', alignItems:'center'}}>
-                                    <Text style={{color:'#93C822', fontWeight:'600'}}>+ Add Field</Text>
+                            <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingVertical: 10 }}>
+                                <TouchableOpacity onPress={addFieldRow} style={{ borderWidth: 1, borderColor: '#93C822', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 10, width: '90%', alignItems: 'center' }}>
+                                    <Text style={{ color: '#93C822', fontWeight: '600' }}>+ Add Field</Text>
                                 </TouchableOpacity>
                             </View>
                         )}
 
                         {templateModalView === 'create' ? (
-                            
-                                <TouchableOpacity 
-                                style={styles.createNewTemplateButton} 
+
+                            <TouchableOpacity
+                                style={styles.createNewTemplateButton}
                                 onPress={async () => {
                                     const mappings: Record<string, Record<string, string[]>> = {};
                                     templateDraft.fieldRows.forEach(r => {
@@ -1354,24 +1427,24 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
                                                 UserId: currentUserId,
                                             });
                                         }
-                                    } catch {}
+                                    } catch { }
                                     setTemplateModalView('picker');
-                                        setTemplateModalVisible(false);
+                                    setTemplateModalVisible(false);
                                     setBottomNavState('platform');
-                                    }}
-                                >
+                                }}
+                            >
                                 <Icon name="content-save" size={20} color="#FFFFFF" />
                                 <Text style={styles.createNewTemplateButtonText}>Save Template</Text>
-                                </TouchableOpacity>
+                            </TouchableOpacity>
 
                         ) : (
-                        <TouchableOpacity 
-                            style={styles.createNewTemplateButton} 
+                            <TouchableOpacity
+                                style={styles.createNewTemplateButton}
                                 onPress={() => setTemplateModalView('create')}
-                        >
-                            <Icon name="plus" size={20} color="#FFFFFF" />
-                            <Text style={styles.createNewTemplateButtonText}>Create New Template</Text>
-                        </TouchableOpacity>
+                            >
+                                <Icon name="plus" size={20} color="#FFFFFF" />
+                                <Text style={styles.createNewTemplateButtonText}>Create New Template</Text>
+                            </TouchableOpacity>
                         )}
                     </View>
                 </View>
@@ -1379,137 +1452,117 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
 
             {/* Global Item Jobs Modal (no tabs UI) */}
             <ItemJobsModal
-              visible={jobsModalVisible}
-              onClose={() => setJobsModalVisible(false)}
-              items={(() => {
-                const built = (analysisData?.results || []).map((res, idx) => {
-                  const first = res?.serpApiData?.[0];
-                  return { index: idx, title: first?.title || `Item ${idx + 1}`, thumb: first?.image || first?.thumbnail || '', matchesCount: res?.serpApiData?.length || 0 };
-                });
-                if (built.length > 0) return built;
-                return (externalItems || []).map((it, i) => ({ index: it.index ?? i, title: it.title || `Item ${i + 1}`, thumb: it.thumb || '', matchesCount: it.matchesCount || 0 }));
-              })()}
-              currentIndex={currentProductIndex}
-              scanColor={() => (analysisData ? '#93C822' : (isLoading ? '#FFD700' : '#4B5563'))}
-              matchColor={(idx) => (idx === currentProductIndex && selectedIndices.length > 0 ? '#93C822' : '#FFD700')}
-              detailsColor={(idx) => {
-                const s = itemGenerateJobs[idx]?.status;
-                if (s === 'completed') return '#93C822';
-                if (s === 'failed') return '#e11d48';
-                if (s) return '#FFD700';
-                return '#4B5563';
-              }}
-              detailsEnabled={(idx) => !!itemGenerateJobs[idx]?.jobId}
-              countLabel={'Matches'}
-              getSecondaryText={(idx) => {
-                const s = itemGenerateJobs[idx]?.status;
-                if (!s) return null;
-                return s === 'completed' ? 'Generated' : s === 'failed' ? 'Generation failed' : 'Generating…';
-              }}
-              enableMultiSelect
-              onBatchGenerateSelected={async (indices) => {
-                try {
-                  // Generate for each selected index sequentially to avoid overwhelming backend
-                  for (const idx of indices) {
+                visible={jobsModalVisible}
+                onClose={() => setJobsModalVisible(false)}
+                items={modalItems}
+                currentIndex={currentProductIndex}
+                scanColor={() => (analysisData ? '#93C822' : (isLoading ? '#FFD700' : '#4B5563'))}
+                matchColor={(idx) => (idx === currentProductIndex && selectedIndices.length > 0 ? '#93C822' : '#FFD700')}
+                detailsColor={(idx) => {
+                    const s = itemGenerateJobs[idx]?.status;
+                    if (s === 'completed') return '#93C822';
+                    if (s === 'failed') return '#e11d48';
+                    if (s) return '#FFD700';
+                    return '#4B5563';
+                }}
+                detailsEnabled={(idx) => !!itemGenerateJobs[idx]?.jobId}
+                countLabel={'Matches'}
+                getSecondaryText={(idx) => {
+                    const s = itemGenerateJobs[idx]?.status;
+                    if (!s) return null;
+                    return s === 'completed' ? 'Generated' : s === 'failed' ? 'Generation failed' : 'Generating…';
+                }}
+                enableMultiSelect
+                onBatchGenerateSelected={async (indices) => {
+                    try {
+                        // Generate for each selected index sequentially to avoid overwhelming backend
+                        for (const idx of indices) {
+                            setCurrentProductIndex(idx);
+                            const submit: JobResponse = await handleGenerate();
+                            const jid = submit?.jobId;
+                            if (jid) setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: jid } }));
+                        }
+                        setJobsModalVisible(false);
+                    } catch {
+                        Alert.alert('Batch generate failed', 'Please try again');
+                    }
+                }}
+                onBatchRescanSelected={async (indices) => {
+                    try {
+                        const token = await getToken();
+                        // Build minimal match payload using current best/cover images
+                        const productsPayload = indices.map((idx) => {
+                            const serp = analysisData?.results[idx]?.serpApiData || [];
+                            const firstImage = serp[0]?.image || serp[0]?.thumbnail || '';
+                            return {
+                                productIndex: idx,
+                                images: [{ url: firstImage }],
+                            };
+                        });
+                        const res = await fetch(`${BASE_URL}/api/products/match/jobs`, {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ products: productsPayload, options: { useReranking: true } }),
+                        });
+                        if (!res.ok) throw new Error(`Rescan failed (${res.status})`);
+                        setJobsModalVisible(false);
+                        Alert.alert('Rescan started', `${indices.length} item(s) queued`);
+                    } catch (e) {
+                        Alert.alert('Rescan failed', 'Please try again');
+                    }
+                }}
+                onRescan={(idx) => {
+                    // Navigate user to AddProduct to retake the core photo for this item
+                    setJobsModalVisible(false);
+                    navigation.navigate('AddProduct' as never, { focusItemIndex: idx, message: 'Retake core photo to improve results' } as never);
+                }}
+                onQuickGenerate={async (idx) => {
+                    try {
+                        setCurrentProductIndex(idx);
+                        setJobsModalVisible(false);
+                        const submitResult: JobResponse = await handleGenerate();
+                        const jid = submitResult?.jobId;
+                        if (jid) {
+                            setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: jid } }));
+                            const jobMap = { ...itemGenerateJobs, [idx]: { jobId: jid } };
+                            navigation.navigate('LoadingScreen' as never, {
+                                processType: 'generate',
+                                payload: { jobId: jid, firstPhotos: [] },
+                                onCompleteRoute: { screen: 'GenerateDetailsScreen', params: { jobId: jid, matchJobId: analysisData?.jobId, items: modalItems, jobMap, userImagesByIndex } }
+                            } as never);
+                        }
+                    } catch (e) {
+                        Alert.alert('Generate failed', 'Please try again');
+                    }
+                }}
+                onPickScan={(idx) => {
                     setCurrentProductIndex(idx);
-                    const submit: JobResponse = await handleGenerate();
-                    const jid = submit?.jobId;
-                    if (jid) setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: jid } }));
-                  }
-                  setJobsModalVisible(false);
-                } catch {
-                  Alert.alert('Batch generate failed', 'Please try again');
-                }
-              }}
-              onBatchRescanSelected={async (indices) => {
-                try {
-                  const token = await getToken();
-                  // Build minimal match payload using current best/cover images
-                  const productsPayload = indices.map((idx) => {
-                    const serp = analysisData?.results[idx]?.serpApiData || [];
-                    const firstImage = serp[0]?.image || serp[0]?.thumbnail || '';
-                    return {
-                      productIndex: idx,
-                      images: [{ url: firstImage }],
-                    };
-                  });
-                  const res = await fetch(`${BASE_URL}/api/products/match/jobs`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ products: productsPayload, options: { useReranking: true } }),
-                  });
-                  if (!res.ok) throw new Error(`Rescan failed (${res.status})`);
-                  setJobsModalVisible(false);
-                  Alert.alert('Rescan started', `${indices.length} item(s) queued`);
-                } catch (e) {
-                  Alert.alert('Rescan failed', 'Please try again');
-                }
-              }}
-              onRescan={(idx) => {
-                // Navigate user to AddProduct to retake the core photo for this item
-                setJobsModalVisible(false);
-                navigation.navigate('AddProduct' as never, { focusItemIndex: idx, message: 'Retake core photo to improve results' } as never);
-              }}
-              onQuickGenerate={async (idx) => {
-                try {
-                  setCurrentProductIndex(idx);
-                  setJobsModalVisible(false);
-                  const submitResult: JobResponse = await handleGenerate();
-                  const jid = submitResult?.jobId;
-                  if (jid) {
-                    setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: jid } }));
-                    const itemsForModal = (analysisData?.results || []).map((res, ridx) => {
-                      const first = res?.serpApiData?.[0];
-                      return {
-                        index: ridx,
-                        title: first?.title || `Item ${ridx + 1}`,
-                        thumb: first?.image || first?.thumbnail || '',
-                        matchesCount: res?.serpApiData?.length || 0,
-                      };
-                    });
-                    const jobMap = { ...itemGenerateJobs, [idx]: { jobId: jid } };
-                    navigation.navigate('LoadingScreen' as never, {
-                      processType: 'generate',
-                      payload: { jobId: jid, firstPhotos: [] },
-                      onCompleteRoute: { screen: 'GenerateDetailsScreen', params: { jobId: jid, matchJobId: analysisData?.jobId, items: itemsForModal, jobMap, userImagesByIndex } }
-                    } as never);
-                  }
-                } catch (e) {
-                  Alert.alert('Generate failed', 'Please try again');
-                }
-              }}
-              onPickScan={(idx) => {
-                setCurrentProductIndex(idx);
-                setSelectedIndices([]);
-                setSelectedPlatforms([]);
-                setSelectedTemplate(null);
-                setJobsModalVisible(false);
-                setBottomNavState('empty');
-              }}
-              onPickMatch={(idx) => {
-                setCurrentProductIndex(idx);
-                setJobsModalVisible(false);
-                setBottomNavState('selection');
-              }}
-              onPickDetails={(idx) => {
-                const jobId = itemGenerateJobs[idx]?.jobId;
-                if (jobId) {
-                  const itemsForModal = (analysisData?.results || []).map((res, ridx) => {
-                    const first = res?.serpApiData?.[0];
-                    return { index: ridx, title: first?.title || `Item ${ridx + 1}`, thumb: first?.image || first?.thumbnail || '', matchesCount: res?.serpApiData?.length || 0 };
-                  });
-                  const jobMap = { ...itemGenerateJobs };
-                  navigation.navigate('LoadingScreen' as never, {
-                    processType: 'generate',
-                    payload: { jobId, firstPhotos: [] },
-                    onCompleteRoute: { screen: 'GenerateDetailsScreen', params: { jobId, items: itemsForModal, jobMap, matchJobId: analysisData?.jobId, userImagesByIndex } }
-                  } as never);
-                  setJobsModalVisible(false);
-                }
-              }}
+                    setSelectedIndices([]);
+                    setSelectedPlatforms([]);
+                    setSelectedTemplate(null);
+                    setJobsModalVisible(false);
+                    setBottomNavState('empty');
+                }}
+                onPickMatch={(idx) => {
+                    setCurrentProductIndex(idx);
+                    setJobsModalVisible(false);
+                    setBottomNavState('selection');
+                }}
+                onPickDetails={(idx) => {
+                    const jobId = itemGenerateJobs[idx]?.jobId;
+                    if (jobId) {
+                        const jobMap = { ...itemGenerateJobs };
+                        navigation.navigate('LoadingScreen' as never, {
+                            processType: 'generate',
+                            payload: { jobId, firstPhotos: [] },
+                            onCompleteRoute: { screen: 'GenerateDetailsScreen', params: { jobId, items: modalItems, jobMap, matchJobId: analysisData?.jobId, userImagesByIndex } }
+                        } as never);
+                        setJobsModalVisible(false);
+                    }
+                }}
             />
 
-      {/* old bulk modal removed in favor of ItemJobsModal */}
+            {/* old bulk modal removed in favor of ItemJobsModal */}
         </View>
     );
 }
@@ -1518,60 +1571,60 @@ export default MatchSelectionScreen;
 
 // --- Enhanced Stylesheet ---
 const styles = StyleSheet.create({
-    container: { 
-        flex: 1, 
-        backgroundColor: 'rgba(255, 255, 255, 0)', 
+    container: {
+        flex: 1,
+        backgroundColor: 'rgba(255, 255, 255, 0)',
         paddingVertical: 20,
-    }, 
-    centerContainer: { 
-        flex: 1, 
-        justifyContent: 'center', 
-        alignItems: 'center', 
-        backgroundColor: 'rgb(255, 255, 255)' 
-    }, 
-    errorText: { 
-        color: '#ff4d4d', 
-        fontSize: 16, 
-        textAlign: 'center', 
-        padding: 20 
-    }, 
-    infoText: { 
-        color: '#000000', 
-        fontSize: 16, 
-        textAlign: 'center', 
-        marginTop: 50 
-    }, 
-    header: { 
-        paddingHorizontal: 16, 
-        paddingVertical: 10, 
-        borderBottomWidth: 1, 
-        borderBottomColor: 'rgba(228, 228, 231, 0.1)' 
+    },
+    centerContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: 'rgb(255, 255, 255)'
+    },
+    errorText: {
+        color: '#ff4d4d',
+        fontSize: 16,
+        textAlign: 'center',
+        padding: 20
+    },
+    infoText: {
+        color: '#000000',
+        fontSize: 16,
+        textAlign: 'center',
+        marginTop: 50
+    },
+    header: {
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: 'rgba(228, 228, 231, 0.1)'
     },
     headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#000000' },
     headerSubtitle: { fontSize: 14, color: '#000000', marginTop: 4 },
-    itemContainer: { 
-        width: ITEM_WIDTH, 
-        marginBottom: ITEM_SPACING, 
-        borderRadius: 8, 
-        overflow: 'hidden', 
-        backgroundColor: '#FFFFFF', 
-        borderWidth: 2, 
+    itemContainer: {
+        width: ITEM_WIDTH,
+        marginBottom: ITEM_SPACING,
+        borderRadius: 8,
+        overflow: 'hidden',
+        backgroundColor: '#FFFFFF',
+        borderWidth: 2,
         borderColor: 'rgba(228, 228, 231, 0.5)'
     },
-    itemSelected: { 
-        borderColor: '#93C822', 
-        borderWidth: 2, 
-        borderRadius: 8 
+    itemSelected: {
+        borderColor: '#93C822',
+        borderWidth: 2,
+        borderRadius: 8
     },
     itemPressed: {
         opacity: 0.8,
         transform: [{ scale: 0.98 }]
     },
-    selectionOverlay: { 
-        ...StyleSheet.absoluteFillObject, 
-        backgroundColor: 'rgba(147, 200, 34, 0.3)', 
-        justifyContent: 'center', 
-        alignItems: 'center' 
+    selectionOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: 'rgba(147, 200, 34, 0.3)',
+        justifyContent: 'center',
+        alignItems: 'center'
     },
     itemImage: { width: '100%', height: ITEM_WIDTH, backgroundColor: '#333' },
     itemDetails: { padding: 8 },
@@ -1579,18 +1632,18 @@ const styles = StyleSheet.create({
     itemPrice: { fontSize: 13, color: '#000000', marginTop: 2 },
     itemCondition: { fontSize: 12, color: '#666666', marginTop: 2 },
     itemSource: { fontSize: 12, color: '#000000', marginTop: 4 },
-    bottomNavContainer: { 
-        padding: 20, 
+    bottomNavContainer: {
+        padding: 20,
         backgroundColor: 'transparent',
-        borderTopWidth: 1, 
-        borderTopColor: '#E5E5E5', 
+        borderTopWidth: 1,
+        borderTopColor: '#E5E5E5',
         //backgroundColor: 'red',
         //backgroundColor: 'rgba(255, 255, 255, 0.9)',
         minHeight: 100,
     },
     expandedBottomNav: {
-        alignItems: 'center', 
-        gap: 12, 
+        alignItems: 'center',
+        gap: 12,
         paddingLeft: 30,
         paddingRight: 30,
         justifyContent: 'space-between',
@@ -1599,9 +1652,9 @@ const styles = StyleSheet.create({
         maxHeight: 600,
         backgroundColor: 'rgb(255, 255, 255)'
     },
-    bottomNavStepContainer: { 
-        alignItems: 'center', 
-        gap: 12, 
+    bottomNavStepContainer: {
+        alignItems: 'center',
+        gap: 12,
         paddingLeft: 30,
         paddingRight: 30,
         marginTop: 10,
@@ -1615,8 +1668,8 @@ const styles = StyleSheet.create({
         backgroundColor: 'transparent',
         gap: 12,
         maxHeight: 100,
-    
-    
+
+
     },
     dropdownSelect: {
         flexDirection: 'row',
@@ -1636,15 +1689,15 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         color: '#000000'
     },
-    mainButton: { 
-        flexDirection: 'row', 
-        backgroundColor: '#93C822', 
-        paddingVertical: 14, 
-        paddingHorizontal: 30, 
-        borderRadius: 12, 
-        alignItems: 'center', 
-        justifyContent: 'center', 
-        width: '100%' 
+    mainButton: {
+        flexDirection: 'row',
+        backgroundColor: '#93C822',
+        paddingVertical: 14,
+        paddingHorizontal: 30,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '100%'
     },
     emptyButtonSolo: {
         backgroundColor: 'transparent',
@@ -1665,35 +1718,35 @@ const styles = StyleSheet.create({
         borderRadius: 12,
     },
     mainButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-    secondaryButton: { 
+    secondaryButton: {
         marginTop: 12,
-        flexDirection: 'row', 
-        backgroundColor: '#D9D9D9', 
-        paddingVertical: 14, 
-        paddingHorizontal: 30, 
-        borderRadius: 12, 
-        alignItems: 'center', 
-        justifyContent: 'center', 
-        width: '100%' 
+        flexDirection: 'row',
+        backgroundColor: '#D9D9D9',
+        paddingVertical: 14,
+        paddingHorizontal: 30,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '100%'
     },
     secondaryButtonText: { color: '#888', fontSize: 16, fontWeight: '500' },
-    
-    
+
+
     clearBackButton: {
-        flexDirection: 'row', 
-        backgroundColor: 'transparent', 
-        paddingVertical: 7, 
-        borderRadius: 12, 
+        flexDirection: 'row',
+        backgroundColor: 'transparent',
+        paddingVertical: 7,
+        borderRadius: 12,
     },
-    backButton: { 
-        flexDirection: 'row', 
-        backgroundColor: '#D9D9D9', 
-        paddingVertical: 14, 
-        paddingHorizontal: 30, 
-        borderRadius: 12, 
-        alignItems: 'center', 
-        justifyContent: 'center', 
-        width: '100%' 
+    backButton: {
+        flexDirection: 'row',
+        backgroundColor: '#D9D9D9',
+        paddingVertical: 14,
+        paddingHorizontal: 30,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '100%'
     },
     backButtonText: { color: '#888', fontSize: 16, fontWeight: '600' },
     disabledButton: { backgroundColor: '#555' },
@@ -1724,33 +1777,33 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '600',
     },
-    platformHeader: { 
+    platformHeader: {
         flexDirection: 'row',
         width: '100%',
-        marginBottom: 12 
+        marginBottom: 12
     },
-    platformHeaderText: { 
-        fontSize: 24, 
-        fontWeight: '500', 
-        color: '#000' 
+    platformHeaderText: {
+        fontSize: 24,
+        fontWeight: '500',
+        color: '#000'
     },
     backIconButton: {
         padding: 4
     },
     platformGrid: {
-        flexDirection: 'row', 
+        flexDirection: 'row',
         flexWrap: 'wrap',
-        justifyContent: 'center', 
-        marginBottom: 16, 
+        justifyContent: 'center',
+        marginBottom: 16,
         gap: 8
     },
-    modalContainer: { 
-        flex: 1, 
-        justifyContent: 'flex-end', 
-        backgroundColor: 'rgba(0, 0, 0, 0.6)' 
+    modalContainer: {
+        flex: 1,
+        justifyContent: 'flex-end',
+        backgroundColor: 'rgba(0, 0, 0, 0.6)'
     },
-    modalContent: { 
-        backgroundColor: '#FFFFFF', 
+    modalContent: {
+        backgroundColor: '#FFFFFF',
         borderRadius: 20,
         paddingBottom: 20,
         minHeight: '50%',
@@ -1769,12 +1822,12 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         padding: 20
     },
-    modalTitle: { 
-        fontSize: 20, 
-        fontWeight: 'bold', 
+    modalTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
         color: '#000000'
     },
-    modalCloseButton: { 
+    modalCloseButton: {
         padding: 4,
         color: '#000000'
     },
@@ -1794,11 +1847,11 @@ const styles = StyleSheet.create({
         textTransform: 'uppercase',
         letterSpacing: 0.5
     },
-    templateOption: { 
-        paddingVertical: 15, 
+    templateOption: {
+        paddingVertical: 15,
         borderRadius: 12,
-        borderWidth: 1, 
-        borderColor: '#E5E5E5' 
+        borderWidth: 1,
+        borderColor: '#E5E5E5'
     },
     templateRow: {
         flexDirection: 'row',
@@ -1812,8 +1865,8 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingHorizontal: 20,
     },
-    templateOptionText: { 
-        color: '#000000', 
+    templateOptionText: {
+        color: '#000000',
         fontSize: 16,
         fontWeight: '500',
         flex: 1
@@ -1829,8 +1882,8 @@ const styles = StyleSheet.create({
         borderRadius: 8,
         alignItems: 'center',
         flexDirection: 'row',
-    }, 
-    createTemplateContainer:{
+    },
+    createTemplateContainer: {
         flexDirection: 'row',
         minHeight: 800,
         backgroundColor: 'red',

@@ -560,6 +560,11 @@ const ProfileScreen = () => {
           style: "destructive",
           onPress: async () => {
             console.log(`[ProfileScreen] Attempting to disconnect connection ID: ${connectionId}`);
+
+            // ✅ Optimistically remove from UI immediately for instant feedback
+            const previousConnections = [...platformConnections];
+            setPlatformConnections(prev => prev.filter(c => c.Id !== connectionId));
+
             try {
               // 1. Get Auth Token
               const token = await getApiToken();
@@ -581,19 +586,21 @@ const ProfileScreen = () => {
               }
 
               console.log(`[ProfileScreen] Successfully disconnected connection ID: ${connectionId}`);
-              Alert.alert('Disconnected', `${platformName} connection removed.`);
+              showStatusNotification('Disconnected', `${platformName} connection removed.`, 'success');
 
-              // --- NEW: Reset Legend State to clear out old data ---
+              // --- Reset Legend State to clear out old data ---
               await resetLegendState();
               console.log('[ProfileScreen] Legend state reset successfully.');
-              // --- END NEW ---
 
-              // 3. Refresh the connections list
+              // Refresh the connections list to ensure consistency
               fetchConnections();
 
             } catch (error: unknown) {
               console.error("[ProfileScreen] Error disconnecting platform:", error);
               const message = error instanceof Error ? error.message : String(error);
+
+              // ✅ Restore connections on failure
+              setPlatformConnections(previousConnections);
               Alert.alert('Error', `Failed to disconnect ${platformName}: ${message}`);
             }
           },
@@ -697,35 +704,14 @@ const ProfileScreen = () => {
   };
   // --- END Reconnect Platform Logic ---
 
+  // Web app base URL for opening billing and team pages
+  const WEB_APP_URL = 'https://app.anorha.app';
+
   const handleOpenBilling = async () => {
     try {
-      const token = await getApiToken();
-      if (!token) {
-        Alert.alert('Error', 'Not authenticated. Please log in again.');
-        return;
-      }
-
-      const response = await fetch(`${SSSYNC_API_BASE_URL}/api/auth/billing/login-link`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to get login link: ${response.status}`);
-      }
-
-      const { url } = await response.json();
-      if (!url) {
-        throw new Error('No URL received from server');
-      }
-
-      // Open in browser - will deeplink back with checkout_id when done
-      const result = await WebBrowser.openBrowserAsync(url);
-      // Note: When user completes checkout, they'll be deeplinked back via sssync://billing?checkout_id=...
-      // The app should handle this deeplink in the navigator's linking config
+      // Simply open the web app billing page directly
+      // User will sign in through normal Clerk flow if not already authenticated
+      await WebBrowser.openBrowserAsync(`${WEB_APP_URL}/billing`);
     } catch (error: any) {
       console.error('Failed to open billing:', error);
       Alert.alert('Error', `Failed to open billing: ${error.message}`);
@@ -733,36 +719,10 @@ const ProfileScreen = () => {
   };
 
   const handleOpenTeams = async () => {
-    // Open the webapp's team page in a browser for managing team members and invites
     try {
-      const token = await getApiToken();
-      if (!token) {
-        Alert.alert('Error', 'Not authenticated. Please log in again.');
-        return;
-      }
-
-      // Generate a magic login link that redirects to /team after sign-in
-      const response = await fetch(`${SSSYNC_API_BASE_URL}/api/auth/billing/login-link`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to get login link: ${response.status}`);
-      }
-
-      const { url } = await response.json();
-      if (!url) {
-        throw new Error('No URL received from server');
-      }
-
-      // Replace /billing with /team in the redirect URL
-      const teamUrl = url.replace('/billing', '/team');
-
-      await WebBrowser.openBrowserAsync(teamUrl);
+      // Simply open the web app team page directly
+      // User will sign in through normal Clerk flow if not already authenticated
+      await WebBrowser.openBrowserAsync(`${WEB_APP_URL}/team`);
     } catch (error: any) {
       console.error('Failed to open team page:', error);
       Alert.alert('Error', `Failed to open team page: ${error.message}`);

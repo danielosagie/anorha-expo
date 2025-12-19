@@ -1600,10 +1600,14 @@ const ProductDetailScreen = observer(
           // stale platformData.variants may have outdated inventory data
           // Merge: keep platformData fields, but override variants with fresh inventory
 
-          // Filter out "phantom" variants (empty options) IF we have other real variants
-          // This prevents "Variant" and "Broken" appearing together
-          const validVariants = (hydratedVariants || []).filter(v => Object.keys(v.optionValues || {}).length > 0);
-          const freshVariants = validVariants.length > 0 ? validVariants : (hydratedVariants || []);
+          // ⚡ CRITICAL FIX: Don't filter by optionValues - some variants may have optionValues in Metadata
+          // instead of the Options column. The VariantType filter at line 1416 already handles
+          // filtering out 'base' variants. Just use hydratedVariants directly.
+          // 
+          // NOTE: The old filter caused ALL variants to disappear when optionValues wasn't populated
+          console.log('[ProductDetail] Using', hydratedVariants.length, 'freshVariants for platforms. First variant optionValues:',
+            JSON.stringify(hydratedVariants[0]?.optionValues || {}));
+          const freshVariants = hydratedVariants || [];
 
           // ⚡ CRITICAL FIX: Extract ONLY non-inventory/price fields from platformData
           // platformData comes from stale ProductVariants.Metadata.platformSpecificData

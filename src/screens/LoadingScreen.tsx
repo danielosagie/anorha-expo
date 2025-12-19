@@ -1,11 +1,11 @@
 import { useNavigation, useTheme } from '@react-navigation/native';
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TouchableOpacity, 
-  Image, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Image,
   SafeAreaView,
   Dimensions,
   Platform,
@@ -39,6 +39,27 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
   const [jobStatus, setJobStatus] = useState('queued');
   const [jobsModalVisible, setJobsModalVisible] = useState(false);
   const [lastStage, setLastStage] = useState<string | null>(null); // Track last stage to prevent animation replay
+  const [currentItemIndex, setCurrentItemIndex] = useState(0);
+
+  // Build modal items from bulkItems or default to single item
+  const [modalItems, setModalItems] = useState<Array<{ index: number; title: string; thumb?: string; matchesCount: number }>>(() => {
+    if (Array.isArray(bulkItems) && bulkItems.length > 0) {
+      return bulkItems.map((item: any, idx: number) => {
+        const photos = Array.isArray(item?.photos) ? item.photos : [];
+        const firstPhoto = photos[0];
+        const thumb = typeof firstPhoto === 'string' ? firstPhoto : firstPhoto?.uri || firstPhoto?.url || '';
+        return {
+          index: idx,
+          title: item?.title || `Item ${idx + 1}`,
+          thumb,
+          matchesCount: 0,
+        };
+      });
+    }
+    // Fallback to single item from firstPhotos
+    const thumb = typeof firstPhotos?.[0] === 'string' ? firstPhotos[0] : firstPhotos?.[0]?.uri || '';
+    return [{ index: 0, title: 'Item 1', thumb, matchesCount: 0 }];
+  });
 
   // Define the stages for different processes
   const stages = {
@@ -74,7 +95,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
     'Ready': 'Ready to review',
   };
 
-  
+
 
 
   // Poll job status using the jobId
@@ -87,12 +108,12 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
     const pollJobStatus = async () => {
       try {
 
-        
+
 
         // Get current user
         async function getToken() { return await ensureSupabaseJwt(); }
 
-        
+
         // Get auth token
         const { data: { session } } = await supabase.auth.getSession();
         const token = await getToken();
@@ -106,12 +127,12 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
             },
           });
           const status = await response.json();
-          
+
           console.log('[POLLING] Job status:', status.status, 'Stage:', status.currentStage);
-          
+
           // Update job status and stage
           setJobStatus(status.status);
-          
+
           // Map backend stages to frontend stage index
           const mappedStage = stageNameMap[status.currentStage] || status.currentStage;
           const stageIndex = activeStages.indexOf(mappedStage);
@@ -123,7 +144,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
           } else if (mappedStage === lastStage) {
             console.log('[ANIMATION] Stage unchanged:', mappedStage, '- skipping animation');
           }
-          
+
           // If completed, navigate to next screen
           if (status.status === 'completed') {
             console.log(`Process "${processType}" complete! Navigating...`);
@@ -144,7 +165,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
             console.error('Job failed:', status.error);
             // Handle error - maybe go back or show error screen
           }
-          
+
         } else {
 
           const response = await fetch(`${BASE_URL}/api/products/match/jobs/${jobId}/status`, {
@@ -154,12 +175,12 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
             },
           });
           const status = await response.json();
-          
+
           console.log('[POLLING] Job status:', status.status, 'Stage:', status.currentStage);
-          
+
           // Update job status and stage
           setJobStatus(status.status);
-          
+
           // Map backend stages to frontend stage index
           const stageIndex = activeStages.indexOf(status.currentStage);
           if (stageIndex >= 0 && status.currentStage !== lastStage) {
@@ -170,7 +191,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
           } else if (status.currentStage === lastStage) {
             console.log('[ANIMATION] Stage unchanged:', status.currentStage, '- skipping animation');
           }
-          
+
           // Early navigate: as soon as we have initial results, go to selection screen (non-blocking rerank/embeddings continue server-side)
           if (!navigatedEarly && Array.isArray(status.results) && status.results.length > 0) {
             setNavigatedEarly(true);
@@ -183,6 +204,8 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
                 matchesCount: Array.isArray(res?.serpApiData) ? res.serpApiData.length : 0,
               };
             });
+            // Update modalItems with real data from results
+            setModalItems(itemsForModal);
             // Build userImagesByIndex if bulkItems were provided
             const prevResponse = ((onCompleteRoute?.params as any)?.response) || {};
             const sourceBulk = prevResponse?.bulkItems || (payload?.bulkItems);
@@ -222,8 +245,8 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
 
 
         }
-        
-        
+
+
       } catch (error) {
         console.error('[POLLING] Error polling status:', error);
       }
@@ -232,7 +255,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
     // Start polling immediately, then every 2 seconds
     pollJobStatus();
     const interval = setInterval(pollJobStatus, 2000);
-    
+
     return () => clearInterval(interval);
   }, [jobId, processType, navigation, onCompleteRoute, activeStages]);
 
@@ -241,7 +264,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
   useEffect(() => {
     if (jobStatus !== 'queued' && jobStatus !== 'processing') return;
     if (currentStageIndex >= activeStages.length - 1) return;
-    
+
     // FIX: Don't advance more than 1 stage ahead of backend's reported stage
     // This prevents the "1,2,3,4,5,6...snap back to 4" issue
     const maxAllowedIndex = Math.min(backendStageIndex + 1, activeStages.length - 1);
@@ -270,29 +293,29 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
   console.log('[LOADING] Payload photos:', firstPhotos);
 
   return (
-    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'white', width: '100%', height: '100%'  }}>
+    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'white', width: '100%', height: '100%' }}>
       <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ position: 'absolute', top: 48, left: 24, zIndex: 4000, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}>
         <Boxes size={18} color={'#000'} />
         <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Current Jobs</Text>
       </TouchableOpacity>
       <View style={styles.container}>
-        <PyramidGrid 
+        <PyramidGrid
           items={(firstPhotos || []).map((photo, i) => {
             // Handle different photo formats - could be URI string or photo object
             const uri = typeof photo === 'string' ? photo : photo?.uri || photo?.url || String(photo);
             console.log(`[PYRAMID] Photo ${i}:`, typeof photo, uri?.substring(0, 50));
             return { id: `img-${i}-${Date.now()}`, uri };
-          })} 
-          style={{ 
-            justifyContent: 'center', 
-            alignItems: 'center', 
+          })}
+          style={{
+            justifyContent: 'center',
+            alignItems: 'center',
             minHeight: '40%',
             maxHeight: '55%',
             width: '90%' // Give it more width
-          }} 
+          }}
         />
-        <StepLoader 
-          stages={activeStages} 
+        <StepLoader
+          stages={activeStages}
           currentStageIndex={currentStageIndex}
           style={{ paddingTop: 40, marginBottom: 10, maxHeight: '25%', minHeight: '15%' }}
         />
@@ -301,25 +324,62 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
       <ItemJobsModal
         visible={jobsModalVisible}
         onClose={() => setJobsModalVisible(false)}
-        items={[{ index: 0, title: 'Item 1', thumb: firstPhotos?.[0], matchesCount: 0 }]}
-        currentIndex={0}
-        scanColor={() => (jobStatus === 'failed' ? '#EF4444' : '#10B981')}
-        matchColor={() => '#4B5563'}
-        detailsColor={() => (jobStatus === 'completed' ? '#10B981' : jobStatus === 'failed' ? '#EF4444' : '#4B5563')}
-        detailsEnabled={() => true}
-        onPickScan={() => {
+        items={modalItems}
+        currentIndex={currentItemIndex}
+        scanColor={(idx) => {
+          // Scan is complete if we're here (photos were taken)
+          return jobStatus === 'failed' ? '#EF4444' : '#10B981';
+        }}
+        matchColor={(idx) => {
+          // Match status based on processType and job status
+          if (processType === 'match') {
+            if (jobStatus === 'completed') return '#10B981';
+            if (jobStatus === 'failed') return '#EF4444';
+            if (jobStatus === 'processing' || jobStatus === 'queued') return '#FFD700';
+          }
+          // If we're in generate process, match was already done
+          if (processType === 'generate') return '#10B981';
+          return '#4B5563';
+        }}
+        detailsColor={(idx) => {
+          if (processType === 'generate') {
+            if (jobStatus === 'completed') return '#10B981';
+            if (jobStatus === 'failed') return '#EF4444';
+            if (jobStatus === 'processing' || jobStatus === 'queued') return '#FFD700';
+          }
+          return '#4B5563';
+        }}
+        detailsEnabled={(idx) => processType === 'generate' && jobStatus === 'completed'}
+        countLabel={processType === 'match' ? 'Matches' : 'Platforms'}
+        getSecondaryText={(idx) => {
+          if (jobStatus === 'processing' || jobStatus === 'queued') {
+            return activeStages[currentStageIndex] || 'Processing...';
+          }
+          return null;
+        }}
+        onPickScan={(idx) => {
+          setCurrentItemIndex(idx);
           if (jobStatus === 'failed') {
             navigation.replace('AddProduct' as any, {
               firstPhotos: firstPhotos || [],
               bulkItems: bulkItems || [],
+              focusItemIndex: idx,
               errorMessage: 'Scan failed. Please retake clearer photos and try again.'
             });
           } else {
             setJobsModalVisible(false);
           }
         }}
-        onPickMatch={() => setJobsModalVisible(false)}
-        onPickDetails={() => setJobsModalVisible(false)}
+        onPickMatch={(idx) => {
+          setCurrentItemIndex(idx);
+          setJobsModalVisible(false);
+          // If match is processing, just close - we're already on loading screen
+        }}
+        onPickDetails={(idx) => {
+          setCurrentItemIndex(idx);
+          setJobsModalVisible(false);
+          // If generate is complete, could navigate but we'll auto-navigate anyway
+        }}
       />
     </View>
   );

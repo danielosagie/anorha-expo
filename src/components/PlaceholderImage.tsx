@@ -61,7 +61,7 @@ const PlaceholderImage: React.FC<PlaceholderImageProps> = ({
   // If gradientColors not provided, create a gradient based on the color
   const colors = gradientColors || [
     color,
-    adjustColor(color, -30)
+    adjustColor(color, -20)
   ];
   
   // Default gradient direction

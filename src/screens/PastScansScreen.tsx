@@ -233,7 +233,7 @@ const PastScansScreen = () => {
         <View style={styles.thumbRow}>
             {Array.isArray((item as any)?.results) && (item as any).results.length > 1 ? (
               <PyramidGrid
-                style={{ marginRight: 10, height: 48, width: 48 }}
+                style={{ marginRight: 10, height: 64, width: 64 }}
                 items={(item as any).results
                   .map((r: any, idx: number) => ({ id: String(idx), uri: r?.serpApiData?.[0]?.image || '' }))
                   .filter((x: any) => !!x.uri)
@@ -303,18 +303,7 @@ const PastScansScreen = () => {
           <Text style={styles.scanDate}>
             {new Date(item.created_at).toLocaleDateString()}
           </Text>
-          <View style={styles.scanDetails}>
-             <Text style={styles.scanDetail}>
-                High: {item.summary?.highConfidenceCount ?? 0}
-             </Text>
-             <Text style={styles.scanDetail}>
-                Med: {item.summary?.mediumConfidenceCount ?? 0}
-             </Text>
-             <Text style={styles.scanDetail}>
-                Low: {item.summary?.lowConfidenceCount ?? 0}
-             </Text>
-          </View>
-
+          
           <View style={styles.scanStatus}>
             <Icon 
               name={item.status === 'completed' ? 'check-circle' : 'cogs'} 

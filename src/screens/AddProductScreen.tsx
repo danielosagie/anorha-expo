@@ -16,6 +16,7 @@ import {
   Modal,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import * as Haptics from 'expo-haptics';
 import { Camera, CameraView, CameraType, FlashMode, BarcodeScanningResult } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import Animated, {
@@ -31,7 +32,7 @@ import Animated, {
   SlideOutDown,
   withRepeat,
 } from 'react-native-reanimated';
-import { PanGestureHandler, TapGestureHandler, State } from 'react-native-gesture-handler';
+import { PanGestureHandler, TapGestureHandler, State, PanGestureHandlerGestureEvent } from 'react-native-gesture-handler';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -43,6 +44,8 @@ import PhotoStack, { CapturedPhoto } from '../components/camera/PhotoStack';
 import CameraControls from '../components/camera/CameraControls';
 import BusinessTemplateModal, { BusinessTemplate } from '../components/camera/BusinessTemplateModal';
 import QuickProductDetailSheet from '../components/QuickProductDetailSheet';
+import ManifestReviewSheet from '../components/ManifestReviewSheet';
+import ReceiptReviewSheet from '../components/ReceiptReviewSheet';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { File, Directory, Paths } from 'expo-file-system';
 
@@ -173,7 +176,7 @@ type AddProductScreenProps = StackScreenProps<AppStackParamList, 'AddProduct'>;
 
 type CameraInstruction = 'ready' | 'move_closer' | 'move_back' | 'add_light' | 'focus' | 'processing' | 'matches_found' | 'no_matches' | 'barcode_scanned';
 
-type CameraMode = 'camera' | 'barcode';
+type CameraMode = 'camera' | 'barcode' | 'manifest' | 'receipt';
 
 const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const navigation = useNavigation();
@@ -188,7 +191,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [capturedPhotos, setCapturedPhotos] = useState<CapturedPhoto[]>([]);
   const [isCapturing, setIsCapturing] = useState(false);
-  const [cameraMode, setCameraMode] = useState<CameraMode>('camera');
+  const [cameraMode, setCameraMode] = useState<'camera' | 'barcode' | 'manifest' | 'receipt'>('camera');
 
   // Barcode state
   const [scannedBarcode, setScannedBarcode] = useState<string | null>(null);
@@ -197,6 +200,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [barcodeSearching, setBarcodeSearching] = useState(false);
   const [showBarcodeResultModal, setShowBarcodeResultModal] = useState(false);
   const [platformLocations, setPlatformLocations] = useState<{ id: string; name: string; platformType?: string }[]>([]);
+
+  // Manifest state
+  const [showManifestSheet, setShowManifestSheet] = useState(false);
+  const [manifestJobId, setManifestJobId] = useState<string | null>(null);
+
+  // Receipt state
+  const [showReceiptSheet, setShowReceiptSheet] = useState(false);
+  const [receiptJobId, setReceiptJobId] = useState<string | null>(null);
 
   // Fetch platform locations on mount (with platformType from connections)
   useEffect(() => {
@@ -380,6 +391,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Instructions mapping
   const getInstructionText = (instruction: CameraInstruction): string => {
     switch (instruction) {
+      case 'ready': cameraMode === 'receipt' ? 'Upload/take picture of receipt' : 'Upload/take picture of receipt';
+      case 'ready': cameraMode === 'manifest' ? 'Upload/take picture of manifest' : 'Upload/take picture of manifest';
       case 'ready': return cameraMode === 'camera' ? 'Point camera at product' : 'Scan barcode on product';
       case 'move_closer': return 'Move closer to product';
       case 'move_back': return 'Move back from product';
@@ -389,7 +402,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       case 'matches_found': return `${matchData?.totalMatches || 0} matches found!`;
       case 'no_matches': return 'No matches found';
       case 'barcode_scanned': return scannedBarcode || 'Barcode scanned';
-      default: return cameraMode === 'camera' ? 'Point camera at product' : 'Scan barcode on product';
+      default: return cameraMode === 'camera' ? 'Point camera at product': 'lol';
     }
   };
 
@@ -665,7 +678,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   }, [flash]);
 
-  const handleContinue = useCallback(() => {
+  const handleContinue = useCallback(async () => {
     console.log('[CONTINUE] Button pressed, opening search sheet');
     console.log('[CONTINUE] Current state:', {
       capturedPhotosCount: capturedPhotos.length,
@@ -683,12 +696,168 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return;
     }
 
+    // MANIFEST MODE: Parse manifest pages
+    if (cameraMode === 'manifest') {
+      const allPhotos = bulkItems.flatMap(item => item.photos);
+      if (allPhotos.length === 0) {
+        Alert.alert('No Pages', 'Please capture at least one manifest page first.');
+        return;
+      }
+
+      console.log('[CONTINUE] Manifest mode - parsing', allPhotos.length, 'pages');
+      showNotificationMessage('Parsing manifest...', 10000);
+
+      try {
+        // Convert photos to base64 using fetch
+        const images = await Promise.all(
+          allPhotos.map(async (photo, index) => {
+            try {
+              // Use fetch to get the image as blob, then convert to base64
+              const response = await fetch(photo.uri);
+              const blob = await response.blob();
+              const base64 = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                  const result = reader.result as string;
+                  // Remove data URL prefix (e.g., "data:image/jpeg;base64,")
+                  const base64Data = result.split(',')[1] || result;
+                  resolve(base64Data);
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+              });
+              return { base64, filename: `page_${index + 1}.jpg` };
+            } catch (e) {
+              console.error('[MANIFEST] Failed to read photo:', e);
+              return null;
+            }
+          })
+        );
+
+        const validImages = images.filter(Boolean);
+        if (validImages.length === 0) {
+          throw new Error('Failed to process any images');
+        }
+
+        // Call the manifest parsing API
+        const jwt = await ensureSupabaseJwt();
+        const API_URL = process.env.EXPO_PUBLIC_SSSYNC_BACKEND_URL || 'https://sssync-bknd.onrender.com';
+
+        const response = await fetch(`${API_URL}/products/manifests/parse`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${jwt}`,
+          },
+          body: JSON.stringify({ images: validImages }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        console.log('[MANIFEST] Job started:', data.jobId);
+
+        // Show the ManifestReviewSheet with the job ID
+        setManifestJobId(data.jobId);
+        setShowManifestSheet(true);
+
+        // Clear photos after successful submission
+        setBulkItems([]);
+        setActiveItemId(null);
+
+      } catch (error: any) {
+        console.error('[MANIFEST] Error:', error);
+        Alert.alert('Error', error.message || 'Failed to parse manifest');
+      }
+
+      return;
+    }
+
+    // RECEIPT MODE: Process receipt for inventory intake
+    if (cameraMode === 'receipt') {
+      const allPhotos = bulkItems.flatMap(item => item.photos);
+      if (allPhotos.length === 0) {
+        Alert.alert('No Receipts', 'Please capture at least one receipt first.');
+        return;
+      }
+
+      console.log('[CONTINUE] Receipt mode - processing', allPhotos.length, 'receipts');
+      showNotificationMessage('Processing receipt...', 10000);
+
+      try {
+        // Convert photos to base64 using fetch
+        const images = await Promise.all(
+          allPhotos.map(async (photo, index) => {
+            try {
+              const response = await fetch(photo.uri);
+              const blob = await response.blob();
+              const base64 = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                  const result = reader.result as string;
+                  const base64Data = result.split(',')[1] || result;
+                  resolve(base64Data);
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+              });
+              return { base64, filename: `receipt_${index + 1}.jpg` };
+            } catch (e) {
+              console.error('[RECEIPT] Failed to read photo:', e);
+              return null;
+            }
+          })
+        );
+
+        const validImages = images.filter(Boolean);
+        if (validImages.length === 0) {
+          throw new Error('Failed to process any images');
+        }
+
+        // Call the receipt parsing API
+        const jwt = await ensureSupabaseJwt();
+        const API_URL = process.env.EXPO_PUBLIC_SSSYNC_BACKEND_URL || 'https://sssync-bknd.onrender.com';
+
+        const response = await fetch(`${API_URL}/products/receipts/parse`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${jwt}`,
+          },
+          body: JSON.stringify({ images: validImages }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        console.log('[RECEIPT] Job started:', data.jobId);
+
+        // Show the ReceiptReviewSheet with the job ID
+        setReceiptJobId(data.jobId);
+        setShowReceiptSheet(true);
+
+        // Clear photos after successful submission
+        setBulkItems([]);
+        setActiveItemId(null);
+
+      } catch (error: any) {
+        console.error('[RECEIPT] Error:', error);
+        Alert.alert('Error', error.message || 'Failed to process receipt');
+      }
+
+      return;
+    }
+
     // Always open sheet - it will show empty state if no photos
     setShowMatchSheet(false);
     matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
     setShowDeepSearchSheet(true);
     sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4); // Position for 60% height sheet
-  }, [sheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems.length, activeItemId, cameraMode, barcodeSearchResult]);
+  }, [sheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems, activeItemId, cameraMode, barcodeSearchResult, showNotificationMessage]);
 
   // Handle image picker - SIMPLIFIED: Always add to bulkItems
   const handleImageUpload = useCallback(async () => {
@@ -698,10 +867,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return;
     }
 
+    const crop_window_shape: ImagePicker.CropShape = 'rectangle';
+    
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
-      aspect: [4, 3],
+      aspect: [9, 16],
+      shape: crop_window_shape,
+      allowsMultipleSelection: true,
       quality: 0.8,
     });
 
@@ -787,9 +960,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   }, [scannedBarcode]);
 
-  // Toggle camera mode
+  // Toggle camera mode (cycles: camera → barcode → manifest → camera)
   const toggleCameraMode = useCallback(() => {
-    setCameraMode(prev => prev === 'camera' ? 'barcode' : 'camera');
+    setCameraMode(prev => {
+      if (prev === 'camera') return 'barcode';
+      if (prev === 'barcode') return 'manifest';
+      return 'camera';
+    });
     setScannedBarcode(null);
     setCurrentInstruction('ready');
   }, []);
@@ -1681,15 +1858,29 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           onCopyBarcode={copyBarcodeToClipboard}
         />
 
-        {/* Photo frame overlay */}
-        <View style={styles.photoFrameOverlay} />
 
-        {/* Scan line overlay for barcode mode */}
+        {cameraMode === 'camera' && (
+          <View style={styles.photoFrameOverlay}/>
+        )} 
+        
         {cameraMode === 'barcode' && (
-          <View style={styles.scanLineContainer}>
-            <View style={styles.scanLine} />
+          <View style={styles.photoFrameOverlay}>
+            <View style={styles.scanLineContainer}>
+              <View style={styles.scanLine} />
+            </View>
           </View>
         )}
+
+        {cameraMode === 'manifest' && (
+          <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
+        )}
+
+        {cameraMode === 'receipt' && (
+          <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
+        )}
+
+
+
 
         {/* Progress Bar */}
         {showProgressBar && (
@@ -1754,7 +1945,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             </TouchableOpacity>
           </View>
            </View>
-         )} */}
+         )} 
+        */}
 
         {/* Bottom controls */}
         <BottomControls
@@ -1763,7 +1955,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           captureButtonScale={captureButtonScale}
           photosCount={bulkItems.reduce((sum, item) => sum + item.photos.length, 0)}
           cameraMode={cameraMode}
-          onToggleCameraMode={toggleCameraMode}
+          onSetCameraMode={(mode) => {
+            setCameraMode(mode);
+            setScannedBarcode(null);
+            setCurrentInstruction('ready');
+          }}
           onImageUpload={handleImageUpload}
           onContinue={handleContinue}
           hasBarcodeResult={!!barcodeSearchResult}
@@ -1920,6 +2116,83 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           </Animated.View>
         ) : null}
       </Modal>
+
+      {/* Manifest Review Sheet Modal */}
+      <Modal
+        visible={showManifestSheet && !!manifestJobId}
+        transparent
+        animationType="slide"
+        statusBarTranslucent
+        onRequestClose={() => {
+          setShowManifestSheet(false);
+          setManifestJobId(null);
+        }}
+        presentationStyle="overFullScreen"
+      >
+        {showManifestSheet && manifestJobId ? (
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+            <View style={{ height: SCREEN_HEIGHT * 0.85 }}>
+              <ManifestReviewSheet
+                jobId={manifestJobId}
+                onClose={() => {
+                  setShowManifestSheet(false);
+                  setManifestJobId(null);
+                }}
+                onAddToInventory={(items) => {
+                  console.log('[MANIFEST] Adding items to inventory:', items.length);
+                  Alert.alert(
+                    'Coming Soon',
+                    `${items.length} items will be added to inventory in a future update.`,
+                    [{
+                      text: 'OK', onPress: () => {
+                        setShowManifestSheet(false);
+                        setManifestJobId(null);
+                      }
+                    }]
+                  );
+                }}
+              />
+            </View>
+          </View>
+        ) : null}
+      </Modal>
+
+      {/* Receipt Review Sheet Modal */}
+      <Modal
+        visible={showReceiptSheet && !!receiptJobId}
+        transparent
+        animationType="slide"
+        statusBarTranslucent
+        onRequestClose={() => {
+          setShowReceiptSheet(false);
+          setReceiptJobId(null);
+        }}
+        presentationStyle="overFullScreen"
+      >
+        {showReceiptSheet && receiptJobId ? (
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+            <View style={{ height: SCREEN_HEIGHT * 0.85 }}>
+              <ReceiptReviewSheet
+                jobId={receiptJobId}
+                onClose={() => {
+                  setShowReceiptSheet(false);
+                  setReceiptJobId(null);
+                }}
+                onApplyUpdates={(updates) => {
+                  console.log('[RECEIPT] Applied updates:', updates.length);
+                }}
+                onCreateNew={(itemName) => {
+                  // Switch to camera mode with the item name pre-filled
+                  setShowReceiptSheet(false);
+                  setReceiptJobId(null);
+                  setCameraMode('camera');
+                  Alert.alert('Add New Item', `Switch to camera mode to add: ${itemName}`);
+                }}
+              />
+            </View>
+          </View>
+        ) : null}
+      </Modal>
     </GestureHandlerRootView>
   );
 };
@@ -2015,7 +2288,7 @@ const BottomControls: React.FC<{
   captureButtonScale: any;
   photosCount: number;
   cameraMode: CameraMode;
-  onToggleCameraMode: () => void;
+  onSetCameraMode: (mode: CameraMode) => void;
   onImageUpload: () => void;
   onContinue: () => void;
   hasBarcodeResult?: boolean;
@@ -2026,15 +2299,119 @@ const BottomControls: React.FC<{
   captureButtonScale,
   photosCount,
   cameraMode,
-  onToggleCameraMode,
+  onSetCameraMode,
   onImageUpload,
   onContinue,
   hasBarcodeResult,
   productName
 }) => {
+    // Drag-to-select logic using simple state
+    const [hoveredMode, setHoveredMode] = useState<CameraMode | null>(null);
+    const [showModePopup, setShowModePopup] = useState(false);
+    const popupScale = useSharedValue(0);
+    const popupOpacity = useSharedValue(0);
+
     const captureButtonAnimatedStyle = useAnimatedStyle(() => ({
       transform: [{ scale: captureButtonScale.value }],
     }));
+
+    const popupAnimatedStyle = useAnimatedStyle(() => ({
+      transform: [{ scale: popupScale.value }],
+      opacity: popupOpacity.value,
+    }));
+
+    const toggleModePopup = useCallback(() => {
+      if (showModePopup) {
+        // Close smoothly
+        popupScale.value = withTiming(0, { duration: 150 });
+        popupOpacity.value = withTiming(0, { duration: 150 }, () => {
+          runOnJS(setShowModePopup)(false);
+        });
+      } else {
+        setShowModePopup(true);
+        popupScale.value = withTiming(1, { duration: 200 });
+        popupOpacity.value = withTiming(1, { duration: 150 });
+      }
+    }, [showModePopup, popupScale, popupOpacity]);
+
+    const selectMode = useCallback((mode: CameraMode) => {
+      onSetCameraMode(mode);
+      // Smooth close
+      popupScale.value = withTiming(0, { duration: 150 });
+      popupOpacity.value = withTiming(0, { duration: 150 }, () => {
+        runOnJS(setShowModePopup)(false);
+      });
+      setHoveredMode(null);
+    }, [onSetCameraMode, popupScale, popupOpacity]);
+
+    const POPUP_WIDTH = 350;
+    const ITEM_WIDTH = POPUP_WIDTH / 4;
+
+    // Pan gesture handler callback (non-deprecated approach)
+    const onPanGestureEvent = useCallback((event: PanGestureHandlerGestureEvent) => {
+      const x = event.nativeEvent.x;
+      let newMode: CameraMode | null = null;
+
+      if (x >= 0 && x < ITEM_WIDTH) newMode = 'camera';
+      else if (x >= ITEM_WIDTH && x < ITEM_WIDTH * 2) newMode = 'barcode';
+      else if (x >= ITEM_WIDTH * 2 && x < ITEM_WIDTH * 3) newMode = 'manifest';
+      else if (x >= ITEM_WIDTH * 3 && x <= ITEM_WIDTH * 4) newMode = 'receipt';
+
+      if (newMode && newMode !== hoveredMode) {
+        setHoveredMode(newMode);
+        Haptics.selectionAsync();
+      }
+    }, [hoveredMode, ITEM_WIDTH, POPUP_WIDTH]);
+
+    const onPanHandlerStateChange = useCallback((event: PanGestureHandlerGestureEvent) => {
+      if (event.nativeEvent.state === State.END) {
+        if (hoveredMode) {
+          selectMode(hoveredMode);
+        }
+      }
+    }, [hoveredMode, selectMode]);
+
+    const getModeIcon = (mode: CameraMode): string => {
+      switch (mode) {
+        case 'camera': return 'camera';
+        case 'barcode': return 'barcode-scan';
+        case 'manifest': return 'file-document-outline';
+        case 'receipt': return 'receipt';
+      }
+    };
+
+    const getModeLabel = (mode: CameraMode): string => {
+      switch (mode) {
+        case 'camera': return 'Camera';
+        case 'barcode': return 'Barcode';
+        case 'manifest': return 'Manifest';
+        case 'receipt': return 'Receipt';
+      }
+    };
+
+    const getContinueText = () => {
+      if (cameraMode === 'barcode' && hasBarcodeResult) {
+        return productName
+          ? `Update: ${productName.slice(0, 25)}${productName.length > 25 ? '...' : ''}`
+          : 'Open Update Product';
+      }
+      if (cameraMode === 'manifest') {
+        return photosCount > 0
+          ? `Parse ${photosCount} page${photosCount > 1 ? 's' : ''}`
+          : 'Capture manifest pages';
+      }
+      if (cameraMode === 'receipt') {
+        return photosCount > 0
+          ? `Process ${photosCount} receipt${photosCount > 1 ? 's' : ''}`
+          : 'Capture receipt';
+      }
+      return photosCount > 0
+        ? `Continue with ${photosCount} photo${photosCount > 1 ? 's' : ''}`
+        : 'Take a photo to get started';
+    };
+
+    const modes: CameraMode[] = ['camera', 'barcode', 'manifest', 'receipt'];
+    const activeMode = hoveredMode || cameraMode;
 
     return (
       <View style={styles.bottomControls}>
@@ -2053,24 +2430,72 @@ const BottomControls: React.FC<{
             </TouchableOpacity>
           </Animated.View>
 
-          <TouchableOpacity style={styles.focusButton} onPress={onToggleCameraMode}>
-            <Icon
-              name={cameraMode === 'camera' ? 'camera' : 'barcode-scan'}
-              size={24}
-              color="white"
-            />
-          </TouchableOpacity>
+          {/* Mode selector with popup */}
+          <View style={styles.modeSelectorWrapper}>
+            {/* Popup bubble */}
+            {showModePopup && (
+              <Animated.View style={[styles.modePopup, popupAnimatedStyle]}>
+                <PanGestureHandler
+                  onGestureEvent={onPanGestureEvent}
+                  onHandlerStateChange={onPanHandlerStateChange}
+                >
+                  <Animated.View style={styles.modePopupContent}>
+                    {modes.map((mode, index) => (
+                      <TouchableOpacity
+                        key={mode}
+                        style={[
+                          styles.modePopupItem,
+                          activeMode === mode && styles.modePopupItemActive,
+                        ]}
+                        onPress={() => selectMode(mode)}
+                        activeOpacity={1}
+                      >
+                        <Text style={[
+                          styles.modePopupLabel,
+                          activeMode === mode && styles.modePopupLabelActive,
+                        ]}>
+                          {getModeLabel(mode)}
+                        </Text>
+                        <View style={[
+                          styles.modePopupIconContainer,
+                          activeMode === mode && styles.modePopupIconContainerActive,
+                        ]}>
+                          <Icon
+                            name={getModeIcon(mode)}
+                            size={28}
+                            color={activeMode === mode ? '#fff' : 'rgba(255,255,255,0.7)'}
+                          />
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                  </Animated.View>
+                </PanGestureHandler>
+                <View style={{ flex: 1, paddingRight: 25 }}>
+                  {/* Speech bubble arrow - Positioned relative to button center */}
+                  <View style={styles.modePopupArrow} />
+                </View>
+
+              </Animated.View>
+            )}
+
+            {/* Current mode button (collapsed state) */}
+            <TouchableOpacity
+              style={styles.modeButton}
+              onPress={toggleModePopup}
+            >
+              <Icon
+                name={getModeIcon(cameraMode)}
+                size={24}
+                color="white"
+              />
+            </TouchableOpacity>
+          </View>
         </Animated.View>
 
         <Animated.View entering={SlideInDown.delay(700)} style={styles.continueButtonContainer}>
           <TouchableOpacity style={styles.continueButton} onPress={onContinue}>
             <Text style={styles.continueButtonText} numberOfLines={1}>
-              {cameraMode === 'barcode' && hasBarcodeResult
-                ? productName ? `Update: ${productName.slice(0, 25)}${productName.length > 25 ? '...' : ''}` : 'Open Update Product'
-                : photosCount > 0
-                  ? `Continue with ${photosCount} photo${photosCount > 1 ? 's' : ''}`
-                  : 'Take a photo to get started'
-              }
+              {getContinueText()}
             </Text>
           </TouchableOpacity>
         </Animated.View>
@@ -2317,7 +2742,7 @@ const BulkItemsSheet: React.FC<{
           const { translationY } = event.nativeEvent;
           const minY = SCREEN_HEIGHT * 0.2; // Maximum expanded (80% height)
           const maxY = SCREEN_HEIGHT * 0.6; // Minimum height (40% height)
-          const currentY = SCREEN_HEIGHT * 0.4; // Current position (60% height)
+          const currentY = SCREEN_HEIGHT * 0.5; // Current position (60% height)
 
           // Calculate new position based on drag
           const newY = Math.max(minY, Math.min(maxY, currentY + translationY * 0.5));
@@ -2853,7 +3278,7 @@ const styles = StyleSheet.create({
   },
   scanLine: {
     width: '100%',
-    height: 2,
+    height: 3,
     backgroundColor: '#4CAF50',
     opacity: 0.8,
   },
@@ -2906,6 +3331,104 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  // Mode Selector Styles
+  modeSelectorWrapper: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 100, // Ensure popup is above other elements
+  },
+  modeButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  modePopup: {
+    position: 'absolute',
+    right: -40,
+    bottom: 65, // Position above the button
+    alignItems: 'flex-end',
+    width: 350, // Wide enough for 3 items
+    // Center the popup (280px) over the button (50px).
+    // Button is right aligned in wrapper. Wrapper is 50px.
+    // To center 280 over 50: right = -(280-50)/2 = -115
+    paddingRight: 30,
+  },
+  modePopupContent: {
+    flexDirection: 'row',
+    backgroundColor: '#000',
+    borderRadius: 24,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'space-between',
+    width: '100%',
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.30,
+    shadowRadius: 4.65,
+    elevation: 8,
+  },
+  modePopupItem: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    gap: 8,
+    flex: 1,
+  },
+  modePopupItemActive: {
+    backgroundColor: 'rgba(76, 175, 80, 0.2)', // Green tint for active
+  },
+  modePopupLabel: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  modePopupLabelActive: {
+    color: '#fff',
+  },
+  modePopupIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+  },
+  modePopupIconContainerActive: {
+    borderColor: '#fff',
+    backgroundColor: '#4CAF50', // Green background for active icon
+  },
+  modePopupArrow: {
+    width: 0,
+    height: 0,
+    backgroundColor: 'transparent',
+    borderStyle: 'solid',
+    borderLeftWidth: 10,
+    borderRightWidth: 10,
+    borderBottomWidth: 0,
+    borderTopWidth: 10,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderBottomColor: 'transparent',
+    borderTopColor: '#000', // Match content background
+    marginTop: -1,
+    // Arrow should be centered on the button. 
+    // Popup is centered on the button.
+    // So arrow should be centered on the popup.
+    // Since alignItems is center on modePopup, just remove margins.
+  },
   continueButtonContainer: {
     paddingHorizontal: 20,
   },
@@ -2946,7 +3469,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
     paddingTop: 20,
     paddingBottom: 44,
-    height: SCREEN_HEIGHT * 0.6, // Fixed 60% height
+    height: SCREEN_HEIGHT * 0.7, // Fixed 60% height
   },
   sheetHeader: {
     flexDirection: 'row',

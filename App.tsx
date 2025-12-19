@@ -25,6 +25,7 @@ import { useProcessResumption } from './src/hooks/useProcessState';
 import { ProcessState, ProcessType } from './src/utils/ProcessPersistence';
 import SafeErrorBoundary from './src/utils/SafeErrorBoundary';
 import { OrgProvider } from './src/context/OrgContext';
+import { JobsProvider } from './src/context/JobsContext';
 
 // Feature flag to disable new functionality during debugging
 const ENABLE_PROCESS_FEATURES = false;
@@ -37,7 +38,7 @@ const App: React.FC = () => {
       try {
         await SecureStore.deleteItemAsync('__clerk_skip_cache');
         console.log('[App] Cleaned up any existing cache conflict flags');
-      } catch {}
+      } catch { }
     };
     cleanupCache();
   }, []);
@@ -51,7 +52,7 @@ const App: React.FC = () => {
     const [showProcessModal, setShowProcessModal] = useState(false);
     const { isLoaded: clerkLoaded, isSignedIn } = useAuth();
     const session = useContext(SessionContext);
-    
+
     // Use process resumption hook properly
     const processResumption = ENABLE_PROCESS_FEATURES ? useProcessResumption() : null;
 
@@ -70,7 +71,7 @@ const App: React.FC = () => {
           } else if (status === 'error') {
             // keep default error handling (no success notification)
           }
-        } catch {}
+        } catch { }
       };
       handleInitialUrl();
       const subscription = Linking.addEventListener('url', (event: { url: string }) => {
@@ -85,7 +86,7 @@ const App: React.FC = () => {
           } else if (status === 'error') {
             // keep default error handling (no success notification)
           }
-        } catch {}
+        } catch { }
       });
       return () => subscription.remove();
     }, []);
@@ -93,16 +94,16 @@ const App: React.FC = () => {
     // Initialize LegendState when Clerk is signed in, cleanup when signed out
     useEffect(() => {
       if (!clerkLoaded) return;
-      
+
       if (!isSignedIn) {
         console.log('[App] User signed out, clearing Legend State');
         setLegendStateModules(null);
         return;
       }
-      
+
       // Wait until the Clerk→Supabase bridge has been configured
       if (!session?.ready) return;
-      
+
       (async () => {
         try {
           const { data: { user } } = await supabase.auth.getUser();
@@ -112,7 +113,7 @@ const App: React.FC = () => {
           const initialized = await initializeLegendState(supabase, user.id);
           setLegendStateModules(initialized);
           console.log('[App] Legend State ready');
-          
+
           // Check for resumable processes after everything is ready
           if (ENABLE_PROCESS_FEATURES) {
             setTimeout(() => {
@@ -138,22 +139,22 @@ const App: React.FC = () => {
       console.log('[App] Manually resetting Legend State by forcing re-initialization...');
       const { data: { session } } = await supabase.auth.getSession();
       if (session && session.user) {
-          try {
-              const reinitializedModules = await initializeLegendState(supabase, session.user.id, { force: true });
-              setLegendStateModules(reinitializedModules);
-              console.log('[App] Legend State has been forcefully reset and re-initialized.');
-          } catch (error) {
-              console.error('[App] Error during forced Legend State re-initialization:', error);
-          }
+        try {
+          const reinitializedModules = await initializeLegendState(supabase, session.user.id, { force: true });
+          setLegendStateModules(reinitializedModules);
+          console.log('[App] Legend State has been forcefully reset and re-initialized.');
+        } catch (error) {
+          console.error('[App] Error during forced Legend State re-initialization:', error);
+        }
       } else {
-          console.warn('[App] Could not reset Legend State: No active session.');
+        console.warn('[App] Could not reset Legend State: No active session.');
       }
-  };
+    };
 
     const handleResumeProcess = (process: ProcessState) => {
       try {
         console.log('[App] Resuming process:', process.type, process.id);
-        
+
         // Navigate to appropriate screen based on process type
         switch (process.type) {
           case ProcessType.AI_GENERATION:
@@ -176,31 +177,31 @@ const App: React.FC = () => {
       }
     };
 
-  const GlobalPlatformPickerOverlay: React.FC = () => {
-    const overlay = usePlatformPickerOverlay();
-    const { connections } = usePlatformConnections();
-    
-    // DEBUG: Log overlay state
-    console.log('[GlobalPlatformPickerOverlay] Rendering with overlay.visible:', overlay.visible);
-    console.log('[GlobalPlatformPickerOverlay] Overlay onStartConnect exists:', !!overlay.onStartConnect);
-    
-    const counts: Record<string, number> = {};
-    (connections || []).forEach((c: any) => {
-      if ((c.Status || '').toLowerCase() === 'active') {
-        counts[c.PlatformType] = (counts[c.PlatformType] || 0) + 1;
+    const GlobalPlatformPickerOverlay: React.FC = () => {
+      const overlay = usePlatformPickerOverlay();
+      const { connections } = usePlatformConnections();
+
+      // DEBUG: Log overlay state
+      console.log('[GlobalPlatformPickerOverlay] Rendering with overlay.visible:', overlay.visible);
+      console.log('[GlobalPlatformPickerOverlay] Overlay onStartConnect exists:', !!overlay.onStartConnect);
+
+      const counts: Record<string, number> = {};
+      (connections || []).forEach((c: any) => {
+        if ((c.Status || '').toLowerCase() === 'active') {
+          counts[c.PlatformType] = (counts[c.PlatformType] || 0) + 1;
+        }
+      });
+
+      if (!overlay.visible) {
+        console.log('[GlobalPlatformPickerOverlay] Not visible, returning null');
+        return null;
       }
-    });
-    
-    if (!overlay.visible) {
-      console.log('[GlobalPlatformPickerOverlay] Not visible, returning null');
-      return null;
-    }
-    
-    console.log('[GlobalPlatformPickerOverlay] Rendering overlay!');
+
+      console.log('[GlobalPlatformPickerOverlay] Rendering overlay!');
       return (
         <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, justifyContent: 'flex-end', zIndex: 9999 }} pointerEvents="box-none">
-          <Pressable 
-            style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)' }} 
+          <Pressable
+            style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)' }}
             onPress={() => {
               console.log('[GlobalPlatformPickerOverlay] Backdrop pressed, hiding overlay');
               overlay.hide();
@@ -214,19 +215,19 @@ const App: React.FC = () => {
               selectedPlatforms={[]}
               isConnected={(p) => (connections || []).some((c: any) => c.PlatformType === p && (c.Status || '').toLowerCase() === 'active')}
               platformActiveCounts={counts}
-              onShowSelection={() => {}}
-              onShowTemplates={() => {}}
+              onShowSelection={() => { }}
+              onShowTemplates={() => { }}
               onBackToEmpty={() => { overlay.hide(); }}
-              onBackToSelection={() => {}}
-              onOpenTemplateModal={() => {}}
-              onTemplateSelect={() => {}}
-              onPlatformToggle={() => {}}
-              onGeneratePress={() => {}}
-               onStartConnect={(platform) => {
-                 console.log('[GlobalPlatformPickerOverlay] onStartConnect called with platform:', platform);
-                 overlay.hide();
-                 overlay.onStartConnect?.(platform);
-               }}
+              onBackToSelection={() => { }}
+              onOpenTemplateModal={() => { }}
+              onTemplateSelect={() => { }}
+              onPlatformToggle={() => { }}
+              onGeneratePress={() => { }}
+              onStartConnect={(platform) => {
+                console.log('[GlobalPlatformPickerOverlay] onStartConnect called with platform:', platform);
+                overlay.hide();
+                overlay.onStartConnect?.(platform);
+              }}
             />
           </View>
         </View>
@@ -254,7 +255,7 @@ const App: React.FC = () => {
             )}
             <FlashMessage position="top" />
             <GlobalPlatformPickerOverlay />
-            
+
             {/* Only show process modal if everything is ready and features enabled */}
             {ENABLE_PROCESS_FEATURES && session?.ready && (
               <SafeErrorBoundary>
@@ -288,7 +289,7 @@ const App: React.FC = () => {
     const [forceRefresh, setForceRefresh] = useState(0);
     const navKey = `navigation-${isSignedIn ? 'signed-in' : 'signed-out'}-${forceRefresh}`;
     console.log('[App] Clerk state:', { isLoaded, isSignedIn, navKey });
-    
+
     // Debug what happens when isSignedIn changes
     useEffect(() => {
       if (isLoaded) {
@@ -300,7 +301,7 @@ const App: React.FC = () => {
         }
       }
     }, [isLoaded, isSignedIn]);
-    
+
 
 
     // Reset navigationReady when auth state changes to ensure proper re-initialization
@@ -309,7 +310,7 @@ const App: React.FC = () => {
       console.log('[App] Auth state changed, resetting navigation ready state');
       setNavigationReady(false);
     }, [isLoaded, isSignedIn]);
-    
+
     if (!isLoaded) {
       return (
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -317,32 +318,34 @@ const App: React.FC = () => {
         </View>
       );
     }
-    
+
     return (
       <PlatformConnectionsProvider>
         <PlatformPickerOverlayProvider>
-        <NavigationContainer 
-          key={navKey}
-          ref={navigationRef}
-          onReady={() => {
-            console.log('[App] Navigation container ready, key:', navKey, 'isSignedIn:', isSignedIn);
-            setNavigationReady(true);
-          }}
-        >
-          {isSignedIn ? (
-            <WithSessionProvider>
-              {React.createElement(OrgProvider as any, null, (
-                <AuthedAppContent navigationRef={navigationRef} />
-              ))}
-            </WithSessionProvider>
-          ) : (
-            <ThemeProvider>
-              <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-              <AppNavigator />
-              <FlashMessage position="top" />
-            </ThemeProvider>
-          )}
-        </NavigationContainer>
+          <NavigationContainer
+            key={navKey}
+            ref={navigationRef}
+            onReady={() => {
+              console.log('[App] Navigation container ready, key:', navKey, 'isSignedIn:', isSignedIn);
+              setNavigationReady(true);
+            }}
+          >
+            {isSignedIn ? (
+              <WithSessionProvider>
+                {React.createElement(OrgProvider as any, null, (
+                  <JobsProvider>
+                    <AuthedAppContent navigationRef={navigationRef} />
+                  </JobsProvider>
+                ))}
+              </WithSessionProvider>
+            ) : (
+              <ThemeProvider>
+                <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+                <AppNavigator />
+                <FlashMessage position="top" />
+              </ThemeProvider>
+            )}
+          </NavigationContainer>
         </PlatformPickerOverlayProvider>
       </PlatformConnectionsProvider>
     );

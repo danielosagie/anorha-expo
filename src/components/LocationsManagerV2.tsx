@@ -133,12 +133,95 @@ interface DraftPool {
 }
 
 interface DeletePoolState {
-  visible: boolean;
-  poolId: string | null;
-  mergeTarget: string | null;
-  availablePools: LocationPool[];
   loading: boolean;
 }
+
+// Internal component for Pool Accordion Item
+// Internal component for Pool Accordion Item
+const PoolAccordionItem = ({
+  pool,
+  onToggle,
+  isExpanded,
+  locationMetadataMap,
+  onPressManage,
+  onDelete
+}: {
+  pool: LocationPool,
+  onToggle: () => void,
+  isExpanded: boolean,
+  locationMetadataMap: Map<string, any>,
+  onPressManage: () => void,
+  onDelete: () => void
+}) => {
+  const theme = useTheme();
+
+  const locationCount = pool.locationIds?.length || 0;
+  const isEmpty = locationCount === 0;
+
+  // Deduplicate platform types for the closed state icons
+  const platformTypes = useMemo(() => {
+    const types = new Set<string>();
+    pool.locationIds?.forEach(id => {
+      const meta = locationMetadataMap.get(id);
+      if (meta?.platformType) types.add(meta.platformType);
+    });
+    return Array.from(types);
+  }, [pool.locationIds, locationMetadataMap]);
+
+  return (
+    <View style={[styles.accordionContainer, isEmpty && { opacity: 0.8 }]}>
+      <TouchableOpacity
+        style={[
+          styles.accordionHeader,
+          isExpanded && !isEmpty && styles.accordionHeaderOpen
+        ]}
+        onPress={isEmpty ? undefined : onToggle}
+        activeOpacity={isEmpty ? 1 : 0.7}
+      >
+        <View style={styles.accordionHeaderLeft}>
+          <Text style={styles.accordionTitle}>{pool.name}</Text>
+        </View>
+        <View style={styles.accordionHeaderRight}>
+          <View style={styles.accordionBadge}>
+            <Text style={styles.accordionBadgeText}>({locationCount})</Text>
+            <View style={styles.accordionIcons}>
+              {platformTypes.map(type => {
+                const Logo = PLATFORM_LOGOS[type as keyof typeof PLATFORM_LOGOS];
+                return Logo ? <Logo key={type} width={14} height={14} style={{ marginLeft: 4 }} /> : null;
+              })}
+            </View>
+          </View>
+
+          {!isEmpty && (
+            <View style={{ marginLeft: 8 }}>
+              {isExpanded ? (
+                <Icon name="chevron-up" size={24} color="#666" />
+              ) : (
+                <Icon name="chevron-down" size={24} color="#666" />
+              )}
+            </View>
+          )}
+        </View>
+      </TouchableOpacity>
+
+      {isExpanded && !isEmpty && (
+        <View style={styles.accordionContent}>
+          {pool.locationIds?.map(locId => {
+            const meta = locationMetadataMap.get(locId);
+            const Logo = meta?.platformType ? PLATFORM_LOGOS[meta.platformType as keyof typeof PLATFORM_LOGOS] : null;
+
+            return (
+              <View key={locId} style={styles.accordionItemRow}>
+                <Text style={styles.accordionItemText}>{meta?.locationName || locId}</Text>
+                {Logo && <Logo width={16} height={16} />}
+              </View>
+            );
+          })}
+        </View>
+      )}
+    </View>
+  );
+};
 
 const PartnerWelcomeOverlay: React.FC<{
   visible: boolean;
@@ -239,7 +322,8 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
   const [showWelcomeOverlay, setShowWelcomeOverlay] = useState(false);
   const [partnerNameForOverlay, setPartnerNameForOverlay] = useState('');
 
-
+  // Accordion state
+  const [expandedPools, setExpandedPools] = useState<Set<string>>(new Set());
 
   // View mode state machine
   const [viewMode, setViewMode] = useState<ViewMode>('default');
@@ -337,6 +421,78 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
     return map;
   }, [platformConnections]);
 
+  // Transform API response from Record<connId, {...}> to the grouped format we need
+  const transformAvailableLocations = (record: Record<string, any>): TransformedLocationGroup[] => {
+    const byPlatform = new Map<string, TransformedLocationGroup>();
+
+    // Handle empty object or null
+    if (!record || Object.keys(record).length === 0) {
+      // console.log('[LocationsManagerV2] No available locations (empty record)');
+      return [];
+    }
+
+    for (const [connId, connData] of Object.entries(record)) {
+      if (!connData) continue;
+
+      const platformType = connData.platformType?.toLowerCase();
+      if (!platformType) continue;
+
+      if (!byPlatform.has(platformType)) {
+        byPlatform.set(platformType, {
+          platformType,
+          connections: [],
+        });
+      }
+
+      const group = byPlatform.get(platformType)!;
+
+      // Only add if there are locations
+      const locations = connData.locations || [];
+      if (locations.length > 0) {
+        group.connections.push({
+          connectionId: connId,
+          connectionName: connData.connectionName,
+          locations: locations.map((loc: any) => ({
+            platformLocationId: loc.platformLocationId,
+            locationName: loc.locationName,
+            timezone: loc.timezone,
+          })),
+        });
+      }
+    }
+
+    const result = Array.from(byPlatform.values());
+    console.log('[LocationsManagerV2] Transformed locations:', result.length, 'platforms');
+    return result;
+  };
+
+  // Load available locations for creating/editing
+  const loadAvailableLocations = useCallback(async () => {
+    try {
+      const token = await ensureSupabaseJwt();
+      if (!resolvedOrgId) {
+        console.log('[LocationsManagerV2] No org ID, skipping locations load');
+        setAvailable([]);
+        return;
+      }
+      // console.log('[LocationsManagerV2] Loading available locations for org:', resolvedOrgId);
+      const r = await fetch(`${API_BASE_URL}/api/pools/locations/available?orgId=${resolvedOrgId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) {
+        const errorText = await r.text();
+        // console.warn(`Failed to load locations: ${r.status} - ${errorText}`);
+        return; // Don't throw for background loading in Default view
+      }
+      const rawRecord: Record<string, any> = await r.json();
+      const transformed = transformAvailableLocations(rawRecord);
+      setAvailable(transformed);
+    } catch (e) {
+      console.error('[LocationsManagerV2] loadAvailableLocations error', e);
+      setAvailable([]);
+    }
+  }, [resolvedOrgId]);
+
   const loadList = useCallback(async () => {
     // If no org ID yet, just ensure we're not loading forever
     if (!resolvedOrgId) {
@@ -347,6 +503,10 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
     setIsLoading(true);
     try {
       const token = await ensureSupabaseJwt();
+
+      // Load available locations FIRST (for metadata)
+      // We do this in parallel or before to ensure we have data for the UI
+      loadAvailableLocations();
 
       // Load pools, partnerships, invites, and members in parallel
       const headers = { Authorization: `Bearer ${token}` };
@@ -404,7 +564,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
     } finally {
       setIsLoading(false);
     }
-  }, [resolvedOrgId, connectionIds]);
+  }, [resolvedOrgId, connectionIds, loadAvailableLocations]);
 
   // Sync prop to state
   useEffect(() => {
@@ -461,78 +621,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
     }
   };
 
-  // Transform API response from Record<connId, {...}> to the grouped format we need
-  const transformAvailableLocations = (record: Record<string, any>): TransformedLocationGroup[] => {
-    const byPlatform = new Map<string, TransformedLocationGroup>();
 
-    // Handle empty object or null
-    if (!record || Object.keys(record).length === 0) {
-      console.log('[LocationsManagerV2] No available locations (empty record)');
-      return [];
-    }
-
-    for (const [connId, connData] of Object.entries(record)) {
-      if (!connData) continue;
-
-      const platformType = connData.platformType?.toLowerCase();
-      if (!platformType) continue;
-
-      if (!byPlatform.has(platformType)) {
-        byPlatform.set(platformType, {
-          platformType,
-          connections: [],
-        });
-      }
-
-      const group = byPlatform.get(platformType)!;
-
-      // Only add if there are locations
-      const locations = connData.locations || [];
-      if (locations.length > 0) {
-        group.connections.push({
-          connectionId: connId,
-          connectionName: connData.connectionName,
-          locations: locations.map((loc: any) => ({
-            platformLocationId: loc.platformLocationId,
-            locationName: loc.locationName,
-            timezone: loc.timezone,
-          })),
-        });
-      }
-    }
-
-    const result = Array.from(byPlatform.values());
-    console.log('[LocationsManagerV2] Transformed locations:', result.length, 'platforms');
-    return result;
-  };
-
-  // Load available locations for creating/editing
-  const loadAvailableLocations = useCallback(async () => {
-    try {
-      const token = await ensureSupabaseJwt();
-      if (!resolvedOrgId) {
-        console.log('[LocationsManagerV2] No org ID, skipping locations load');
-        setAvailable([]);
-        return;
-      }
-      console.log('[LocationsManagerV2] Loading available locations for org:', resolvedOrgId);
-      const r = await fetch(`${API_BASE_URL}/api/pools/locations/available?orgId=${resolvedOrgId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!r.ok) {
-        const errorText = await r.text();
-        throw new Error(`Failed to load locations: ${r.status} - ${errorText}`);
-      }
-      const rawRecord: Record<string, any> = await r.json();
-      console.log('[LocationsManagerV2] Raw API response:', rawRecord);
-      const transformed = transformAvailableLocations(rawRecord);
-      console.log('[LocationsManagerV2] Transformed result:', transformed);
-      setAvailable(transformed);
-    } catch (e) {
-      console.error('[LocationsManagerV2] loadAvailableLocations error', e);
-      setAvailable([]);
-    }
-  }, [resolvedOrgId]);
 
   // Load an existing pool and its locations for editing
   const loadPoolForEditing = useCallback(
@@ -876,11 +965,28 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
   };
 
   const groupedSingleLocations = useMemo(() => {
-    const items = singleLocations.map((l) => ({
+    // Calculate filter set: all locations currently in any pool
+    const pooledLocationIds = new Set<string>();
+    for (const pool of pools) {
+      if (pool.locationIds) {
+        for (const locId of pool.locationIds) {
+          pooledLocationIds.add(locId);
+        }
+      }
+    }
+
+    // Filter out pooled locations from singleLocations
+    const availableSingle = singleLocations.filter(
+      l => !pooledLocationIds.has(l.PlatformLocationId)
+    );
+
+    const items = availableSingle.map((l) => ({
       id: l.PlatformLocationId,
       name: l.Name || 'Unnamed Location',
       platformType: connectionById.get(l.PlatformConnectionId)?.PlatformType?.toLowerCase(),
     }));
+
+    // Deduplicate logic (existing)
     const keySet = new Set<string>();
     const out: { id: string; name: string; platformType?: string }[] = [];
     for (const it of items) {
@@ -890,7 +996,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
       out.push(it);
     }
     return out;
-  }, [singleLocations, connectionById]);
+  }, [singleLocations, connectionById, pools]);
 
   // Fast lookup for available locations by platformLocationId
   const availableLocationById = useMemo(() => {
@@ -1063,207 +1169,106 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
   );
 
   // Default view: list of pools and locations OR partners OR team
-  const renderDefaultView = () => (
-    <View style={styles.card}>
-      <View style={styles.headerRow}>
-        <Text style={styles.headerTitle}>Locations</Text>
+  const renderDefaultView = () => {
+    const hasPools = pools.length > 0;
+    const hasLocations = groupedSingleLocations.length > 0;
+    const hasAnyData = hasPools || hasLocations;
 
-        <View style={{ flexDirection: 'row', backgroundColor: '#f0f0f0', borderRadius: 8, padding: 2, marginRight: 8 }}>
-          <TouchableOpacity
-            onPress={() => setActiveTab('locations')}
-            style={{
-              paddingHorizontal: 12,
-              paddingVertical: 6,
-              borderRadius: 6,
-              backgroundColor: activeTab === 'locations' ? '#fff' : 'transparent',
-              shadowColor: activeTab === 'locations' ? '#000' : 'transparent',
-              shadowOpacity: activeTab === 'locations' ? 0.1 : 0,
-              shadowRadius: 2,
-            }}
-          >
-            <Text style={{ fontSize: 13, fontWeight: activeTab === 'locations' ? '600' : '400', color: '#333' }}>Pools</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => setActiveTab('partners')}
-            style={{
-              paddingHorizontal: 12,
-              paddingVertical: 6,
-              borderRadius: 6,
-              backgroundColor: activeTab === 'partners' ? '#fff' : 'transparent',
-              shadowColor: activeTab === 'partners' ? '#000' : 'transparent',
-              shadowOpacity: activeTab === 'partners' ? 0.1 : 0,
-              shadowRadius: 2,
-            }}
-          >
-            <Text style={{ fontSize: 13, fontWeight: activeTab === 'partners' ? '600' : '400', color: '#333' }}>Partners</Text>
-          </TouchableOpacity>
+    return (
+      <View style={styles.card}>
+        <View style={styles.headerRow}>
+          <Text style={styles.headerTitle}>Locations/Pools</Text>
+          {activeTab === 'locations' && (
+            <TouchableOpacity onPress={enterManageMode} style={styles.manageBtn}>
+              <Text style={styles.manageBtnText}>Manage</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
-        {activeTab === 'locations' ? (
-          <TouchableOpacity onPress={enterManageMode} style={styles.manageBtn}>
-            <Text style={styles.manageBtnText}>Manage</Text>
-          </TouchableOpacity>
-        ) : activeTab === 'partners' ? (
-          <TouchableOpacity
-            onPress={() => setViewMode('invitePartner')}
-            style={[styles.manageBtn, { backgroundColor: theme.colors.primary }]}
-          >
-            <Text style={[styles.manageBtnText, { color: '#fff' }]}>+ Invite</Text>
-          </TouchableOpacity>
-        ) : null}
-      </View>
-
-      {(!resolvedOrgId || isLoading) ? (
-        <View style={{ paddingVertical: 24 }}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-        </View>
-      ) : activeTab === 'partners' ? (
-        <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
-          {/* Pending Invites Section */}
-          {pendingInvites.length > 0 && (
-            <View style={{ marginBottom: 20 }}>
-              <Text style={styles.sectionTitle}>Pending Invites</Text>
-              {pendingInvites.map((invite) => (
-                <View key={invite.id} style={styles.listItem}>
-                  <View>
-                    <Text style={styles.listItemText}>{invite.email}</Text>
-                    <Text style={{ fontSize: 12, color: '#666' }}>
-                      Pool: {invite.poolName}
-                    </Text>
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => {
-                      Clipboard.setString(invite.inviteLink);
-                      Alert.alert('Link Copied');
+        {(!resolvedOrgId || isLoading) ? (
+          <View style={{ paddingVertical: 24 }}>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+          </View>
+        ) : !hasAnyData && activeTab === 'locations' ? (
+          <View style={styles.emptyState}>
+            <Icon name="map-marker-off" size={48} color="#ccc" />
+            <Text style={styles.emptyStateTitle}>No Locations Yet</Text>
+            <Text style={styles.emptyStateSubtitle}>
+              Connect a platform to sync your store locations, or create a custom location group.
+            </Text>
+          </View>
+        ) : (
+          <ScrollView scrollEnabled={!disableScroll} contentContainerStyle={{ paddingBottom: 12 }}>
+            {/* POOLS SECTION */}
+            {hasPools && (
+              <View style={{ marginBottom: 16 }}>
+                <Text style={styles.sectionTitle}>POOLS</Text>
+                {pools.map(pool => (
+                  <PoolAccordionItem
+                    key={pool.id}
+                    pool={pool}
+                    locationMetadataMap={availableLocationById}
+                    onToggle={() => {
+                      setExpandedPools(prev => {
+                        const next = new Set(prev);
+                        if (next.has(pool.id)) next.delete(pool.id);
+                        else next.add(pool.id);
+                        return next;
+                      });
                     }}
-                    style={{ padding: 8, backgroundColor: '#f0f0f0', borderRadius: 6 }}
-                  >
-                    <Icon name="content-copy" size={16} color="#666" />
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </View>
-          )}
-
-          {/* Active Partnerships Section */}
-          <Text style={styles.sectionTitle}>Active Partners</Text>
-          {partnerships.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Icon name="account-group-outline" size={48} color="#ccc" />
-              <Text style={styles.emptyStateTitle}>No Partners Yet</Text>
-              <Text style={styles.emptyStateSubtitle}>
-                Invite partners to share inventory pools with them. They will get a synced copy.
-              </Text>
-              <TouchableOpacity
-                onPress={() => setViewMode('invitePartner')}
-                style={[styles.primaryBtn, { marginTop: 16, alignSelf: 'center', width: 'auto', paddingHorizontal: 24 }]}
-              >
-                <Text style={styles.primaryBtnText}>Invite a Partner</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            partnerships.map((p) => (
-              <View key={p.id} style={styles.listItem}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                  <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.primary + '20', alignItems: 'center', justifyContent: 'center' }}>
-                    <Text style={{ color: theme.colors.primary, fontWeight: 'bold' }}>
-                      {p.partnerOrgName?.[0] || 'P'}
-                    </Text>
-                  </View>
-                  <View>
-                    <Text style={styles.listItemText}>{p.partnerOrgName || p.partnerEmail}</Text>
-                    <Text style={{ fontSize: 12, color: '#999' }}>
-                      Pool: {p.poolName} • {p.productCount} products
-                    </Text>
-                  </View>
-                </View>
-                <View style={{ backgroundColor: '#e6f4ea', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 }}>
-                  <Text style={{ fontSize: 10, color: '#1e7e34', fontWeight: 'bold' }}>ACTIVE</Text>
-                </View>
+                    isExpanded={expandedPools.has(pool.id)}
+                    onPressManage={enterManageMode}
+                    onDelete={() => openDeletePool(pool.id, pool.name)}
+                  />
+                ))}
               </View>
-            ))
-          )}
-        </ScrollView>
-      ) : pools.length === 0 && groupedSingleLocations.length === 0 ? (
-        // Empty state for Locations
-        <View style={styles.emptyState}>
-          <Icon name="map-marker-off" size={48} color="#ccc" />
-          <Text style={styles.emptyStateTitle}>No Locations Yet</Text>
-          <Text style={styles.emptyStateSubtitle}>
-            Connect a platform to sync your store locations, or create a custom location group.
-          </Text>
-        </View>
-      ) : (
-        <ScrollView scrollEnabled={!disableScroll}>
-          {/* Pools section */}
-          {pools.length > 0 && (
-            <>
-              <Text style={styles.sectionTitle}>Pools</Text>
-              {pools.map((p) => (
-                <TouchableOpacity
-                  key={`pool-${p.id}`}
-                  style={[
-                    styles.listItem,
-                    selectedListItem.kind === 'pool' && selectedListItem.id === p.id && styles.listItemPoolActive,
-                  ]}
-                  onPress={() => setSelectedListItem({ kind: 'pool', id: p.id })}
-                >
-                  <Text style={styles.listItemText}>{p.name} - Pool</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <Icon name="lock" size={14} color="#999" />
+            )}
+
+            {/* LOCATIONS SECTION */}
+            {hasLocations && (
+              <View>
+                <Text style={styles.sectionTitle}>LOCATIONS</Text>
+                {groupedSingleLocations.map(loc => {
+                  const Logo = loc.platformType ? PLATFORM_LOGOS[loc.platformType as keyof typeof PLATFORM_LOGOS] : null;
+
+                  return (
                     <TouchableOpacity
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        openDeletePool(p.id, p.name);
-                      }}
-                      style={{ padding: 4 }}
+                      key={loc.id}
+                      style={styles.accordionContainer} // Reuse container style for consistent border
+                      activeOpacity={0.8}
+                      onPress={() => { }} // No action on single location tap yet aside maybe edit? Design doesn't specify.
                     >
-                      <Icon name="delete-outline" size={20} color="#ff4444" />
+                      <View style={styles.singleLocationRow}>
+                        <Text style={styles.accordionTitle}>{loc.name}</Text>
+                        {Logo && <Logo width={20} height={20} />}
+                      </View>
                     </TouchableOpacity>
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </>
-          )}
+                  );
+                })}
+              </View>
+            )}
 
-          {/* Locations section */}
-          {groupedSingleLocations.length > 0 && (
-            <>
-              <Text style={[styles.sectionTitle, pools.length > 0 && { marginTop: 12 }]}>Locations</Text>
-              {groupedSingleLocations.map((l) => (
-                <TouchableOpacity
-                  key={`loc-${l.id}`}
-                  style={[
-                    styles.listItem,
-                    selectedListItem.kind === 'single' && selectedListItem.id === l.id && styles.listItemSingleActive,
-                  ]}
-                  onPress={() => setSelectedListItem({ kind: 'single', id: l.id })}
-                >
-                  <Text style={styles.listItemText}>{l.name}</Text>
-                  {renderListItemRight(l.platformType)}
-                </TouchableOpacity>
-              ))}
-            </>
-          )}
-        </ScrollView>
-      )}
+            {/* Create Button */}
+            <TouchableOpacity style={styles.confirmBtn} onPress={enterCreateMode}>
+              <Icon name="plus" size={18} color="#fff" />
+              <Text style={styles.confirmBtnText}>Create New Location/Group</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        )}
 
-      <TouchableOpacity style={styles.confirmBtn} onPress={enterCreateMode}>
-        <Icon name="plus-circle" size={18} color="#fff" />
-        <Text style={styles.confirmBtnText}>Create Location/Group</Text>
-      </TouchableOpacity>
+        <PartnerWelcomeOverlay
+          visible={showWelcomeOverlay}
+          partnerName={partnerNameForOverlay}
+          onConnect={() => {
+            setShowWelcomeOverlay(false);
+            if (onPressConnect) onPressConnect();
+            else Alert.alert('Connection', 'Please go to Settings > Connections to connect a platform.');
+          }}
+        />
+      </View>
+    );
+  };
 
-      <PartnerWelcomeOverlay
-        visible={showWelcomeOverlay}
-        partnerName={partnerNameForOverlay}
-        onConnect={() => {
-          setShowWelcomeOverlay(false);
-          if (onPressConnect) onPressConnect();
-          else Alert.alert('Connection', 'Please go to Settings > Connections to connect a platform.');
-        }}
-      />
-    </View >
-  );
 
   // Manage pools view: inline card with all pools expanded
   const renderManagePoolsView = () => (
@@ -2827,6 +2832,87 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     width: '100%',
+  },
+  sectionTitle: { // Ensure this exists or override it to match design
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#999',
+    marginTop: 20,
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  accordionContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e0e0e0', // matches design "Closed - Default" look
+    marginBottom: 8,
+    overflow: 'hidden',
+  },
+  accordionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    minHeight: 56,
+  },
+  accordionHeaderOpen: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  accordionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: 8, // space between title and badge
+  },
+  accordionHeaderRight: {
+    marginLeft: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  accordionTitle: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#111',
+  },
+  accordionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  accordionBadgeText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#111',
+    marginRight: 6,
+  },
+  accordionIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  accordionContent: {
+    backgroundColor: '#fff',
+  },
+  accordionItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  accordionItemText: {
+    fontSize: 15,
+    color: '#333',
+  },
+  singleLocationRow: { // For single locations in the main list
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
   },
 });
 

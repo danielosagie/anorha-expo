@@ -218,6 +218,8 @@ const MappingReviewScreen = () => {
   const [sortBy, setSortBy] = useState<'title' | 'sku'>('title');
   // NEW: Scan summary
   const [scanSummary, setScanSummary] = useState<{ countProducts?: number; countVariants?: number; countLocations?: number } | null>(null);
+  // NEW: State for refresh/rescan
+  const [isRefreshing, setIsRefreshing] = useState(false);
   // Inline bottom-sheet wizard state
   const [wizardVisible, setWizardVisible] = useState(false);
   const [wizardStep, setWizardStep] = useState(0); // 0 platforms, 1 sync mode, 2 delist, 3 buffer, 4 review
@@ -1936,6 +1938,44 @@ const MappingReviewScreen = () => {
     }
   };
 
+  // --- NEW: Function to refresh/rescan platform products ---
+  const handleRefreshPlatform = async () => {
+    console.log(`[MappingReviewScreen] Refreshing platform data for ${connectionId}`);
+    setIsRefreshing(true);
+    setError(null);
+
+    try {
+      const token = await waitForSupabaseToken();
+      if (!token) throw new Error("Authentication required");
+
+      // Trigger a platform scan
+      const scanResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/scan`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (scanResponse.ok) {
+        console.log(`[MappingReviewScreen] Scan triggered successfully, fetching suggestions...`);
+        // Wait a moment then fetch fresh suggestions
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await fetchMappingSuggestions(connectionId);
+      } else {
+        // If scan endpoint fails, just refresh suggestions
+        console.warn(`[MappingReviewScreen] Scan trigger failed, refreshing suggestions directly`);
+        await fetchMappingSuggestions(connectionId);
+      }
+
+    } catch (err: any) {
+      console.error('[MappingReviewScreen] Error refreshing platform:', err);
+      setError(err.message || 'Failed to refresh platform data');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   // --- NEW: Sync Rules UI Components ---
   const renderSyncDirectionOption = (option: SyncDirection, title: string, subtitle: string, icon: string) => (
     <TouchableOpacity
@@ -3544,9 +3584,22 @@ const MappingReviewScreen = () => {
                   }}
                 >
                   <Icon name="check-all" size={18} color="#FFF" />
-                  <Text style={{ marginLeft: 6, color: '#FFF', fontWeight: '700' }}>Approve All</Text>
+                  <Text style={{ marginLeft: 6, color: '#FFF', fontWeight: '700' }}>Approve All ({counts.review})</Text>
                 </TouchableOpacity>
               )}
+              {/* Refresh Platform Button */}
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: theme.colors.primary + '50', borderRadius: 8, backgroundColor: theme.colors.primary + '10' }}
+                onPress={handleRefreshPlatform}
+                disabled={isRefreshing}
+              >
+                {isRefreshing ? (
+                  <ActivityIndicator size="small" color={theme.colors.primary} />
+                ) : (
+                  <Icon name="refresh" size={18} color={theme.colors.primary} />
+                )}
+                <Text style={{ marginLeft: 6, color: theme.colors.primary, fontWeight: '600' }}>{isRefreshing ? 'Scanning...' : 'Rescan'}</Text>
+              </TouchableOpacity>
               <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8 }} onPress={() => setSortBy(sortBy === 'title' ? 'sku' : 'title')} accessibilityLabel="Sort by">
                 <Icon name="sort" size={18} color={theme.colors.textSecondary} />
                 <Text style={{ marginLeft: 6, color: theme.colors.textSecondary, fontWeight: '600' }}>Sort By: {sortBy === 'title' ? 'Title' : 'SKU'}</Text>
