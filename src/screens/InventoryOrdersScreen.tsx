@@ -26,6 +26,8 @@ type EnrichedProductVariant = ProductVariantData & {
   imageUrl?: string;
   totalQuantity?: number;
   platformNames?: string[];
+  minPrice?: number;  // Lowest price across all option variants
+  maxPrice?: number;  // Highest price across all option variants
   OnShopify?: boolean;
   OnSquare?: boolean;
   OnClover?: boolean;
@@ -54,8 +56,9 @@ const InventoryOrdersScreen = observer(() => {
   const legendState: LegendStateObservables | null = useLegendState();
 
   // Subscribe to real-time product variant and inventory changes
-  useProductVariantRealtime();
-  useInventoryLevelsRealtime();
+  // These hooks return updateCounter values that we'll use to trigger useMemo re-computation
+  const { updateCounter: variantUpdateCounter } = useProductVariantRealtime();
+  const { updateCounter: inventoryUpdateCounter } = useInventoryLevelsRealtime();
 
   // Filter & Search State
   const [activeTab, setActiveTab] = useState('inventory');
@@ -75,26 +78,26 @@ const InventoryOrdersScreen = observer(() => {
   useEffect(() => {
     const p = route.params;
     if (p) {
-        console.log('[InventoryOrdersScreen] applying params:', p);
-        if (typeof p.initialSearch === 'string') setSearchQuery(p.initialSearch);
-        if (p.initialSortBy) setSortBy(p.initialSortBy);
-        if (p.initialLocationIds) setSelectedLocationIds(p.initialLocationIds);
-        if (p.lowStockOnly !== undefined) setLowStockOnly(p.lowStockOnly);
-        
-        if (p.openScannerOnMount) {
-             setTimeout(() => {
-                 setScannerOpen(true);
-                 scannerResultHandlerRef.current = (code: string) => {
-                    handleBarcodeScan(code);
-                    setScannerOpen(false);
-                    scannerResultHandlerRef.current = null;
-                 };
-             }, 100);
-        }
-        
-        if (p.openLocationPicker) {
-             setLocationPickerOpen(true);
-        }
+      console.log('[InventoryOrdersScreen] applying params:', p);
+      if (typeof p.initialSearch === 'string') setSearchQuery(p.initialSearch);
+      if (p.initialSortBy) setSortBy(p.initialSortBy);
+      if (p.initialLocationIds) setSelectedLocationIds(p.initialLocationIds);
+      if (p.lowStockOnly !== undefined) setLowStockOnly(p.lowStockOnly);
+
+      if (p.openScannerOnMount) {
+        setTimeout(() => {
+          setScannerOpen(true);
+          scannerResultHandlerRef.current = (code: string) => {
+            handleBarcodeScan(code);
+            setScannerOpen(false);
+            scannerResultHandlerRef.current = null;
+          };
+        }, 100);
+      }
+
+      if (p.openLocationPicker) {
+        setLocationPickerOpen(true);
+      }
     }
   }, [route.params]);
 
@@ -174,12 +177,24 @@ const InventoryOrdersScreen = observer(() => {
     }
   }, [legendState]);
 
-  // Direct access to observables - observer() will track these automatically for reactivity
+  // CRITICAL FIX: Use useSelector to properly track observable changes for real-time reactivity
+  // Direct .get() calls outside useMemo don't trigger re-renders when data changes
+  // useSelector creates a subscription that re-renders the component when the observable changes
   const activeProductVariants = legendObservables?.productVariants$?.get() || {};
   const activePlatformMappings = (legendObservables?.platformProductMappings$?.get() || {}) as Record<string, PlatformProductMapping>;
   const activeInventoryLevels = (legendObservables?.inventoryLevels$?.get() || {}) as Record<string, InventoryLevel>;
   const activeProductImages = (legendObservables?.productImages$?.get() || {}) as Record<string, ProductImage>;
   const activeMarketplaceListings = (legendObservables?.marketplaceListings$?.get() || {}) as Record<string, MarketplaceListing>;
+
+  // Debug: Log when observables update (helps diagnose real-time issues)
+  useEffect(() => {
+    console.log('[InventoryOrdersScreen] Observable state updated:', {
+      variantCount: Object.keys(activeProductVariants).length,
+      levelCount: Object.keys(activeInventoryLevels).length,
+      imageCount: Object.keys(activeProductImages).length,
+      mappingCount: Object.keys(activePlatformMappings).length,
+    });
+  }, [activeProductVariants, activeInventoryLevels, activeProductImages, activePlatformMappings]);
 
   const enrichedProductVariants = useMemo((): EnrichedProductVariant[] => {
     const variants = activeProductVariants;
@@ -193,14 +208,20 @@ const InventoryOrdersScreen = observer(() => {
     // Build a map of ProductId -> option variants for inventory aggregation
     const optionVariantsByProduct = new Map<string, Array<{ id: string; variant: any }>>();
     const allVariantIds = Object.keys(variants);
-    
+
+    // Build connection -> platformType lookup to filter inventory by platform
+    const connectionToPlatform = new Map<string, string>();
+    platformConnections.forEach(conn => {
+      connectionToPlatform.set(conn.Id, conn.PlatformType.toLowerCase());
+    });
+
     allVariantIds.forEach(variantId => {
       const variant = variants[variantId];
       if (!variant) return;
-      
+
       // Cast to access VariantType which may not be on the base interface yet
       const variantWithType = variant as any;
-      
+
       // Only track option variants for aggregation
       if (variantWithType.VariantType === 'option') {
         const productId = variant.ProductId;
@@ -211,28 +232,67 @@ const InventoryOrdersScreen = observer(() => {
       }
     });
 
+    /**
+     * CRITICAL FIX: Helper to get inventory levels for a variant from PRIMARY platform only.
+     * This prevents double-counting when the same product exists on multiple platforms.
+     * Priority order: shopify > square > clover > amazon > ebay > facebook
+     */
+    const getPrimaryPlatformInventory = (variantId: string): number => {
+      const variantLevels = Object.values(levels).filter((level: InventoryLevel) =>
+        level.ProductVariantId === variantId
+      );
+
+      // DEBUG: Log the raw levels being found
+      console.log(`[getPrimaryPlatformInventory] variantId=${variantId.slice(0, 8)}, found ${variantLevels.length} levels:`,
+        variantLevels.map((l: InventoryLevel) => `loc=${l.PlatformLocationId?.slice(0, 10)}, qty=${l.Quantity}, conn=${l.PlatformConnectionId?.slice(0, 8)}`).join(' | '));
+
+      // Group by platform
+      const byPlatform: Record<string, number> = {};
+      variantLevels.forEach(level => {
+        const platform = connectionToPlatform.get(level.PlatformConnectionId) || 'unknown';
+        byPlatform[platform] = (byPlatform[platform] || 0) + (level.Quantity || 0);
+      });
+
+      // DEBUG: Log the grouping and connection lookup
+      console.log(`[getPrimaryPlatformInventory] byPlatform=${JSON.stringify(byPlatform)}, connectionToPlatform size=${connectionToPlatform.size}`);
+
+      // Pick PRIMARY platform only (priority order)
+      const platformPriority = ['shopify', 'square', 'clover', 'amazon', 'ebay', 'facebook'];
+      for (const plat of platformPriority) {
+        if (byPlatform[plat] !== undefined) {
+          console.log(`[getPrimaryPlatformInventory] PRIMARY=${plat}, qty=${byPlatform[plat]}`);
+          return byPlatform[plat];
+        }
+      }
+
+      // Fallback: sum all if no known platform (shouldn't happen)
+      const fallback = Object.values(byPlatform).reduce((sum, qty) => sum + qty, 0);
+      console.log(`[getPrimaryPlatformInventory] FALLBACK (no known platform), total=${fallback}`);
+      return fallback;
+    };
+
     // FILTER 1: Only show 'flat' or 'base' variants (not 'option' variants)
     // Option variants are sub-items that belong to a base variant and shouldn't appear separately
     // Also filter out archived variants
     let productVariantIdsToDisplay = allVariantIds.filter(variantId => {
       const variant = variants[variantId];
       if (!variant) return false;
-      
+
       const variantWithType = variant as any;
-      
+
       // Filter out archived variants (soft delete)
       if (variantWithType.IsArchived === true) {
         console.log(`[InventoryScreen] Filtering out archived variant: ${variant.Title} (${variantId})`);
         return false;
       }
-      
+
       // Filter out 'option' variants - these should not appear as separate list items
       // They are aggregated into their base variant
       if (variantWithType.VariantType === 'option') {
         console.log(`[InventoryScreen] Filtering out option variant: ${variant.Sku} (parent: ${variant.ProductId})`);
         return false;
       }
-      
+
       return true; // Show 'flat', 'base', or null/undefined VariantType
     });
 
@@ -284,24 +344,24 @@ const InventoryOrdersScreen = observer(() => {
       productVariantIdsToDisplay = productVariantIdsToDisplay.filter(variantId => {
         const variant = variants[variantId];
         if (!variant) return false;
-        
+
         // Check if base variant has inventory at selected locations
         const baseHasInventory = Object.values(levels).some((level: InventoryLevel) =>
           level.ProductVariantId === variantId &&
           selectedLocationIds.includes(level.PlatformLocationId || 'unknown')
         );
-        
+
         if (baseHasInventory) return true;
-        
+
         // Also check option variants for inventory
         const optionVariants = optionVariantsByProduct.get(variant.ProductId) || [];
-        const optionHasInventory = optionVariants.some(ov => 
+        const optionHasInventory = optionVariants.some(ov =>
           Object.values(levels).some((level: InventoryLevel) =>
             level.ProductVariantId === ov.id &&
             selectedLocationIds.includes(level.PlatformLocationId || 'unknown')
           )
         );
-        
+
         return optionHasInventory;
       });
     }
@@ -309,32 +369,44 @@ const InventoryOrdersScreen = observer(() => {
     const enrichedVariants: EnrichedProductVariant[] = productVariantIdsToDisplay.map(variantId => {
       const variant = variants[variantId];
       const variantWithType = variant as any;
-      
+
       // Get images - check variant first, then product-level images
       const variantImages = Object.values(images).filter((img: ProductImage) => img.ProductVariantId === variantId);
-      const imageUrl = variantImages.length > 0 
-        ? variantImages[0].ImageUrl 
+      const imageUrl = variantImages.length > 0
+        ? variantImages[0].ImageUrl
         : (variantWithType.PrimaryImageUrl || undefined);
 
-      // CRITICAL: Aggregate inventory from OPTION variants when this is a 'base' variant
+      // CRITICAL: Aggregate inventory and prices from OPTION variants when this is a 'base' variant
+      // Use getPrimaryPlatformInventory to avoid cross-platform double-counting
       let totalQuantity = 0;
+      let minPrice: number | undefined = undefined;
+      let maxPrice: number | undefined = undefined;
       const optionVariants = optionVariantsByProduct.get(variant.ProductId) || [];
-      
+
       if (variantWithType.VariantType === 'base' && optionVariants.length > 0) {
-        // For base variants, aggregate inventory from all option variants
+        // For base variants, aggregate inventory and collect prices from all option variants
+        // CRITICAL: Use getPrimaryPlatformInventory to avoid counting same product on multiple platforms
+        const optionPrices: number[] = [];
         optionVariants.forEach(ov => {
-          const optionLevels = Object.values(levels).filter((level: InventoryLevel) => 
-            level.ProductVariantId === ov.id
-          );
-          totalQuantity += optionLevels.reduce((sum, level) => sum + level.Quantity, 0);
+          // Use helper to get inventory from PRIMARY platform only
+          totalQuantity += getPrimaryPlatformInventory(ov.id);
+          // Collect price from option variant
+          if (ov.variant.Price !== undefined && ov.variant.Price !== null) {
+            optionPrices.push(ov.variant.Price);
+          }
         });
-        console.log(`[InventoryScreen] Base variant ${variant.Sku}: aggregated ${totalQuantity} from ${optionVariants.length} option variants`);
+        // Calculate min/max prices
+        if (optionPrices.length > 0) {
+          minPrice = Math.min(...optionPrices);
+          maxPrice = Math.max(...optionPrices);
+        }
+        console.log(`[InventoryScreen] Base variant ${variant.Sku}: aggregated ${totalQuantity} qty (primary platform only), price range: $${minPrice} - $${maxPrice} from ${optionVariants.length} option variants`);
       } else {
-        // For flat variants (no options), use direct inventory
-        const variantLevels = Object.values(levels).filter((level: InventoryLevel) => 
-          level.ProductVariantId === variantId
-        );
-        totalQuantity = variantLevels.reduce((sum, level) => sum + level.Quantity, 0);
+        // For flat variants (no options), use getPrimaryPlatformInventory to avoid cross-platform duplication
+        totalQuantity = getPrimaryPlatformInventory(variantId);
+        // Use the variant's own price
+        minPrice = variant.Price;
+        maxPrice = variant.Price;
       }
 
       // Use the actual boolean flags from ProductVariants to determine platform status
@@ -351,6 +423,8 @@ const InventoryOrdersScreen = observer(() => {
         imageUrl,
         totalQuantity,
         platformNames,
+        minPrice,
+        maxPrice,
         VariantType: variantWithType.VariantType,
         IsArchived: variantWithType.IsArchived,
         optionVariantCount: optionVariants.length,
@@ -366,7 +440,7 @@ const InventoryOrdersScreen = observer(() => {
     });
 
     return Array.from(uniqueVariants.values());
-  }, [activeProductVariants, activeProductImages, activeInventoryLevels, activePlatformMappings, platformConnections, selectedPlatformType, selectedLocationIds, legendObservables]);
+  }, [activeProductVariants, activeProductImages, activeInventoryLevels, activePlatformMappings, platformConnections, selectedPlatformType, selectedLocationIds, legendObservables, variantUpdateCounter, inventoryUpdateCounter]);
 
   // Apply search and sort filters
   const filteredInventory = useMemo(() => {
@@ -381,9 +455,9 @@ const InventoryOrdersScreen = observer(() => {
 
     // Low stock filter
     if (lowStockOnly && !searchQuery) {
-       filtered = filtered.filter((item: EnrichedProductVariant) => 
-         (item.totalQuantity || 0) <= 5
-       );
+      filtered = filtered.filter((item: EnrichedProductVariant) =>
+        (item.totalQuantity || 0) <= 5
+      );
     }
 
     // Barcode search
@@ -516,6 +590,8 @@ const InventoryOrdersScreen = observer(() => {
         id={item.Id}
         title={item.Title}
         price={item.Price}
+        minPrice={item.minPrice}
+        maxPrice={item.maxPrice}
         sku={item.Sku}
         imageUrl={item.imageUrl}
         totalQuantity={item.totalQuantity}
@@ -532,7 +608,7 @@ const InventoryOrdersScreen = observer(() => {
 
     return (
       <TouchableOpacity
-        onPress={() => {}}
+        onPress={() => { }}
         activeOpacity={0.7}
       >
         <Text style={[styles.mockOrderText, { color: theme.colors.textSecondary }]}>
@@ -563,13 +639,13 @@ const InventoryOrdersScreen = observer(() => {
   return (
     <View style={[styles.background]}>
 
-    
+
       <View style={[styles.container, { marginTop: 60, paddingTop: 20, backgroundColor: "#FFF", }]}>
 
         {activeTab === 'inventory' && (
           <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
             {/* Search Bar with Scanner */}
-            <View style={{ paddingHorizontal: 16, marginBottom: 8, backgroundColor: "#FFF",}}>
+            <View style={{ paddingHorizontal: 16, marginBottom: 8, backgroundColor: "#FFF", }}>
               <SearchBarWithScanner
                 placeholder="Search for a product"
                 value={searchQuery}
@@ -612,7 +688,7 @@ const InventoryOrdersScreen = observer(() => {
             <View style={styles.filterRow}>
               <View style={{ flex: 1 }}>
                 <PoolLocationCombobox
-                  orgId={legendState?.userId || ''}
+                  platformConnections={platformConnections}
                   selectedItems={selectedLocationIds}
                   onSelectionChange={setSelectedLocationIds}
                   startOpen={locationPickerOpen}
@@ -662,7 +738,7 @@ const InventoryOrdersScreen = observer(() => {
               }
               ListHeaderComponent={
                 <>
-                  
+
                 </>
               }
               ListEmptyComponent={
@@ -697,32 +773,32 @@ const InventoryOrdersScreen = observer(() => {
 
       {/* Full-screen Scanner Modal - renders above everything */}
       {scannerOpen && (
-      <View style={styles.scannerDockFull} pointerEvents="box-none">
-        <View style={styles.scannerFullBleed}>
-          <CameraView
-            style={styles.scannerCamera}
-            facing="back"
-            onBarcodeScanned={(result: any) => {
-              const code = result?.data || result?.rawValue;
-              if (code && scannerResultHandlerRef.current) {
-                scannerResultHandlerRef.current(code);
-              }
-            }}
-            barcodeScannerSettings={{
-              barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
-            }}
-          />
-          <TouchableOpacity
-            onPress={() => {
-              console.log('[InventoryOrdersScreen] Scanner close button pressed');
-              setScannerOpen(false);
-            }}
-            style={styles.scannerCloseButton}
-          >
-            <Icon name="close" size={28} color="#fff" />
-          </TouchableOpacity>
+        <View style={styles.scannerDockFull} pointerEvents="box-none">
+          <View style={styles.scannerFullBleed}>
+            <CameraView
+              style={styles.scannerCamera}
+              facing="back"
+              onBarcodeScanned={(result: any) => {
+                const code = result?.data || result?.rawValue;
+                if (code && scannerResultHandlerRef.current) {
+                  scannerResultHandlerRef.current(code);
+                }
+              }}
+              barcodeScannerSettings={{
+                barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
+              }}
+            />
+            <TouchableOpacity
+              onPress={() => {
+                console.log('[InventoryOrdersScreen] Scanner close button pressed');
+                setScannerOpen(false);
+              }}
+              style={styles.scannerCloseButton}
+            >
+              <Icon name="close" size={28} color="#fff" />
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
       )}
 
     </View>
@@ -872,7 +948,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     zIndex: 5000,
     height: 240,
-    width: "100%", 
+    width: "100%",
   },
   scannerFullBleed: {
     flex: 1,
@@ -892,7 +968,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  optimizeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eef2ff',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginLeft: 8,
+    gap: 4,
+  },
+  optimizeButtonText: {
+    color: '#6366f1',
+    fontSize: 13,
+    fontWeight: '600',
+  },
 });
 
-export default InventoryOrdersScreen; 
+export default InventoryOrdersScreen;
 

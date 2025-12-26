@@ -3,12 +3,12 @@
     "name": "Anorha",
     "slug": "sssync",
     "owner": "anorha",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "splash": {
       "resizeMode": "contain",
-      "backgroundColor": "#0E8F7F"
+      "backgroundColor": "#FFF9EB"
     },
     "assetBundlePatterns": [
       "**/*"
@@ -16,6 +16,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "anorha.alpha",
+      "buildNumber": "2",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSLocationWhenInUseUsageDescription": "Anorha may access your location to provide enhanced features through third-party services. Location access is optional and can be disabled in your device settings."
@@ -50,7 +51,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#200030",
+          "backgroundColor": "#FFF9EB",
           "image": "./src/assets/anorha_logo.png",
           "resizeMode": "contain",
           "imageWidth": 200,
@@ -61,9 +62,9 @@
       ],
       [
         "react-native-vision-camera",
-      {
-        "enableCodeScanner": true
-      }
+        {
+          "enableCodeScanner": true
+        }
       ]
     ],
     "extra": {

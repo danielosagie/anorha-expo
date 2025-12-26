@@ -180,6 +180,10 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
     const { isConnected } = usePlatformConnections();
     const isNewScan = Boolean((route.params as any)?.isNewScan === true);
 
+    // Quick scan override params - when passing data directly instead of polling a job
+    const overrideResults: Array<{ productIndex: number; serpApiData: any[] }> | undefined = (route.params as any)?.overrideResults;
+    const preSelectedIndices: number[] = (route.params as any)?.preSelectedIndices || [];
+
     // Get shared JobsContext for cross-screen state sync
     const jobsContext = useJobsOptional();
 
@@ -404,6 +408,22 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         let cancelled = false;
         let timer: any;
 
+        // If override results are provided, use them directly instead of polling
+        if (overrideResults && Array.isArray(overrideResults) && overrideResults.length > 0) {
+            console.log('[MatchSelectionScreen] Using override results:', overrideResults.length, 'products');
+            setAnalysisData({ jobId: 'quick-scan-override', results: overrideResults as any });
+            setJobStatus('completed');
+            setIsLoading(false);
+
+            // Apply pre-selected indices if provided
+            if (preSelectedIndices.length > 0) {
+                console.log('[MatchSelectionScreen] Pre-selecting indices:', preSelectedIndices);
+                setSelectedIndices(preSelectedIndices);
+                setBottomNavState('selection');
+            }
+            return;
+        }
+
         const pollStatus = async () => {
             try {
                 const token = await getToken();
@@ -477,7 +497,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         }
 
         return () => { cancelled = true; if (timer) clearTimeout(timer); };
-    }, [jobId]);
+    }, [jobId, overrideResults, preSelectedIndices]);
 
     const fetchTemplatesPage = useCallback(async (offset: number, replace: boolean = false) => {
         try {

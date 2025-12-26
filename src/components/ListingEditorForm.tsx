@@ -163,6 +163,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
   const lastPlatformRef = useRef<string>('');
   const lastOptionsRef = useRef<string>('');
 
+  // 🟢 EXTERNAL UPDATES: Helper to check if a field was updated externally
+  const hasExternalUpdate = useCallback((fieldKey: string): boolean => {
+    if (!externalUpdates?.[fieldKey]) return false;
+    const update = externalUpdates[fieldKey];
+    // Highlight if updated within last 5 seconds
+    return (Date.now() - update.updatedAt) < 5000;
+  }, [externalUpdates]);
+
   // Update activeTab only if current tab becomes invalid. Avoid redundant resets.
   useEffect(() => {
     console.log('[ListingEditorForm] activeTab effect', { canonicalKey, activeTab, platformKeys });
@@ -944,6 +952,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
           onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'title') : undefined}
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('title')}
           error={requiredFields?.includes?.('title') && !activeData.title}
+          externalUpdate={hasExternalUpdate('title')}
         />
 
         <Field
@@ -954,6 +963,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
           onInfo={() => onOpenFieldPanel?.('description')}
           onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'description') : undefined}
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('description')}
+          externalUpdate={hasExternalUpdate('description')}
         />
 
         <ChipsField
@@ -1004,6 +1014,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                     refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('price')}
                     error={priceError}
                     keyboardType={"decimal-pad"}
+                    externalUpdate={hasExternalUpdate('price')}
                   />
 
                 </View>
@@ -1038,10 +1049,11 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
           onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'sku') : undefined}
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('sku')}
           error={requiredFields?.includes?.('sku') && !activeData.sku}
+          externalUpdate={hasExternalUpdate('sku')}
         />
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <View style={{ flex: 1 }}>
-            <Field label="Barcode" value={activeData.barcode} onChangeText={(t) => patchField('barcode', t)} onInfo={() => onOpenFieldPanel?.('barcode')} />
+            <Field label="Barcode" value={activeData.barcode} onChangeText={(t) => patchField('barcode', t)} onInfo={() => onOpenFieldPanel?.('barcode')} externalUpdate={hasExternalUpdate('barcode')} />
           </View>
           <TouchableOpacity style={[styles.scanBtn, {}]} onPress={() => { (onOpenBarcodeScanner || (() => { }))((code: string) => patchField('barcode', code)); }}>
             <Icon name="qrcode-scan" size={20} color="#fff" />
@@ -1435,8 +1447,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                   if (!pData || !pData.variants) return;
 
                   pData.variants.forEach((v: any) => {
-                    const vId = v.id || Object.values(v.optionValues || {}).join('/');
+                    // FIX: Use optionValues as the unique key to properly merge variants across platforms
+                    // Using v.id causes duplicates when each platform has different IDs for same variant
+                    const optionKey = Object.entries(v.optionValues || {}).sort(([a], [b]) => a.localeCompare(b)).map(([k, val]) => `${k}:${val}`).join('/') || v.sku || 'default';
+                    const vId = optionKey;
                     const existing = variantMap.get(vId);
+
+                    console.log(`[ListingEditorForm] Aggregating variant: platform=${pk}, optionKey=${optionKey}, existingEntry=${!!existing}`);
 
                     const inv: Record<string, { quantity: number; price?: number; image?: string }> = existing ? { ...existing.inventory } : {};
 
@@ -1490,16 +1507,39 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
 
                 const isShopify = targetPlatform === 'shopify';
 
+                // Helper to compute optionKey for a variant (used for matching in 'all' tab)
+                const getOptionKey = (v: any) => Object.entries(v.optionValues || {})
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .map(([k, val]) => `${k}:${val}`)
+                  .join('/') || v.sku || 'default';
+
                 // Update the target platform
                 const newVariants = (pData.variants || []).map((v: any) => {
-                  if (v.id === variantId) {
+                  // CRITICAL FIX: In 'all' tab, variantId is an optionKey (e.g. 'State:Broken')
+                  // In platform tabs, variantId is the actual variant ID
+                  const matchesById = v.id === variantId;
+                  const matchesByOptionKey = activeTab === 'all' && getOptionKey(v) === variantId;
+
+                  if (matchesById || matchesByOptionKey) {
+                    console.log(`[handleUpdateInventory] ✅ Matched variant: id=${v.id.slice(0, 8)}, optionKey=${getOptionKey(v)}, variantId=${variantId}, field=${field}, value=${value}, isShopify=${isShopify}`);
+
                     if (field === 'price') {
                       if (isShopify) {
-                        // Shopify: GLOBAL price - update all locations
+                        // Shopify: GLOBAL price - update ALL SHOPIFY locations for this connection
                         const updatedInv = { ...(v.inventoryByLocation || {}) };
-                        Object.keys(updatedInv).forEach(locId => {
-                          updatedInv[locId] = { ...updatedInv[locId], price: value };
+                        // Get ALL Shopify location IDs from allLocs (the known locations for this platform)
+                        const shopifyLocIds = allLocs.filter(l => l.platformKey === 'shopify').map(l => l.id);
+
+                        // Apply price to ALL Shopify locations, creating entries if they don't exist
+                        shopifyLocIds.forEach(locId => {
+                          updatedInv[locId] = {
+                            ...(updatedInv[locId] || {}),
+                            price: value
+                          };
                         });
+
+                        console.log(`[ListingEditorForm] Shopify global price update: ${value}, synced to ${shopifyLocIds.length} locations: ${shopifyLocIds.join(', ')}`);
+                        console.log(`[ListingEditorForm] Updated inventoryByLocation prices:`, Object.entries(updatedInv).map(([k, v]: [string, any]) => `${k}=$${v.price}`).join(', '));
                         return {
                           ...v,
                           price: value,
@@ -1768,10 +1808,16 @@ function SimpleQuantityInput({ quantity, onChangeQuantity }: { quantity: number;
 
 
 
-function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, required, onRegenerate, refilled, error }: { label: string; value?: string; onChangeText?: (t: string) => void; multiline?: boolean; keyboardType?: any; onInfo?: () => void; required?: boolean; onRegenerate?: () => void; refilled?: boolean; error?: boolean }) {
+function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, required, onRegenerate, refilled, error, externalUpdate }: { label: string; value?: string; onChangeText?: (t: string) => void; multiline?: boolean; keyboardType?: any; onInfo?: () => void; required?: boolean; onRegenerate?: () => void; refilled?: boolean; error?: boolean; externalUpdate?: boolean }) {
   // Use local state with uncontrolled input to prevent re-render issues
   const [localValue, setLocalValue] = useState(value ?? '');
   const timeoutRef = React.useRef<any>(null);
+
+  // 🟢 Green border style for external updates
+  const externalUpdateStyle = externalUpdate ? {
+    borderColor: '#34C759', // iOS green
+    borderWidth: 2,
+  } : null;
 
   // Sync from parent when value changes externally (but not from our own typing)
   useEffect(() => {
@@ -1795,7 +1841,11 @@ function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, re
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 0 }}>
           <Text style={styles.fieldLabel}>{label}{required ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
-          {refilled ? (
+          {externalUpdate ? (
+            <View style={{ backgroundColor: 'rgba(52,199,89,0.15)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
+              <Text style={{ color: '#059669', fontSize: 10, fontWeight: '600' }}>Updated</Text>
+            </View>
+          ) : refilled ? (
             <View style={{ backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
               <Text style={{ color: '#3f6212', fontSize: 10 }}>Refilled</Text>
             </View>
@@ -1815,6 +1865,7 @@ function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, re
           styles.input,
           multiline && { minHeight: 100, textAlignVertical: 'top' },
           error ? { borderColor: '#ef4444' } : null,
+          externalUpdateStyle, // 🟢 Green border for external updates (overrides error if both present)
         ]}
         value={localValue}
         onChangeText={handleChange}

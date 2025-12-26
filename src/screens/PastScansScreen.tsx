@@ -5,7 +5,6 @@ import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
-import PyramidGrid from '../components/PyramidGrid';
 import Button from '../components/Button';
 import { supabase } from '../../lib/supabase';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -62,7 +61,7 @@ type PastScansScreenNavigationProp = StackNavigationProp<AppStackParamList, 'Pas
 const PastScansScreen = () => {
   const theme = useTheme();
   const navigation = useNavigation<PastScansScreenNavigationProp>();
-  
+
   const [activeTab, setActiveTab] = useState<'matches' | 'listings'>('matches');
   const [matchJobs, setMatchJobs] = useState<MatchJob[]>([]);
   const [generationJobs, setGenerationJobs] = useState<GenerationJob[]>([]);
@@ -86,7 +85,7 @@ const PastScansScreen = () => {
         console.error('Error fetching match jobs:', error);
         throw new Error('Failed to fetch match jobs.');
       }
-      
+
       // The table has `job_id`, but our keyExtractor needs `id`. Let's map it.
       const formattedJobs = data.map(job => ({ ...job, id: job.job_id })) as MatchJob[];
       setMatchJobs(formattedJobs);
@@ -103,19 +102,19 @@ const PastScansScreen = () => {
       setLoading(true);
       setError(null);
       const { data: { user } } = await supabase.auth.getUser();
-      
+
       if (!user) throw new Error('No authenticated user');
 
-      const {data, error} = await supabase
+      const { data, error } = await supabase
         .from("generate_jobs")
         .select('job_id, created_at, status, summary, results')
         .eq('user_id', user.id)
-        .order('created_at', {ascending: false});
+        .order('created_at', { ascending: false });
 
 
       const { data: products, error: productsError } = await supabase
-      .from('Products')
-      .select(`
+        .from('Products')
+        .select(`
         Id,
         CreatedAt,
         IsArchived,
@@ -130,43 +129,43 @@ const PastScansScreen = () => {
           ProductImages!ProductImages_ProductVariantId_fkey ( ImageUrl, Position )
         )
       `)
-      .eq('UserId', user.id)
-      .order('CreatedAt', { ascending: false });
+        .eq('UserId', user.id)
+        .order('CreatedAt', { ascending: false });
 
-    if (productsError) {
-      console.error('Database error:', productsError);
-      throw new Error('Failed to fetch products');
-    }
+      if (productsError) {
+        console.error('Database error:', productsError);
+        throw new Error('Failed to fetch products');
+      }
 
-    if (!products) {
-      return;
-    }
+      if (!products) {
+        return;
+      }
 
-    const transformedScans = products.reduce((acc: PastScan[], product) => {
-      const variant = product.ProductVariants?.[0];
-      if (!variant) return acc;
+      const transformedScans = products.reduce((acc: PastScan[], product) => {
+        const variant = product.ProductVariants?.[0];
+        if (!variant) return acc;
 
-      const sortedImages = variant.ProductImages
-        ?.sort((a, b) => (a.Position || 0) - (b.Position || 0))
-        ?.map(img => img.ImageUrl) || [];
+        const sortedImages = variant.ProductImages
+          ?.sort((a, b) => (a.Position || 0) - (b.Position || 0))
+          ?.map(img => img.ImageUrl) || [];
 
-      let status: 'draft' | 'active' | 'archived' = product.IsArchived ? 'archived' : (variant.Title ? 'active' : 'draft');
-      
-      acc.push({
-        id: product.Id,
-        variantId: variant.Id,
-        created_at: product.CreatedAt,
-        title: variant.Title || 'Untitled Product',
-        description: variant.Description || '',
-        price: variant.Price || 0,
-        sku: variant.Sku || '',
-        barcode: variant.Barcode || '',
-        images: sortedImages,
-        platform_details: variant.Options || {},
-        status
-      });
-      return acc;
-    }, []);
+        let status: 'draft' | 'active' | 'archived' = product.IsArchived ? 'archived' : (variant.Title ? 'active' : 'draft');
+
+        acc.push({
+          id: product.Id,
+          variantId: variant.Id,
+          created_at: product.CreatedAt,
+          title: variant.Title || 'Untitled Product',
+          description: variant.Description || '',
+          price: variant.Price || 0,
+          sku: variant.Sku || '',
+          barcode: variant.Barcode || '',
+          images: sortedImages,
+          platform_details: variant.Options || {},
+          status
+        });
+        return acc;
+      }, []);
 
       if (error) {
         console.error('Database error:', error);
@@ -226,45 +225,71 @@ const PastScansScreen = () => {
 
   const renderMatchJobItem = ({ item }: { item: MatchJob }) => (
     <Card style={styles.scanCard}>
-      <TouchableOpacity 
+      <TouchableOpacity
         style={styles.scanItem}
         onPress={() => handleLoadMatchJob(item)}
       >
         <View style={styles.thumbRow}>
-            {Array.isArray((item as any)?.results) && (item as any).results.length > 1 ? (
-              <PyramidGrid
-                style={{ marginRight: 10, height: 64, width: 64 }}
-                items={(item as any).results
-                  .map((r: any, idx: number) => ({ id: String(idx), uri: r?.serpApiData?.[0]?.image || '' }))
-                  .filter((x: any) => !!x.uri)
-                }
-              />
-            ) : ((item as any)?.results?.[0]?.serpApiData?.[0]?.image ? (
-              <Image source={{ uri: (item as any).results[0].serpApiData[0].image }} style={styles.thumb} />
-            ) : null)}
-          </View>
+          {(() => {
+            const results = (item as any)?.results || [];
+            const images = results
+              .map((r: any) => r?.serpApiData?.[0]?.image || r?.sourceImageUrl || '')
+              .filter((uri: string) => !!uri);
+
+            const firstImage = images[0];
+            const itemCount = results.length;
+
+            if (!firstImage) {
+              return (
+                <View style={[styles.thumb, { justifyContent: 'center', alignItems: 'center' }]}>
+                  <Icon name="image-off" size={24} color="#94a3b8" />
+                </View>
+              );
+            }
+
+            return (
+              <View style={{ width: 80, height: 80, marginRight: 12 }}>
+                <Image
+                  source={{ uri: firstImage }}
+                  style={{
+                    width: 80,
+                    height: 80,
+                    borderRadius: 10,
+                    backgroundColor: '#f1f5f9',
+                  }}
+                />
+                {itemCount > 1 && (
+                  <View style={{
+                    position: 'absolute',
+                    bottom: -4,
+                    right: -4,
+                    backgroundColor: '#1e293b',
+                    borderRadius: 12,
+                    paddingHorizontal: 8,
+                    paddingVertical: 3,
+                    borderWidth: 2,
+                    borderColor: '#fff',
+                  }}>
+                    <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>
+                      {itemCount} items
+                    </Text>
+                  </View>
+                )}
+              </View>
+            );
+          })()}
+        </View>
         <View style={styles.scanInfo}>
-        
+
           <Text style={styles.scanTitle}>Match Job</Text>
           <Text style={styles.scanDate}>
             {new Date(item.created_at).toLocaleString()}
           </Text>
-          <View style={styles.scanDetails}>
-             <Text style={styles.scanDetail}>
-                High: {item.summary?.highConfidenceCount ?? 0}
-             </Text>
-             <Text style={styles.scanDetail}>
-                Med: {item.summary?.mediumConfidenceCount ?? 0}
-             </Text>
-             <Text style={styles.scanDetail}>
-                Low: {item.summary?.lowConfidenceCount ?? 0}
-             </Text>
-          </View>
           <View style={styles.scanStatus}>
-            <Icon 
-              name={item.status === 'completed' ? 'check-circle' : 'cogs'} 
-              size={16} 
-              color={item.status === 'completed' ? theme.colors.success : theme.colors.primary} 
+            <Icon
+              name={item.status === 'completed' ? 'check-circle' : 'cogs'}
+              size={16}
+              color={item.status === 'completed' ? theme.colors.success : theme.colors.primary}
             />
             <Text style={[
               styles.statusText,
@@ -281,34 +306,71 @@ const PastScansScreen = () => {
 
   const renderScanItem = ({ item }: { item: GenerationJob }) => (
     <Card style={styles.scanCard}>
-      <TouchableOpacity 
+      <TouchableOpacity
         style={styles.scanItem}
         onPress={() => handleLoadGeneration(item)}
       >
         <View style={styles.scanDetails}>
-            {Array.isArray(item.results) && item.results.length > 1 ? (
-              <PyramidGrid
-                style={{ marginRight: 10 }}
-                items={item.results
-                  .map((r: any, idx: number) => ({ id: String(idx), uri: r?.sourceImageUrl || '' }))
-                  .filter((x: any) => !!x.uri)
-                }
-              />
-            ) : ((item as any)?.summary?.firstThumb ? (
-              <Image source={{ uri: (item as any).summary.firstThumb }} style={styles.thumb} />
-            ) : null)}
-          </View>
+          {(() => {
+            const results = item.results || [];
+            const images = results
+              .map((r: any) => r?.sourceImageUrl || '')
+              .filter((uri: string) => !!uri);
+
+            const firstImage = images[0] || (item as any)?.summary?.firstThumb;
+            const itemCount = results.length;
+
+            if (!firstImage) {
+              return (
+                <View style={[styles.thumb, { justifyContent: 'center', alignItems: 'center' }]}>
+                  <Icon name="image-off" size={24} color="#94a3b8" />
+                </View>
+              );
+            }
+
+            return (
+              <View style={{ width: 80, height: 80, marginRight: 12 }}>
+                <Image
+                  source={{ uri: firstImage }}
+                  style={{
+                    width: 80,
+                    height: 80,
+                    borderRadius: 10,
+                    backgroundColor: '#f1f5f9',
+                  }}
+                />
+                {itemCount > 1 && (
+                  <View style={{
+                    position: 'absolute',
+                    bottom: -4,
+                    right: -4,
+                    backgroundColor: '#1e293b',
+                    borderRadius: 12,
+                    paddingHorizontal: 8,
+                    paddingVertical: 3,
+                    borderWidth: 2,
+                    borderColor: '#fff',
+                  }}>
+                    <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>
+                      {itemCount} items
+                    </Text>
+                  </View>
+                )}
+              </View>
+            );
+          })()}
+        </View>
         <View style={styles.scanInfo}>
           <Text style={styles.scanTitle}>{(item as any)?.summary?.firstTitle || 'Generated Listing'}</Text>
           <Text style={styles.scanDate}>
             {new Date(item.created_at).toLocaleDateString()}
           </Text>
-          
+
           <View style={styles.scanStatus}>
-            <Icon 
-              name={item.status === 'completed' ? 'check-circle' : 'cogs'} 
-              size={16} 
-              color={item.status === 'completed' ? theme.colors.success : theme.colors.primary} 
+            <Icon
+              name={item.status === 'completed' ? 'check-circle' : 'cogs'}
+              size={16}
+              color={item.status === 'completed' ? theme.colors.success : theme.colors.primary}
             />
             <Text style={[
               styles.statusText,
@@ -317,7 +379,7 @@ const PastScansScreen = () => {
               {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
             </Text>
           </View>
-          
+
         </View>
         <Icon name="chevron-right" size={24} color={theme.colors.textSecondary} />
       </TouchableOpacity>
@@ -337,8 +399,8 @@ const PastScansScreen = () => {
       return (
         <View style={styles.centered}>
           <Text style={styles.errorText}>{error}</Text>
-          <Button 
-            title="Try Again" 
+          <Button
+            title="Try Again"
             onPress={activeTab === 'matches' ? fetchMatchJobs : fetchPastGenerations}
             style={styles.retryButton}
           />
@@ -367,7 +429,7 @@ const PastScansScreen = () => {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.backButton}
           onPress={() => navigation.goBack()}
         >
@@ -520,10 +582,10 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   thumb: {
-    width: 48,
-    height: 48,
-    borderRadius: 6,
-    marginRight: 10,
+    width: 80,
+    height: 80,
+    borderRadius: 10,
+    marginRight: 12,
     backgroundColor: '#f1f5f9',
   },
 });

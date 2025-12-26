@@ -88,12 +88,12 @@ interface ActivityListItem {
 // Helper to check if an event is user-relevant (ONLY orders, inventory, product updates/publishes)
 const isUserRelevantEvent = (eventType: string): boolean => {
   const et = (eventType || '').toUpperCase();
-  
+
   const isInventory = et.includes('INVENTORY_ADJUSTMENT') || et.includes('INVENTORY_UPDATED') || et.includes('INVENTORY_SET');
   const isProductPublish = et.includes('PRODUCT_PUBLISH') || et.includes('PRODUCT_PUBLISHED');
   const isProductUpdate = et.includes('PRODUCT_UPDATED') || et.includes('UPDATE_CANONICAL_DRAFT') || et.includes('PRODUCT_CREATED');
   const isOrder = et.includes('ORDER_CREATED') || et.includes('ORDER_UPDATED') || et.includes('ORDER_FULFILLED');
-  
+
   return isInventory || isProductPublish || isProductUpdate || isOrder;
 };
 
@@ -104,11 +104,11 @@ const getDateLabel = (isoTimestamp: string): string => {
     const today = new Date();
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
-    
+
     const eventDateStr = eventDate.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
     const todayStr = today.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
     const yesterdayStr = yesterday.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
-    
+
     if (eventDateStr === todayStr) return 'Today';
     if (eventDateStr === yesterdayStr) return 'Yesterday';
     return eventDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
@@ -120,7 +120,7 @@ const getDateLabel = (isoTimestamp: string): string => {
 // Helper to group events by date
 const getEventsByDate = (events: ActivityEvent[]): Map<string, ActivityEvent[]> => {
   const grouped = new Map<string, ActivityEvent[]>();
-  
+
   events.forEach(event => {
     const dateLabel = getDateLabel(event.timestamp);
     if (!grouped.has(dateLabel)) {
@@ -128,7 +128,7 @@ const getEventsByDate = (events: ActivityEvent[]): Map<string, ActivityEvent[]> 
     }
     grouped.get(dateLabel)?.push(event);
   });
-  
+
   return grouped;
 };
 
@@ -136,7 +136,7 @@ const getEventsByDate = (events: ActivityEvent[]): Map<string, ActivityEvent[]> 
 const createActivityListWithHeaders = (events: ActivityEvent[]): ActivityListItem[] => {
   const grouped = getEventsByDate(events);
   const listItems: ActivityListItem[] = [];
-  
+
   grouped.forEach((groupEvents, dateLabel) => {
     // Add date header
     listItems.push({
@@ -144,7 +144,7 @@ const createActivityListWithHeaders = (events: ActivityEvent[]): ActivityListIte
       dateLabel,
       key: `header-${dateLabel}`,
     });
-    
+
     // Add events for this date
     groupEvents.forEach(event => {
       listItems.push({
@@ -154,7 +154,7 @@ const createActivityListWithHeaders = (events: ActivityEvent[]): ActivityListIte
       });
     });
   });
-  
+
   return listItems;
 };
 
@@ -207,19 +207,19 @@ const ActivityFeedScreen = observer(() => {
   // Fetch org members and build user image map
   const fetchOrgMembersWithImages = useCallback(async () => {
     if (!currentOrg?.id) return;
-    
+
     try {
       const token = await ensureSupabaseJwt();
-      
+
       // Fetch org members from backend (should include Clerk data)
       const membersRes = await fetch(`https://api.sssync.app/api/organizations/${currentOrg.id}/members`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      
+
       if (membersRes.ok) {
         const members = await membersRes.json();
         const newUserImageMap: Record<string, string> = {};
-        
+
         // Build map of userId -> image URL
         (Array.isArray(members) ? members : members.members || []).forEach((member: any) => {
           if (member.UserId && member.ClerkImageUrl) {
@@ -228,12 +228,12 @@ const ActivityFeedScreen = observer(() => {
             newUserImageMap[member.Id] = member.ImageUrl;
           }
         });
-        
+
         // Add current user
         if (clerkUser?.id && clerkUser?.imageUrl) {
           newUserImageMap[clerkUser.id] = clerkUser.imageUrl;
         }
-        
+
         setUserImageMap(newUserImageMap);
       }
     } catch (e) {
@@ -267,7 +267,7 @@ const ActivityFeedScreen = observer(() => {
         setLoading(false);
         return;
       }
-      
+
       // Build query string with cursor and orgId if provided
       let queryString = `limit=50`;
       if (cursor) {
@@ -286,7 +286,7 @@ const ActivityFeedScreen = observer(() => {
       console.log(`[ActivityFeed] 📡   OrgId from currentOrg: ${currentOrg?.id || 'MISSING'}`);
       console.log(`[ActivityFeed] 📡   UserId: ${legendState.userId}`);
       console.log(`[ActivityFeed] 📡 ==========================================`);
-      
+
       const response = await fetch(
         fullUrl,
         {
@@ -352,18 +352,18 @@ const ActivityFeedScreen = observer(() => {
       }));
 
       // Filter to show user-relevant events, but fall back to all if none found
-      const userRelevantEvents = allTransformedEvents.filter(event => 
+      const userRelevantEvents = allTransformedEvents.filter(event =>
         isUserRelevantEvent(event.eventType)
       );
 
       // Use user-relevant events if available, otherwise show all (excluding pure webhook noise)
-      const transformedEvents = userRelevantEvents.length > 0 
-        ? userRelevantEvents 
+      const transformedEvents = userRelevantEvents.length > 0
+        ? userRelevantEvents
         : allTransformedEvents.filter(event => {
-            const et = (event.eventType || '').toUpperCase();
-            // At minimum, exclude webhook processing noise
-            return !et.includes('WEBHOOK') && !et.includes('USER_VIEWED');
-          });
+          const et = (event.eventType || '').toUpperCase();
+          // At minimum, exclude webhook processing noise
+          return !et.includes('WEBHOOK') && !et.includes('USER_VIEWED');
+        });
 
       console.log(`[ActivityFeed] Transformed ${data.events.length} events → ${userRelevantEvents.length} user-relevant, showing ${transformedEvents.length}`);
 
@@ -681,15 +681,15 @@ const ActivityFeedScreen = observer(() => {
       typeof item.details?.quantityDelta === 'number'
         ? item.details.quantityDelta
         : typeof item.details?.quantity_delta === 'number'
-        ? item.details.quantity_delta
-        : undefined;
-    
+          ? item.details.quantity_delta
+          : undefined;
+
     const reason =
-      typeof item.details?.reason === 'string' 
-        ? item.details.reason 
+      typeof item.details?.reason === 'string'
+        ? item.details.reason
         : typeof item.details?.adjustment_reason === 'string'
-        ? item.details.adjustment_reason
-        : undefined;
+          ? item.details.adjustment_reason
+          : undefined;
 
     // Build reason text (e.g., "Reason: -5 Units (Damaged)")
     const reasonParts: string[] = [];
@@ -705,8 +705,8 @@ const ActivityFeedScreen = observer(() => {
     const ownerLabel = getOwnerLabel(item);
 
     // Get the profile image URL from our user image map (works for any org member)
-    const ownerImageUrl = item.userId 
-      ? userImageMap[item.userId] 
+    const ownerImageUrl = item.userId
+      ? userImageMap[item.userId]
       : item.details?.userImageUrl || item.details?.actorImageUrl || undefined;
 
     // Format display title based on event type
@@ -732,15 +732,15 @@ const ActivityFeedScreen = observer(() => {
 
     // Get product image from variant (ImageUrls array) or details
     const productImageUrl = (variant?.ImageUrls && variant.ImageUrls.length > 0 ? variant.ImageUrls[0] : null)
-      || item.details?.imageUrl 
-      || item.details?.image_url 
+      || item.details?.imageUrl
+      || item.details?.image_url
       || item.primaryImageUrl
       || undefined;
 
     // Get price from variant or order details
-    const price = variant?.Price 
-      || item.details?.price 
-      || item.details?.total_price 
+    const price = variant?.Price
+      || item.details?.price
+      || item.details?.total_price
       || item.details?.subtotal_price
       || undefined;
 
@@ -799,11 +799,11 @@ const ActivityFeedScreen = observer(() => {
     <View style={[styles.background]}>
       <View style={[styles.container, { marginTop: 60, paddingTop: 20 }]}>
         <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
-          
+
 
           {/* Search Bar */}
           <View style={{ paddingHorizontal: 16, marginBottom: 8 }}>
-            <View style={[styles.searchBar, { backgroundColor: "#FFF"}]}>
+            <View style={[styles.searchBar, { backgroundColor: "#FFF" }]}>
               <Icon name="magnify" size={20} color="#999" style={styles.searchIcon} />
               <TextInput
                 style={[styles.searchInput, { color: theme.colors.text }]}
@@ -834,7 +834,7 @@ const ActivityFeedScreen = observer(() => {
           <View style={styles.filterRow}>
             <View style={{ flex: 1 }}>
               <PoolLocationCombobox
-                orgId={legendState?.userId || ''}
+                platformConnections={platformConnections}
                 selectedItems={selectedLocationIds}
                 onSelectionChange={setSelectedLocationIds}
               />
@@ -855,7 +855,7 @@ const ActivityFeedScreen = observer(() => {
 
           <FlatList
             data={createActivityListWithHeaders(filteredEvents)}
-            renderItem={({ item }: { item: ActivityListItem }) => 
+            renderItem={({ item }: { item: ActivityListItem }) =>
               item.type === 'header' ? (
                 <View style={styles.dateHeader}>
                   <Text style={[styles.dateHeaderText, { color: theme.colors.textSecondary }]}>
@@ -946,9 +946,9 @@ const ActivityFeedScreen = observer(() => {
                     (activeDateField === 'start' ? startDate : endDate) || new Date()
                   }
                   mode="date"
-                  textColor= "#000"
-                  accentColor= "#D9D9D9"
-                  themeVariant= "light"
+                  textColor="#000"
+                  accentColor="#D9D9D9"
+                  themeVariant="light"
                   display={Platform.OS === 'ios' ? 'inline' : 'default'}
                   onChange={(_event, selectedDate) => {
                     if (!selectedDate) {

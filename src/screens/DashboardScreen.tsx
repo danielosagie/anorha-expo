@@ -18,6 +18,7 @@ import { ensureSupabaseJwt } from '../../lib/supabase';
 import { useProductVariantRealtime } from '../hooks/useProductVariantRealtime';
 import { useOrgNudges, trackInsightAction } from '../hooks/useOrgNudges';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import { QuickSellCard } from '../components/liquidation/QuickSellCard';
 
 
 // User-relevant event types for activity display (excludes system/webhook events)
@@ -378,9 +379,19 @@ const DashboardScreen = () => {
       };
     }
 
-    const pv = legendCtx?.productVariants$?.get?.() || {};
-    const levels = legendCtx?.inventoryLevels$?.get?.() || {};
-    const images = legendCtx?.productImages$?.get?.() || {};
+    const pv = legendCtx?.productVariants$?.get?.() ?? {};
+    const levels = legendCtx?.inventoryLevels$?.get?.() ?? {};
+    const images = legendCtx?.productImages$?.get?.() ?? {};
+
+    // Guard against uninitialized legend-state - wait for data to load
+    if (Object.keys(pv).length === 0 && Object.keys(levels).length === 0) {
+      console.log('[Dashboard] Legend-state not yet initialized, skipping low stock computation');
+      return {
+        totalInventory: 0,
+        lowStockItems: [],
+        lowStockCount: 0
+      };
+    }
 
     let total = 0;
     const variantQuantities: Record<string, number> = {};
@@ -426,7 +437,7 @@ const DashboardScreen = () => {
       lowStockItems: items,
       lowStockCount: Object.keys(variantQuantities).filter(vid => variantQuantities[vid] <= threshold).length
     };
-  }, [legendCtx?.productVariants$, legendCtx?.inventoryLevels$, legendCtx?.productImages$, currentOrg?.id]);
+  }, [legendCtx?.productVariants$, legendCtx?.inventoryLevels$, legendCtx?.productImages$, currentOrg?.id, initialDataLoaded]);
 
   // 2. Fetch Recent Activity (filtered to user-relevant events only)
   const fetchActivity = async () => {
@@ -797,6 +808,11 @@ const DashboardScreen = () => {
             </View>
           )}
         </View>
+
+
+        {/* Quick Sell Card
+        <QuickSellCard onRefreshed={refreshData} />
+        */}
 
         {/* Overview */}
         <View style={styles.sectionContainer}>

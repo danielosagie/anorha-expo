@@ -228,9 +228,10 @@ const MappingReviewScreen = () => {
 
   // NEW: Product creation mode - controls how unLinked products are handled
   // 'sync_everywhere' = Create missing products on all platforms (single source of truth)
-  // 'keep_separate' = Only sync products that are already linked
-  type ProductCreationMode = 'sync_everywhere' | 'keep_separate';
-  const [productCreationMode, setProductCreationMode] = useState<ProductCreationMode>('sync_everywhere');
+  // 'only_this_store' = Only add missing items to this specific platform
+  // 'ignore' = Don't add missing items anywhere, only sync existing matches
+  type ProductCreationMode = 'sync_everywhere' | 'only_this_store' | 'ignore';
+  const [productCreationMode, setProductCreationMode] = useState<ProductCreationMode>('only_this_store');
 
 
   // Pools Selection State
@@ -397,9 +398,15 @@ const MappingReviewScreen = () => {
   }, [connectionId]); // Only depend on connectionId
 
   // Load locations for this connection (for pool assignment)
+  // IMPORTANT: This now also loads EXISTING pool assignments from the backend
   useEffect(() => {
     const fetchConnectionLocations = async () => {
       if (!connectionId) return;
+      // Wait for pools to be loaded before we can cross-reference
+      if (pools.length === 0 && !isLoadingPools) {
+        // Pools finished loading but none exist - still load locations
+        console.log('[MappingReviewScreen] No pools available, loading locations without assignments');
+      }
 
       try {
         setIsLoadingLocations(true);
@@ -426,13 +433,40 @@ const MappingReviewScreen = () => {
         setConnectionLocations(formattedLocations);
         console.log('[MappingReviewScreen] ✅ Loaded connection locations:', formattedLocations.length);
 
-        // Initialize all locations to the selected pool (if any)
-        if (selectedPool && formattedLocations.length > 0) {
-          const initialAssignments: Record<string, string> = {};
-          formattedLocations.forEach(loc => {
-            initialAssignments[loc.platformLocationId] = selectedPool;
+        // CRITICAL: Load EXISTING pool assignments by cross-referencing with pools
+        // Each pool has a locationIds array containing assigned location IDs
+        const existingAssignments: Record<string, string> = {};
+        let foundAnyExisting = false;
+
+        for (const location of formattedLocations) {
+          // Find which pool (if any) this location is assigned to
+          const assignedPool = pools.find((pool: any) => {
+            const poolLocationIds = pool.locationIds || pool.location_ids || [];
+            return poolLocationIds.includes(location.platformLocationId);
           });
-          setLocationPoolAssignments(initialAssignments);
+
+          if (assignedPool) {
+            existingAssignments[location.platformLocationId] = assignedPool.id;
+            foundAnyExisting = true;
+            console.log(`[MappingReviewScreen] Location "${location.locationName}" already assigned to pool "${assignedPool.name}"`);
+          }
+        }
+
+        if (foundAnyExisting) {
+          // Use existing assignments from the backend - don't modify them
+          console.log('[MappingReviewScreen] ✅ Loaded existing pool assignments:', Object.keys(existingAssignments).length);
+          setLocationPoolAssignments(existingAssignments);
+
+          // Also set selectedPool to match the first assigned pool (for consistency)
+          const firstAssignedPoolId = Object.values(existingAssignments)[0];
+          if (firstAssignedPoolId && !selectedPool) {
+            setSelectedPool(firstAssignedPoolId);
+          }
+        } else {
+          // No existing assignments found - leave them unassigned
+          // User can manually assign via the wizard if needed
+          console.log('[MappingReviewScreen] No existing pool assignments found, leaving locations unassigned');
+          setLocationPoolAssignments({});
         }
       } catch (error) {
         console.error('[MappingReviewScreen] Error loading locations:', error);
@@ -442,8 +476,11 @@ const MappingReviewScreen = () => {
       }
     };
 
-    fetchConnectionLocations();
-  }, [connectionId, selectedPool]);
+    // Only run when we have connectionId and pools are done loading
+    if (connectionId && !isLoadingPools) {
+      fetchConnectionLocations();
+    }
+  }, [connectionId, pools, isLoadingPools]); // Depend on pools being loaded
 
   // Load existing quick settings on mount (for wizard pre-population)
   useEffect(() => {
@@ -3609,7 +3646,7 @@ const MappingReviewScreen = () => {
 
           <FlatList
             data={currentList}
-            keyExtractor={(it) => it.platformProduct.id}
+            keyExtractor={(it, index) => `${it.platformProduct.id}-${index}`}
             renderItem={({ item }) => (
               <MappingCard
                 variant={(item.action === 'IGNORE' ? 'ignored' : (item.action === 'LINK_EXISTING' ? 'matched' : ((item.confidence != null && item.confidence > 0 && item.confidence < 0.8) || item.matchType === 'TITLE') ? 'review' : 'new')) as any}
@@ -3691,86 +3728,203 @@ const MappingReviewScreen = () => {
 
                     {/* NEW Step 0: Product Creation Mode */}
                     {wizardStep === 0 && (
-                      <View style={{ paddingHorizontal: 0, paddingTop: 20 }}>
-                        <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>
-                          Choose how Anorha handles products that don't exist on other platforms
+                      <View style={{ paddingHorizontal: 0, paddingTop: 24, minHeight: 400 }}>
+                        {/* Reselect Matches link - gray */}
+                        <TouchableOpacity
+                          style={{ alignSelf: 'center', marginBottom: 20 }}
+                          onPress={() => setWizardVisible(false)}
+                        >
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <Icon name="arrow-u-left-top" size={16} color="#6B7280" />
+                            <Text style={{ color: '#6B7280', fontSize: 14 }}>Reselect Matches</Text>
+                          </View>
+                        </TouchableOpacity>
+
+                        {/* Title */}
+                        <Text style={{ fontSize: 22, fontWeight: '700', color: theme.colors.text, textAlign: 'center', marginBottom: 10 }}>
+                          Should We Add Missing Items?
+                        </Text>
+                        <Text style={{ color: theme.colors.textSecondary, marginBottom: 32, textAlign: 'center', fontSize: 15, lineHeight: 22 }}>
+                          Adds missing items to other platforms & vice-versa
                         </Text>
 
-                        {/* Option 1: Sync Everywhere */}
-                        <TouchableOpacity
-                          style={{
-                            borderWidth: 2,
-                            borderColor: productCreationMode === 'sync_everywhere' ? theme.colors.primary : '#E5E7EB',
-                            borderRadius: 16,
-                            padding: 20,
-                            marginBottom: 12,
-                            backgroundColor: productCreationMode === 'sync_everywhere' ? theme.colors.primary + '10' : '#fff',
-                          }}
-                          onPress={() => setProductCreationMode('sync_everywhere')}
-                        >
-                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                            <Boxes size={24} color={productCreationMode === 'sync_everywhere' ? theme.colors.primary : '#6B7280'} />
-                            <Text style={{ fontSize: 17, fontWeight: '700', color: theme.colors.text, marginLeft: 12, flex: 1 }}>
-                              Create Missing Everywhere
-                            </Text>
-                            <View style={{
-                              width: 24, height: 24, borderRadius: 12, borderWidth: 2,
+                        {/* Three horizontal option cards */}
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 10, marginBottom: 32 }}>
+                          {/* Option 1: Yes, all stores - Dynamic platform icon stack */}
+                          <TouchableOpacity
+                            style={{
+                              flex: 1,
+                              borderWidth: 2,
                               borderColor: productCreationMode === 'sync_everywhere' ? theme.colors.primary : '#E5E7EB',
-                              backgroundColor: productCreationMode === 'sync_everywhere' ? theme.colors.primary : 'transparent',
-                              alignItems: 'center', justifyContent: 'center'
-                            }}>
-                              {productCreationMode === 'sync_everywhere' && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' }} />}
-                            </View>
-                          </View>
-                          <Text style={{ color: theme.colors.textSecondary, fontSize: 14, lineHeight: 20 }}>
-                            Products on {platformName} will be created on all your other platforms automatically. One catalog, synced everywhere.
-                          </Text>
-                        </TouchableOpacity>
-
-                        {/* Option 2: Keep Separate */}
-                        <TouchableOpacity
-                          style={{
-                            borderWidth: 2,
-                            borderColor: productCreationMode === 'keep_separate' ? theme.colors.primary : '#E5E7EB',
-                            borderRadius: 16,
-                            padding: 20,
-                            marginBottom: 12,
-                            backgroundColor: productCreationMode === 'keep_separate' ? theme.colors.primary + '10' : '#fff',
-                          }}
-                          onPress={() => setProductCreationMode('keep_separate')}
-                        >
-                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                            <Unlink size={24} color={productCreationMode === 'keep_separate' ? theme.colors.primary : '#6B7280'} />
-                            <Text style={{ fontSize: 17, fontWeight: '700', color: theme.colors.text, marginLeft: 12, flex: 1 }}>
-                              Keep Separate
-                            </Text>
+                              borderRadius: 12,
+                              paddingVertical: 16,
+                              paddingHorizontal: 8,
+                              backgroundColor: productCreationMode === 'sync_everywhere' ? theme.colors.primary + '15' : '#fff',
+                              alignItems: 'center',
+                            }}
+                            onPress={() => setProductCreationMode('sync_everywhere')}
+                          >
+                            {/* Dynamic platform icons - photo stack style */}
                             <View style={{
-                              width: 24, height: 24, borderRadius: 12, borderWidth: 2,
-                              borderColor: productCreationMode === 'keep_separate' ? theme.colors.primary : '#E5E7EB',
-                              backgroundColor: productCreationMode === 'keep_separate' ? theme.colors.primary : 'transparent',
-                              alignItems: 'center', justifyContent: 'center'
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              marginBottom: 10,
+                              height: 52,
+                              width: '100%',
                             }}>
-                              {productCreationMode === 'keep_separate' && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' }} />}
+                              {/* Show stacked icons for all connected platforms */}
+                              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                                {platformConnections.slice(0, 3).map((conn, index) => {
+                                  const platformType = conn.PlatformType?.toLowerCase() || '';
+                                  return (
+                                    <View
+                                      key={conn.Id}
+                                      style={{
+                                        marginLeft: index === 0 ? 0 : -12,
+                                        backgroundColor: '#fff',
+                                        borderRadius: 8,
+                                        padding: 3,
+                                        borderWidth: 1.5,
+                                        borderColor: '#E5E7EB',
+                                        zIndex: 3 - index,
+                                        shadowColor: '#000',
+                                        shadowOpacity: 0.08,
+                                        shadowRadius: 2,
+                                        shadowOffset: { width: 0, height: 1 },
+                                        elevation: 2,
+                                      }}
+                                    >
+                                      {platformType.includes('shopify') && <ShopifySvg width={32} height={32} />}
+                                      {platformType.includes('square') && <SquareSvg width={32} height={32} />}
+                                      {platformType.includes('clover') && <CloverSvg width={32} height={32} />}
+                                      {platformType.includes('ebay') && <EbaySvg width={32} height={32} />}
+                                      {platformType.includes('facebook') && <FacebookSvg width={32} height={32} />}
+                                      {platformType.includes('amazon') && <AmazonSvg width={32} height={32} />}
+                                      {!platformType.match(/shopify|square|clover|ebay|facebook|amazon/) && (
+                                        <Icon name="store" size={32} color={getPlatformColor(platformType)} />
+                                      )}
+                                    </View>
+                                  );
+                                })}
+                                {/* Show +N indicator if more than 3 platforms */}
+                                {platformConnections.length > 3 && (
+                                  <View style={{
+                                    marginLeft: -10,
+                                    backgroundColor: '#F3F4F6',
+                                    borderRadius: 8,
+                                    padding: 3,
+                                    width: 38,
+                                    height: 38,
+                                    borderWidth: 1.5,
+                                    borderColor: '#E5E7EB',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    zIndex: 0,
+                                  }}>
+                                    <Text style={{ fontSize: 12, fontWeight: '700', color: '#6B7280' }}>
+                                      +{platformConnections.length - 3}
+                                    </Text>
+                                  </View>
+                                )}
+                              </View>
                             </View>
-                          </View>
-                          <Text style={{ color: theme.colors.textSecondary, fontSize: 14, lineHeight: 20 }}>
-                            Only sync products that already exist on both platforms. Unlinked products stay independent.
-                          </Text>
-                        </TouchableOpacity>
+                            <Text style={{
+                              fontSize: 13,
+                              fontWeight: '600',
+                              color: theme.colors.text,
+                              textAlign: 'center',
+                            }}>
+                              Yes, all stores
+                            </Text>
+                          </TouchableOpacity>
+
+                          {/* Option 2: Only this store */}
+                          <TouchableOpacity
+                            style={{
+                              flex: 1,
+                              borderWidth: 2,
+                              borderColor: productCreationMode === 'only_this_store' ? theme.colors.primary : '#E5E7EB',
+                              borderRadius: 12,
+                              paddingVertical: 16,
+                              paddingHorizontal: 8,
+                              backgroundColor: productCreationMode === 'only_this_store' ? theme.colors.primary + '15' : '#fff',
+                              alignItems: 'center',
+                            }}
+                            onPress={() => setProductCreationMode('only_this_store')}
+                          >
+                            {/* Platform icon - show current platform */}
+                            <View style={{
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              marginBottom: 10,
+                              height: 52,
+                            }}>
+                              {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={48} height={48} />}
+                              {platformName?.toLowerCase().includes('square') && <SquareSvg width={48} height={48} />}
+                              {platformName?.toLowerCase().includes('clover') && <CloverSvg width={48} height={48} />}
+                              {platformName?.toLowerCase().includes('ebay') && <EbaySvg width={48} height={48} />}
+                              {platformName?.toLowerCase().includes('facebook') && <FacebookSvg width={48} height={48} />}
+                              {platformName?.toLowerCase().includes('amazon') && <AmazonSvg width={48} height={48} />}
+                              {!platformName?.toLowerCase().match(/shopify|square|clover|ebay|facebook|amazon/) && (
+                                <Icon name="store" size={48} color={theme.colors.primary} />
+                              )}
+                            </View>
+                            <Text style={{
+                              fontSize: 13,
+                              fontWeight: '600',
+                              color: theme.colors.text,
+                              textAlign: 'center',
+                            }}>
+                              Only this store
+                            </Text>
+                          </TouchableOpacity>
+
+                          {/* Option 3: Ignore/Skip */}
+                          <TouchableOpacity
+                            style={{
+                              flex: 1,
+                              borderWidth: 2,
+                              borderColor: productCreationMode === 'ignore' ? theme.colors.primary : '#E5E7EB',
+                              borderRadius: 12,
+                              paddingVertical: 16,
+                              paddingHorizontal: 8,
+                              backgroundColor: productCreationMode === 'ignore' ? theme.colors.primary + '15' : '#fff',
+                              alignItems: 'center',
+                            }}
+                            onPress={() => setProductCreationMode('ignore')}
+                          >
+                            {/* Skip icon */}
+                            <View style={{
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              marginBottom: 10,
+                              height: 52,
+                            }}>
+                              <Icon name="cancel" size={48} color="#6B7280" />
+                            </View>
+                            <Text style={{
+                              fontSize: 13,
+                              fontWeight: '600',
+                              color: theme.colors.text,
+                              textAlign: 'center',
+                            }}>
+                              Ignore/Skip
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
 
                         {/* Continue button for step 0 */}
                         <TouchableOpacity
                           style={{
                             backgroundColor: theme.colors.primary,
-                            borderRadius: 12,
-                            paddingVertical: 16,
+                            borderRadius: 28,
+                            paddingVertical: 18,
                             paddingHorizontal: 24,
-                            marginTop: 20,
                             alignItems: 'center',
                           }}
                           onPress={() => setWizardStep(1)}
                         >
-                          <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>
+                          <Text style={{ color: '#fff', fontWeight: '700', fontSize: 17 }}>
                             Continue
                           </Text>
                         </TouchableOpacity>
@@ -4006,50 +4160,7 @@ const MappingReviewScreen = () => {
                               </View>
                             )}
 
-                            {/* Continue button */}
-                            <View style={{ marginTop: 20 }}>
-                              <Button
-                                title={Object.values(locationPoolAssignments).includes('create-new') ? "Create Pool & Continue" : "Continue"}
-                                onPress={async () => {
-                                  // If any locations assigned to create-new, create the pool first
-                                  if (Object.values(locationPoolAssignments).includes('create-new')) {
-                                    if (!poolNameInput.trim()) {
-                                      Alert.alert('Error', 'Please enter a name for the new pool');
-                                      return;
-                                    }
-                                    await handleCreatePool();
-                                  } else {
-                                    // Add locations to selected existing pool(s)
-                                    const poolLocationMap: Record<string, string[]> = {};
-                                    Object.entries(locationPoolAssignments).forEach(([locId, poolId]) => {
-                                      if (!poolLocationMap[poolId]) poolLocationMap[poolId] = [];
-                                      poolLocationMap[poolId].push(locId);
-                                    });
-
-                                    // Update each pool with its assigned locations
-                                    const token = await ensureSupabaseJwt();
-                                    for (const [poolId, locationIds] of Object.entries(poolLocationMap)) {
-                                      try {
-                                        await fetch(`https://api.sssync.app/api/pools/${poolId}/locations`, {
-                                          method: 'POST',
-                                          headers: {
-                                            'Authorization': `Bearer ${token}`,
-                                            'Content-Type': 'application/json',
-                                          },
-                                          body: JSON.stringify({ location_ids: locationIds }),
-                                        });
-                                        console.log(`[MappingReviewScreen] Added ${locationIds.length} locations to pool ${poolId}`);
-                                      } catch (e) {
-                                        console.error(`[MappingReviewScreen] Failed to add locations to pool ${poolId}:`, e);
-                                      }
-                                    }
-                                    setWizardStep(1);
-                                  }
-                                }}
-                                loading={isCreatingPool}
-                                disabled={selectedPool === 'create-new' ? !poolNameInput.trim() || isCreatingPool : !selectedPool}
-                              />
-                            </View>
+                            {/* Note: Navigation uses the arrow buttons below, not a separate Continue button */}
                           </>
                         )}
                       </View>
@@ -4329,9 +4440,10 @@ const MappingReviewScreen = () => {
                           {wizardStep === 5 && 'Inventory Buffer'}
                           {wizardStep === 6 && 'Review'}
                         </Text>
-                        <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 20 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, paddingHorizontal: 30 }}>
+                          {/* Large Back Button */}
                           <TouchableOpacity
-                            onPress={() => {
+                            onPress={async () => {
                               if (wizardStep === 1) {
                                 // If going back from step 1 (pool), go to step 0 (product creation mode)
                                 setWizardStep(0);
@@ -4339,29 +4451,84 @@ const MappingReviewScreen = () => {
                                 setWizardStep((s) => Math.max(1, s - 1));
                               }
                             }}
-                            style={{ padding: 10, opacity: 1 }}
+                            style={{
+                              width: 60,
+                              height: 60,
+                              borderRadius: 12,
+                              backgroundColor: '#9CA3AF',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
                           >
-                            <Icon name="chevron-left" size={22} />
+                            <Icon name="chevron-left" size={28} color="#fff" />
                           </TouchableOpacity>
+
+                          {/* Dots indicator */}
                           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                            {[1, 2, 3, 4, 5, 6].map(i => (
+                            {[0, 1, 2, 3, 4, 5, 6].map(i => (
                               <View
                                 key={`dot-${i}`}
                                 style={{
-                                  width: 8,
-                                  height: 8,
-                                  borderRadius: 4,
+                                  width: 10,
+                                  height: 10,
+                                  borderRadius: 5,
                                   backgroundColor: i === wizardStep ? theme.colors.primary : '#E5E7EB'
                                 }}
                               />
                             ))}
                           </View>
+
+                          {/* Large Next Button */}
                           <TouchableOpacity
-                            disabled={wizardStep === 6}
-                            onPress={() => setWizardStep((s) => Math.min(6, s + 1))}
-                            style={{ padding: 10, opacity: wizardStep === 6 ? 0.5 : 1 }}
+                            disabled={wizardStep === 6 || (wizardStep === 1 && Object.values(locationPoolAssignments).includes('create-new') && !poolNameInput.trim())}
+                            onPress={async () => {
+                              // Handle pool creation when on step 1 and creating new pool
+                              if (wizardStep === 1 && Object.values(locationPoolAssignments).includes('create-new')) {
+                                if (!poolNameInput.trim()) {
+                                  Alert.alert('Error', 'Please enter a name for the new pool');
+                                  return;
+                                }
+                                await handleCreatePool();
+                              } else if (wizardStep === 1) {
+                                // Add locations to selected existing pool(s)
+                                const poolLocationMap: Record<string, string[]> = {};
+                                Object.entries(locationPoolAssignments).forEach(([locId, poolId]) => {
+                                  if (!poolLocationMap[poolId]) poolLocationMap[poolId] = [];
+                                  poolLocationMap[poolId].push(locId);
+                                });
+
+                                // Update each pool with its assigned locations
+                                const token = await ensureSupabaseJwt();
+                                for (const [poolId, locationIds] of Object.entries(poolLocationMap)) {
+                                  try {
+                                    await fetch(`https://api.sssync.app/api/pools/${poolId}/locations`, {
+                                      method: 'POST',
+                                      headers: {
+                                        'Authorization': `Bearer ${token}`,
+                                        'Content-Type': 'application/json',
+                                      },
+                                      body: JSON.stringify({ location_ids: locationIds }),
+                                    });
+                                    console.log(`[MappingReviewScreen] Added ${locationIds.length} locations to pool ${poolId}`);
+                                  } catch (e) {
+                                    console.error(`[MappingReviewScreen] Failed to add locations to pool ${poolId}:`, e);
+                                  }
+                                }
+                                setWizardStep(2);
+                              } else {
+                                setWizardStep((s) => Math.min(6, s + 1));
+                              }
+                            }}
+                            style={{
+                              width: 60,
+                              height: 60,
+                              borderRadius: 12,
+                              backgroundColor: (wizardStep === 6 || (wizardStep === 1 && selectedPool === 'create-new' && !poolNameInput.trim())) ? '#D1D5DB' : theme.colors.primary,
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
                           >
-                            <Icon name="chevron-right" size={22} />
+                            <Icon name="chevron-right" size={28} color="#fff" />
                           </TouchableOpacity>
                         </View>
                       </>

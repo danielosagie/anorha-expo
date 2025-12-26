@@ -14,6 +14,7 @@ import {
   Clipboard,
   ScrollView,
   Modal,
+  TextInput,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
@@ -43,6 +44,7 @@ import { SvgXml } from 'react-native-svg';
 import PhotoStack, { CapturedPhoto } from '../components/camera/PhotoStack';
 import CameraControls from '../components/camera/CameraControls';
 import BusinessTemplateModal, { BusinessTemplate } from '../components/camera/BusinessTemplateModal';
+import ItemNavigationBar from '../components/camera/ItemNavigationBar';
 import QuickProductDetailSheet from '../components/QuickProductDetailSheet';
 import ManifestReviewSheet from '../components/ManifestReviewSheet';
 import ReceiptReviewSheet from '../components/ReceiptReviewSheet';
@@ -266,6 +268,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [notificationMessage, setNotificationMessage] = useState('');
   const [showProgressBar, setShowProgressBar] = useState(false);
 
+  // Experimental Text Search
+
+
   // Camera ref
   const cameraRef = useRef<CameraView>(null);
   const isFocused = useIsFocused();
@@ -402,7 +407,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       case 'matches_found': return `${matchData?.totalMatches || 0} matches found!`;
       case 'no_matches': return 'No matches found';
       case 'barcode_scanned': return scannedBarcode || 'Barcode scanned';
-      default: return cameraMode === 'camera' ? 'Point camera at product': 'lol';
+      default: return cameraMode === 'camera' ? 'Point camera at product' : 'lol';
     }
   };
 
@@ -868,7 +873,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
 
     const crop_window_shape: ImagePicker.CropShape = 'rectangle';
-    
+
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
@@ -1098,15 +1103,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       if (!tokenMaybe) {
         console.warn('[QUICK SCAN] No Supabase JWT available. Are you signed in and the Clerk bridge configured?');
         showNotificationMessage('Sign in required to scan. Please log in and try again.', 3000);
-        setCurrentInstruction('ready');
-        stopProgressAnimation();
-        setIsAutoScanning(false);
-
-        // Clear loading state for this item (auth error)
         setItemLoadingStates(prev => {
           const { [itemId]: removed, ...rest } = prev;
           return rest;
         });
+        setIsAutoScanning(false);
         return;
       }
       console.log('[QUICK SCAN] Starting quick scan for photo:', photo.id);
@@ -1145,152 +1146,75 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      const quickScanResult = await response.json();
+      const result = await response.json();
 
-      console.log('[QUICK SCAN] Response received:', JSON.stringify(quickScanResult, null, 2));
-      console.log('[QUICK SCAN] Processing time:', quickScanResult.totalProcessingTimeMs + 'ms');
-      console.log('[QUICK SCAN] Overall confidence:', quickScanResult.overallConfidence);
-      console.log('[QUICK SCAN] Recommended action:', quickScanResult.recommendedAction);
+      if (quickScanCancelledRef.current) return;
 
-      // Extract matches and reranker metadata
-      const allMatches = quickScanResult.results?.flatMap((result: any) => result.matches) || [];
-      const rerankerMeta = (() => {
-        const first = quickScanResult.results?.[0];
-        const ra = first?.rerankerAnalysis;
-        if (!ra) return undefined;
-        return {
-          type: ra.type as 'llama4-groq' | 'jina-modal' | 'fast-text' | 'none',
-          rankingMethod: ra.rankingMethod as 'exact_match' | 'semantic_similarity' | 'fuzzy_match' | 'vector_fallback' | undefined,
-          confidence: typeof ra.confidence === 'number' ? ra.confidence : undefined,
-          reasoning: typeof ra.reasoning === 'string' ? ra.reasoning : undefined,
-          processingTimeMs: typeof ra.processingTimeMs === 'number' ? ra.processingTimeMs : undefined,
-          alternatives: Array.isArray(ra.alternatives) ? ra.alternatives : undefined,
+      console.log('[QUICK SCAN] Received result for item:', itemId);
+      console.log('[QUICK SCAN] Full result:', JSON.stringify(result, null, 2));
+
+      // Parse backend response - backend returns results array with matches
+      const allMatches = result.results?.flatMap((r: any) => r.matches) || result.quickScanMatches || [];
+      const rerankerMeta = result.results?.[0]?.rerankerAnalysis;
+      const quickScanResult = {
+        recommendedAction: result.recommendedAction || 'show_multiple_matches',
+        overallConfidence: result.overallConfidence || 'medium'
+      };
+
+      if (allMatches.length > 0) {
+        const nextMatchData: MatchResponse = {
+          systemAction: quickScanResult?.recommendedAction || 'show_multiple_matches',
+          confidence: quickScanResult?.overallConfidence || 0,
+          totalMatches: allMatches.length,
+          rankedCandidates: allMatches.map((match: any) => ({
+            id: match.ProductVariantId || match.productId || `match-${Date.now()}`,
+            title: match.title || 'Unknown Product',
+            description: match.description || '',
+            price: match.price || 0,
+            imageUrl: match.imageUrl || '',
+            sourceUrl: match.productUrl || match.link || '',
+          }))
         };
-      })();
 
-      setTimeout(async () => {
-        if (quickScanCancelledRef.current) {
-          console.log('[QUICK SCAN] Scan was cancelled before displaying results, skipping UI update');
-          setIsAutoScanning(false);
-          stopProgressAnimation();
-          setItemLoadingStates(prev => {
-            const { [itemId]: removed, ...rest } = prev;
-            return rest;
-          });
-          setCurrentInstruction('ready');
-          return;
+        if (rerankerMeta) {
+          nextMatchData.reranker = rerankerMeta;
         }
-        // Show matches for any of these scenarios:
-        // 1. Backend explicitly recommends showing matches (high or medium confidence)
-        // 2. We have matches even with low confidence (let user decide)
-        const shouldShowMatches =
-          quickScanResult.recommendedAction === 'show_single_match' ||
-          quickScanResult.recommendedAction === 'show_multiple_candidates' ||
-          (allMatches.length > 0 && quickScanResult.overallConfidence !== 'low') ||
-          (allMatches.length > 0 && quickScanResult.recommendedAction === 'fallback_to_manual'); // Show even low confidence matches
 
-        if (shouldShowMatches) {
-          const confidenceMessage = quickScanResult.overallConfidence === 'high' ? 'High confidence matches found!' :
-            quickScanResult.overallConfidence === 'medium' ? 'Good matches found!' :
-              'Possible matches found (low confidence)';
-          console.log(`[QUICK SCAN] ${confidenceMessage} - showing match sheet`);
-          console.log(`[QUICK SCAN] Recommended action: ${quickScanResult.recommendedAction}, confidence: ${quickScanResult.overallConfidence}, matches: ${allMatches.length}`);
-
-          setQuickScanResults(allMatches);
-          const nextMatchData: MatchResponse = {
-            systemAction: quickScanResult.recommendedAction as any || 'show_multiple_matches',
-            confidence: quickScanResult.overallConfidence,
-            totalMatches: allMatches.length,
-            rankedCandidates: allMatches.map((match: any) => ({
-              id: match.ProductVariantId || match.productId || `match-${Date.now()}`,
-              title: match.title || 'Unknown Product',
-              description: match.description || '',
-              price: match.price || 0,
-              imageUrl: match.imageUrl || '',
-              // matchPercentage: Math.round((match.combinedScore || 0) * 100),
-              sourceUrl: match.productUrl || match.link || '',
-            }))
+        // Update store
+        setQuickScanStore(prev => {
+          const updated = {
+            ...prev,
+            [itemId]: { matchData: nextMatchData, serpApiData: candidatesToSerpApiData(nextMatchData.rankedCandidates as any) }
           };
-          if (rerankerMeta) {
-            nextMatchData.reranker = rerankerMeta;
-          }
-          setMatchData(nextMatchData);
-          // Persist per-item for reopening and for MatchSelection overrides
-          console.log('[QUICK SCAN] Storing results for itemId:', itemId);
-          console.log('[QUICK SCAN] Match data:', nextMatchData);
-          setQuickScanStore(prev => {
-            const updated = {
-              ...prev,
-              [itemId]: { matchData: nextMatchData, serpApiData: candidatesToSerpApiData(nextMatchData.rankedCandidates as any) }
-            };
-            console.log('[QUICK SCAN] Updated quickScanStore keys:', Object.keys(updated));
-            return updated;
-          });
-          setCurrentMatchItemId(itemId);
-          setCurrentInstruction('matches_found');
-          stopProgressAnimation();
-          // Ensure bulk sheet is closed before opening match sheet
-          setShowDeepSearchSheet(false);
-          sheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
-          setShowMatchSheet(true);
-          matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2); // Taller sheet (80% height visible)
+          return updated;
+        });
+
+        // Notify user (silent update, no sheet)
+        const isFirstItemScanned = Object.keys(quickScanStore).length === 0;
+        if (isFirstItemScanned) {
+          showNotificationMessage(`✓ Match found! Tap to review.`, 3000);
         } else {
-          console.log('[QUICK SCAN] No matches found, creating item automatically');
-          // NO FALLBACK TO ANALYZE - just create item and show deep search
-          setCurrentInstruction('no_matches');
-          stopProgressAnimation();
-          showNotificationMessage('No matches found. Item created - use search options to find your product.', 4000);
-          setTimeout(() => {
-            setShowMatchSheet(false);
-            matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
-            setShowDeepSearchSheet(true);
-            sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
-          }, 1000);
+          showNotificationMessage(`✓ Match found!`, 2000);
         }
-        setIsAutoScanning(false);
 
-        // Clear loading state for this item
-        setItemLoadingStates(prev => {
-          const { [itemId]: removed, ...rest } = prev;
-          return rest;
-        });
-      }, 500);
-
-    } catch (error) {
-      console.error('[QUICK SCAN] Quick scan failed:', error);
-
-      if (quickScanCancelledRef.current) {
-        console.log('[QUICK SCAN] Error occurred but scan was cancelled, skipping UI updates');
-        setIsAutoScanning(false);
-        stopProgressAnimation();
-        setItemLoadingStates(prev => {
-          const { [itemId]: removed, ...rest } = prev;
-          return rest;
-        });
-        setCurrentInstruction('ready');
-        return;
+      } else {
+        console.log('[QUICK SCAN] No matches found');
+        showNotificationMessage('No quick matches found. Added to review.', 3000);
       }
 
-      console.log('[QUICK SCAN] Creating item automatically (no fallback to analyze)');
-      // NO FALLBACK TO ANALYZE - just create item
-      setCurrentInstruction('no_matches');
-      stopProgressAnimation();
-      showNotificationMessage('Quick scan failed. Item created - use search options.', 3000);
-      setTimeout(() => {
-        setShowMatchSheet(false);
-        matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
-        setShowDeepSearchSheet(true);
-        sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
-      }, 1000);
+    } catch (error) {
+      console.error('[QUICK SCAN] scan failed:', error);
+      showNotificationMessage('Quick scan failed. Retrying in background...', 3000);
+    } finally {
       setIsAutoScanning(false);
-
-      // Clear loading state for this item (error case)
+      // Clear loading state
       setItemLoadingStates(prev => {
         const { [itemId]: removed, ...rest } = prev;
         return rest;
       });
     }
-  }, [isAutoScanning, sheetTranslateY, stopProgressAnimation, uploadImageToSupabase, candidatesToSerpApiData, quickScanCancelledRef]);
+
+  }, [uploadImageToSupabase, candidatesToSerpApiData, quickScanStore, showNotificationMessage]);
 
   // Open Match Selection screen using quick scan results for a given item
   const openMatchSelectionForItem = useCallback((itemId?: string | null) => {
@@ -1723,6 +1647,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar barStyle="light-content" backgroundColor="black" />
+
         <View style={styles.permissionContainer}>
           <MaterialIcons name="camera-alt" size={80} color="#666" />
           <Text style={styles.permissionTitle}>Camera Access Required</Text>
@@ -1860,9 +1785,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
 
         {cameraMode === 'camera' && (
-          <View style={styles.photoFrameOverlay}/>
-        )} 
-        
+          <View style={styles.photoFrameOverlay} />
+        )}
+
         {cameraMode === 'barcode' && (
           <View style={styles.photoFrameOverlay}>
             <View style={styles.scanLineContainer}>
@@ -1964,6 +1889,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           onContinue={handleContinue}
           hasBarcodeResult={!!barcodeSearchResult}
           productName={barcodeSearchResult?.variant?.Title}
+          items={bulkItems}
+          activeItemId={activeItemId}
+          onSelectItem={(id) => setActiveItemId(id)}
+          onNewItem={() => {
+            const newItemId = `item-${Date.now()}`;
+            setBulkItems(prev => [...prev.map(i => ({ ...i, isActive: false })), {
+              id: newItemId,
+              photos: [],
+              isActive: true
+            }]);
+            setActiveItemId(newItemId);
+          }}
         />
       </CameraView>
 
@@ -1982,6 +1919,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             onClose={closeMatchSheet}
             onUseForSelection={() => openMatchSelectionForItem(currentMatchItemId)}
             sheetStyle={matchSheetAnimatedStyle}
+            navigation={navigation}
+            onStartBroadSearch={() => {
+              // Close match sheet and open bulk items sheet
+              setShowMatchSheet(false);
+              matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
+              setShowDeepSearchSheet(true);
+              sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
+            }}
           />
         ) : null}
       </Modal>
@@ -2281,6 +2226,7 @@ const CenterOverlay: React.FC<{
   );
 };
 
+
 // Bottom Controls Component
 const BottomControls: React.FC<{
   onCapture: () => void;
@@ -2292,7 +2238,12 @@ const BottomControls: React.FC<{
   onImageUpload: () => void;
   onContinue: () => void;
   hasBarcodeResult?: boolean;
-  productName?: string; // For showing product name on Update button
+  productName?: string;
+  // Item navigation props
+  items: Array<{ id: string; photos: any[] }>;
+  activeItemId: string | null;
+  onSelectItem: (id: string) => void;
+  onNewItem: () => void;
 }> = ({
   onCapture,
   isCapturing,
@@ -2303,8 +2254,14 @@ const BottomControls: React.FC<{
   onImageUpload,
   onContinue,
   hasBarcodeResult,
-  productName
+  productName,
+  items,
+  activeItemId,
+  onSelectItem,
+  onNewItem
 }) => {
+    const activeIndex = items.findIndex(i => i.id === activeItemId);
+    const totalItems = items.length;
     // Drag-to-select logic using simple state
     const [hoveredMode, setHoveredMode] = useState<CameraMode | null>(null);
     const [showModePopup, setShowModePopup] = useState(false);
@@ -2346,6 +2303,13 @@ const BottomControls: React.FC<{
 
     const POPUP_WIDTH = 350;
     const ITEM_WIDTH = POPUP_WIDTH / 4;
+
+    // EXPERIMENTAL: Long press on mode button to toggle text search
+    const onLongPressMode = () => {
+      // Toggle text search from parent? We need a callback prop for this
+      // For now, we'll just log it. In real usage, pass onTextSearchToggle prop.
+      console.log('Long press mode button');
+    };
 
     // Pan gesture handler callback (non-deprecated approach)
     const onPanGestureEvent = useCallback((event: PanGestureHandlerGestureEvent) => {
@@ -2493,11 +2457,52 @@ const BottomControls: React.FC<{
         </Animated.View>
 
         <Animated.View entering={SlideInDown.delay(700)} style={styles.continueButtonContainer}>
-          <TouchableOpacity style={styles.continueButton} onPress={onContinue}>
-            <Text style={styles.continueButtonText} numberOfLines={1}>
-              {getContinueText()}
-            </Text>
-          </TouchableOpacity>
+          <View style={styles.itemNavRow}>
+            {/* Left Arrow - Previous Item */}
+            <TouchableOpacity
+              style={[styles.itemNavArrow, (photosCount === 0 || activeIndex <= 0) && styles.itemNavArrowDisabled]}
+              onPress={() => {
+                if (activeIndex > 0) onSelectItem(items[activeIndex - 1].id);
+              }}
+              disabled={photosCount === 0 || activeIndex <= 0}
+            >
+              <Icon name="chevron-left" size={24} color={photosCount > 0 && activeIndex > 0 ? "#FFF" : "rgba(255,255,255,0.3)"} />
+            </TouchableOpacity>
+
+            {/* Center - Continue Button with item counter */}
+            <TouchableOpacity
+              style={[styles.continueButton, photosCount === 0 && styles.continueButtonDisabled]}
+              onPress={onContinue}
+              disabled={photosCount === 0}
+            >
+              {totalItems > 1 && (
+                <View style={styles.itemCountBadge}>
+                  <Text style={styles.itemCountBadgeText}>{activeIndex + 1}/{totalItems}</Text>
+                </View>
+              )}
+              <Text style={styles.continueButtonText} numberOfLines={1}>
+                {getContinueText()}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Right Arrow/New Item */}
+            {activeIndex < totalItems - 1 ? (
+              <TouchableOpacity
+                style={styles.itemNavArrow}
+                onPress={() => onSelectItem(items[activeIndex + 1].id)}
+              >
+                <Icon name="chevron-right" size={24} color="#FFF" />
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.itemNavArrow, styles.itemNavNewButton, photosCount === 0 && styles.itemNavArrowDisabled]}
+                onPress={onNewItem}
+                disabled={photosCount === 0}
+              >
+                <Icon name="plus" size={24} color={photosCount > 0 ? "#000" : "rgba(255,255,255,0.3)"} />
+              </TouchableOpacity>
+            )}
+          </View>
         </Animated.View>
       </View>
     );
@@ -2518,25 +2523,48 @@ const MatchResultsSheet: React.FC<{
   onClose: () => void;
   sheetStyle: any;
   onUseForSelection?: () => void;
-}> = ({ matchData, onClose, sheetStyle, onUseForSelection }) => {
-  const [selectedMatchIds, setSelectedMatchIds] = React.useState<Set<string>>(new Set());
+  onStartBroadSearch?: () => void;
+  navigation?: any;
+}> = ({ matchData, onClose, sheetStyle, onUseForSelection, onStartBroadSearch, navigation }) => {
+  // Use index-based selection to avoid duplicate id issues
+  const [selectedMatchIndices, setSelectedMatchIndices] = React.useState<Set<number>>(new Set());
 
-  const toggleMatchSelection = (candidateId: string) => {
-    setSelectedMatchIds(prev => {
+  const toggleMatchSelection = (index: number) => {
+    setSelectedMatchIndices(prev => {
       const newSet = new Set(prev);
-      if (newSet.has(candidateId)) {
-        newSet.delete(candidateId);
+      if (newSet.has(index)) {
+        newSet.delete(index);
       } else {
-        newSet.add(candidateId);
+        newSet.add(index);
       }
       return newSet;
     });
   };
 
   const handleGenerateWithSelected = () => {
-    if (selectedMatchIds.size > 0) {
-      // TODO: Pass selected matches to the generate flow
-      // For now, use the existing onUseForSelection callback
+    if (selectedMatchIndices.size > 0 && navigation) {
+      // Convert matchData.rankedCandidates to serpApiData format for MatchSelectionScreen
+      const serpApiData = matchData.rankedCandidates.map((c, idx) => ({
+        position: idx + 1,
+        title: c.title || 'Unknown Product',
+        link: c.sourceUrl || '',
+        source: 'quickscan',
+        source_icon: '',
+        thumbnail: c.imageUrl || '',
+        image: c.imageUrl || '',
+        price: typeof c.price === 'number' ? { value: `$${c.price}`, extracted_value: c.price, currency: 'USD' } : undefined,
+      }));
+
+      // Navigate with pre-selected indices
+      navigation.navigate('MatchSelectionScreen', {
+        overrideResults: [{ productIndex: 0, serpApiData }],
+        overrideFocusIndex: 0,
+        preSelectedIndices: Array.from(selectedMatchIndices),
+        isNewScan: true
+      });
+      onClose();
+    } else if (selectedMatchIndices.size > 0) {
+      // Fallback to old behavior if no navigation
       onUseForSelection?.();
     }
   };
@@ -2573,16 +2601,16 @@ const MatchResultsSheet: React.FC<{
 
         <View style={styles.matchResults}>
           {matchData.rankedCandidates.map((candidate, index) => {
-            const isSelected = selectedMatchIds.has(candidate.id);
+            const isSelected = selectedMatchIndices.has(index);
 
             return (
               <TouchableOpacity
-                key={`match-${candidate.id}-${index}`}
+                key={`match-${index}`}
                 style={[
                   styles.matchCard,
                   isSelected && styles.matchCardSelected
                 ]}
-                onPress={() => toggleMatchSelection(candidate.id)}
+                onPress={() => toggleMatchSelection(index)}
                 activeOpacity={0.7}
               >
                 <Image source={{ uri: candidate.imageUrl }} style={styles.matchImage} />
@@ -2613,32 +2641,31 @@ const MatchResultsSheet: React.FC<{
         </View>
 
         <View style={styles.sheetActions}>
-          <TouchableOpacity
-            style={[
-              styles.primaryButton,
-              selectedMatchIds.size === 0 && styles.primaryButtonDisabled
-            ]}
-            onPress={handleGenerateWithSelected}
-            disabled={selectedMatchIds.size === 0}
-          >
-            <Text style={styles.primaryButtonText}>
-              {selectedMatchIds.size > 0
-                ? `Generate from ${selectedMatchIds.size} match${selectedMatchIds.size > 1 ? 'es' : ''}`
-                : 'Select matches to continue'
-              }
-            </Text>
-          </TouchableOpacity>
-
-          {/*
-          <View style={styles.secondaryActions}>
-            <TouchableOpacity style={styles.secondaryButton}>
-              <Text style={styles.secondaryButtonText}>Show More</Text>
+          {/* Side by side buttons like the design */}
+          <View style={styles.matchActionsRow}>
+            <TouchableOpacity
+              style={styles.reviewDetailsButton}
+              onPress={onStartBroadSearch}
+            >
+              <Icon name="magnify" size={18} color="#666" />
+              <Text style={styles.reviewDetailsButtonText}>Review Details</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.secondaryButton}>
-              <Text style={styles.secondaryButtonText}>Not My Product</Text>
+
+            <TouchableOpacity
+              style={[
+                styles.listProductButton,
+                selectedMatchIndices.size === 0 && styles.listProductButtonDisabled
+              ]}
+              onPress={handleGenerateWithSelected}
+              disabled={selectedMatchIndices.size === 0}
+            >
+              <Icon name="package-variant" size={18} color={selectedMatchIndices.size > 0 ? "#FFF" : "#999"} />
+              <Text style={[
+                styles.listProductButtonText,
+                selectedMatchIndices.size === 0 && { color: '#999' }
+              ]}>List Product</Text>
             </TouchableOpacity>
           </View>
-          */}
         </View>
       </ScrollView>
     </Animated.View>
@@ -2792,9 +2819,14 @@ const BulkItemsSheet: React.FC<{
             : `Creating ${totalItems} New Item${totalItems > 1 ? 's' : ''}`
           }
         </Text>
-        <View style={{ width: 24 }} />
+        {/* New Item button */}
+        <TouchableOpacity style={styles.headerNewItemButton} onPress={onAddNewItem}>
+          <Icon name="plus" size={20} color="#93C822" />
+        </TouchableOpacity>
       </View>
 
+
+      {/* Main Camera View */}
       <View style={styles.sheetContent}>
 
 
@@ -2881,8 +2913,8 @@ const BulkItemsSheet: React.FC<{
                           </View>
                         )}
                       </View>
-                      {/* Show delete button if there are multiple items OR if in bulk mode */}
-                      {(isBulkMode && bulkItems.length > 0) && (
+                      {/* Show delete button if there are items */}
+                      {bulkItems.length > 0 && (
                         <TouchableOpacity
                           style={styles.deleteItemButton}
                           onPress={(e) => { e.stopPropagation?.(); onDeleteItem(item.id); }}
@@ -2967,16 +2999,20 @@ const BulkItemsSheet: React.FC<{
                     {/* Optional quick matches reopen button if present */}
                     {(() => {
                       const hasQuickMatches = quickScanStore?.[item.id];
+                      const matchCount = hasQuickMatches?.matchData?.totalMatches || 0;
                       console.log(`[RENDER QUICK BUTTON] Item ${id + 1} (${item.id}): hasQuickMatches = ${hasQuickMatches ? 'YES' : 'NO'}`);
                       if (hasQuickMatches) {
-                        console.log(`[RENDER QUICK BUTTON] Item ${id + 1} match count:`, quickScanStore[item.id].matchData.totalMatches);
+                        console.log(`[RENDER QUICK BUTTON] Item ${id + 1} match count:`, matchCount);
                       }
-                      return hasQuickMatches && (
+                      return matchCount > 0 && (
                         <TouchableOpacity
-                          style={[styles.secondaryButton, { marginTop: 10 }]}
+                          style={styles.quickMatchesButton}
                           onPress={() => onOpenQuickMatches?.(item.id)}
                         >
-                          <Text style={styles.secondaryButtonText}>View Quick Matches ({quickScanStore[item.id].matchData.totalMatches || 0})</Text>
+                          <View style={styles.matchNotificationDot} />
+                          <Text style={styles.quickMatchesButtonText}>
+                            View Quick Matches ({matchCount})
+                          </Text>
                         </TouchableOpacity>
                       );
                     })()}
@@ -3219,11 +3255,42 @@ const styles = StyleSheet.create({
   // Barcode Overlay Styles
   barcodeOverlayContainer: {
     position: 'absolute',
-    top: 100,
+    top: 140, // Below nav bar
     left: 0,
     right: 0,
     alignItems: 'center',
-    zIndex: 15,
+    zIndex: 20,
+  },
+
+  textSearchOverlay: {
+    position: 'absolute',
+    top: 120,
+    left: 20,
+    right: 20,
+    zIndex: 200,
+  },
+  textSearchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF',
+    borderRadius: 25,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  textSearchInput: {
+    flex: 1,
+    height: 36,
+    fontSize: 16,
+    color: '#000',
+  },
+  textSearchClose: {
+    padding: 4,
+    marginLeft: 8,
   },
   barcodeOverlay: {
     backgroundColor: 'rgba(0,0,0,0.8)',
@@ -3432,15 +3499,53 @@ const styles = StyleSheet.create({
   continueButtonContainer: {
     paddingHorizontal: 20,
   },
-  continueButton: {
-    backgroundColor: '#93C822',
-    borderRadius: 12,
-    paddingVertical: 15,
+  itemNavRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  itemNavArrow: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  itemNavArrowDisabled: {
+    opacity: 0.4,
+  },
+  itemNavNewButton: {
+    backgroundColor: '#93C822',
+  },
+  continueButton: {
+    flex: 1,
+    marginHorizontal: 12,
+    backgroundColor: '#93C822',
+    borderRadius: 22,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  continueButtonDisabled: {
+    backgroundColor: 'rgba(255,255,255,0.15)',
   },
   continueButtonText: {
     color: 'white',
     fontSize: 16,
+    fontWeight: '600',
+  },
+  itemCountBadge: {
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    marginRight: 8,
+  },
+  itemCountBadgeText: {
+    color: 'rgba(0,0,0,0.7)',
+    fontSize: 12,
     fontWeight: '600',
   },
 
@@ -3468,8 +3573,9 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingTop: 20,
-    paddingBottom: 44,
-    height: SCREEN_HEIGHT * 0.7, // Fixed 60% height
+    paddingBottom: 80, // Increased bottom padding
+    marginBottom: 60, // Added bottom margin
+    height: SCREEN_HEIGHT * 0.7,
   },
   sheetHeader: {
     flexDirection: 'row',
@@ -3482,6 +3588,53 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: '#333',
+  },
+  headerNewItemButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(147, 200, 34, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  matchActionsRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  reviewDetailsButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 25,
+    backgroundColor: '#f5f5f5',
+    gap: 8,
+  },
+  reviewDetailsButtonText: {
+    color: '#666',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  listProductButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 25,
+    backgroundColor: '#93C822',
+    gap: 8,
+  },
+  listProductButtonDisabled: {
+    backgroundColor: '#e0e0e0',
+  },
+  listProductButtonText: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
   sheetContent: {
     flexGrow: 1,
@@ -3659,6 +3812,35 @@ const styles = StyleSheet.create({
   broadSearchText: {
     fontSize: 16,
     color: '#666',
+  },
+  broadSearchButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#2196F3',
+  },
+  // Green notification indicator styles for quick matches button
+  quickMatchesButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+    borderWidth: 2,
+    borderColor: '#4CAF50',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginTop: 10,
+    gap: 6,
+  },
+  quickMatchesButtonText: {
+    color: '#4CAF50',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  matchNotificationDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#4CAF50',
   },
   photoAttachments: {
     borderTopWidth: 1,

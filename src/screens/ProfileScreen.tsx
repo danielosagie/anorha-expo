@@ -1,7 +1,8 @@
 import React, { useState, useContext, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput, Image, Linking } from 'react-native';
 import { WebView } from 'react-native-webview';
 import Animated, { FadeInUp } from 'react-native-reanimated';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
@@ -14,7 +15,7 @@ import FacebookSvg from '../assets/facebook.svg';
 import EbaySvg from '../assets/ebay.svg';
 import CloverSvg from '../assets/clover.svg';
 import SquareSvg from '../assets/square.svg';
-import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation, useFocusEffect, useRoute, RouteProp, useIsFocused } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
@@ -23,6 +24,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CommonActions } from '@react-navigation/native';
 import * as WebBrowser from 'expo-web-browser';
 import * as Clipboard from 'expo-clipboard';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import * as Crypto from 'expo-crypto'; // For generating random string
@@ -46,6 +49,8 @@ import LocationsManagerV2 from '../components/LocationsManagerV2';
 
 
 const SSSYNC_API_BASE_URL = "https://api.sssync.app"; // Keep if used for constructing backend URLs
+// --- Constants for Feature Flags / Testing ---
+const USE_EXTERNAL_BROWSER_FOR_FACEBOOK = true; // Set to true to use Chrome/Safari instead of in-app session
 // --- END Re-inlined Constants ---
 
 // Define route param types (add other screens/params if needed)
@@ -168,6 +173,73 @@ const getStatusDisplay = (status: string): { label: string, color: string, icon:
   }
 };
 
+// Helper to determine recommended action for a connection in error state
+type RecommendedAction = 'reconnect' | 'rescan' | 'fix_resume' | 'manage';
+
+const getRecommendedAction = (
+  connection: { Status: string; LastSyncSuccessAt: string | null; IsEnabled: boolean },
+  platformType: string
+): { action: RecommendedAction; label: string; icon: string; color: string; description: string } => {
+  const status = connection.Status?.toLowerCase();
+  const hasEverSynced = !!connection.LastSyncSuccessAt;
+  const isEnabled = connection.IsEnabled;
+
+  // If connection is disabled, primary action is to re-enable
+  if (!isEnabled) {
+    return {
+      action: 'fix_resume',
+      label: 'Re-enable',
+      icon: 'play-circle',
+      color: '#FF9500', // warning
+      description: 'Re-enable this connection and resume syncing'
+    };
+  }
+
+  // For error state, determine the best action
+  if (status === CONNECTION_STATUS.ERROR) {
+    // If never synced successfully, likely an OAuth or setup issue
+    if (!hasEverSynced) {
+      // Platforms that use OAuth need reconnect
+      if (['shopify', 'square', 'facebook', 'ebay', 'clover'].includes(platformType.toLowerCase())) {
+        return {
+          action: 'reconnect',
+          label: 'Reconnect',
+          icon: 'link-variant',
+          color: '#FF3B30', // error
+          description: 'Re-authorize your account credentials'
+        };
+      }
+      // For other platforms, try rescan
+      return {
+        action: 'rescan',
+        label: 'Retry Scan',
+        icon: 'refresh',
+        color: '#FF9500', // warning
+        description: 'Retry the initial product scan'
+      };
+    }
+
+    // If previously synced successfully, likely a transient error - try rescan
+    return {
+      action: 'rescan',
+      label: 'Rescan',
+      icon: 'refresh',
+      color: '#FF9500', // warning
+      description: 'Rescan products to fix sync issues'
+    };
+  }
+
+  // For non-error states, show manage
+  return {
+    action: 'manage',
+    label: 'Manage',
+    icon: 'cog',
+    color: '#007AFF', // primary
+    description: 'View and manage sync settings'
+  };
+};
+
+
 // Add a function to show in-app notifications
 const showStatusNotification = (title: string, message: string, type: 'success' | 'info' | 'warning' | 'danger' = 'info') => {
   try {
@@ -199,6 +271,29 @@ const ProfileScreen = () => {
   // For refresh trigger from route params
   const routeRefreshParam = route.params?.refresh || 0;
   const [refreshTrigger, setRefreshTrigger] = useState(routeRefreshParam);
+  const isFocused = useIsFocused();
+
+  // Helper function for smart date formatting
+  const formatSyncDate = (dateString: string): string => {
+    const syncDate = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - syncDate.getTime();
+    const diffHours = diffMs / (1000 * 60 * 60);
+
+    const isToday = syncDate.toDateString() === now.toDateString();
+    const isThisYear = syncDate.getFullYear() === now.getFullYear();
+
+    if (isToday) {
+      // Show time only (e.g., "2:31 PM")
+      return syncDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    } else if (isThisYear) {
+      // Show date without year (e.g., "Dec 18")
+      return syncDate.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    } else {
+      // Show full date with year (e.g., "Dec 18, 2024")
+      return syncDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+  };
 
   useEffect(() => {
     if (route.params?.refresh) {
@@ -217,8 +312,38 @@ const ProfileScreen = () => {
   const [entitlements, setEntitlements] = useState<{ planName: string | null; maxConnections: number; aiScanLimit: number | null; isPaid: boolean } | null>(null);
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
+  type ShopifyFlowStep = 'idle' | 'enterInfo';
   const [shopifyShopName, setShopifyShopName] = useState('');
   const [shopifyFlowStep, setShopifyFlowStep] = useState<ShopifyFlowStep>('idle');
+  const [pastedShopifyUrl, setPastedShopifyUrl] = useState('');
+  const [manualShopName, setManualShopName] = useState('');
+  const [optimizationSummary, setOptimizationSummary] = useState<{ total: number; fullyReady: number } | null>(null);
+
+  // Fetch optimization summary for streak bar (only when screen is focused)
+  useEffect(() => {
+    if (!isFocused) return;
+
+    let isCancelled = false;
+    const fetchSummary = async () => {
+      try {
+        const token = await getToken();
+        if (!token || isCancelled) return;
+        const res = await fetch(`${SSSYNC_API_BASE_URL}/api/products/publish-readiness`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok && !isCancelled) {
+          const data = await res.json();
+          setOptimizationSummary(data);
+        }
+      } catch (err) {
+        console.error('[ProfileScreen] Error fetching optimization summary:', err);
+      }
+    };
+    fetchSummary();
+
+    return () => { isCancelled = true; };
+  }, [isFocused]); // Removed getToken - it's stable from useAuth
+
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [showDevOptions, setShowDevOptions] = useState(false);
   const [devMode, setDevMode] = useState(false);
@@ -233,11 +358,6 @@ const ProfileScreen = () => {
   const [showCreatePool, setShowCreatePool] = useState(false);
   const [showManagePool, setShowManagePool] = useState(false);
   const [selectedPoolId, setSelectedPoolId] = useState<string | null>(null);
-
-  type ShopifyFlowStep = 'idle' | 'enterInfo'; // Simplified states
-  const [pastedShopifyUrl, setPastedShopifyUrl] = useState('');
-  const [manualShopName, setManualShopName] = useState('');
-  // --- END REVISED Guided Shopify Flow State ---
 
   const { user } = useUser();
   const [planName, setPlanName] = useState('');
@@ -267,27 +387,46 @@ const ProfileScreen = () => {
         const e = await fetchUserEntitlements();
         setEntitlements(e);
 
-        // Load Live Stats
-        const { count: prodCount } = await supabase
-          .from('ProductVariants')
-          .select('*', { count: 'exact', head: true })
-          .eq('UserId', user.id);
+        // Load Live Stats based on current org's connections
+        let prodCount = 0;
+        let locCount = 0;
 
-        const { count: locCount } = await supabase
-          .from('PlatformLocations')
-          .select('*', { count: 'exact', head: true })
-          .eq('UserId', user.id);
+        if (currentOrg?.id) {
+          // Count products via platform connections that belong to this org
+          const { data: connections } = await supabase
+            .from('PlatformConnections')
+            .select('Id')
+            .eq('OrgId', currentOrg.id);
+
+          if (connections && connections.length > 0) {
+            const connectionIds = connections.map(c => c.Id);
+
+            // Count products (via PlatformProducts linked to connections)
+            const { count: pCount } = await supabase
+              .from('PlatformProducts')
+              .select('*', { count: 'exact', head: true })
+              .in('PlatformConnectionId', connectionIds);
+            prodCount = pCount || 0;
+
+            // Count locations
+            const { count: lCount } = await supabase
+              .from('PlatformLocations')
+              .select('*', { count: 'exact', head: true })
+              .in('PlatformConnectionId', connectionIds);
+            locCount = lCount || 0;
+          }
+        }
 
         setStats({
-          products: prodCount || 0,
-          locations: locCount || 0
+          products: prodCount,
+          locations: locCount
         });
 
       } catch (e) {
         logError('profile_load_data', 'Failed to load profile data', { error: String(e) });
       }
     })();
-  }, [user]);
+  }, [user, currentOrg?.id]);
 
   // Auto-switch away from auto-created personal workspaces to real organization
   useEffect(() => {
@@ -494,8 +633,63 @@ const ProfileScreen = () => {
 
   // --- GLOBAL OVERLAY: wire platform start connect ---
   const overlay = usePlatformPickerOverlay();
-  const handleStartConnectPlatform = useCallback((platform: string) => {
-    if (platform === 'shopify') {
+  const handleStartConnectPlatform = useCallback(async (platform: string) => {
+    if (platform === 'csv') {
+      // Handle CSV import
+      try {
+        overlay.hide();
+        const result = await DocumentPicker.getDocumentAsync({
+          type: ['text/csv', 'text/comma-separated-values', 'application/csv', '*/*'],
+          copyToCacheDirectory: true,
+        });
+
+        if (result.canceled || !result.assets?.[0]) {
+          console.log('[ProfileScreen] CSV picking cancelled');
+          return;
+        }
+
+        const file = result.assets[0];
+        console.log('[ProfileScreen] CSV selected:', file.name);
+
+        // Read file contents using legacy FileSystem API
+        const fileContent = await FileSystem.readAsStringAsync(file.uri);
+
+        // Simple CSV parsing
+        const lines = fileContent.split('\n').filter((line: string) => line.trim());
+        if (lines.length < 2) {
+          Alert.alert('Invalid CSV', 'The file must have headers and at least one data row.');
+          return;
+        }
+
+        // Parse headers (first line)
+        const headers = lines[0].split(',').map((h: string) => h.trim().replace(/^"|"$/g, ''));
+
+        // Parse data rows
+        const csvData = lines.slice(1).map((line: string) => {
+          const values = line.split(',').map((v: string) => v.trim().replace(/^"|"$/g, ''));
+          const row: Record<string, string> = {};
+          headers.forEach((header: string, i: number) => {
+            row[header] = values[i] || '';
+          });
+          return row;
+        });
+
+        // Get sample row for preview
+        const sampleRow = csvData[0] || {};
+
+        console.log('[ProfileScreen] Parsed CSV:', { headers, rowCount: csvData.length });
+
+        // Navigate to column mapping screen
+        navigation.navigate('CSVColumnMapping' as any, {
+          csvHeaders: headers,
+          csvData,
+          sampleRow,
+        });
+      } catch (error) {
+        console.error('[ProfileScreen] CSV import error:', error);
+        Alert.alert('Import Error', 'Failed to read the CSV file. Please try again.');
+      }
+    } else if (platform === 'shopify') {
       setShopifyFlowStep('enterInfo');
       setPastedShopifyUrl('');
       setManualShopName('');
@@ -516,16 +710,22 @@ const ProfileScreen = () => {
     } else {
       Alert.alert('Connect', `Connect logic for ${platform} not implemented yet.`);
     }
-  }, [setShopifyFlowStep, setPastedShopifyUrl, setManualShopName]);
+  }, [setShopifyFlowStep, setPastedShopifyUrl, setManualShopName, navigation]);
+
+  // Use a ref to hold the handler to avoid infinite loop
+  const handleStartConnectRef = React.useRef(handleStartConnectPlatform);
+  handleStartConnectRef.current = handleStartConnectPlatform;
 
   useEffect(() => {
     console.log('[ProfileScreen] Setting up overlay for screen');
-    overlay.enableForScreen(handleStartConnectPlatform);
+    // Use a stable wrapper that calls the ref
+    const stableHandler = (platform: string) => handleStartConnectRef.current(platform);
+    overlay.enableForScreen(stableHandler);
     return () => {
       console.log('[ProfileScreen] Cleaning up overlay for screen');
       overlay.disableForScreen();
     };
-  }, [overlay]); // Remove handleStartConnectPlatform dependency to prevent re-runs
+  }, []); // Empty deps - only run once on mount
 
   // Auto-open overlay if coming from onboarding
   useEffect(() => {
@@ -1100,7 +1300,7 @@ const ProfileScreen = () => {
   };
   // --- END Square Connection Logic ---
 
-  // --- Facebook Connection Logic (Simplified) ---
+  // --- Facebook Connection Logic ---
   const handleFacebookConnect = async () => {
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -1110,20 +1310,49 @@ const ProfileScreen = () => {
       }
 
       const finalRedirectUri = 'anorhaapp://auth-callback';
-      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/facebook/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
+      const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
 
-      console.log("[ProfileScreen] Facebook Connect: Starting flow...");
-      await WebBrowser.openAuthSessionAsync(backendAuthUrl, finalRedirectUri);
+      // Build the auth URL - now passing finalRedirectUri so backend knows where to return the user
+      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/facebook/login?userId=${user.id}&finalRedirectUri=${encodedFinalRedirectUri}`;
 
-      // Refresh connections - App handles deep link too
-      await fetchConnections();
+      console.log(`[ProfileScreen] Facebook Connect: Opening in ${USE_EXTERNAL_BROWSER_FOR_FACEBOOK ? 'External' : 'Internal'} browser...`);
+
+      if (USE_EXTERNAL_BROWSER_FOR_FACEBOOK) {
+        // Option A: Open in Chrome/Safari - user must return manually OR reliance on custom scheme redirect
+        const supported = await Linking.canOpenURL(backendAuthUrl);
+        if (supported) {
+          await Linking.openURL(backendAuthUrl);
+          Alert.alert(
+            "Complete in Browser",
+            "Complete the Facebook login in your browser. When done, you'll be redirected back to the app.",
+            [{ text: "OK" }]
+          );
+        } else {
+          Alert.alert("Error", "Could not open Facebook login. Please try again.");
+        }
+      } else {
+        // Option B: Open in System-native Auth Session (Better UX, returns automatically)
+        const result = await WebBrowser.openAuthSessionAsync(
+          backendAuthUrl,
+          finalRedirectUri
+        );
+
+        console.log('[ProfileScreen] Facebook Auth Result:', result.type);
+        if (result.type === 'cancel' || result.type === 'dismiss') {
+          // User cancelled
+        } else if (result.type !== 'success') {
+          console.warn('[ProfileScreen] Facebook Auth Result type:', result.type);
+        }
+      }
 
     } catch (error: unknown) {
-      console.error("[ProfileScreen] Facebook Connect: General error:", error);
-      Alert.alert("Error", "Failed to initiate Facebook connection.");
+      console.error("[ProfileScreen] Facebook Connect Error:", error);
+      Alert.alert("Error", "Failed to open Facebook login. Please try again.");
     }
   };
   // --- END Facebook Connection Logic ---
+
+
 
   // --- NEW: Handler for Review & Sync ---
   const handleReviewAndSync = (connectionId: string, platformName: string) => {
@@ -1222,7 +1451,7 @@ const ProfileScreen = () => {
     },
     {
       icon: 'help-circle',
-      title: 'Give Feedback',
+      title: 'Please Give Feedback',
       onPress: async () => {
         await WebBrowser.openBrowserAsync('https://anorha.userjot.com/');
       }
@@ -1355,55 +1584,8 @@ const ProfileScreen = () => {
     }
   };
 
-  // Add this to ProfileScreen or AppNavigator useEffect on startup
-  const syncUserOrgs = async () => {
-    try {
-      const token = await ensureSupabaseJwt();
-
-      // Call sync endpoint to create OrgMemberships from Clerk teams
-      const response = await fetch(
-        'https://api.sssync.app/api/organizations/sync-clerk-teams',
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-
-      if (response.ok) {
-        console.log('Synced Clerk teams with orgs');
-
-        // 2. FORCE BACKEND TO FIX ACTIVE ORG & SYNC LOCAL STATE
-        const activeRes = await fetch(`${SSSYNC_API_BASE_URL}/api/organizations/me/active`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (activeRes.ok) {
-          const activeData = await activeRes.json();
-          // If backend says we should be on a different org than what we have, switch!
-          if (activeData.activeOrg && activeData.activeOrg.Id !== currentOrg?.id && setOrg) {
-            console.log('[ProfileScreen] Backend corrected active org to:', activeData.activeOrg.Name);
-            setOrg({
-              id: activeData.activeOrg.Id,
-              name: activeData.activeOrg.Name,
-              role: activeData.activeOrg.userRole || 'org:admin'
-            });
-          }
-        }
-
-        // Then reload orgs in OrgSwitcher or trigger refresh
-        setRefreshTrigger(prev => prev + 1);
-      }
-    } catch (e) {
-      console.error('Error syncing user orgs:', e);
-    }
-  };
-
-  useEffect(() => {
-    syncUserOrgs();
-  }, []);
+  // Note: Clerk team sync is now handled automatically via backend webhooks
+  // The sync-clerk-teams endpoint was removed - orgs are synced on login
 
   // Clean up the subscription when the component unmounts
   useEffect(() => {
@@ -1425,6 +1607,7 @@ const ProfileScreen = () => {
       contentContainerStyle={styles.scrollViewContent}
       showsVerticalScrollIndicator={false}
     >
+
       {/*
       <OrgSwitcher 
         onOrgChanged={(orgId, orgName) => {
@@ -1665,9 +1848,7 @@ const ProfileScreen = () => {
 
                                 {connection.LastSyncSuccessAt && (
                                   <Text style={styles.lastSyncText}>
-                                    Last synced: {new Date(
-                                      connection.LastSyncSuccessAt
-                                    ).toLocaleString()}
+                                    Last synced: {formatSyncDate(connection.LastSyncSuccessAt)}
                                   </Text>
                                 )}
                               </View>
@@ -1721,69 +1902,85 @@ const ProfileScreen = () => {
                               </TouchableOpacity>
                             )}
 
-                            {/* For error state, show Reconnect (credentials) or Fix & Resume (general) */}
-                            {connection.Status === CONNECTION_STATUS.ERROR && (
-                              <View style={{ flexDirection: 'row', gap: 8 }}>
-                                {/* Reconnect button for credential issues */}
-                                {(platformConfig.key === 'square' || platformConfig.key === 'shopify') && (
-                                  <TouchableOpacity
-                                    style={[styles.actionButton, { backgroundColor: theme.colors.error + '15' }]}
-                                    onPress={() => handleReconnectPlatform(connection.Id, platformConfig.key, platformConfig.name)}
-                                  >
-                                    <Icon name="link-variant" size={18} color={theme.colors.error} />
-                                    <Text style={[styles.actionButtonText, { color: theme.colors.error }]}>Reconnect</Text>
-                                  </TouchableOpacity>
-                                )}
-                                {/* General Fix & Resume for other issues */}
-                                <TouchableOpacity
-                                  style={[styles.actionButton, { backgroundColor: theme.colors.warning + '15' }]}
-                                  onPress={() => fixAndResumeConnection(connection.Id, platformConfig.name)}
-                                >
-                                  <Icon name="refresh" size={18} color={theme.colors.warning} />
-                                  <Text style={[styles.actionButtonText, { color: theme.colors.warning }]}>Fix & Resume</Text>
-                                </TouchableOpacity>
-                              </View>
-                            )}
+                            {/* For error state, show context-aware action */}
+                            {connection.Status === CONNECTION_STATUS.ERROR && (() => {
+                              const recommended = getRecommendedAction(connection, platformConfig.key);
 
-                            {/* Active connections: Manage + Reconnect option for Square/Shopify */}
-                            {connection.Status === CONNECTION_STATUS.ACTIVE && (
-                              <View style={{ flexDirection: 'row', gap: 8 }}>
-                                <TouchableOpacity
-                                  style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
-                                  onPress={() =>
+                              const handleAction = () => {
+                                switch (recommended.action) {
+                                  case 'reconnect':
+                                    handleReconnectPlatform(connection.Id, platformConfig.key, platformConfig.name);
+                                    break;
+                                  case 'rescan':
+                                    startPlatformScan(connection.Id, platformConfig.name, true);
+                                    break;
+                                  case 'fix_resume':
+                                    fixAndResumeConnection(connection.Id, platformConfig.name);
+                                    break;
+                                  case 'manage':
                                     navigation.navigate('MappingReview', {
                                       connectionId: connection.Id,
                                       platformName: platformConfig.name,
-                                    })
-                                  }
+                                    });
+                                    break;
+                                }
+                              };
+
+                              return (
+                                <TouchableOpacity
+                                  style={[styles.actionButton, { backgroundColor: recommended.color + '15' }]}
+                                  onPress={handleAction}
                                 >
-                                  <Icon name="cog" size={18} color={theme.colors.primary} />
-                                  <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>
-                                    Manage
+                                  <Icon name={recommended.icon} size={18} color={recommended.color} />
+                                  <Text style={[styles.actionButtonText, { color: recommended.color }]}>
+                                    {recommended.label}
                                   </Text>
                                 </TouchableOpacity>
-                                {/* Reconnect option for Square/Shopify to refresh credentials */}
-                                {(platformConfig.key === 'square' || platformConfig.key === 'shopify') && (
-                                  <TouchableOpacity
-                                    style={[styles.actionButton, { backgroundColor: '#6B7280' + '15' }]}
-                                    onPress={() => handleReconnectPlatform(connection.Id, platformConfig.key, platformConfig.name)}
-                                  >
-                                    <Icon name="link-variant" size={18} color="#6B7280" />
-                                  </TouchableOpacity>
-                                )}
-                              </View>
+                              );
+                            })()}
+
+
+                            {/* Active connections: Manage (no reconnect in normal mode - moved to edit mode) */}
+                            {connection.Status === CONNECTION_STATUS.ACTIVE && (
+                              <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
+                                onPress={() =>
+                                  navigation.navigate('MappingReview', {
+                                    connectionId: connection.Id,
+                                    platformName: platformConfig.name,
+                                  })
+                                }
+                              >
+                                <Icon name="cog" size={18} color={theme.colors.primary} />
+                                <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>
+                                  Manage
+                                </Text>
+                              </TouchableOpacity>
                             )}
                           </View>
                         )}
-                        {/* Delete Button (Edit Mode) */}
+                        {/* Edit Mode: Refresh Login + Disconnect buttons */}
                         {isEditMode && (
-                          <TouchableOpacity
-                            style={styles.deleteButton}
-                            onPress={() => handleDisconnectPlatform(connection.Id, platformConfig.name)}
-                          >
-                            <Icon name="minus-circle-outline" size={24} color={theme.colors.error} />
-                            <Text style={{ color: "red", fontSize: 14 }}>Disconnect</Text>
-                          </TouchableOpacity>
+                          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                            {/* Refresh Login - for refreshing OAuth credentials */}
+                            {(platformConfig.key === 'square' || platformConfig.key === 'shopify') && (
+                              <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: theme.colors.primary + '10' }]}
+                                onPress={() => handleReconnectPlatform(connection.Id, platformConfig.key, platformConfig.name)}
+                              >
+                                <Icon name="link-variant" size={18} color={theme.colors.primary} />
+                                <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Reconnect</Text>
+                              </TouchableOpacity>
+                            )}
+                            {/* Disconnect */}
+                            <TouchableOpacity
+                              style={styles.deleteButton}
+                              onPress={() => handleDisconnectPlatform(connection.Id, platformConfig.name)}
+                            >
+                              <Icon name="minus-circle-outline" size={24} color={theme.colors.error} />
+                              <Text style={{ color: "red", fontSize: 14 }}>Disconnect</Text>
+                            </TouchableOpacity>
+                          </View>
                         )}
                       </View>
                     );
@@ -1799,7 +1996,7 @@ const ProfileScreen = () => {
               {/* --- END ADJUSTED CONDITION --- */}
               {/* Always render Add Connection Button (unless error/loading) */}
               <Button
-                title="Add Connection"
+                title="Import Inventory/Connect Platform"
                 onPress={() => {
                   console.log('[ProfileScreen] Add Connection button pressed');
                   console.log('[ProfileScreen] Before show - overlay.visible:', overlay.visible);
@@ -1815,6 +2012,46 @@ const ProfileScreen = () => {
           {/* --- END UPDATED Integrations Rendering --- */}
         </Card>
       </Animated.View>
+
+
+
+      {/* Optimize Listings Card - between Locations and Settings 
+      <Animated.View entering={FadeInUp.delay(320).duration(500)}>
+        <TouchableOpacity
+          style={styles.optimizeCard}
+          onPress={() => navigation.navigate('BackfillOptimizer' as any)}
+          activeOpacity={0.7}
+        >
+          <View style={styles.optimizeHeader}>
+            <LinearGradient
+              colors={['#8cc63f', '#70a826']}
+              style={styles.optimizeIconBadge}
+            >
+              <Icon name="tune" size={20} color="#fff" />
+            </LinearGradient>
+            <View style={styles.optimizeTextContainer}>
+              <Text style={styles.optimizeTitle}>Optimize Listings</Text>
+              <Text style={styles.optimizeSubtitle}>Fill missing data for platforms</Text>
+            </View>
+            <Icon name="chevron-right" size={24} color="#9ca3af" />
+          </View>
+          <View style={styles.streakBarContainer}>
+            <View style={styles.streakBar}>
+              <View style={[styles.streakFill, {
+                width: `${optimizationSummary && optimizationSummary.total > 0
+                  ? Math.round((optimizationSummary.fullyReady / optimizationSummary.total) * 100)
+                  : 0}%`
+              }]} />
+            </View>
+            <Text style={styles.streakText}>
+              {optimizationSummary && optimizationSummary.total > 0
+                ? Math.round((optimizationSummary.fullyReady / optimizationSummary.total) * 100)
+                : 0}% complete
+            </Text>
+          </View>
+        </TouchableOpacity>
+      </Animated.View>
+      */}
 
       {/* Locations & Pools Card (v2) - render unconditionally; component resolves orgId */}
       <Animated.View entering={FadeInUp.delay(250).duration(500)}>
@@ -1835,8 +2072,6 @@ const ProfileScreen = () => {
           )}
         </Card>
       </Animated.View>
-
-
 
       {/* Menu Card */}
       <Animated.View entering={FadeInUp.delay(400).duration(500)}>
@@ -2952,6 +3187,71 @@ const styles = StyleSheet.create({
   manageBtnText: {
     fontSize: 13,
     fontWeight: '600',
+  },
+  // Optimize Listings styles
+  optimizeCard: {
+    width: '100%',
+    backgroundColor: '#fff',
+    marginHorizontal: 0,
+    marginBottom: 16,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#ffffff68',
+    shadowColor: '#8cc63f',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  optimizeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  optimizeIconBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: '#70a826ff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  optimizeTextContainer: {
+    flex: 1,
+  },
+  optimizeTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  optimizeSubtitle: {
+    fontSize: 13,
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  streakBarContainer: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  streakBar: {
+    flex: 1,
+    height: 6,
+    backgroundColor: '#e5e7eb',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  streakFill: {
+    height: '100%',
+    backgroundColor: '#8cc63f',
+    borderRadius: 3,
+  },
+  streakText: {
+    fontSize: 12,
+    color: '#6b7280',
+    fontWeight: '500',
   },
 });
 

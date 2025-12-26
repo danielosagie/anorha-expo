@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { getLegendStateObservables } from '../utils/SupaLegend';
 import { ProductVariant } from '../utils/SupaLegend';
@@ -26,25 +26,31 @@ export function useProductVariantRealtime() {
   // Track pending updates to batch them
   const pendingUpdatesRef = useRef<Map<string, ProductVariant>>(new Map());
   const flushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
+
+  // Counter that increments on each real-time update to trigger re-renders in consuming components
+  const [updateCounter, setUpdateCounter] = useState(0);
+
   useEffect(() => {
     console.log('[Real-time] Setting up ProductVariant subscription...');
-    
+
     // Batch updates to avoid rapid re-renders
     const flushUpdates = () => {
       const observables = getLegendStateObservables();
       if (!observables?.productVariants$) return;
-      
+
       const updates = pendingUpdatesRef.current;
       if (updates.size === 0) return;
-      
+
       console.log(`[Real-time] Flushing ${updates.size} batched updates`);
       updates.forEach((variant, id) => {
         observables.productVariants$[id].set(variant);
       });
       updates.clear();
+
+      // Increment counter to trigger re-renders in consuming components
+      setUpdateCounter(c => c + 1);
     };
-    
+
     // Subscribe to ALL changes in ProductVariants table
     const subscription = supabase
       .channel('product-variants-all')
@@ -59,7 +65,7 @@ export function useProductVariantRealtime() {
           const variantId = payload.new?.Id || payload.old?.Id;
           const variantType = (payload.new as any)?.VariantType || (payload.old as any)?.VariantType;
           const isArchived = (payload.new as any)?.IsArchived;
-          
+
           console.log('[Real-time] ProductVariant change detected:', {
             eventType: payload.eventType,
             variantId,
@@ -78,44 +84,47 @@ export function useProductVariantRealtime() {
             // New variant inserted - add to legend-state
             const newVariant = payload.new as ProductVariant;
             console.log('[Real-time] ✅ INSERT: Adding new variant', newVariant.Id, 'type:', variantType);
-            
+
             // Batch the update
             pendingUpdatesRef.current.set(newVariant.Id, newVariant);
-            
+
             // Schedule flush
             if (flushTimeoutRef.current) clearTimeout(flushTimeoutRef.current);
             flushTimeoutRef.current = setTimeout(flushUpdates, 100);
-            
+
           } else if (payload.eventType === 'UPDATE') {
             // Variant updated - merge into legend-state (preserve existing fields not in update)
             const updatedVariant = payload.new as ProductVariant;
             console.log('[Real-time] ✅ UPDATE: Updating variant', updatedVariant.Id, 'type:', variantType);
-            
+
             // SOFT DELETE HANDLING: If variant was archived, keep it but mark as archived
             // The UI will filter it out but we don't remove it from state (allows undo)
             if (isArchived) {
               console.log('[Real-time] 📦 Variant archived (soft delete):', updatedVariant.Id);
             }
-            
+
             // Get existing variant and merge (to preserve any local-only fields)
             const existingVariant = observables.productVariants$[updatedVariant.Id].get();
-            const mergedVariant = existingVariant 
+            const mergedVariant = existingVariant
               ? { ...existingVariant, ...updatedVariant }
               : updatedVariant;
-            
+
             // Batch the update
             pendingUpdatesRef.current.set(updatedVariant.Id, mergedVariant);
-            
+
             // Schedule flush
             if (flushTimeoutRef.current) clearTimeout(flushTimeoutRef.current);
             flushTimeoutRef.current = setTimeout(flushUpdates, 100);
-            
+
           } else if (payload.eventType === 'DELETE') {
             // Variant hard-deleted - remove from legend-state
             // Note: We prefer soft deletes (IsArchived), so hard deletes should be rare
             const deletedVariant = payload.old as ProductVariant;
             console.log('[Real-time] ⚠️ DELETE: Removing variant (hard delete)', deletedVariant.Id);
             observables.productVariants$[deletedVariant.Id].delete();
+
+            // Trigger re-render for DELETE too
+            setUpdateCounter(c => c + 1);
           }
         }
       )
@@ -138,6 +147,9 @@ export function useProductVariantRealtime() {
       subscription.unsubscribe();
     };
   }, []);
+
+  // Return the updateCounter so consumers can include it in their dependencies
+  return { updateCounter };
 }
 
 /**
@@ -202,9 +214,12 @@ export function useProductVariantRealtimeForProduct(productId?: string) {
  * - Syncing inventory across multiple users viewing the same product
  */
 export function useInventoryLevelsRealtime() {
+  // Counter that increments on each real-time update to trigger re-renders
+  const [updateCounter, setUpdateCounter] = useState(0);
+
   useEffect(() => {
     console.log('[Real-time] Setting up InventoryLevels subscription...');
-    
+
     const subscription = supabase
       .channel('inventory-levels-all')
       .on(
@@ -218,7 +233,7 @@ export function useInventoryLevelsRealtime() {
           const levelId = payload.new?.Id || payload.old?.Id;
           const variantId = payload.new?.ProductVariantId || payload.old?.ProductVariantId;
           const quantity = payload.new?.Quantity;
-          
+
           console.log('[Real-time] InventoryLevel change:', {
             eventType: payload.eventType,
             levelId,
@@ -240,6 +255,9 @@ export function useInventoryLevelsRealtime() {
             console.log('[Real-time] ✅ Removing inventory level', levelId);
             observables.inventoryLevels$[levelId].delete();
           }
+
+          // Increment counter to trigger re-renders
+          setUpdateCounter(c => c + 1);
         }
       )
       .subscribe(
@@ -257,5 +275,8 @@ export function useInventoryLevelsRealtime() {
       subscription.unsubscribe();
     };
   }, []);
+
+  // Return the updateCounter so consumers can include it in their dependencies
+  return { updateCounter };
 }
 

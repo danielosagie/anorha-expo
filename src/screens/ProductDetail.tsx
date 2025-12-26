@@ -111,6 +111,69 @@ function getPlatformLogoComponent(platformType?: string) {
   return found ? found[1] : null;
 }
 
+/**
+ * CRITICAL FIX: Clean displayedPlatforms data before save to prevent cross-platform location contamination.
+ * When editing on 'all' tab, inventoryByLocation gets merged across platforms.
+ * This function filters each platform's variants to ONLY include locations that belong to that platform.
+ */
+function cleanPlatformDataForSave(displayedPlatforms: Record<string, any>): Record<string, any> {
+  const cleanedData: Record<string, any> = {};
+
+  for (const [platformKey, platformData] of Object.entries(displayedPlatforms)) {
+    if (!platformData) continue;
+
+    // Deep clone to avoid mutating original
+    const cleanedPlatform = JSON.parse(JSON.stringify(platformData));
+
+    // Get the set of valid location IDs for this platform from its locations array
+    const platformLocationIds = new Set<string>();
+    if (Array.isArray(cleanedPlatform.locations)) {
+      cleanedPlatform.locations.forEach((loc: any) => {
+        if (loc?.id) platformLocationIds.add(loc.id);
+      });
+    }
+
+    // Filter variants' inventoryByLocation to only include this platform's locations
+    if (Array.isArray(cleanedPlatform.variants)) {
+      cleanedPlatform.variants = cleanedPlatform.variants.map((variant: any) => {
+        if (!variant.inventoryByLocation) return variant;
+
+        const filteredInventory: Record<string, any> = {};
+        for (const [locId, locData] of Object.entries(variant.inventoryByLocation)) {
+          // If we have a locations array, use it as source of truth
+          if (platformLocationIds.size > 0) {
+            if (platformLocationIds.has(locId)) {
+              filteredInventory[locId] = locData;
+            } else {
+              console.log(`[cleanPlatformDataForSave] Filtered out location ${locId} from ${platformKey} - not in platform's locations`);
+            }
+          } else {
+            // Fallback: Use pattern matching for platform detection
+            const isShopifyLoc = locId.includes('gid://shopify/');
+            const isLikelySquareLoc = /^[A-Z0-9]{8,}$/.test(locId) && !locId.includes('gid://');
+
+            if (platformKey === 'shopify' && !isShopifyLoc && isLikelySquareLoc) {
+              console.log(`[cleanPlatformDataForSave] Filtered Square location ${locId} from Shopify platform`);
+              continue;
+            }
+            if (platformKey === 'square' && isShopifyLoc) {
+              console.log(`[cleanPlatformDataForSave] Filtered Shopify location ${locId} from Square platform`);
+              continue;
+            }
+            filteredInventory[locId] = locData;
+          }
+        }
+
+        return { ...variant, inventoryByLocation: filteredInventory };
+      });
+    }
+
+    cleanedData[platformKey] = cleanedPlatform;
+  }
+
+  return cleanedData;
+}
+
 const ProductDetailScreen = observer(
   ({ route, navigation }: { route: ProductDetailRouteProps; navigation: ProductDetailNavigationProps }) => {
     const theme = useTheme();
@@ -156,7 +219,7 @@ const ProductDetailScreen = observer(
     // Track when we just saved to prevent useEffect from wiping state
     // CRITICAL: Use timestamp-based blocking instead of boolean to prevent race conditions
     const justSavedTimestampRef = useRef<number>(0);
-    const SAVE_BLOCK_WINDOW_MS = 2000; // Block realtime updates for 2 seconds after save
+    const SAVE_BLOCK_WINDOW_MS = 5000; // Block realtime updates for 5 seconds after save (prevents self-triggered banner)
 
     // Helper to check if we're in the save blocking window
     const isInSaveBlockingWindow = useCallback(() => {
@@ -226,6 +289,30 @@ const ProductDetailScreen = observer(
       PlatformLocationId: string;
       Name: string | null;
     }>>([]);
+
+    // 🟢 EXTERNAL UPDATES: Track which fields changed from external sources for green border highlighting
+    const [externalUpdates, setExternalUpdates] = useState<Record<string, { value?: any; updatedAt: number }>>({});
+
+    // Auto-clear external update highlights after 5 seconds
+    useEffect(() => {
+      if (Object.keys(externalUpdates).length === 0) return;
+
+      const timer = setTimeout(() => {
+        const now = Date.now();
+        setExternalUpdates(prev => {
+          const filtered: Record<string, { value?: any; updatedAt: number }> = {};
+          for (const [key, update] of Object.entries(prev)) {
+            // Keep updates that are less than 5 seconds old
+            if (now - update.updatedAt < 5000) {
+              filtered[key] = update;
+            }
+          }
+          return filtered;
+        });
+      }, 5000);
+
+      return () => clearTimeout(timer);
+    }, [externalUpdates]);
 
     // Keep ref in sync with state
     useEffect(() => {
@@ -836,6 +923,9 @@ const ProductDetailScreen = observer(
         const canonical = displayedPlatforms[canonicalKey] || {};
 
         // Prepare update data - using the correct API structure from the backend
+        // CRITICAL FIX: Clean platform data to remove cross-platform location contamination
+        const cleanedPlatformData = cleanPlatformDataForSave(displayedPlatforms);
+
         const updateData = {
           Title: canonical.title || formData.Title,
           Description: canonical.description || formData.Description,
@@ -848,8 +938,9 @@ const ProductDetailScreen = observer(
           RequiresShipping: canonical.requiresShipping !== undefined ? canonical.requiresShipping : formData.RequiresShipping,
           IsTaxable: formData.IsTaxable,
           TaxCode: formData.TaxCode,
-          // IMPORTANT: Include platform-specific data (variants, options, tags, etc)
-          PlatformSpecificData: displayedPlatforms,
+          // IMPORTANT: Include CLEANED platform-specific data (variants, options, tags, etc)
+          // This prevents cross-platform location contamination from 'all' tab edits
+          PlatformSpecificData: cleanedPlatformData,
           Tags: canonical.tags || [],
           Vendor: canonical.vendor,
           ProductType: canonical.productType,
@@ -1220,7 +1311,7 @@ const ProductDetailScreen = observer(
           .from('ProductVariants')
           .select('*')
           .eq('Id', productId)
-          .single()
+          .maybeSingle()  // Use maybeSingle to avoid error when product doesn't exist
           .then(({ data, error }) => {
             if (data) {
               console.log('[ProductDetail] Fetched item from Supabase:', data.Id);
@@ -1238,9 +1329,15 @@ const ProductDetailScreen = observer(
                 IsTaxable: data.IsTaxable !== false,
                 TaxCode: data.TaxCode || '',
               });
-            } else {
-              console.error('[ProductDetail] Failed to fetch item:', error);
+            } else if (error) {
+              console.error('[ProductDetail] Database error fetching item:', error);
               setDetailedItem(null);
+              Alert.alert('Error', 'Failed to load product details. Please try again.');
+            } else {
+              // No data and no error means product doesn't exist
+              console.warn('[ProductDetail] Product not found with ID:', productId);
+              setDetailedItem(null);
+              Alert.alert('Product Not Found', 'This product may still be syncing or no longer exists.');
             }
             setIsLoading(false);
           });
@@ -1810,7 +1907,42 @@ const ProductDetailScreen = observer(
                   return prev;
                 }
 
+                // 🟢 TRACK EXTERNAL UPDATES: Record which fields changed for green border highlighting
+                const now = Date.now();
+                const fieldChanges: Record<string, { value?: any; updatedAt: number }> = {};
+
+                if (prev.Title !== updatedProduct.Title && updatedProduct.Title !== undefined) {
+                  fieldChanges['title'] = { value: updatedProduct.Title, updatedAt: now };
+                }
+                if (prev.Description !== updatedProduct.Description && updatedProduct.Description !== undefined) {
+                  fieldChanges['description'] = { value: updatedProduct.Description, updatedAt: now };
+                }
+                if (prev.Price !== updatedProduct.Price && updatedProduct.Price !== undefined) {
+                  fieldChanges['price'] = { value: updatedProduct.Price, updatedAt: now };
+                }
+                if (prev.Sku !== updatedProduct.Sku && updatedProduct.Sku !== undefined) {
+                  fieldChanges['sku'] = { value: updatedProduct.Sku, updatedAt: now };
+                }
+                if (prev.Barcode !== updatedProduct.Barcode && updatedProduct.Barcode !== undefined) {
+                  fieldChanges['barcode'] = { value: updatedProduct.Barcode, updatedAt: now };
+                }
+                if (prev.Weight !== updatedProduct.Weight && updatedProduct.Weight !== undefined) {
+                  fieldChanges['weight'] = { value: updatedProduct.Weight, updatedAt: now };
+                }
+
+                if (Object.keys(fieldChanges).length > 0) {
+                  console.log('[ProductDetail] 🟢 External field changes detected:', Object.keys(fieldChanges));
+                  setExternalUpdates(prevUpdates => ({ ...prevUpdates, ...fieldChanges }));
+                  // Show banner only when we have actual field changes from external source
+                  showBanner('Product updated from external source');
+                }
+
                 console.log('[ProductDetail] ✅ Applying realtime update (merging to preserve nested data)');
+                console.log('[ProductDetail] REALTIME CHANGES:', {
+                  title: { old: prev.Title, new: updatedProduct.Title },
+                  price: { old: prev.Price, new: updatedProduct.Price },
+                  sku: { old: prev.Sku, new: updatedProduct.Sku },
+                });
 
                 // ✅ MERGE: Keep existing nested data (ImageUrls, Options, Metadata, etc.)
                 // Only take scalar fields from the realtime update, preserve complex objects from prev
@@ -1838,8 +1970,25 @@ const ProductDetailScreen = observer(
                 } as ProductVariant;
               });
 
-              // Show non-blocking notification
-              showBanner('Product updated from external source');
+              // ⚡ FIX: Also update displayedPlatforms to reflect realtime changes in the UI
+              // Without this, the ListingEditorForm won't show the updated values
+              setDisplayedPlatforms(prev => {
+                if (!prev || Object.keys(prev).length === 0) return prev;
+
+                const updated = { ...prev };
+                // Update ALL platforms with the new canonical values
+                for (const platformKey of Object.keys(updated)) {
+                  updated[platformKey] = {
+                    ...updated[platformKey],
+                    title: updatedProduct.Title ?? updated[platformKey].title,
+                    description: updatedProduct.Description ?? updated[platformKey].description,
+                    price: updatedProduct.Price ?? updated[platformKey].price,
+                    sku: updatedProduct.Sku ?? updated[platformKey].sku,
+                  };
+                }
+                console.log('[ProductDetail] ✅ REALTIME: Also updated displayedPlatforms for UI refresh');
+                return updated;
+              });
             }
           }
         )
@@ -2167,7 +2316,40 @@ const ProductDetailScreen = observer(
                 // handler stored on closure
                 (ProductDetailScreen as any)._scannerResultHandler = onResult;
               }}
-              onOpenImageCapture={() => pickImagesFromLibrary()}
+              onOpenImageCapture={async (onResult) => {
+                try {
+                  const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                  if (status !== 'granted') {
+                    Alert.alert('Permission Required', 'Please grant camera roll permissions to add images.');
+                    return;
+                  }
+                  const result = await ImagePicker.launchImageLibraryAsync({
+                    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                    allowsMultipleSelection: true,
+                    quality: 0.8,
+                  });
+                  if (!result.canceled && result.assets) {
+                    setIsUploadingImages(true);
+                    const uploadedUrls = await uploadImagesToSupabase(result.assets);
+                    onResult(uploadedUrls);  // Call the callback with uploaded URLs
+                    await addImagesToProduct(uploadedUrls);
+                    setIsUploadingImages(false);
+                  }
+                } catch (error) {
+                  console.error('Error picking images:', error);
+                  setIsUploadingImages(false);
+                  Alert.alert('Error', 'Failed to pick images. Please try again.');
+                }
+              }}
+              // 🟢 EXTERNAL UPDATES: Pass field changes for green border highlighting
+              externalUpdates={externalUpdates}
+              onAdoptExternalUpdate={(key) => {
+                // Clear a specific field's external update when user acknowledges it
+                setExternalUpdates(prev => {
+                  const { [key]: _, ...rest } = prev;
+                  return rest;
+                });
+              }}
             />
 
             {/* Active Listings */}

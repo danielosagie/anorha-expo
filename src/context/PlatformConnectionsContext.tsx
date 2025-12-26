@@ -69,7 +69,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
           }
           setToggles(map);
         }
-      } catch {}
+      } catch { }
     } catch (e: any) {
       setError(e?.message || 'Failed to load connections');
       setConnections([]);
@@ -80,6 +80,32 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
 
   useEffect(() => {
     fetchConnections();
+
+    // Subscribe to realtime updates for PlatformConnections table
+    const channel = supabase
+      .channel('platform-connections-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Listen for INSERT, UPDATE, DELETE
+          schema: 'public',
+          table: 'PlatformConnections',
+        },
+        (payload) => {
+          console.log('[PlatformConnectionsContext] Realtime update received:', payload.eventType);
+          // Refetch all connections on any change
+          fetchConnections();
+        }
+      )
+      .subscribe((status) => {
+        console.log('[PlatformConnectionsContext] Realtime subscription status:', status);
+      });
+
+    // Cleanup subscription on unmount
+    return () => {
+      console.log('[PlatformConnectionsContext] Unsubscribing from realtime updates');
+      supabase.removeChannel(channel);
+    };
   }, [fetchConnections]);
 
   const connectedByPlatform = useMemo(() => {

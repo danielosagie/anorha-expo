@@ -1,8 +1,9 @@
 // sssync_mobile_test/src/context/OrgContext.tsx
 
-import React, { createContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useState, useEffect, useCallback, useContext } from 'react';
 import { useUser } from '@clerk/clerk-expo';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import { SessionContext } from './SessionContext';
 
 export interface UserOrgAccess {
   id: string;
@@ -26,12 +27,13 @@ export const OrgContext = createContext<OrgContextType>({
   availableOrgs: [],
   isLoading: true,
   error: null,
-  switchOrg: async () => {},
-  refreshOrgs: async () => {},
+  switchOrg: async () => { },
+  refreshOrgs: async () => { },
 });
 
 export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isSignedIn, user: clerkUser } = useUser();
+  const session = useContext(SessionContext);
   const [availableOrgs, setAvailableOrgs] = useState<UserOrgAccess[]>([]);
   const [currentOrg, setCurrentOrg] = useState<UserOrgAccess | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -40,44 +42,15 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const API_BASE = 'https://api.sssync.app';
 
   /**
-   * 1. Sync Clerk teams to DB first (backfill)
-   */
-  const syncClerkTeams = useCallback(async () => {
-    if (!isSignedIn || !clerkUser?.id) return;
-
-    try {
-      const token = await ensureSupabaseJwt();
-      const response = await fetch(`${API_BASE}/api/organizations/sync-clerk-teams`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Sync failed: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      console.log('[OrgContext] Clerk sync complete:', data);
-      return data;
-    } catch (err) {
-      console.error('[OrgContext] Clerk sync error:', err);
-      setError(err instanceof Error ? err.message : 'Sync failed');
-      throw err;
-    }
-  }, [isSignedIn, clerkUser?.id]);
-
-  /**
-   * 2. Fetch all available orgs for this user
+   * Fetch all available orgs for this user
+   * Note: Clerk team sync is now handled automatically via backend webhooks
    */
   const loadAvailableOrgs = useCallback(async () => {
     if (!isSignedIn) return;
 
     try {
       const token = await ensureSupabaseJwt();
-      
+
       // Fetch user's organizations from /api/organizations
       const orgsResponse = await fetch(`${API_BASE}/api/organizations`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -89,7 +62,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       let orgsData = await orgsResponse.json();
       console.log('[OrgContext] Orgs data:', orgsData);
-      
+
       // Parse response format: [{ Role, Organizations: { Id, Name, ... } }, ...]
       const formattedOrgs: UserOrgAccess[] = (orgsData || []).map((membership: any) => ({
         id: membership.Organizations.Id,
@@ -120,7 +93,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.log('[OrgContext] Set available orgs, count:', orgsWithActive.length);
 
       setAvailableOrgs(orgsWithActive);
-      
+
       // Set current org
       const active = orgsWithActive.find((org) => org.id === activeOrgId);
       if (active) {
@@ -186,28 +159,21 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [availableOrgs]);
 
   /**
-   * 4. Refresh orgs (re-fetch from API)
+   * Refresh orgs (re-fetch from API)
    */
   const refreshOrgs = useCallback(async () => {
     setIsLoading(true);
     try {
-      // Syncing Clerk teams is best-effort; backend webhooks already do this.
-      try {
-        await syncClerkTeams();
-      } catch (syncErr) {
-        console.warn('[OrgContext] Clerk sync is optional, continuing:', syncErr);
-      }
-      // Always reload orgs even if sync failed
       await loadAvailableOrgs();
     } catch (err) {
       console.error('[OrgContext] Refresh error:', err);
     } finally {
       setIsLoading(false);
     }
-  }, [syncClerkTeams, loadAvailableOrgs]);
+  }, [loadAvailableOrgs]);
 
   /**
-   * On app load: Sync Clerk teams, then load orgs
+   * On app load: Wait for session to be ready, then load orgs
    */
   useEffect(() => {
     if (!isSignedIn) {
@@ -217,8 +183,15 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
+    // Wait for SessionProvider to configure the Supabase bridge
+    if (!session?.ready) {
+      console.log('[OrgContext] Waiting for session.ready before loading orgs...');
+      return;
+    }
+
+    console.log('[OrgContext] Session ready, loading orgs...');
     refreshOrgs();
-  }, [isSignedIn, refreshOrgs]);
+  }, [isSignedIn, session?.ready, refreshOrgs]);
 
   return (
     <OrgContext.Provider

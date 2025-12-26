@@ -169,6 +169,22 @@ const VariantInventoryEditor: React.FC<VariantInventoryEditorProps> = ({
 }) => {
   const theme = useTheme();
 
+  /**
+   * Pass inventory updates directly to parent.
+   * NOTE: Global Shopify pricing is handled by the PARENT (ListingEditorForm.handleUpdateInventory)
+   * which already propagates price changes to ALL Shopify locations.
+   * We just pass through a single update - no need to call for each location here.
+   */
+  const handleInventoryUpdate = (
+    variantId: string,
+    locationId: string,
+    field: 'quantity' | 'price',
+    value: number
+  ) => {
+    // Just pass through - parent handles Shopify global pricing at ListingEditorForm lines 1502-1521
+    onUpdateInventory(variantId, locationId, field, value);
+  };
+
   // --- "All" Tab View ---
   // Shows ALL locations across ALL platforms with editable rows
   if (activeTab === 'all') {
@@ -200,7 +216,7 @@ const VariantInventoryEditor: React.FC<VariantInventoryEditorProps> = ({
                       platformKey={loc.platformKey}
                       quantity={data.quantity}
                       price={currentPrice}
-                      onUpdateInventory={onUpdateInventory}
+                      onUpdateInventory={handleInventoryUpdate}
                     />
                   );
                 })
@@ -253,9 +269,9 @@ const VariantInventoryEditor: React.FC<VariantInventoryEditorProps> = ({
                       isOverride={isOverride}
                       isGenerationMode={isGenerationMode}
 
-                      // Handlers
-                      onChangeQuantity={(q) => onUpdateInventory(variant.id, invKey, 'quantity', q)}
-                      onChangePrice={(p) => onUpdateInventory(variant.id, invKey, 'price', p)}
+                      // Handlers - Use internal wrapper for global Shopify pricing
+                      onChangeQuantity={(q) => handleInventoryUpdate(variant.id, invKey, 'quantity', q)}
+                      onChangePrice={(p) => handleInventoryUpdate(variant.id, invKey, 'price', p)}
                       onSelectImage={() => onSelectImage?.(variant.id)}
                     />
                   </View>

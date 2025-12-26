@@ -167,11 +167,11 @@ const BottomNav: React.FC<Props> = ({
         <View style={styles.platformPickerContainer}>
           <View style={{ flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 12, paddingVertical: 12 }}>
             <View style={styles.platformHeader}>
-              <Text style={styles.platformHeaderText}>Connect a Platform</Text>
+              <Text style={styles.platformHeaderText}>Which Platform To Add?</Text>
               <View style={{ width: 24 }} />
             </View>
             <View style={styles.platformGrid}>
-              {['shopify','amazon','ebay','clover','square','facebook'].map((p) => (
+              {['shopify', 'square', 'facebook'].map((p) => (
                 <PlatformButton
                   key={p}
                   platform={p}
@@ -182,6 +182,20 @@ const BottomNav: React.FC<Props> = ({
                 />
               ))}
             </View>
+            {/* Divider */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', width: '100%', marginVertical: 8 }}>
+              <View style={{ flex: 1, height: 1, backgroundColor: '#e5e7eb' }} />
+              <Text style={{ marginHorizontal: 12, color: '#9ca3af', fontSize: 13 }}>OR</Text>
+              <View style={{ flex: 1, height: 1, backgroundColor: '#e5e7eb' }} />
+            </View>
+            {/* CSV Import Button */}
+            <TouchableOpacity
+              style={styles.csvImportButton}
+              onPress={() => onStartConnect && onStartConnect('csv')}
+            >
+              <Icon name="table" size={20} color="#6b7280"/>
+              <Text style={styles.csvImportText}>Import from CSV</Text>
+            </TouchableOpacity>
           </View>
         </View>
       )}
@@ -324,6 +338,25 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 16,
     gap: 8
+  },
+  csvImportButton: {
+    flex: 1,
+    minWidth: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    gap: 8,
+  },
+  csvImportText: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#374151',
   },
 });
 

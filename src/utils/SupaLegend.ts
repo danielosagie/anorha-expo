@@ -70,7 +70,7 @@ let legendStateObservablesSingleton: LegendStateObservables | null = null;
 
 // Initialization function
 export async function initializeLegendState(
-    supabaseClient: SupabaseClient, 
+    supabaseClient: SupabaseClient,
     userIdToInitialize: string, // Changed from optional to required
     options: { force?: boolean } = {} // NEW: Add options with force flag
 ): Promise<LegendStateObservables> {
@@ -94,14 +94,20 @@ export async function initializeLegendState(
     const currentUserId = userIdToInitialize;
     console.log(`[SupaLegend] currentUserId set to: ${currentUserId}`);
 
-    // --- BEGIN DIAGNOSTIC: Clear persisted productVariants$ for this user ---
+    // --- BEGIN DIAGNOSTIC: Clear persisted caches for this user ---
     const productVariantsPersistKey = `productVariants_user_${currentUserId}_v2`;
+    const inventoryLevelsPersistKey = `inventoryLevels_user_${currentUserId}_v3`;
     try {
         console.log(`[SupaLegend - DIAGNOSTIC] Attempting to remove AsyncStorage key: ${productVariantsPersistKey}`);
         await AsyncStorage.removeItem(productVariantsPersistKey);
         console.log(`[SupaLegend - DIAGNOSTIC] Successfully removed AsyncStorage key: ${productVariantsPersistKey}`);
+
+        // CRITICAL: Also clear inventoryLevels cache to remove stale/corrupted data
+        console.log(`[SupaLegend - DIAGNOSTIC] Attempting to remove AsyncStorage key: ${inventoryLevelsPersistKey}`);
+        await AsyncStorage.removeItem(inventoryLevelsPersistKey);
+        console.log(`[SupaLegend - DIAGNOSTIC] Successfully removed AsyncStorage key: ${inventoryLevelsPersistKey}`);
     } catch (e) {
-        console.error(`[SupaLegend - DIAGNOSTIC] Error removing AsyncStorage key ${productVariantsPersistKey}:`, e);
+        console.error(`[SupaLegend - DIAGNOSTIC] Error removing AsyncStorage keys:`, e);
     }
     // --- END DIAGNOSTIC ---
 
@@ -109,13 +115,13 @@ export async function initializeLegendState(
         generateId,
     });
 
-    const syncBaseOptions: any = { 
+    const syncBaseOptions: any = {
         persist: {
             plugin: observablePersistAsyncStorage({
                 AsyncStorage,
             }),
         },
-        supabase: supabaseClient, 
+        supabase: supabaseClient,
         retry: {
             infinite: true,
         },
@@ -160,7 +166,7 @@ export async function initializeLegendState(
             collection: 'PlatformProductMappings',
             select: (from: any) => from.select('*, id:Id'),
             actions: ['read', 'create', 'update', 'delete'],
-            realtime: true, 
+            realtime: true,
             persist: {
                 name: `platformProductMappings_user_${currentUserId}_v2`,
                 retrySync: true,
@@ -174,7 +180,7 @@ export async function initializeLegendState(
             collection: 'ProductImages',
             select: (from: any) => from.select('*, id:Id'),
             actions: ['read', 'create', 'update', 'delete'],
-            realtime: true, 
+            realtime: true,
             persist: {
                 name: `productImages_user_${currentUserId}_v2`,
                 retrySync: true,
@@ -182,7 +188,7 @@ export async function initializeLegendState(
         })
     );
     console.log(`[SupaLegend] productImages$ observable configured for UserId: ${currentUserId} (indirectly, needs RLS/joins for proper filtering)`);
-    
+
     // Add onChange listener for productImages$ diagnostics
     productImages$.onChange(syncedData => {
         const dataCount = Object.keys(syncedData || {}).length;
@@ -199,9 +205,9 @@ export async function initializeLegendState(
             collection: 'InventoryLevels',
             select: (from: any) => from.select('*, id:Id'),
             actions: ['read', 'create', 'update', 'delete'],
-            realtime: true, 
+            realtime: true,
             persist: {
-                name: `inventoryLevels_user_${currentUserId}_v3`,
+                name: `inventoryLevels_user_${currentUserId}_v4`, // INCREMENTED: v3 -> v4 to clear corrupted cache
                 retrySync: true,
             },
         })
@@ -214,7 +220,7 @@ export async function initializeLegendState(
             select: (from: any) => from.select('*, id:Id'), // Alias Id to id
             filter: (query: any) => query.eq('SellerUserId', currentUserId), // Filter by SellerUserId
             actions: ['read', 'create', 'update', 'delete'],
-            realtime: { filter: `SellerUserId=eq.${currentUserId}` }, 
+            realtime: { filter: `SellerUserId=eq.${currentUserId}` },
             persist: {
                 name: `marketplaceListings_user_${currentUserId}_v2`,
                 retrySync: true,
@@ -224,7 +230,7 @@ export async function initializeLegendState(
     console.log(`[SupaLegend] marketplaceListings$ observable configured for UserId: ${currentUserId}`);
 
     // Placeholder for PlatformLocations observable - to be implemented with actual data fetching
-    const platformLocations$ = observable<Record<string, PlatformLocation>>({}); 
+    const platformLocations$ = observable<Record<string, PlatformLocation>>({});
     console.log(`[SupaLegend] platformLocations$ observable initialized (placeholder).`);
 
     // --- Activate observables to potentially kickstart sync --- 
@@ -304,7 +310,7 @@ export function deleteProductVariant(id: string) {
         console.warn(`ProductVariant with id ${id} not found for hard deletion.`);
         return;
     }
-    obs[id].delete(); 
+    obs[id].delete();
 }
 
 // Temporarily commented out code for other observables will be re-introduced into the initializeLegendState function later.
@@ -477,7 +483,7 @@ export interface MarketplaceListing {
     CreatedAt: string; // timestamptz
     UpdatedAt: string; // timestamptz
     // Helper field for aliasing, actual DB field is Id
-    id?: string; 
+    id?: string;
 }
 
 // Define PlatformLocation interface (based on discussion)
@@ -489,7 +495,7 @@ export interface PlatformLocation {
     IsPOS: boolean;
     // Potentially other fields like address, etc.
     // Helper field for aliasing, actual DB field is Id
-    id?: string; 
+    id?: string;
 }
 
 // Define PlatformConnection interface (based on sssync-db.md and usage)

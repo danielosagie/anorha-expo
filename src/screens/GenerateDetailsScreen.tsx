@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert, ActivityIndicator } from 'react-native';
 import { CameraView } from 'expo-camera';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -16,21 +16,13 @@ import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../
 import { Paths, Directory, File } from 'expo-file-system/next';
 import * as ImagePicker from 'expo-image-picker';
 import { useJobsOptional } from '../context/JobsContext';
+import PublishConfirmationModal from '../components/PublishConfirmationModal';
+import { PLATFORM_META } from '../utils/platformConstants';
 
 // Feature flag to hide AI refill functionality
 const ENABLE_AI_REFILL_FEATURES = false;
 
-// Platform metadata for UI display
-const PLATFORM_META: Record<string, { label: string; icon: string }> = {
-  shopify: { label: 'Shopify', icon: 'shopping' },
-  amazon: { label: 'Amazon', icon: 'amazon' },
-  ebay: { label: 'eBay', icon: 'shopping' },
-  clover: { label: 'Clover', icon: 'leaf' },
-  square: { label: 'Square', icon: 'square-outline' },
-  facebook: { label: 'Facebook', icon: 'facebook' },
-  whatnot: { label: 'Whatnot', icon: 'shopping' },
-  depop: { label: 'Depop', icon: 'shopping' },
-};
+
 
 type Props = StackScreenProps<AppStackParamList, 'GenerateDetailsScreen'>;
 
@@ -660,6 +652,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [mediaGallery, setMediaGallery] = useState<string[]>([]);
   const [mediaModalVisible, setMediaModalVisible] = useState(false);
   const [selectedVariantForMedia, setSelectedVariantForMedia] = useState<string | null>(null);
+  const [isPublishing, setIsPublishing] = useState(false);
 
   // Fetch connections and locations on mount
   useEffect(() => {
@@ -731,6 +724,42 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
         console.log('[GenerateDetails] Built platform locations:', Object.keys(locsByPlatform).map(p => `${p}: ${locsByPlatform[p].length} locs`));
         setPlatformLocations(locsByPlatform);
+
+        // ⚡ FIX: Ensure ALL enabled platforms appear in displayedPlatforms for publishing
+        // Even if AI generation didn't produce data for a platform, user should be able to publish to it
+        const enabledPlatformTypes = [...new Set(
+          connections
+            .filter((c: any) => c.IsEnabled && c.Status === 'active')
+            .map((c: any) => c.PlatformType?.toLowerCase())
+        )];
+
+        console.log('[GenerateDetails] Enabled platforms from connections:', enabledPlatformTypes);
+
+        // Add empty entries for platforms that don't exist in displayedPlatforms
+        const currentPlatforms = platformsRef.current;
+        const updatedPlatforms = { ...currentPlatforms };
+        let added = false;
+
+        for (const pt of enabledPlatformTypes) {
+          if (pt && typeof pt === 'string' && !updatedPlatforms[pt]) {
+            // Create empty platform entry with basic structure
+            const platformLocs = locsByPlatform[pt] || [];
+            updatedPlatforms[pt] = {
+              title: '',
+              description: '',
+              sku: '',
+              price: 0,
+              variants: [],
+              locations: platformLocs,
+            };
+            console.log(`[GenerateDetails] Added empty platform entry for: ${pt}`);
+            added = true;
+          }
+        }
+
+        if (added) {
+          updatePlatforms(() => updatedPlatforms);
+        }
       } catch (e) {
         console.error('Failed to fetch connections/locations:', e);
       }
@@ -1580,6 +1609,20 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         return;
       }
 
+      // Check if connections are loaded, if not fetch them now
+      let connectionsToUse = allConnections;
+      if (!connectionsToUse || connectionsToUse.length === 0) {
+        console.log('[doPublish] Connections not loaded yet, fetching now...');
+        const connRes = await fetch(`${baseUrl}/api/platform-connections`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        connectionsToUse = connRes.ok ? await connRes.json() : [];
+        setAllConnections(connectionsToUse);
+      }
+
+      console.log('[doPublish] Using connections:', connectionsToUse);
+      console.log('[doPublish] Connections count:', connectionsToUse?.length);
+
       const payload = buildPlatformPayload();
       const canonical = payload.platformDetails?.canonical || {};
       console.log('doPublish - Canonical payload:', canonical);
@@ -1601,6 +1644,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       }
       console.log('doPublish - Missing by platform:', missingByPlatform);
 
+      console.log('[doPublish] Using already-fetched connections:', allConnections);
+      console.log('[doPublish] Connections count:', allConnections?.length);
+
       if (Object.keys(missingByPlatform).length) {
         const lines = Object.entries(missingByPlatform).map(([plat, fields]) =>
           `${PLATFORM_META[plat]?.label || plat}: Missing ${fields.join(', ')}`
@@ -1609,16 +1655,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         return;
       }
 
-      // Fetch connections for ready platforms
-      const connRes = await fetch(`${baseUrl}/api/platform-connections`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const connections = connRes.ok ? await connRes.json() : [];
-      setAllConnections(connections);
-
-      // Extract locations from connections
+      // Extract locations from connections (no longer needed for modal, but keep for compatibility)
       const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>> = {};
-      for (const conn of connections) {
+      for (const conn of connectionsToUse) {
         const platform = conn.PlatformType?.toLowerCase();
         if (!platform || !conn.IsEnabled) continue;
 
@@ -1638,19 +1677,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       }
       setPlatformLocations(locsByPlatform);
 
-      // Auto-select first connection for each ready platform
-      const autoSelected: Record<string, string> = {};
-      for (const platform of readyPlatforms) {
-        const platformConns = connections.filter((c: any) =>
-          c.PlatformType?.toLowerCase() === platform.toLowerCase() && c.IsEnabled
-        );
-        if (platformConns.length > 0) {
-          autoSelected[platform] = platformConns[0].Id;
-        }
-      }
-      setSelectedConnectionIds(autoSelected);
+      // Set empty selections initially - PublishConfirmationModal will handle default 'ALL' selection
+      setSelectedConnectionIds({});
 
-      // Show modal
+      // Show modal - connections are already in allConnections state from mount
+      console.log('[doPublish] About to show modal with', connectionsToUse.length, 'connections');
       setPublishModalOpen(true);
 
     } catch (err) {
@@ -1714,6 +1745,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     try {
       console.log('[confirmAndPublish] Starting publish...');
       setPublishModalOpen(false);
+      setIsPublishing(true); // Show publishing indicator immediately
+
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
       const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || first?.productId;
@@ -1721,6 +1754,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       console.log('[confirmAndPublish] Got IDs:', { productId, variantId, baseUrl: !!baseUrl, token: !!token });
       if (!baseUrl || !productId || !variantId || !token) {
         console.log('[confirmAndPublish] Missing required data, aborting');
+        setIsPublishing(false);
         return;
       }
 
@@ -1778,6 +1812,29 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       console.log('[confirmAndPublish] Canonical data being sent:', JSON.stringify(payload.platformDetails.canonical, null, 2));
       console.log('[confirmAndPublish] Full payload:', JSON.stringify(publishPayload, null, 2));
 
+      // Prepare navigation params ahead of time for optimistic navigation
+      const imageUrl = (() => {
+        const idx = typeof payload.media?.coverImageIndex === 'number' ? payload.media.coverImageIndex : 0;
+        const arr = Array.isArray(payload.media?.imageUris) ? payload.media.imageUris : [];
+        return arr[idx] || first?.sourceImageUrl || '';
+      })();
+
+      const navigationParams = {
+        productId,
+        variantId,
+        title: canonical.title,
+        description: canonical.description,
+        price: Number(canonical.price || 0),
+        imageUrl,
+        platforms: platformsToPublish,
+        accountNames: accountNamesList,
+        quantityByPlatform: quantityByPlatformComputed,
+        origin: 'generate',
+        sourcePlatform: platformsToPublish[0] || 'shopify',
+        isPublishing: true, // Tell the confirmation screen we're still publishing
+      };
+
+      // Send the publish request
       const publishRes = await fetch(`${baseUrl}/api/products/publish`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -1789,6 +1846,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (!publishRes.ok) {
         const errorText = await publishRes.text();
         console.error('Publish failed:', errorText);
+        setIsPublishing(false);
 
         // Parse error for better user messaging
         try {
@@ -1806,28 +1864,17 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         return;
       }
 
-      const imageUrl = (() => {
-        const idx = typeof payload.media?.coverImageIndex === 'number' ? payload.media.coverImageIndex : 0;
-        const arr = Array.isArray(payload.media?.imageUris) ? payload.media.imageUris : [];
-        return arr[idx] || first?.sourceImageUrl || '';
-      })();
-
+      // Success! Navigate to confirmation screen
+      // The product is now being created/synced in the background on the backend
+      setIsPublishing(false);
       navigation.navigate('PublishConfirmation', {
-        productId,
-        variantId,
-        title: canonical.title,
-        description: canonical.description,
-        price: Number(canonical.price || 0),
-        imageUrl,
-        platforms: platformsToPublish,
-        accountNames: accountNamesList,
-        quantityByPlatform: quantityByPlatformComputed,
-        origin: 'generate',
-        sourcePlatform: platformsToPublish[0] || 'shopify',
+        ...navigationParams,
+        isPublishing: false, // Publish completed successfully
       } as any);
 
     } catch (err) {
       console.error('Error in confirmAndPublish:', err);
+      setIsPublishing(false);
       alert('Failed to publish. Please try again.');
     }
   };
@@ -2152,6 +2199,36 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   return (
     <View style={{ flex: 1 }}>
+      {/* Publishing Overlay */}
+      {isPublishing && (
+        <View style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.7)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 9999,
+        }}>
+          <View style={{
+            backgroundColor: '#fff',
+            borderRadius: 16,
+            padding: 32,
+            alignItems: 'center',
+            minWidth: 200,
+          }}>
+            <ActivityIndicator size="large" color="#93C822" />
+            <Text style={{ marginTop: 16, fontSize: 18, fontWeight: '600', color: '#111' }}>
+              Publishing...
+            </Text>
+            <Text style={{ marginTop: 8, fontSize: 14, color: '#666', textAlign: 'center' }}>
+              Your product is being published to your connected platforms
+            </Text>
+          </View>
+        </View>
+      )}
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
         <View style={{ position: 'absolute', top: -32, right: 16, zIndex: 4000, flexDirection: 'row', gap: 8 }}>
           <TouchableOpacity onPress={() => setVersionsSheetOpen(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5' }}>
@@ -2232,9 +2309,31 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                   // handler stored on closure
                   (GenerateDetailsScreen as any)._scannerResultHandler = onResult;
                 }}
-                onOpenImageCapture={(done) => {
-                  // Use AddProduct camera flow; pass a callback for captured images (photos only)
-                  (route as any).navigation?.navigate?.('AddProduct', { firstPhotos: [], bulkItems: [], captureOnly: true, onDone: (uris: string[]) => done(uris) } as any);
+                onOpenImageCapture={async (onResult) => {
+                  try {
+                    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                    if (status !== 'granted') {
+                      Alert.alert('Permission Required', 'Please grant photo library access to add images.');
+                      return;
+                    }
+                    const result = await ImagePicker.launchImageLibraryAsync({
+                      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                      allowsMultipleSelection: true,
+                      quality: 0.8,
+                    });
+                    if (!result.canceled && result.assets) {
+                      // Upload the selected images to Supabase
+                      const uploadedUrls = await uploadLocalImagesToSupabase(
+                        result.assets.map(asset => asset.uri)
+                      );
+                      if (uploadedUrls.length > 0) {
+                        onResult(uploadedUrls);
+                      }
+                    }
+                  } catch (error) {
+                    console.error('Error picking images:', error);
+                    Alert.alert('Error', 'Failed to pick images. Please try again.');
+                  }
                 }}
                 onAddMissingField={(platformKey: string) => {
                   setSelectedMissingPlatform(platformKey);
@@ -2790,134 +2889,21 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       )}
 
       {/* Publish Confirmation Modal */}
-      {publishModalOpen && (
-        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 9999 }}>
-          <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 20, width: '90%', maxHeight: '80%' }}>
-            <Text style={{ fontSize: 20, fontWeight: '700', color: '#000', marginBottom: 16 }}>Review & Publish</Text>
-
-            <ScrollView style={{ maxHeight: 400 }}>
-              <Text style={{ fontSize: 14, fontWeight: '600', color: '#666', marginBottom: 12 }}>Publishing to {readyPlatforms.length} platform(s)</Text>
-
-              {/* Summary */}
-              <View style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginBottom: 16 }}>
-                <Text style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Product: {buildPlatformPayload().platformDetails?.canonical?.title || 'Untitled'}</Text>
-                <Text style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>SKU: {buildPlatformPayload().platformDetails?.canonical?.sku || 'N/A'}</Text>
-                <Text style={{ fontSize: 12, color: '#666' }}>Price: ${buildPlatformPayload().platformDetails?.canonical?.price || 0}</Text>
-              </View>
-
-              {/* Platform Account Selection */}
-              <Text style={{ fontSize: 14, fontWeight: '600', color: '#000', marginBottom: 8 }}>Select Accounts</Text>
-              {readyPlatforms.map((platform) => {
-                const platformConns = allConnections.filter((c: any) =>
-                  c.PlatformType?.toLowerCase() === platform.toLowerCase() && c.IsEnabled
-                );
-                const selectedConnId = selectedConnectionIds[platform];
-                const allSelected = selectedConnId === 'ALL';
-
-                return (
-                  <View key={platform} style={{ marginBottom: 12 }}>
-                    <Text style={{ fontSize: 12, fontWeight: '600', color: '#666', marginBottom: 4 }}>
-                      {PLATFORM_META[platform]?.label || platform}
-                    </Text>
-                    {platformConns.length === 0 ? (
-                      <Text style={{ fontSize: 12, color: '#F00', fontStyle: 'italic' }}>No connections available</Text>
-                    ) : (
-                      <View style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8 }}>
-                        {/* Ensure default selection is 'ALL' if not set */}
-                        {(() => {
-                          // If no selection for this platform, default to 'ALL'
-                          if (selectedConnId === undefined) {
-                            setTimeout(() => {
-                              setSelectedConnectionIds(prev => {
-                                // Only set if still undefined (avoid race)
-                                if (prev[platform] === undefined) {
-                                  return { ...prev, [platform]: 'ALL' };
-                                }
-                                return prev;
-                              });
-                            }, 0);
-                          }
-                          return null;
-                        })()}
-
-                        {/* All option */}
-                        {platformConns.length > 1 && (
-                          <TouchableOpacity
-                            onPress={() => setSelectedConnectionIds(prev => ({ ...prev, [platform]: 'ALL' }))}
-                            style={{
-                              padding: 12,
-                              backgroundColor: allSelected ? '#F0F9FF' : '#FFF',
-                              borderBottomWidth: 1,
-                              borderBottomColor: '#E5E5E5',
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                            }}
-                          >
-                            <Text style={{ fontSize: 14, color: '#000', fontWeight: '600', flex: 1 }}>All Accounts ({platformConns.length})</Text>
-                            {allSelected && <Icon name="check-circle" size={18} color="#93C822" />}
-                          </TouchableOpacity>
-                        )}
-                        {/* Individual accounts */}
-                        {platformConns.map((conn: any) => (
-                          <TouchableOpacity
-                            key={conn.Id}
-                            onPress={() => setSelectedConnectionIds(prev => ({ ...prev, [platform]: conn.Id }))}
-                            style={{
-                              padding: 12,
-                              backgroundColor: selectedConnId === conn.Id ? '#F0F9FF' : '#FFF',
-                              borderBottomWidth: 1,
-                              borderBottomColor: '#E5E5E5',
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                            }}
-                          >
-                            <Text style={{ fontSize: 14, color: '#000', flex: 1 }}>{conn.DisplayName}</Text>
-                            {selectedConnId === conn.Id && <Icon name="check-circle" size={18} color="#93C822" />}
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-                    )}
-                  </View>
-                );
-              })}
-            </ScrollView>
-
-            {/* Actions */}
-            <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
-              <TouchableOpacity
-                onPress={() => setPublishModalOpen(false)}
-                style={{ flex: 1, paddingVertical: 12, backgroundColor: '#F5F5F5', borderRadius: 8, alignItems: 'center' }}
-              >
-                <Text style={{ fontSize: 14, fontWeight: '600', color: '#666' }}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={confirmAndPublish}
-                style={{ flex: 1, paddingVertical: 12, backgroundColor: '#93C822', borderRadius: 8, alignItems: 'center' }}
-                disabled={Object.keys(selectedConnectionIds).length === 0}
-              >
-                <Text style={{ fontSize: 14, fontWeight: '600', color: '#FFF' }}>
-                  Publish to {(() => {
-                    let total = 0;
-                    for (const [platform, selection] of Object.entries(selectedConnectionIds)) {
-                      if (selection === 'ALL') {
-                        const platformConns = allConnections.filter((c: any) =>
-                          c.PlatformType?.toLowerCase() === platform.toLowerCase() && c.IsEnabled
-                        );
-                        total += platformConns.length;
-                      } else {
-                        total += 1;
-                      }
-                    }
-                    return total;
-                  })()} Account(s)
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      )}
+      <PublishConfirmationModal
+        visible={publishModalOpen}
+        onClose={() => setPublishModalOpen(false)}
+        onConfirm={confirmAndPublish}
+        readyPlatforms={readyPlatforms}
+        allConnections={allConnections}
+        selectedConnectionIds={selectedConnectionIds}
+        setSelectedConnectionIds={setSelectedConnectionIds}
+        productSummary={{
+          title: buildPlatformPayload().platformDetails?.canonical?.title,
+          sku: buildPlatformPayload().platformDetails?.canonical?.sku,
+          price: buildPlatformPayload().platformDetails?.canonical?.price
+        }}
+        isPublishing={isPublishing}
+      />
       {/* Media Gallery Modal */}
       {mediaModalVisible && (
         <>

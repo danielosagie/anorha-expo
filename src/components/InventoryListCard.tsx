@@ -20,6 +20,8 @@ interface InventoryListCardProps {
   id: string;
   title: string;
   price?: number;
+  minPrice?: number;  // For price range display when variants have different prices
+  maxPrice?: number;  // For price range display when variants have different prices
   sku?: string;
   imageUrl?: string;
   totalQuantity?: number;
@@ -31,6 +33,8 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
   id,
   title,
   price,
+  minPrice,
+  maxPrice,
   sku,
   imageUrl,
   totalQuantity,
@@ -54,6 +58,23 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
 
   const isLowStock = (totalQuantity ?? 0) <= 5;
   const isOutOfStock = (totalQuantity ?? 0) === 0;
+
+  // Format price display - show range if min and max are different
+  const formatPriceDisplay = (): string => {
+    // If minPrice and maxPrice are provided and different, show range
+    if (minPrice !== undefined && maxPrice !== undefined && minPrice !== maxPrice) {
+      return `$${minPrice.toFixed(2)} - $${maxPrice.toFixed(2)}`;
+    }
+    // If only minPrice or maxPrice provided, use that
+    if (minPrice !== undefined) {
+      return `$${minPrice.toFixed(2)}`;
+    }
+    if (maxPrice !== undefined) {
+      return `$${maxPrice.toFixed(2)}`;
+    }
+    // Fallback to single price prop
+    return `$${price?.toFixed(2) ?? '0.00'}`;
+  };
 
   return (
     <TouchableOpacity
@@ -90,7 +111,7 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
             </Text>
 
             <Text style={[styles.price, { color: theme.colors.textSecondary }]}>
-              ${price?.toFixed(2) ?? '0.00'}
+              {formatPriceDisplay()}
             </Text>
 
             {sku && (
@@ -123,16 +144,16 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
             <View
               style={[
                 styles.stockBadge,
-                { 
-                    borderColor: isOutOfStock ? '#9CA3AF' : isLowStock ? '#EF4444' : '#E5E7EB',
+                {
+                  borderColor: isOutOfStock ? '#9CA3AF' : isLowStock ? '#EF4444' : '#E5E7EB',
                 },
               ]}
             >
               {isLowStock && !isOutOfStock && (
-                 <Icon name="alert-outline" size={14} color="#EF4444" style={{marginRight: 4}} />
+                <Icon name="alert-outline" size={14} color="#EF4444" style={{ marginRight: 4 }} />
               )}
               {isOutOfStock && (
-                 <Icon name="refresh" size={14} color="#6B7280" style={{marginRight: 4}} />
+                <Icon name="refresh" size={14} color="#6B7280" style={{ marginRight: 4 }} />
               )}
               <Text
                 style={[
@@ -176,7 +197,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     marginRight: 12,
-    
+
   },
   productImage: {
     borderRadius: 12,

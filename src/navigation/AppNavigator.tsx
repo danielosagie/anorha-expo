@@ -49,6 +49,8 @@ import MarketplaceChatScreen from '../screens/MarketplaceChatScreen';
 import ActivityFeedScreen from '../screens/ActivityFeedScreen';
 import PublishConfirmationScreen from '../screens/PublishConfirmationScreen';
 import PartnerAcceptScreen from '../screens/PartnerAcceptScreen';
+import { BackfillOptimizerScreen } from '../screens/BackfillOptimizerScreen';
+import CSVColumnMappingScreen from '../screens/CSVColumnMappingScreen';
 import { isFeatureEnabled } from '../config/features';
 import { SessionContext } from '../context/SessionContext';
 
@@ -64,19 +66,19 @@ type AuthStackParamList = {
 
 // Export the type
 export type AppStackParamList = {
-  CreateAccountScreen: undefined; 
-  TabNavigator: undefined; 
+  CreateAccountScreen: undefined;
+  TabNavigator: undefined;
   AddListing?: { // The entire params object for AddListing is optional
-    initialData?: { 
+    initialData?: {
       title: string;
       description: string;
       price: number;
       sku: string;
       barcode: string;
       images: string[];
-      platformDetails: any; 
+      platformDetails: any;
       status: 'draft' | 'active' | 'archived';
-      initialStage?: string; 
+      initialStage?: string;
       productId?: string;
       variantId?: string;
       uploadedImageUrls?: string[];
@@ -96,7 +98,7 @@ export type AppStackParamList = {
   };
   ProductDetail: { productId: string };
   PastScans: undefined;
-  MappingReview: { connectionId: string; platformName: string; jobId?: string; }; 
+  MappingReview: { connectionId: string; platformName: string; jobId?: string; };
   SyncRules: { connectionId: string };
   Profile: { refresh?: number }; // Add Profile screen with optional refresh param
   Team: undefined;
@@ -206,10 +208,10 @@ export type AppStackParamList = {
     jobId: string,
     status: string,
     results: Array<{
-        productIndex: number,
-        platforms: any[],
-        scrapedData: any[],
-        originalSelection: any[],
+      productIndex: number,
+      platforms: any[],
+      scrapedData: any[],
+      originalSelection: any[],
     }>,
     summary: any[],
     completedAt: string,
@@ -238,6 +240,12 @@ export type AppStackParamList = {
   PartnerAccept: {
     inviteCode?: string;
     inviteId?: string;
+  };
+  BackfillOptimizer: undefined;
+  CSVColumnMapping: {
+    csvHeaders: string[];
+    csvData: any[];
+    sampleRow: Record<string, string>;
   };
 };
 
@@ -285,12 +293,12 @@ const TabNavigator = () => {
         headerShown: false,
         tabBarStyle: customTabBarStyle,
       }}
-      
+
       tabBar={(props: any) => <TabBar {...props} style={customTabBarStyle} />}
       initialRouteName="Dashboard"
     >
-      <Tab.Screen 
-        name="Dashboard" 
+      <Tab.Screen
+        name="Dashboard"
         component={DashboardScreen}
         options={{
           tabBarLabel: 'Home',
@@ -299,8 +307,8 @@ const TabNavigator = () => {
           ),
         }}
       />
-      <Tab.Screen 
-        name="Inventory" 
+      <Tab.Screen
+        name="Inventory"
         component={InventoryOrdersScreen}
         options={{
           tabBarLabel: 'Inventory',
@@ -309,8 +317,8 @@ const TabNavigator = () => {
           ),
         }}
       />
-      <Tab.Screen 
-        name="AddProduct" 
+      <Tab.Screen
+        name="AddProduct"
         component={AddProductScreen}
         options={{
           tabBarLabel: 'Add Products',
@@ -335,23 +343,23 @@ const TabNavigator = () => {
       />
       
       */}
-    
+
       <Tab.Screen
         name="ActivityFeed"
         component={ActivityFeedScreen}
         options={{
           tabBarLabel: 'Activity',
           tabBarIcon: ({ color, size, focused }: { color: string; size: number; focused: boolean }) => (
-            <Icon 
-              name="clipboard-clock-outline" 
-              color={focused ? "#FF9900" : color} 
-              size={size} 
+            <Icon
+              name="clipboard-clock-outline"
+              color={focused ? "#FF9900" : color}
+              size={size}
             />
           ),
         }}
       />
-      <Tab.Screen 
-        name="Profile" 
+      <Tab.Screen
+        name="Profile"
         component={ProfileScreen}
         options={{
           tabBarLabel: 'Settings',
@@ -399,6 +407,8 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="PublishConfirmation" component={PublishConfirmationScreen} />
     <AppStackNav.Screen name="OnboardConnectionScreen" component={OnboardConnectionScreen} />
     <AppStackNav.Screen name="PartnerAccept" component={PartnerAcceptScreen} />
+    <AppStackNav.Screen name="BackfillOptimizer" component={BackfillOptimizerScreen} />
+    <AppStackNav.Screen name="CSVColumnMapping" component={CSVColumnMappingScreen} />
   </AppStackNav.Navigator>
 );
 
@@ -414,9 +424,9 @@ const AppNavigator = () => {
   const [appIsReady, setAppIsReady] = useState(false);
   const [initialStackName, setInitialStackName] = useState<'AuthStack' | 'AppStack' | null>(null);
   const [initialAppScreen, setInitialAppScreen] = useState<'CreateAccountScreen' | 'TabNavigator' | null>(null);
-  
+
   // Dev tools to test onboarding flow
-  const [devForceOnboarding] = useState(true); // Set this to true only when testing onboarding - FTUX
+  const [devForceOnboarding] = useState(false); // Set this to true only when testing onboarding - FTUX
   const [devExpireSession, setDevExpireSession] = useState(false); // Set true to make you have to login new each time you leave/after session expires
 
   const [fontsLoaded] = useFonts({
@@ -454,7 +464,7 @@ const AppNavigator = () => {
   // Fallback: force-hide splash after 2s in case onLayout isn't triggered
   useEffect(() => {
     const timer = setTimeout(() => {
-      SplashScreen.hideAsync().catch(() => {});
+      SplashScreen.hideAsync().catch(() => { });
     }, 2000);
     return () => clearTimeout(timer);
   }, []);
@@ -476,11 +486,11 @@ const AppNavigator = () => {
       }
     },
     // Make signOut effectively synchronous for state update, but return Promise for type compatibility
-    signOut: async () => { 
+    signOut: async () => {
       console.log("[AuthContext] signOut called, clearing tokens and Clerk session.")
-      setUserToken(null); 
-      AsyncStorage.removeItem('userToken').catch(() => {});
-      try { stopClerkSupabaseBridge(); } catch {}
+      setUserToken(null);
+      AsyncStorage.removeItem('userToken').catch(() => { });
+      try { stopClerkSupabaseBridge(); } catch { }
       if (clerkSignOut) {
         try {
           await clerkSignOut();
@@ -523,28 +533,9 @@ const AppNavigator = () => {
       }
     })();
   }, []);
-  
-   // Add this to ProfileScreen or AppNavigator useEffect on startup
-   const syncUserOrgs = async () => {
-    const token = await ensureSupabaseJwt();
-    
-    // Call sync endpoint to create OrgMemberships from Clerk teams
-    const response = await fetch(
-      'https://api.sssync.app/api/organizations/sync-clerk-teams',
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-    
-    if (response.ok) {
-      console.log('Synced Clerk teams with orgs');
-      // Then reload orgs in OrgSwitcher
-    }
-  };
+
+  // Note: Clerk team sync is now handled automatically via backend webhooks
+  // The sync-clerk-teams endpoint was removed - orgs are synced on login
 
   // Simplified: just determine which stack to show based on auth state
   useEffect(() => {
@@ -561,13 +552,6 @@ const AppNavigator = () => {
       setIsLoading(false);
     }
   }, [clerkLoaded, isSignedIn]);
-
-  // Add this to ProfileScreen or AppNavigator useEffect on startup
-  useEffect(() => {
-    if (isSignedIn && clerkLoaded) {
-      syncUserOrgs();
-    }
-  }, [isSignedIn, clerkLoaded]);
 
   // Add AppState listener for session expiry
   useEffect(() => {
@@ -648,10 +632,10 @@ const AppNavigator = () => {
   return (
     <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
       <AuthContext.Provider value={authContext}>
-        <Stack.Navigator 
+        <Stack.Navigator
           key={`${initialStackName}-${isSignedIn}-${initialAppScreen ?? 'none'}`}
           initialRouteName={initialStackName ?? (isSignedIn ? 'AppStack' : 'AuthStack')}
-          screenOptions={{ 
+          screenOptions={{
             headerShown: false,
             headerShadowVisible: false,
             headerBackTitleVisible: false,
@@ -663,15 +647,15 @@ const AppNavigator = () => {
           </Stack.Screen>
 
           <Stack.Screen name="AppStack">
-             {(props: any) => {
-                // Check both navigation params and local state for initial screen
-                const navInitialScreen = props?.route?.params?.initialScreenName;
-                const effectiveInitialScreen = navInitialScreen || initialAppScreen || 'TabNavigator';
-                console.log('[AppNavigator] AppStack render - navInitialScreen:', navInitialScreen, 'localInitialScreen:', initialAppScreen, 'effective:', effectiveInitialScreen);
-                
-                return <AppStack initialScreenName={effectiveInitialScreen} />;
-             }}
-            </Stack.Screen>
+            {(props: any) => {
+              // Check both navigation params and local state for initial screen
+              const navInitialScreen = props?.route?.params?.initialScreenName;
+              const effectiveInitialScreen = navInitialScreen || initialAppScreen || 'TabNavigator';
+              console.log('[AppNavigator] AppStack render - navInitialScreen:', navInitialScreen, 'localInitialScreen:', initialAppScreen, 'effective:', effectiveInitialScreen);
+
+              return <AppStack initialScreenName={effectiveInitialScreen} />;
+            }}
+          </Stack.Screen>
 
         </Stack.Navigator>
       </AuthContext.Provider>

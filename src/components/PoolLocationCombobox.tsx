@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -6,162 +6,242 @@ import {
   StyleSheet,
   ScrollView,
   TextInput,
-  Platform,
   Alert,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
-import { ensureSupabaseJwt } from '../lib/supabase';
-import PlatformAvatar from './PlatformAvatar';
-import { useOrg } from '../context/OrgContext'; // Moved to correct import order
+import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import { useOrg } from '../context/OrgContext';
+import ShopifySvg from '../assets/shopify.svg';
+import SquareSvg from '../assets/square.svg';
+import CloverSvg from '../assets/clover.svg';
 
 const API_BASE_URL = 'https://api.sssync.app';
+
+const PLATFORM_LOGOS: Record<string, any> = {
+  shopify: ShopifySvg,
+  square: SquareSvg,
+  clover: CloverSvg,
+};
 
 interface LocationPool {
   id: string;
   name: string;
   description?: string;
+  locationIds?: string[];
 }
 
-interface PlatformLocation {
+interface PlatformConnection {
   Id: string;
-  Name: string;
-  IsPOS: boolean;
+  PlatformType: string;
+  DisplayName: string;
+  Status?: string;
+  IsEnabled?: boolean;
+}
+
+interface DbPlatformLocation {
   PlatformConnectionId: string;
-  PlatformConnections?: {
-    PlatformType: string;
-  };
+  PlatformLocationId: string;
+  Name: string | null;
+}
+
+interface LocationMetadata {
+  platformLocationId: string;
+  locationName: string;
+  platformType: string;
+  connectionName: string;
 }
 
 interface PoolLocationComboboxProps {
   orgId?: string; // Optional now, as we can use context
+  platformConnections?: PlatformConnection[]; // NEW: Pass connections like LocationsManagerV2
   selectedItems: string[]; // location IDs
   onSelectionChange: (locationIds: string[]) => void;
   startOpen?: boolean;
 }
 
-interface PoolWithLocations {
-  pool: LocationPool;
-  locations: PlatformLocation[];
-}
-
 const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
   orgId: propOrgId,
+  platformConnections = [],
   selectedItems,
   onSelectionChange,
   startOpen = false,
 }) => {
   const theme = useTheme();
   const { currentOrg } = useOrg();
-  
-  // Use prop orgId if provided (legacy support), otherwise fall back to context
+
+  // Use prop orgId if provided, otherwise fall back to context
   const effectiveOrgId = propOrgId || currentOrg?.id;
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(startOpen);
   const [pools, setPools] = useState<LocationPool[]>([]);
-  const [poolsWithLocations, setPoolsWithLocations] = useState<PoolWithLocations[]>([]);
+  const [singleLocations, setSingleLocations] = useState<DbPlatformLocation[]>([]);
   const [selectedLocations, setSelectedLocations] = useState<string[]>(selectedItems);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Derive connection IDs and connection map from platformConnections (like LocationsManagerV2)
+  const connectionIds = useMemo(() => platformConnections?.map((c) => c.Id) || [], [platformConnections]);
+
+  const connectionById = useMemo(() => {
+    const map = new Map<string, PlatformConnection>();
+    for (const c of platformConnections || []) map.set(c.Id, c);
+    return map;
+  }, [platformConnections]);
+
+  // Build location metadata map for display
+  const locationMetadataMap = useMemo(() => {
+    const map = new Map<string, LocationMetadata>();
+    singleLocations.forEach(loc => {
+      const conn = connectionById.get(loc.PlatformConnectionId);
+      if (conn) {
+        map.set(loc.PlatformLocationId, {
+          platformLocationId: loc.PlatformLocationId,
+          locationName: loc.Name || loc.PlatformLocationId,
+          platformType: conn.PlatformType.toLowerCase(),
+          connectionName: conn.DisplayName,
+        });
+      }
+    });
+    return map;
+  }, [singleLocations, connectionById]);
+
+  // Sync internal state when props change
   useEffect(() => {
     setSelectedLocations(selectedItems);
   }, [selectedItems]);
 
-  const loadPoolsWithLocations = async () => {
+  // Load data exactly like LocationsManagerV2.loadList
+  const loadData = useCallback(async () => {
     if (!effectiveOrgId) {
-        console.log('[PoolLocationCombobox] No org ID available');
-        return;
+      console.log('[PoolLocationCombobox] No org ID available');
+      return;
     }
 
     try {
       setLoading(true);
       const token = await ensureSupabaseJwt();
 
-      // Fetch all pools
+      // Load pools from API (same as LocationsManagerV2)
       const poolsRes = await fetch(`${API_BASE_URL}/api/pools/org/${effectiveOrgId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!poolsRes.ok) throw new Error('Failed to fetch pools');
-      const poolsData: LocationPool[] = await poolsRes.json();
-      setPools(poolsData);
 
-      // Fetch locations for each pool
-      const poolLocations: PoolWithLocations[] = [];
-      for (const pool of poolsData) {
-        try {
-          const locRes = await fetch(`${API_BASE_URL}/api/pools/${pool.id}/locations`, {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (locRes.ok) {
-            const locData = await locRes.json();
-            poolLocations.push({
-              pool,
-              locations: locData.locations || [],
-            });
-          }
-        } catch (e) {
-          console.error(`Error fetching locations for pool ${pool.id}:`, e);
-        }
+      if (poolsRes.ok) {
+        const poolData = await poolsRes.json();
+        setPools(Array.isArray(poolData) ? poolData : []);
+        console.log('[PoolLocationCombobox] Loaded pools:', poolData?.length || 0);
+      } else {
+        console.error('[PoolLocationCombobox] Pools fetch failed', poolsRes.status);
+        setPools([]);
       }
-      setPoolsWithLocations(poolLocations);
+
+      // Load platform locations directly from Supabase (same as LocationsManagerV2)
+      if (connectionIds.length > 0) {
+        const { data: platformLocs, error } = await supabase
+          .from('PlatformLocations')
+          .select('PlatformConnectionId, PlatformLocationId, Name')
+          .in('PlatformConnectionId', connectionIds);
+
+        if (error) {
+          console.error('[PoolLocationCombobox] Error loading locations:', error);
+          setSingleLocations([]);
+        } else {
+          setSingleLocations(platformLocs || []);
+          console.log('[PoolLocationCombobox] Loaded locations:', platformLocs?.length || 0);
+        }
+      } else {
+        setSingleLocations([]);
+      }
     } catch (error) {
-      console.error('Error loading pools and locations:', error);
+      console.error('[PoolLocationCombobox] Error loading data:', error);
       Alert.alert('Error', 'Failed to load pools and locations');
     } finally {
       setLoading(false);
     }
-  };
+  }, [effectiveOrgId, connectionIds]);
 
   useEffect(() => {
     if (startOpen && !isDropdownOpen) {
-        setIsDropdownOpen(true);
-        loadPoolsWithLocations();
+      setIsDropdownOpen(true);
+      loadData();
     }
   }, [startOpen]);
 
   const handleOpenDropdown = () => {
     if (!isDropdownOpen) {
-      loadPoolsWithLocations();
+      loadData();
     }
     setIsDropdownOpen(!isDropdownOpen);
   };
 
   const toggleLocationSelection = (locationId: string) => {
-    setSelectedLocations((prev) => {
-      if (prev.includes(locationId)) {
-        return prev.filter((id) => id !== locationId);
-      } else {
-        return [...prev, locationId];
-      }
-    });
+    const newSelected = selectedLocations.includes(locationId)
+      ? selectedLocations.filter((id) => id !== locationId)
+      : [...selectedLocations, locationId];
+
+    setSelectedLocations(newSelected);
+    onSelectionChange(newSelected);
   };
 
   const toggleAllLocationsInPool = (poolId: string) => {
-    const pool = poolsWithLocations.find((p) => p.pool.id === poolId);
-    if (!pool) return;
+    const pool = pools.find((p) => p.id === poolId);
+    if (!pool || !pool.locationIds) return;
 
-    const poolLocationIds = pool.locations.map((loc) => loc.Id);
-    const allSelected = poolLocationIds.every((id) =>
-      selectedLocations.includes(id)
-    );
+    // Only include locations that have valid metadata (exist in PlatformLocations)
+    const validLocationIds = pool.locationIds.filter(id => locationMetadataMap.has(id));
+    if (validLocationIds.length === 0) return;
 
+    // Check if all VALID locations in this pool are currently selected
+    const allSelected = validLocationIds.every((id) => selectedLocations.includes(id));
+
+    let newSelected: string[];
     if (allSelected) {
-      setSelectedLocations((prev) =>
-        prev.filter((id) => !poolLocationIds.includes(id))
-      );
+      // Unselect all in this pool
+      newSelected = selectedLocations.filter((id) => !validLocationIds.includes(id));
     } else {
-      setSelectedLocations((prev) => {
-        const newSelected = new Set(prev);
-        poolLocationIds.forEach((id) => newSelected.add(id));
-        return Array.from(newSelected);
-      });
+      // Select all in this pool (merge with existing)
+      const currentSet = new Set(selectedLocations);
+      validLocationIds.forEach((id) => currentSet.add(id));
+      newSelected = Array.from(currentSet);
     }
+
+    setSelectedLocations(newSelected);
+    onSelectionChange(newSelected);
   };
 
-  const handleApplySelection = () => {
-    onSelectionChange(selectedLocations);
-    setIsDropdownOpen(false);
+  // NEW: Toggle ALL locations across ALL pools (Global "All Locations")
+  const toggleGlobalAll = () => {
+    // Collect ALL valid location IDs from ALL pools
+    const allValidLocationIds = new Set<string>();
+    pools.forEach(pool => {
+      (pool.locationIds || []).forEach(id => {
+        if (locationMetadataMap.has(id)) {
+          allValidLocationIds.add(id);
+        }
+      });
+    });
+
+    const allIds = Array.from(allValidLocationIds);
+    if (allIds.length === 0) return;
+
+    // Check if everything is currently selected
+    const isEverythingSelected = allIds.every(id => selectedLocations.includes(id));
+
+    let newSelected: string[];
+    if (isEverythingSelected) {
+      // Deselect all (that are known valid locations)
+      // Note: We only remove known locations to preserve any stray IDs if that's desired, 
+      // but usually 'Deselect All' implies clearing the selection. 
+      // User context implies 'filtering', so clearing selection means 'no locations selected'.
+      newSelected = [];
+    } else {
+      // Select all
+      newSelected = allIds;
+    }
+
+    setSelectedLocations(newSelected);
+    onSelectionChange(newSelected);
   };
 
   const getDisplayText = (): string => {
@@ -169,34 +249,82 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
       return 'All Locations';
     }
 
-    // Count total locations
-    const totalLocations = poolsWithLocations.reduce(
-      (acc, p) => acc + p.locations.length,
-      0
-    );
+    // Count total valid locations across all pools
+    const totalLocations = pools.reduce((acc, pool) => {
+      const validCount = (pool.locationIds || []).filter(id => locationMetadataMap.has(id)).length;
+      return acc + validCount;
+    }, 0);
 
-    if (selectedLocations.length === totalLocations) {
+    if (totalLocations > 0 && selectedLocations.length >= totalLocations) {
       return 'All Locations';
     }
 
     if (selectedLocations.length === 1) {
-      const location = poolsWithLocations
-        .flatMap((p) => p.locations)
-        .find((loc) => loc.Id === selectedLocations[0]);
-      return location?.Name || 'All Locations';
+      const meta = locationMetadataMap.get(selectedLocations[0]);
+      return meta?.locationName || 'All Locations';
     }
 
     return `${selectedLocations.length} of ${totalLocations} Locations`;
   };
 
-  const filteredPools = poolsWithLocations.filter((p) => {
+  // Get unique platform types for a pool
+  const getPoolPlatformTypes = (pool: LocationPool): string[] => {
+    const types = new Set<string>();
+    (pool.locationIds || []).forEach(id => {
+      const meta = locationMetadataMap.get(id);
+      if (meta?.platformType) types.add(meta.platformType);
+    });
+    return Array.from(types);
+  };
+
+  // Render platform logo
+  const renderPlatformLogo = (platformType: string, key?: string) => {
+    const Logo = PLATFORM_LOGOS[platformType.toLowerCase()];
+    if (Logo) {
+      return <Logo key={key || platformType} width={16} height={16} style={{ marginLeft: 4 }} />;
+    }
+    return null;
+  };
+
+  // Helper to determine if global "All" is selected
+  const isGlobalAllSelected = () => {
+    let hasAnyLocations = false;
+    let allSelected = true;
+
+    for (const pool of pools) {
+      const validIds = (pool.locationIds || []).filter(id => locationMetadataMap.has(id));
+      if (validIds.length > 0) {
+        hasAnyLocations = true;
+        if (!validIds.every(id => selectedLocations.includes(id))) {
+          allSelected = false;
+          break;
+        }
+      }
+    }
+    return hasAnyLocations && allSelected;
+  };
+
+  // Search filtering logic
+  const filteredPools = pools.filter((pool) => {
     if (!searchQuery) return true;
     const query = searchQuery.toLowerCase();
-    return (
-      p.pool.name.toLowerCase().includes(query) ||
-      p.locations.some((loc) => loc.Name.toLowerCase().includes(query))
-    );
+    if (pool.name.toLowerCase().includes(query)) return true;
+    const hasMatchingLocation = (pool.locationIds || []).some(id => {
+      const meta = locationMetadataMap.get(id);
+      return meta?.locationName.toLowerCase().includes(query);
+    });
+    return hasMatchingLocation;
   });
+
+  const getFilteredLocationsForPool = (pool: LocationPool): string[] => {
+    const validIds = (pool.locationIds || []).filter(id => locationMetadataMap.has(id));
+    if (!searchQuery) return validIds;
+    const query = searchQuery.toLowerCase();
+    return validIds.filter(id => {
+      const meta = locationMetadataMap.get(id);
+      return meta?.locationName.toLowerCase().includes(query);
+    });
+  };
 
   return (
     <View style={styles.container}>
@@ -206,7 +334,6 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
         activeOpacity={0.7}
       >
         <View style={styles.dropdownContent}>
-          {/* <Icon name="map-marker-outline" size={18} color={theme.colors.textSecondary} /> */} 
           <Text style={[styles.dropdownText, { color: theme.colors.text }]}>
             {getDisplayText()}
           </Text>
@@ -220,120 +347,127 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
 
       {/* Absolute Positioned Inline Dropdown */}
       {isDropdownOpen && (
-        <View style={[styles.dropdownPanel, { backgroundColor: '#fff' }]}>
+        <View style={styles.dropdownPanel}>
+          {/* Search Input */}
           <View style={styles.searchContainer}>
-            <Icon name="magnify" size={18} color="#999" />
+            <Icon name="magnify" size={18} color="#9CA3AF" />
             <TextInput
               style={styles.searchInput}
               placeholder="Search pools/locations..."
-              placeholderTextColor="#999"
+              placeholderTextColor="#9CA3AF"
               value={searchQuery}
               onChangeText={setSearchQuery}
             />
           </View>
 
           {loading ? (
-            <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
+            <Text style={styles.loadingText}>
               Loading...
             </Text>
           ) : (
-            <ScrollView style={styles.locationListScrollView} scrollEnabled={true}>
-              {filteredPools.length === 0 ? (
-                <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
+            <ScrollView
+              style={styles.locationListScrollView}
+              scrollEnabled={true}
+              showsVerticalScrollIndicator={false}
+            >
+              {/* GLOBAL "ALL LOCATIONS" TOGGLE (Only if not searching, or always? User said "All locations should go above all pools") */}
+              {/* If searching, "All Locations" might be confusing if it only selects visible? 
+                  Standard behavior is it acts on the dataset. I'll make it act on visible if searched, or all if not.
+                  For simplicity and "User Request: 1 all locations/pools button", I'll put it at the top always. */}
+              {!searchQuery && pools.length > 0 && (
+                <>
+                  <TouchableOpacity
+                    style={styles.locationSelectItem} // Reusing item style for consistency
+                    onPress={toggleGlobalAll}
+                  >
+                    <View style={styles.checkContainer}>
+                      {isGlobalAllSelected() && (
+                        <Icon name="check" size={16} color="#374151" />
+                      )}
+                    </View>
+                    <Text style={[styles.locationNameText, styles.allLocationText, { fontSize: 14 }]}>
+                      All Locations
+                    </Text>
+                  </TouchableOpacity>
+                  <View style={styles.poolDivider} />
+                </>
+              )}
+
+              {filteredPools.length === 0 && !loading ? (
+                <Text style={styles.emptyText}>
                   No pools or locations found
                 </Text>
               ) : (
-                filteredPools.map((item) => (
-                  <View key={item.pool.id}>
-                    {/* Pool Header */}
-                    <TouchableOpacity
-                      style={styles.poolHeader}
-                      onPress={() => toggleAllLocationsInPool(item.pool.id)}
-                    >
-                      <Text style={[styles.poolNameText, { color: '#333' }]}>
-                        {item.pool.name}
-                      </Text>
-                    </TouchableOpacity>
+                filteredPools.map((pool) => {
+                  const filteredLocationIds = getFilteredLocationsForPool(pool);
+                  const platformTypes = getPoolPlatformTypes(pool);
 
-                    {/* All Locations Option */}
-                    <TouchableOpacity
-                      style={styles.locationSelectItem}
-                      onPress={() => {
-                        const allLocationIds = item.locations.map((loc) => loc.Id);
-                        setSelectedLocations((prev) => {
-                          const allSelected = allLocationIds.every((id) =>
-                            prev.includes(id)
-                          );
-                          if (allSelected) {
-                            return prev.filter((id) => !allLocationIds.includes(id));
-                          } else {
-                            return [...prev, ...allLocationIds.filter((id) => !prev.includes(id))];
-                          }
-                        });
-                      }}
-                    >
-                      <View style={{ width: 24, alignItems: 'center' }}>
-                        {item.locations.every((loc) => selectedLocations.includes(loc.Id)) && (
-                            <Icon name="check" size={18} color="#333" />
-                        )}
-                      </View>
-                      <Text
-                        style={[
-                          styles.locationNameText,
-                          { color: '#333', flex: 1 },
-                        ]}
-                      >
-                        All Locations
-                      </Text>
-                      <View style={{ flexDirection: 'row', gap: 4 }}>
-                         {/* Show distinct platform icons available in this pool */}
-                         {Array.from(new Set(item.locations.map(l => l.PlatformConnections?.PlatformType))).map(pt => (
-                             pt ? <PlatformAvatar key={pt} platformType={pt} size="small" /> : null
-                         ))}
-                      </View>
-                    </TouchableOpacity>
+                  // Skip pools with no valid locations
+                  if (filteredLocationIds.length === 0 && !searchQuery) return null;
 
-                    {/* Individual Locations */}
-                    {item.locations.map((location) => (
+                  // Check if all VALID locations in this pool are selected (for pool header checkmark)
+                  const validIds = (pool.locationIds || []).filter(id => locationMetadataMap.has(id));
+                  const isPoolFullySelected = validIds.length > 0 && validIds.every(id => selectedLocations.includes(id));
+
+                  return (
+                    <View key={pool.id}>
+                      {/* Pool Header - Now Clickable to Select Whole Pool */}
                       <TouchableOpacity
-                        key={location.Id}
-                        style={styles.locationSelectItem}
-                        onPress={() => toggleLocationSelection(location.Id)}
+                        style={styles.poolHeaderInteractive}
+                        onPress={() => toggleAllLocationsInPool(pool.id)}
+                        activeOpacity={0.7}
                       >
-                        <View style={{ width: 24, alignItems: 'center' }}>
-                            {selectedLocations.includes(location.Id) && (
-                                <Icon name="check" size={18} color="#333" />
-                            )}
+                        <View style={[styles.checkContainer, { marginRight: 0 }]}>
+                          {isPoolFullySelected && (
+                            <Icon name="check" size={16} color="#6B7280" />
+                          )}
                         </View>
-                        
-                        <Text style={[styles.locationNameText, { color: '#333', flex: 1 }]}>
-                            {location.Name}
+                        <Text style={styles.poolNameText}>
+                          {pool.name}
                         </Text>
-                        
-                        {location.PlatformConnections && (
-                          <PlatformAvatar
-                            platformType={location.PlatformConnections.PlatformType}
-                            size="small"
-                          />
-                        )}
                       </TouchableOpacity>
-                    ))}
 
-                    <View style={styles.poolDivider} />
-                  </View>
-                ))
+                      {/* Individual Locations */}
+                      {filteredLocationIds.map((locationId) => {
+                        const meta = locationMetadataMap.get(locationId);
+                        if (!meta) return null;
+
+                        const isSelected = selectedLocations.includes(locationId);
+
+                        return (
+                          <TouchableOpacity
+                            key={locationId}
+                            style={styles.locationSelectItem}
+                            onPress={() => toggleLocationSelection(locationId)}
+                          >
+                            <View style={styles.checkContainer}>
+                              {isSelected && (
+                                <Icon name="check" size={16} color="#374151" />
+                              )}
+                            </View>
+
+                            <Text style={styles.locationNameText}>
+                              {meta.locationName}
+                            </Text>
+
+                            <View style={styles.platformIconsRow}>
+                              {renderPlatformLogo(meta.platformType, locationId)}
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
+
+                      {/* Divider between pools */}
+                      <View style={styles.poolDivider} />
+                    </View>
+                  );
+                })
               )}
             </ScrollView>
           )}
 
-          <View style={styles.dropdownFooter}>
-            <TouchableOpacity
-              style={[styles.applyButton, { backgroundColor: theme.colors.primary }]}
-              onPress={handleApplySelection}
-            >
-              <Text style={styles.applyButtonText}>Done</Text>
-            </TouchableOpacity>
-          </View>
+          {/* Footer Removed as requested ("dont really want a done button") */}
+          <View style={{ height: 8 }} />
         </View>
       )}
     </View>
@@ -354,7 +488,6 @@ const styles = StyleSheet.create({
     borderColor: '#E5E7EB',
     borderRadius: 8,
     backgroundColor: '#FFFFFF',
-    // No shadow for cleaner look
   },
   dropdownContent: {
     flexDirection: 'row',
@@ -370,99 +503,100 @@ const styles = StyleSheet.create({
     top: 48,
     left: 0,
     right: 0,
-    borderRadius: 8,
+    borderRadius: 12,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#E5E7EB',
-    maxHeight: 400,
+    maxHeight: 450,
     overflow: 'hidden',
-    zIndex: 1000, // Ensure high z-index
+    zIndex: 1000,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 24,
+    elevation: 12,
   },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: '#F3F4F6',
+    backgroundColor: '#FFFFFF',
   },
   searchInput: {
     flex: 1,
     marginLeft: 8,
     fontSize: 14,
+    color: '#374151',
+    paddingVertical: 0,
   },
   locationListScrollView: {
-    maxHeight: 300,
+    maxHeight: 350,
   },
   loadingText: {
     textAlign: 'center',
     paddingVertical: 20,
+    color: '#6B7280',
+    fontSize: 14,
   },
   emptyText: {
     textAlign: 'center',
     paddingVertical: 20,
-  },
-  poolHeader: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    backgroundColor: '#F9FAFB', // Light gray background for headers
-  },
-  poolNameText: {
-    fontSize: 13,
-    fontWeight: '600',
     color: '#6B7280',
+    fontSize: 14,
   },
-  poolDivider: {
-    height: 1,
-    backgroundColor: '#F3F4F6',
-  },
-  locationSelectItem: {
+  // Updated Pool Header style for interactivity
+  poolHeaderInteractive: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 10,
     paddingHorizontal: 12,
+    backgroundColor: '#F9FAFB',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
   },
-  checkboxIcon: {
-    marginRight: 12,
+  poolNameText: {
+    fontSize: 13,
+    fontWeight: '700', // Bolder to stand out
+    color: '#374151',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
-  locationInfo: {
-    flex: 1,
+  poolDivider: {
+    height: 1,
+    backgroundColor: '#E5E7EB',
   },
-  locationHeader: {
+  locationSelectItem: {
     flexDirection: 'row',
     alignItems: 'center',
+    paddingVertical: 12, // Slightly taller click area
+    paddingHorizontal: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  checkContainer: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 4,
   },
   locationNameText: {
+    flex: 1,
     fontSize: 14,
     fontWeight: '400',
-    marginLeft: 8,
+    color: '#374151',
+    marginLeft: 4,
   },
   allLocationText: {
     fontWeight: '600',
+    color: '#111',
   },
-  locationBadge: {
-    fontSize: 11,
-    fontWeight: '500',
-    marginLeft: 8,
-  },
-  dropdownFooter: {
-    padding: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#F3F4F6',
-  },
-  applyButton: {
-    paddingVertical: 10,
-    borderRadius: 6,
+  platformIconsRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-  },
-  applyButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
+    gap: 4,
   },
 });
 
