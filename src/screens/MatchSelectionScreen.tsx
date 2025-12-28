@@ -236,6 +236,9 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         return (fromParams && typeof fromParams === 'object') ? fromParams : {};
     });
 
+    // Track failed items from server for retry/rescan buttons
+    const [failedItems, setFailedItems] = useState<Array<{ index: number; error: string }>>([]);
+
     // Memoized items for ItemJobsModal - avoids recalculating on every render
     // IMPORTANT: Must be declared BEFORE useEffects that reference it
     const modalItems = useMemo(() => {
@@ -424,7 +427,10 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
             return;
         }
 
-        const pollStatus = async () => {
+        const pollStatus = async (retryCount: number = 0) => {
+            const maxRetries = 5;
+            const baseDelayMs = 1000; // 1s, 2s, 4s, 8s, 16s
+
             try {
                 const token = await getToken();
                 if (!jobId) {
@@ -441,6 +447,26 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 const res = await fetch(`${BASE_URL}/api/products/match/jobs/${jobId}/status`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
+
+                // Handle 5xx server errors with retry
+                if (res.status >= 500 && res.status < 600) {
+                    if (retryCount < maxRetries) {
+                        const delay = baseDelayMs * Math.pow(2, retryCount);
+                        console.log(`[MatchSelectionScreen] Server error ${res.status}, retrying in ${delay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+                        setError(`Reconnecting... (attempt ${retryCount + 1}/${maxRetries})`);
+                        timer = setTimeout(() => pollStatus(retryCount + 1), delay);
+                        return;
+                    } else {
+                        throw new Error(`Server unavailable after ${maxRetries} retries. Please try again later.`);
+                    }
+                }
+
+                // Clear any reconnecting message on success
+                if (retryCount > 0) {
+                    setError(null);
+                    console.log(`[MatchSelectionScreen] Reconnected successfully after ${retryCount} retries`);
+                }
+
                 if (!res.ok) throw new Error(`Status ${res.status}`);
                 const status = await res.json();
                 if (cancelled) return;
@@ -462,14 +488,29 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                         if (res2.ok) {
                             const finalData = await res2.json();
                             setAnalysisData({ jobId: finalData?.jobId, results: finalData?.results || [] });
+
+                            // Extract failed items for retry/rescan UI
+                            if (Array.isArray(finalData?.failedItems) && finalData.failedItems.length > 0) {
+                                console.log(`[MatchSelectionScreen] ${finalData.failedItems.length} items failed, enabling retry`);
+                                setFailedItems(finalData.failedItems);
+                            }
                         }
                     } catch { }
                     return; // stop polling
                 }
 
-                timer = setTimeout(pollStatus, 700);
+                timer = setTimeout(() => pollStatus(0), 700); // Reset retry count on success
             } catch (err: any) {
                 if (!cancelled) {
+                    // Network errors - retry with exponential backoff
+                    const isNetworkError = err.message?.includes('Network') || err.message?.includes('fetch');
+                    if (isNetworkError && retryCount < maxRetries) {
+                        const delay = baseDelayMs * Math.pow(2, retryCount);
+                        console.log(`[MatchSelectionScreen] Network error, retrying in ${delay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+                        setError(`Reconnecting... (attempt ${retryCount + 1}/${maxRetries})`);
+                        timer = setTimeout(() => pollStatus(retryCount + 1), delay);
+                        return;
+                    }
                     setError(err.message);
                     setIsLoading(false);
                 }
@@ -1476,7 +1517,12 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 onClose={() => setJobsModalVisible(false)}
                 items={modalItems}
                 currentIndex={currentProductIndex}
-                scanColor={() => (analysisData ? '#93C822' : (isLoading ? '#FFD700' : '#4B5563'))}
+                scanColor={(idx) => {
+                    // Show failed items in red for retry indication
+                    const isFailed = failedItems.some(f => f.index === idx);
+                    if (isFailed) return '#e11d48'; // Red for failed
+                    return analysisData ? '#93C822' : (isLoading ? '#FFD700' : '#4B5563');
+                }}
                 matchColor={(idx) => (idx === currentProductIndex && selectedIndices.length > 0 ? '#93C822' : '#FFD700')}
                 detailsColor={(idx) => {
                     const s = itemGenerateJobs[idx]?.status;

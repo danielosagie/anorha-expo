@@ -2,11 +2,13 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { Picker } from '@react-native-picker/picker';
+import { ensureSupabaseJwt } from '../../lib/supabase';
+import PillTabs from '../components/ui/PillTabs';
 
-// Canonical Anorha fields that we need to map to
+// Canonical Anorha fields that we map to
 const CANONICAL_FIELDS = [
     { key: 'title', label: 'Title', required: true, example: 'Nike Air Max 90' },
     { key: 'description', label: 'Description', required: false, example: 'Classic sneaker with Air cushioning...' },
@@ -33,7 +35,7 @@ interface RouteParams {
 type CSVColumnMappingScreenRouteProp = RouteProp<{ CSVColumnMapping: RouteParams }, 'CSVColumnMapping'>;
 
 export function CSVColumnMappingScreen() {
-    const navigation = useNavigation<NativeStackNavigationProp<any>>();
+    const navigation = useNavigation<any>();
     const route = useRoute<CSVColumnMappingScreenRouteProp>();
 
     const { csvHeaders = [], csvData = [], sampleRow = {} } = route.params || {};
@@ -41,16 +43,59 @@ export function CSVColumnMappingScreen() {
     // Mapping state: canonical field key -> csv column name
     const [mappings, setMappings] = useState<Record<string, string>>({});
     const [isProcessing, setIsProcessing] = useState(false);
+    const [isLoadingAI, setIsLoadingAI] = useState(false);
+    const [activeTab, setActiveTab] = useState<'all' | 'required' | 'optional'>('all');
 
-    // Auto-detect mappings based on similar column names
+    // Auto-detect mappings using backend AI on mount
     useEffect(() => {
+        const fetchAIMappings = async () => {
+            setIsLoadingAI(true);
+            try {
+                const token = await ensureSupabaseJwt();
+                if (!token) {
+                    console.warn('[CSVColumnMapping] No auth token, falling back to basic matching');
+                    fallbackToBasicMatching();
+                    return;
+                }
+
+                const response = await fetch('https://api.sssync.app/api/products/csv-column-mapping', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        headers: csvHeaders,
+                        sampleRow: sampleRow,
+                    }),
+                });
+
+                if (!response.ok) {
+                    throw new Error(`API returned ${response.status}`);
+                }
+
+                const result = await response.json();
+                setMappings(result.mappings || {});
+                console.log('[CSVColumnMapping] AI mapped', Object.keys(result.mappings || {}).length, 'fields');
+            } catch (error) {
+                console.error('[CSVColumnMapping] AI mapping failed:', error);
+                fallbackToBasicMatching();
+            } finally {
+                setIsLoadingAI(false);
+            }
+        };
+
+        fetchAIMappings();
+    }, [csvHeaders]);
+
+    // Fallback to basic string matching if AI fails
+    const fallbackToBasicMatching = () => {
         const autoMappings: Record<string, string> = {};
 
         CANONICAL_FIELDS.forEach(field => {
             const fieldLower = field.key.toLowerCase();
             const labelLower = field.label.toLowerCase();
 
-            // Try to find a matching CSV column
             const match = csvHeaders.find(header => {
                 const headerLower = header.toLowerCase().replace(/[_\-\s]/g, '');
                 return (
@@ -67,7 +112,7 @@ export function CSVColumnMappingScreen() {
         });
 
         setMappings(autoMappings);
-    }, [csvHeaders]);
+    };
 
     const handleMappingChange = (canonicalField: string, csvColumn: string) => {
         setMappings(prev => ({
@@ -124,6 +169,22 @@ export function CSVColumnMappingScreen() {
     const requiredCount = CANONICAL_FIELDS.filter(f => f.required).length;
     const mappedRequiredCount = CANONICAL_FIELDS.filter(f => f.required && mappings[f.key]).length;
 
+    // Filter fields based on active tab
+    const filteredFields = useMemo(() => {
+        if (activeTab === 'required') {
+            return CANONICAL_FIELDS.filter(f => f.required);
+        } else if (activeTab === 'optional') {
+            return CANONICAL_FIELDS.filter(f => !f.required);
+        }
+        return CANONICAL_FIELDS;
+    }, [activeTab]);
+
+    const tabs = [
+        { key: 'all' as const, id: 'all' as const, label: `All (${CANONICAL_FIELDS.length})` },
+        { key: 'required' as const, id: 'required' as const, label: `Required (${requiredCount})` },
+        { key: 'optional' as const, id: 'optional' as const, label: `Optional (${CANONICAL_FIELDS.length - requiredCount})` },
+    ];
+
     return (
         <SafeAreaView style={styles.container}>
             <View style={styles.header}>
@@ -135,22 +196,29 @@ export function CSVColumnMappingScreen() {
             </View>
 
             <View style={styles.progressBar}>
-                <View style={styles.progressFill}
-                    // @ts-ignore
-                    width={`${(mappedCount / CANONICAL_FIELDS.length) * 100}%`}
-                />
+                <View style={[styles.progressFill, { width: `${(mappedCount / CANONICAL_FIELDS.length) * 100}%` }]} />
             </View>
             <Text style={styles.progressText}>
                 {mappedCount}/{CANONICAL_FIELDS.length} fields mapped • {mappedRequiredCount}/{requiredCount} required
             </Text>
 
-            <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
-                <Text style={styles.sectionTitle}>Match your CSV columns to Anorha fields</Text>
-                <Text style={styles.sectionSubtitle}>
-                    We've auto-detected some matches. Review and adjust as needed.
-                </Text>
+            {isLoadingAI && (
+                <View style={styles.loadingBanner}>
+                    <ActivityIndicator size="small" color="#6366f1" />
+                    <Text style={styles.loadingText}>AI analyzing columns...</Text>
+                </View>
+            )}
 
-                {CANONICAL_FIELDS.map(field => (
+            <View style={styles.tabsContainer}>
+                <PillTabs
+                    tabs={tabs}
+                    value={activeTab}
+                    onChange={(key) => setActiveTab(key as 'all' | 'required' | 'optional')}
+                />
+            </View>
+
+            <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+                {filteredFields.map(field => (
                     <View key={field.key} style={styles.fieldRow}>
                         <View style={styles.fieldInfo}>
                             <View style={styles.fieldLabelRow}>
@@ -253,23 +321,31 @@ const styles = StyleSheet.create({
         paddingVertical: 8,
         backgroundColor: '#fff',
     },
+    loadingBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        backgroundColor: '#eef2ff',
+        gap: 8,
+    },
+    loadingText: {
+        fontSize: 14,
+        color: '#6366f1',
+        fontWeight: '500',
+    },
+    tabsContainer: {
+        padding: 16,
+        paddingBottom: 8,
+        backgroundColor: '#fff',
+    },
     scrollView: {
         flex: 1,
     },
     scrollContent: {
         padding: 16,
         paddingBottom: 100,
-    },
-    sectionTitle: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#111827',
-        marginBottom: 4,
-    },
-    sectionSubtitle: {
-        fontSize: 14,
-        color: '#6b7280',
-        marginBottom: 20,
     },
     fieldRow: {
         backgroundColor: '#fff',

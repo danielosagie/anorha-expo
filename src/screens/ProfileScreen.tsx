@@ -86,6 +86,7 @@ interface PlatformConnection {
   UserId: string;
   IsEnabled: boolean;
   LastSyncSuccessAt: string | null;
+  NeedsReauth?: boolean; // Backend signals when OAuth token is expired/revoked
   CreatedAt: string;
   UpdatedAt: string;
 }
@@ -177,12 +178,13 @@ const getStatusDisplay = (status: string): { label: string, color: string, icon:
 type RecommendedAction = 'reconnect' | 'rescan' | 'fix_resume' | 'manage';
 
 const getRecommendedAction = (
-  connection: { Status: string; LastSyncSuccessAt: string | null; IsEnabled: boolean },
+  connection: { Status: string; LastSyncSuccessAt: string | null; IsEnabled: boolean; NeedsReauth?: boolean },
   platformType: string
 ): { action: RecommendedAction; label: string; icon: string; color: string; description: string } => {
   const status = connection.Status?.toLowerCase();
   const hasEverSynced = !!connection.LastSyncSuccessAt;
   const isEnabled = connection.IsEnabled;
+  const needsReauth = connection.NeedsReauth === true;
 
   // If connection is disabled, primary action is to re-enable
   if (!isEnabled) {
@@ -192,6 +194,18 @@ const getRecommendedAction = (
       icon: 'play-circle',
       color: '#FF9500', // warning
       description: 'Re-enable this connection and resume syncing'
+    };
+  }
+
+  // PRIORITY: If backend explicitly signals needsReauth, always show Reconnect
+  // This handles expired/revoked OAuth tokens regardless of previous sync success
+  if (needsReauth) {
+    return {
+      action: 'reconnect',
+      label: 'Reconnect',
+      icon: 'link-variant',
+      color: '#FF3B30', // error
+      description: 'Your account credentials have expired. Please re-authorize.'
     };
   }
 
@@ -851,46 +865,39 @@ const ProfileScreen = () => {
           onPress: async () => {
             console.log(`[ProfileScreen] Initiating reconnect for ${platformName} (connection ID: ${connectionId})`);
             try {
-              // Step 1: Delete the existing connection
               const token = await getApiToken();
               if (!token) {
                 throw new Error("Authentication token not found.");
               }
 
-              const response = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections/${connectionId}`, {
-                method: 'DELETE',
-                headers: {
-                  'Authorization': `Bearer ${token}`,
-                },
-              });
+              // Use the backend's reconnect endpoint which returns an auth URL
+              const finalRedirectUri = 'anorhaapp://auth-callback';
+              const response = await fetch(
+                `${SSSYNC_API_BASE_URL}/api/auth/${platformType}/reconnect?connectionId=${connectionId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`,
+                {
+                  method: 'GET',
+                  headers: {
+                    'Authorization': `Bearer ${token}`,
+                  },
+                }
+              );
 
               if (!response.ok) {
                 const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
-                throw new Error(errorData.message || `Failed to disconnect. Status: ${response.status}`);
+                throw new Error(errorData.message || `Failed to get reconnect URL. Status: ${response.status}`);
               }
 
-              console.log(`[ProfileScreen] Successfully disconnected old connection ${connectionId}`);
+              const { authUrl } = await response.json();
+              console.log(`[ProfileScreen] Got reconnect URL for ${platformName}, opening in browser...`);
 
-              // Reset Legend State to clear out old data
-              await resetLegendState();
-
-              // Step 2: Immediately initiate new OAuth connection based on platform type
-              if (platformType === 'square') {
-                // Call Square OAuth flow
-                await handleSquareConnect();
-              } else if (platformType === 'shopify') {
-                // For Shopify, show the add connection overlay
-                overlay.show();
-              } else if (platformType === 'facebook') {
-                await handleFacebookConnect();
+              // Open the auth URL in browser
+              const supported = await Linking.canOpenURL(authUrl);
+              if (supported) {
+                await Linking.openURL(authUrl);
+                // User will be redirected back after OAuth completes
               } else {
-                // For other platforms, just show the add connection overlay
-                Alert.alert('Success', `${platformName} disconnected. Please add a new connection.`);
-                overlay.show();
+                throw new Error("Could not open reconnect URL.");
               }
-
-              // Refresh the connections list
-              fetchConnections();
 
             } catch (error: unknown) {
               console.error("[ProfileScreen] Error reconnecting platform:", error);
@@ -1318,15 +1325,11 @@ const ProfileScreen = () => {
       console.log(`[ProfileScreen] Facebook Connect: Opening in ${USE_EXTERNAL_BROWSER_FOR_FACEBOOK ? 'External' : 'Internal'} browser...`);
 
       if (USE_EXTERNAL_BROWSER_FOR_FACEBOOK) {
-        // Option A: Open in Chrome/Safari - user must return manually OR reliance on custom scheme redirect
+        // Option A: Open in Chrome/Safari - user will be redirected back via custom scheme
         const supported = await Linking.canOpenURL(backendAuthUrl);
         if (supported) {
           await Linking.openURL(backendAuthUrl);
-          Alert.alert(
-            "Complete in Browser",
-            "Complete the Facebook login in your browser. When done, you'll be redirected back to the app.",
-            [{ text: "OK" }]
-          );
+          // No alert needed - user will be redirected back automatically after completing OAuth
         } else {
           Alert.alert("Error", "Could not open Facebook login. Please try again.");
         }
@@ -1962,8 +1965,8 @@ const ProfileScreen = () => {
                         {/* Edit Mode: Refresh Login + Disconnect buttons */}
                         {isEditMode && (
                           <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-                            {/* Refresh Login - for refreshing OAuth credentials */}
-                            {(platformConfig.key === 'square' || platformConfig.key === 'shopify') && (
+                            {/* Refresh Login - for refreshing OAuth credentials (all OAuth platforms) */}
+                            {['square', 'shopify', 'facebook', 'clover', 'ebay'].includes(platformConfig.key) && (
                               <TouchableOpacity
                                 style={[styles.actionButton, { backgroundColor: theme.colors.primary + '10' }]}
                                 onPress={() => handleReconnectPlatform(connection.Id, platformConfig.key, platformConfig.name)}

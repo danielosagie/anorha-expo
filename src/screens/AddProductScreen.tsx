@@ -2648,7 +2648,7 @@ const MatchResultsSheet: React.FC<{
               onPress={onStartBroadSearch}
             >
               <Icon name="magnify" size={18} color="#666" />
-              <Text style={styles.reviewDetailsButtonText}>Review Details</Text>
+              <Text style={styles.reviewDetailsButtonText}>Review Items</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -2743,7 +2743,7 @@ const BulkItemsSheet: React.FC<{
   console.log('[SHEET DEBUG] ==================');
 
   // Fixed height at 60% of screen
-  const sheetMaxHeight = SCREEN_HEIGHT * 0.6;
+  const sheetMaxHeight = SCREEN_HEIGHT * 0.7;
   const headerHeight = 160; // Increased for debug sections
   const footerHeight = 120; // Height for fixed bottom actions
   const scrollableHeight = Math.max(200, sheetMaxHeight - headerHeight - footerHeight);
@@ -2769,7 +2769,7 @@ const BulkItemsSheet: React.FC<{
           const { translationY } = event.nativeEvent;
           const minY = SCREEN_HEIGHT * 0.2; // Maximum expanded (80% height)
           const maxY = SCREEN_HEIGHT * 0.6; // Minimum height (40% height)
-          const currentY = SCREEN_HEIGHT * 0.5; // Current position (60% height)
+          const currentY = SCREEN_HEIGHT * 0.6; // Current position (60% height)
 
           // Calculate new position based on drag
           const newY = Math.max(minY, Math.min(maxY, currentY + translationY * 0.5));
@@ -3573,8 +3573,8 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingTop: 20,
-    paddingBottom: 80, // Increased bottom padding
-    marginBottom: 60, // Added bottom margin
+    paddingBottom: 120, // Increased bottom padding
+    marginBottom: 0, // Added bottom margin
     height: SCREEN_HEIGHT * 0.7,
   },
   sheetHeader: {
@@ -3822,9 +3822,9 @@ const styles = StyleSheet.create({
   quickMatchesButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'transparent',
+    backgroundColor: 'white',
     borderWidth: 2,
-    borderColor: '#4CAF50',
+    borderColor: '#e1e1e1ff',
     borderRadius: 8,
     paddingVertical: 8,
     paddingHorizontal: 12,
@@ -3832,7 +3832,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   quickMatchesButtonText: {
-    color: '#4CAF50',
+    color: '#93C822',
     fontSize: 13,
     fontWeight: '600',
   },
@@ -3840,7 +3840,7 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#93C822',
   },
   photoAttachments: {
     borderTopWidth: 1,
@@ -3944,7 +3944,7 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 8,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f5f5f5ff',
     borderWidth: 1,
     borderColor: '#ddd',
     borderStyle: 'dashed',
@@ -3982,6 +3982,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#93C822',
     borderRadius: 12,
     paddingVertical: 16,
+    marginBottom: 10,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',

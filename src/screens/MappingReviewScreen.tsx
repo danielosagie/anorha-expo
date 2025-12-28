@@ -3467,18 +3467,8 @@ const MappingReviewScreen = () => {
     );
   }
 
-  // --- MODIFIED: Show empty state only if both API suggestions and existing mappings are empty ---
-  if ((!suggestions || (Array.isArray(suggestions) && suggestions.length === 0)) && existingMappings.length === 0 && !loadingExistingMappings) {
-    return (
-      <View style={[styles.container, styles.centered]}>
-        <Icon name="information-outline" size={48} color={theme.colors.textSecondary} />
-        <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
-          No mapping suggestions found for {platformName}.
-        </Text>
-        <Button title="Refresh" onPress={() => fetchMappingSuggestions(connectionId)} />
-      </View>
-    );
-  }
+  // NOTE: Removed empty state early return - always show full wizard UI
+  // MappingReviewScreen is used for ongoing settings, not just product mapping
 
   // --- MODIFIED: If we have existing mappings but no API suggestions, show them ---
   if (existingMappings.length > 0 && (!suggestions || (Array.isArray(suggestions) && suggestions.length === 0))) {

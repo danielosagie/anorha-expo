@@ -131,12 +131,13 @@ export async function initializeLegendState(
     const productVariants$ = observable<Record<string, ProductVariant>>(
         customSynced({
             collection: 'ProductVariants',
-            select: (from: any) => from.select('*, id:Id, Options, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, Tags, Metadata, PrimaryImageUrl'),
+            // OPTIMIZED: Only fetch columns we actually use in the UI
+            select: (from: any) => from.select('Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, ImageUrls, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, Tags, PrimaryImageUrl, CreatedAt, UpdatedAt'),
             filter: (query: any) => query.eq('UserId', currentUserId),
             actions: ['read', 'create', 'update', 'delete'],
             realtime: { filter: `UserId=eq.${currentUserId}` },
             persist: {
-                name: `productVariants_user_${currentUserId}_v5`, // Updated version to clear cache with new fields
+                name: `productVariants_user_${currentUserId}_v6`, // Bumped for column change
                 retrySync: true,
             },
         })
@@ -161,73 +162,69 @@ export async function initializeLegendState(
     // 3. For now, they will fetch all records and client-side will need to filter in useMemo.
     // This is NOT ideal for performance or security if RLS is off for these tables.
 
+    // OPTIMIZED: Reduced columns, relies on RLS to filter via ProductVariantId join
     const platformProductMappings$ = observable<Record<string, PlatformProductMapping>>(
         customSynced({
             collection: 'PlatformProductMappings',
-            select: (from: any) => from.select('*, id:Id'),
+            // Only fetch essential columns
+            select: (from: any) => from.select('Id, PlatformConnectionId, ProductVariantId, PlatformProductId, PlatformVariantId, PlatformSku, SyncStatus, IsEnabled, LastSyncedAt, UpdatedAt'),
             actions: ['read', 'create', 'update', 'delete'],
-            realtime: true,
+            realtime: true, // RLS filters via ProductVariantId->UserId join
             persist: {
-                name: `platformProductMappings_user_${currentUserId}_v2`,
+                name: `platformProductMappings_user_${currentUserId}_v3`,
                 retrySync: true,
             },
         })
     );
-    console.log(`[SupaLegend] platformProductMappings$ observable configured for UserId: ${currentUserId} (indirectly, needs RLS/joins for proper filtering)`);
+    console.log(`[SupaLegend] platformProductMappings$ configured (filtered by RLS)`);
 
+    // OPTIMIZED: Only fetch essential image columns, disable realtime
     const productImages$ = observable<Record<string, ProductImage>>(
         customSynced({
             collection: 'ProductImages',
-            select: (from: any) => from.select('*, id:Id'),
+            // Only fetch what's needed to display images
+            select: (from: any) => from.select('Id, ProductVariantId, ImageUrl, Position'),
             actions: ['read', 'create', 'update', 'delete'],
-            realtime: true,
+            realtime: false, // DISABLED: Images rarely change, reduces egress significantly
             persist: {
-                name: `productImages_user_${currentUserId}_v2`,
+                name: `productImages_user_${currentUserId}_v3`, // Bumped for column change
                 retrySync: true,
             },
         })
     );
-    console.log(`[SupaLegend] productImages$ observable configured for UserId: ${currentUserId} (indirectly, needs RLS/joins for proper filtering)`);
+    console.log(`[SupaLegend] productImages$ configured (realtime disabled to reduce egress)`);
 
-    // Add onChange listener for productImages$ diagnostics
-    productImages$.onChange(syncedData => {
-        const dataCount = Object.keys(syncedData || {}).length;
-        console.log(`[SupaLegend - productImages$.onChange] Data changed. Count: ${dataCount}`);
-        if (dataCount > 0 && dataCount < 5) { // Log first few items if count is small
-            console.log('[SupaLegend - productImages$.onChange] Sample data:', JSON.stringify(Object.values(syncedData || {}).slice(0, 5), null, 2));
-        } else if (dataCount === 0) {
-            console.log('[SupaLegend - productImages$.onChange] Data is empty.');
-        }
-    }, { immediate: true });
-
+    // OPTIMIZED: Essential columns only, relies on RLS to filter via ProductVariantId join
     const inventoryLevels$ = observable<Record<string, InventoryLevel>>(
         customSynced({
             collection: 'InventoryLevels',
-            select: (from: any) => from.select('*, id:Id'),
+            // Only fetch essential columns for inventory tracking
+            select: (from: any) => from.select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt'),
             actions: ['read', 'create', 'update', 'delete'],
-            realtime: true,
+            realtime: true, // Live updates essential for inventory
             persist: {
-                name: `inventoryLevels_user_${currentUserId}_v4`, // INCREMENTED: v3 -> v4 to clear corrupted cache
+                name: `inventoryLevels_user_${currentUserId}_v5`, // Bumped for column change
                 retrySync: true,
             },
         })
     );
-    console.log(`[SupaLegend] inventoryLevels$ observable configured for UserId: ${currentUserId} (indirectly, needs RLS/joins for proper filtering)`);
+    console.log(`[SupaLegend] inventoryLevels$ configured with live updates (filtered by RLS)`);
 
     const marketplaceListings$ = observable<Record<string, MarketplaceListing>>(
         customSynced({
             collection: 'MarketplaceListings',
-            select: (from: any) => from.select('*, id:Id'), // Alias Id to id
-            filter: (query: any) => query.eq('SellerUserId', currentUserId), // Filter by SellerUserId
+            // OPTIMIZED: Only fetch essential columns
+            select: (from: any) => from.select('Id, ProductVariantId, SellerUserId, Price, AvailableQuantity, IsEnabled, CreatedAt, UpdatedAt'),
+            filter: (query: any) => query.eq('SellerUserId', currentUserId),
             actions: ['read', 'create', 'update', 'delete'],
             realtime: { filter: `SellerUserId=eq.${currentUserId}` },
             persist: {
-                name: `marketplaceListings_user_${currentUserId}_v2`,
+                name: `marketplaceListings_user_${currentUserId}_v3`, // Bumped for column change
                 retrySync: true,
             },
         })
     );
-    console.log(`[SupaLegend] marketplaceListings$ observable configured for UserId: ${currentUserId}`);
+    console.log(`[SupaLegend] marketplaceListings$ configured with user filter`);
 
     // Placeholder for PlatformLocations observable - to be implemented with actual data fetching
     const platformLocations$ = observable<Record<string, PlatformLocation>>({});

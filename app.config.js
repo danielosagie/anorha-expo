@@ -2,6 +2,7 @@ export default {
   name: "Anorha",
   slug: "sssync",
   owner: "anorha",
+  version: "1.0.1",
   scheme: "anorhaapp",
   android: {
     package: "anorha.alpha",
@@ -13,7 +14,7 @@ export default {
   ios: {
     bundleIdentifier: "anorha.alpha",
     supportsTablet: true,
-    buildNumber: "1",
+    buildNumber: "2",
     icon: "./src/assets/anorha_logo.png",
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
@@ -41,7 +42,7 @@ export default {
     [
       "expo-splash-screen",
       {
-        backgroundColor: "#200030",
+        backgroundColor: "#FFF9EB",
         image: "./src/assets/anorha_logo.png",
         resizeMode: "contain",
         imageWidth: 200,
