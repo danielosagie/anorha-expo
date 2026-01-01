@@ -75,6 +75,15 @@ type PlatformState = {
 
   // Inventory behavior
   inventoryType?: InventoryType;
+
+  // Facebook Marketplace pickup location
+  pickupLocation?: {
+    latitude?: number;
+    longitude?: number;
+    locationName?: string;
+    deliveryMethod?: 'in_person' | 'shipping' | 'both';
+  };
+  condition?: 'new' | 'used' | 'refurbished' | 'like_new' | 'good' | 'fair';
 };
 
 const PLATFORM_META: Record<string, { label: string; icon: string }> = {
@@ -1635,6 +1644,114 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
         )}
 
       </View>
+
+      {/* Facebook Marketplace Pickup Location - only show for Facebook platform */}
+      {activePlatformKey === 'facebook' && (
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>📍 Marketplace Settings</Text>
+          <Text style={styles.subtle}>Configure how buyers can get this item</Text>
+
+          {/* Delivery Method */}
+          <View style={{ marginTop: 12 }}>
+            <Text style={{ fontSize: 14, fontWeight: '600', color: '#333' }}>Delivery Method</Text>
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+              {(['in_person', 'shipping', 'both'] as const).map((method) => (
+                <TouchableOpacity
+                  key={method}
+                  style={[
+                    styles.btnSecondary,
+                    {
+                      backgroundColor: activeData.pickupLocation?.deliveryMethod === method ? '#4CAF50' : '#f0f0f0',
+                      paddingHorizontal: 12,
+                      paddingVertical: 8,
+                    }
+                  ]}
+                  onPress={() => patchField('pickupLocation', {
+                    ...activeData.pickupLocation,
+                    deliveryMethod: method
+                  })}
+                >
+                  <Text style={{
+                    color: activeData.pickupLocation?.deliveryMethod === method ? '#fff' : '#333',
+                    fontSize: 13,
+                  }}>
+                    {method === 'in_person' ? '🚗 Local Pickup' : method === 'shipping' ? '📦 Shipping' : '🚗📦 Both'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          {/* Condition */}
+          <View style={{ marginTop: 12 }}>
+            <Text style={{ fontSize: 14, fontWeight: '600', color: '#333' }}>Condition</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+              {(['new', 'like_new', 'good', 'fair', 'used', 'refurbished'] as const).map((cond) => (
+                <TouchableOpacity
+                  key={cond}
+                  style={[
+                    styles.btnSecondary,
+                    {
+                      backgroundColor: activeData.condition === cond ? '#2196F3' : '#f0f0f0',
+                      paddingHorizontal: 10,
+                      paddingVertical: 6,
+                    }
+                  ]}
+                  onPress={() => patchField('condition', cond)}
+                >
+                  <Text style={{
+                    color: activeData.condition === cond ? '#fff' : '#333',
+                    fontSize: 12,
+                  }}>
+                    {cond.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          {/* Location fields - only show if local pickup is selected */}
+          {(activeData.pickupLocation?.deliveryMethod === 'in_person' || activeData.pickupLocation?.deliveryMethod === 'both') && (
+            <>
+              <Field
+                label="Pickup Location Name (e.g., Atlanta, GA)"
+                value={activeData.pickupLocation?.locationName || ''}
+                onChangeText={(t) => patchField('pickupLocation', {
+                  ...activeData.pickupLocation,
+                  locationName: t
+                })}
+              />
+              <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
+                <View style={{ flex: 1 }}>
+                  <Field
+                    label="Latitude (e.g., 33.7490)"
+                    value={activeData.pickupLocation?.latitude?.toString() || ''}
+                    keyboardType="numeric"
+                    onChangeText={(t) => patchField('pickupLocation', {
+                      ...activeData.pickupLocation,
+                      latitude: t ? parseFloat(t) : undefined
+                    })}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Field
+                    label="Longitude (e.g., -84.3880)"
+                    value={activeData.pickupLocation?.longitude?.toString() || ''}
+                    keyboardType="numeric"
+                    onChangeText={(t) => patchField('pickupLocation', {
+                      ...activeData.pickupLocation,
+                      longitude: t ? parseFloat(t) : undefined
+                    })}
+                  />
+                </View>
+              </View>
+              <Text style={[styles.subtle, { marginTop: 4 }]}>
+                💡 Tip: Get coordinates from Google Maps - right-click any location
+              </Text>
+            </>
+          )}
+        </View>
+      )}
 
 
       {/* Additional fields basic toggle */}

@@ -19,22 +19,22 @@ async function getToken() {
 export function useSyncProgress(connectionId: string) {
   const [progress, setProgress] = useState<SyncProgress | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
-  
+
   useEffect(() => {
+    let newSocket: Socket | null = null;
+
     // ✅ Get auth token before connecting to WebSocket
     const connectWithAuth = async () => {
-
-
       try {
         const token = await getToken()
-        
+
         if (!token) {
           console.warn('[useSyncProgress] No auth token found');
           return;
         }
-        
+
         // ✅ Pass auth token in connection query
-        const newSocket = io('https://api.sssync.app/collaboration', {
+        newSocket = io('https://api.sssync.app/collaboration', {
           transports: ['websocket'],
           timeout: 5000,
           auth: {
@@ -69,10 +69,18 @@ export function useSyncProgress(connectionId: string) {
         console.error('[useSyncProgress] Error connecting to WebSocket:', error);
       }
     };
-    
+
     connectWithAuth();
+
+    // ✅ CLEANUP: Disconnect socket when component unmounts or connectionId changes
+    return () => {
+      if (newSocket) {
+        console.log('[useSyncProgress] Cleaning up WebSocket connection');
+        newSocket.disconnect();
+      }
+    };
   }, [connectionId]);
-  
+
   return { progress, socket };
 }
 

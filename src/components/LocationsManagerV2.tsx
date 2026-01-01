@@ -13,9 +13,10 @@ import {
   Clipboard,
   Switch,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import DraggableFlatList, { RenderItemParams, ScaleDecorator } from 'react-native-draggable-flatlist';
-import { styles } from './LocationsManagerV2Styles'; import { useTheme } from '../context/ThemeContext';
+import { useTheme } from '../context/ThemeContext';
 import Button from './Button';
 import Card from './Card';
 import ShopifySvg from '../assets/shopify.svg';
@@ -43,6 +44,7 @@ interface Partnership {
   productCount: number;
   status: 'active' | 'pending';
   createdAt: string;
+  isInviter?: boolean; // true if current org sent the invite (false means we accepted)
 }
 
 interface PendingInvite {
@@ -353,23 +355,44 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
   const [selectedListItem, setSelectedListItem] = useState<{ kind: 'pool' | 'single' | null; id?: string | null }>({ kind: null, id: null });
   const [resolvedOrgId, setResolvedOrgId] = useState<string | null>(orgId || null);
 
-  // Implicit Detection of FTUX Partner
+  // Implicit Detection of FTUX Partner - only for ACCEPTERS who received shared inventory
+  // Shows only ONCE per user (persisted via AsyncStorage)
   useEffect(() => {
-    // Only run if we have loaded partnerships and it's not empty
-    if (!isLoading && partnerships.length > 0) {
-      // Check if user has NO active working connections
-      const hasWorkingConnection = platformConnections.some(c =>
-        ['active', 'ready_to_sync', 'scanning', 'syncing'].includes(c.Status?.toLowerCase() || '')
-      );
+    const checkAndShowWelcome = async () => {
+      // Only run if we have loaded partnerships and it's not empty
+      if (!isLoading && partnerships.length > 0 && resolvedOrgId) {
+        // Check if already dismissed
+        const dismissedKey = `partner_welcome_dismissed_${resolvedOrgId}`;
+        const dismissed = await AsyncStorage.getItem(dismissedKey);
+        if (dismissed === 'true') {
+          return; // Already shown and dismissed
+        }
 
-      if (!hasWorkingConnection) {
-        // Get the partner name from the first partnership
-        const firstPartner = partnerships[0];
-        setPartnerNameForOverlay(firstPartner.partnerOrgName || firstPartner.partnerEmail);
-        setShowWelcomeOverlay(true);
+        // Check if user has NO active working connections
+        const hasWorkingConnection = platformConnections.some(c =>
+          ['active', 'ready_to_sync', 'scanning', 'syncing'].includes(c.Status?.toLowerCase() || '')
+        );
+
+        if (!hasWorkingConnection) {
+          // Only show for ACCEPTERS (those who received shared inventory, not inviters)
+          const acceptedPartnership = partnerships.find(p => p.isInviter === false);
+          if (acceptedPartnership) {
+            setPartnerNameForOverlay(acceptedPartnership.partnerOrgName || acceptedPartnership.partnerEmail);
+            setShowWelcomeOverlay(true);
+          }
+        }
       }
+    };
+    checkAndShowWelcome();
+  }, [isLoading, partnerships, platformConnections, resolvedOrgId]);
+
+  // Handler for dismissing welcome overlay (persists so it only shows once)
+  const handleDismissWelcome = useCallback(async () => {
+    setShowWelcomeOverlay(false);
+    if (resolvedOrgId) {
+      await AsyncStorage.setItem(`partner_welcome_dismissed_${resolvedOrgId}`, 'true');
     }
-  }, [isLoading, partnerships, platformConnections]);
+  }, [resolvedOrgId]);
 
   // Available locations for creating/editing pools
   const [available, setAvailable] = useState<TransformedLocationGroup[]>([]);
@@ -1209,17 +1232,18 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
           )}
         </View>
 
-        {(!resolvedOrgId || isLoading) ? (
+        {isLoading ? (
           <View style={{ paddingVertical: 24 }}>
             <ActivityIndicator size="large" color={theme.colors.primary} />
           </View>
         ) : !hasAnyData && activeTab === 'locations' ? (
           <View style={styles.emptyState}>
-            <Icon name="map-marker-off" size={48} color="#ccc" />
-            <Text style={styles.emptyStateTitle}>No Locations Yet</Text>
-            <Text style={styles.emptyStateSubtitle}>
-              Connect a platform to sync your store locations, or create a custom location group.
-            </Text>
+            <Text style={styles.noConnectionsText}>No locations/pools found.</Text>
+
+            <TouchableOpacity style={styles.confirmBtn} onPress={enterCreateMode}>
+              <Icon name="plus" size={18} color="#fff" />
+              <Text style={styles.confirmBtnText}>Create Location / Pool</Text>
+            </TouchableOpacity>
           </View>
         ) : (
           <ScrollView scrollEnabled={!disableScroll} contentContainerStyle={{ paddingBottom: 12 }}>
@@ -1284,7 +1308,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
           visible={showWelcomeOverlay}
           partnerName={partnerNameForOverlay}
           onConnect={() => {
-            setShowWelcomeOverlay(false);
+            handleDismissWelcome(); // Persist dismissal so it only shows once
             if (onPressConnect) onPressConnect();
             else Alert.alert('Connection', 'Please go to Settings > Connections to connect a platform.');
           }}
@@ -1322,279 +1346,282 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
         </View>
 
         {/* Managing Locations content */}
-        <ScrollView style={styles.manageCard}>
+        {/* Managing Locations content */}
+        <View style={[styles.manageCard, { flex: 1 }]}>
           {loadingManage ? (
             <View style={{ paddingVertical: 24 }}>
               <ActivityIndicator size="large" color={theme.colors.primary} />
             </View>
           ) : (
-            <DraggableFlatList
-              data={flatData}
-              renderItem={({ item, drag, isActive }) => {
-                if (item.type === 'header') {
-                  const { poolId, draft } = item;
-                  return (
-                    <View style={{
-                      backgroundColor: '#f8fafc',
-                      padding: 10,
-                      borderTopLeftRadius: 8,
-                      borderTopRightRadius: 8,
-                      borderBottomWidth: 1,
-                      borderColor: '#e2e8f0',
-                      marginTop: 10,
-                      flexDirection: 'row',
-                      alignItems: 'center'
-                    }}>
-                      <TextInput
-                        value={draft.name}
-                        onChangeText={(text) =>
-                          setDraftPools((prev) => ({
-                            ...prev,
-                            [poolId]: { ...prev[poolId], name: text },
-                          }))
-                        }
-                        style={{
-                          flex: 1,
-                          fontSize: 16,
-                          fontWeight: '600',
-                          color: '#334155',
-                          padding: 4,
-                        }}
-                      />
-                      <TouchableOpacity
-                        onPress={() => openDeletePool(poolId, draft.name)}
-                        style={{ padding: 8 }}
-                      >
-                        <Icon name="delete-outline" size={20} color="#ff4444" />
-                      </TouchableOpacity>
-                    </View>
-                  );
-                }
-
-                if (item.type === 'location') {
-                  const locId = item.id;
-                  const oldPool = draftPools[item.poolId];
-                  const metaFromDraft = oldPool?.locationMetadata?.get(locId);
-                  const metaFromAvailable = availableLocationById.get(locId);
-                  const meta = metaFromDraft || metaFromAvailable;
-
-                  const connName = meta?.connectionName || 'Unknown connection';
-                  const locName = meta?.locationName || locId;
-                  const platformType = meta?.platformType || '';
-                  const Logo = platformType && PLATFORM_LOGOS[platformType as keyof typeof PLATFORM_LOGOS];
-
-                  return (
-                    <ScaleDecorator>
-                      <TouchableOpacity
-                        activeOpacity={1}
-                        onLongPress={drag}
-                        disabled={isActive}
-                        style={{
-                          backgroundColor: isActive ? '#e0f2fe' : '#fff',
-                          padding: 12,
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          borderBottomWidth: 1,
-                          borderColor: '#f1f5f9',
-                          borderLeftWidth: 4,
-                          borderLeftColor: isActive ? '#3b82f6' : 'transparent',
-                        }}
-                      >
-                        <TouchableOpacity onPressIn={drag} style={{ paddingRight: 12 }}>
-                          <Icon name="drag-horizontal" size={20} color="#94a3b8" />
-                        </TouchableOpacity>
-
-                        {Logo ? <Logo width={20} height={20} style={{ marginRight: 8 }} /> : null}
-
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ fontSize: 14, fontWeight: '500', color: '#334155' }} numberOfLines={1}>
-                            {locName}
-                          </Text>
-                          <Text style={{ fontSize: 12, color: '#64748b' }} numberOfLines={1}>
-                            {connName}
-                          </Text>
-                        </View>
-
-                        <TouchableOpacity
-                          onPress={() => {
-                            let currentPoolIdOfLoc: string | null = null;
-                            Object.entries(draftPools).forEach(([pid, d]) => {
-                              if (d.locationIds.includes(locId)) currentPoolIdOfLoc = pid;
-                            });
-
-                            if (currentPoolIdOfLoc) {
-                              setDraftPools((prev) => ({
-                                ...prev,
-                                [currentPoolIdOfLoc!]: {
-                                  ...prev[currentPoolIdOfLoc!],
-                                  locationIds: prev[currentPoolIdOfLoc!].locationIds.filter(id => id !== locId)
-                                }
-                              }));
-                            }
+            <>
+              <DraggableFlatList
+                containerStyle={{ flex: 1 }}
+                data={flatData}
+                renderItem={({ item, drag, isActive }) => {
+                  if (item.type === 'header') {
+                    const { poolId, draft } = item;
+                    return (
+                      <View style={{
+                        backgroundColor: '#f8fafc',
+                        padding: 10,
+                        borderTopLeftRadius: 12,
+                        borderTopRightRadius: 12,
+                        borderBottomWidth: 1,
+                        borderColor: '#e2e8f0',
+                        marginTop: 10,
+                        flexDirection: 'row',
+                        alignItems: 'center'
+                      }}>
+                        <TextInput
+                          value={draft.name}
+                          onChangeText={(text) =>
+                            setDraftPools((prev) => ({
+                              ...prev,
+                              [poolId]: { ...prev[poolId], name: text },
+                            }))
+                          }
+                          style={{
+                            flex: 1,
+                            fontSize: 16,
+                            fontWeight: '600',
+                            color: '#334155',
+                            padding: 4,
                           }}
-                          style={{ padding: 4 }}
+                        />
+                        <TouchableOpacity
+                          onPress={() => openDeletePool(poolId, draft.name)}
+                          style={{ padding: 8 }}
                         >
-                          <Icon name="close" size={18} color="#ff4444" />
+                          <Icon name="delete-outline" size={20} color="#ff4444" />
                         </TouchableOpacity>
-                      </TouchableOpacity>
-                    </ScaleDecorator>
-                  );
-                }
+                      </View>
+                    );
+                  }
 
-                if (item.type === 'footer') {
-                  const { poolId } = item;
-                  const selection = managePlatformSelectionByPool[poolId];
+                  if (item.type === 'location') {
+                    const locId = item.id;
+                    const oldPool = draftPools[item.poolId];
+                    const metaFromDraft = oldPool?.locationMetadata?.get(locId);
+                    const metaFromAvailable = availableLocationById.get(locId);
+                    const meta = metaFromDraft || metaFromAvailable;
 
-                  return (
-                    <View style={{
-                      padding: 10,
-                      backgroundColor: '#fff',
-                      borderBottomLeftRadius: 8,
-                      borderBottomRightRadius: 8,
-                      marginBottom: 10
-                    }}>
-                      <TouchableOpacity
-                        style={{
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          paddingVertical: 8
-                        }}
-                        onPress={() =>
-                          setManagePlatformSelectionByPool((prev) => ({
-                            ...prev,
-                            [poolId]: null,
-                          }))
-                        }
-                      >
-                        <Icon name="plus" size={16} color="#64748b" />
-                        <Text style={{ fontSize: 13, color: '#64748b', marginLeft: 6 }}>Add Location from Platform</Text>
-                      </TouchableOpacity>
+                    const connName = meta?.connectionName || 'Unknown connection';
+                    const locName = meta?.locationName || locId;
+                    const platformType = meta?.platformType || '';
+                    const Logo = platformType && PLATFORM_LOGOS[platformType as keyof typeof PLATFORM_LOGOS];
 
-                      {selection === null && (
-                        <View style={{ marginTop: 8 }}>
-                          <Text style={styles.label}>Select Platform</Text>
-                          {available.length === 0 ? (
-                            <Text style={{ fontSize: 12, color: '#999' }}>No platforms available</Text>
-                          ) : (
-                            available.map((platform) => {
-                              const Logo = PLATFORM_LOGOS[platform.platformType as keyof typeof PLATFORM_LOGOS];
-                              return (
-                                <View key={platform.platformType}>
-                                  {platform.connections.map((conn) => (
-                                    <TouchableOpacity
-                                      key={conn.connectionId}
-                                      style={styles.platformSelectButton}
-                                      onPress={() =>
-                                        setManagePlatformSelectionByPool((prev) => ({
+                    return (
+                      <ScaleDecorator>
+                        <TouchableOpacity
+                          activeOpacity={1}
+                          onLongPress={drag}
+                          disabled={isActive}
+                          style={{
+                            backgroundColor: isActive ? '#e0f2fe' : '#fff',
+                            padding: 12,
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            borderBottomWidth: 1,
+                            borderColor: '#f1f5f9',
+                            borderLeftWidth: 4,
+                            borderLeftColor: isActive ? '#3b82f6' : 'transparent',
+                          }}
+                        >
+                          <TouchableOpacity onPressIn={drag} style={{ paddingRight: 12 }}>
+                            <Icon name="drag-horizontal" size={20} color="#94a3b8" />
+                          </TouchableOpacity>
+
+                          {Logo ? <Logo width={20} height={20} style={{ marginRight: 8 }} /> : null}
+
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 14, fontWeight: '500', color: '#334155' }} numberOfLines={1}>
+                              {locName}
+                            </Text>
+                            <Text style={{ fontSize: 12, color: '#64748b' }} numberOfLines={1}>
+                              {connName}
+                            </Text>
+                          </View>
+
+                          <TouchableOpacity
+                            onPress={() => {
+                              let currentPoolIdOfLoc: string | null = null;
+                              Object.entries(draftPools).forEach(([pid, d]) => {
+                                if (d.locationIds.includes(locId)) currentPoolIdOfLoc = pid;
+                              });
+
+                              if (currentPoolIdOfLoc) {
+                                setDraftPools((prev) => ({
+                                  ...prev,
+                                  [currentPoolIdOfLoc!]: {
+                                    ...prev[currentPoolIdOfLoc!],
+                                    locationIds: prev[currentPoolIdOfLoc!].locationIds.filter(id => id !== locId)
+                                  }
+                                }));
+                              }
+                            }}
+                            style={{ padding: 4 }}
+                          >
+                            <Icon name="close" size={18} color="#ff4444" />
+                          </TouchableOpacity>
+                        </TouchableOpacity>
+                      </ScaleDecorator>
+                    );
+                  }
+
+                  if (item.type === 'footer') {
+                    const { poolId } = item;
+                    const selection = managePlatformSelectionByPool[poolId];
+
+                    return (
+                      <View style={{
+                        padding: 10,
+                        backgroundColor: '#fff',
+                        borderBottomLeftRadius: 12,
+                        borderBottomRightRadius: 12,
+                        marginBottom: 10
+                      }}>
+                        <TouchableOpacity
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            paddingVertical: 8
+                          }}
+                          onPress={() =>
+                            setManagePlatformSelectionByPool((prev) => ({
+                              ...prev,
+                              [poolId]: null,
+                            }))
+                          }
+                        >
+                          <Icon name="plus" size={16} color="#64748b" />
+                          <Text style={{ fontSize: 13, color: '#64748b', marginLeft: 6 }}>Add Location from Platform</Text>
+                        </TouchableOpacity>
+
+                        {selection === null && (
+                          <View style={{ marginTop: 8 }}>
+                            <Text style={styles.label}>Select Platform</Text>
+                            {available.length === 0 ? (
+                              <Text style={{ fontSize: 12, color: '#999' }}>No platforms available</Text>
+                            ) : (
+                              available.map((platform) => {
+                                const Logo = PLATFORM_LOGOS[platform.platformType as keyof typeof PLATFORM_LOGOS];
+                                return (
+                                  <View key={platform.platformType}>
+                                    {platform.connections.map((conn) => (
+                                      <TouchableOpacity
+                                        key={conn.connectionId}
+                                        style={styles.platformSelectButton}
+                                        onPress={() =>
+                                          setManagePlatformSelectionByPool((prev) => ({
+                                            ...prev,
+                                            [poolId]: {
+                                              connectionId: conn.connectionId,
+                                              connectionName: conn.connectionName,
+                                              platformType: platform.platformType,
+                                            },
+                                          }))
+                                        }
+                                      >
+                                        {Logo ? <Logo width={20} height={20} /> : null}
+                                        <Text style={styles.platformSelectText}>{conn.connectionName}</Text>
+                                      </TouchableOpacity>
+                                    ))}
+                                  </View>
+                                );
+                              })
+                            )}
+                          </View>
+                        )}
+
+                        {selection && (
+                          <View style={{ marginTop: 8 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                              <Text style={styles.label}>Select Location</Text>
+                              <TouchableOpacity
+                                onPress={() => setManagePlatformSelectionByPool((prev) => ({ ...prev, [poolId]: null }))}
+                                style={{ marginLeft: 'auto' }}
+                              >
+                                <Icon name="close" size={16} color="#999" />
+                              </TouchableOpacity>
+                            </View>
+                            <View style={styles.dropdownContainer}>
+                              <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
+                                {getFilteredAvailableLocations(selection.connectionId).map((loc) => (
+                                  <TouchableOpacity
+                                    key={loc.platformLocationId}
+                                    style={styles.dropdownItem}
+                                    onPress={() => {
+                                      const locationId = loc.platformLocationId;
+                                      const meta = availableLocationById.get(locationId);
+                                      setDraftPools((prev) => {
+                                        const current = prev[poolId]?.locationIds || [];
+                                        const currentMetadata = prev[poolId]?.locationMetadata || new Map();
+                                        if (current.includes(locationId)) return prev;
+                                        if (meta) {
+                                          currentMetadata.set(locationId, meta);
+                                        }
+                                        return {
                                           ...prev,
                                           [poolId]: {
-                                            connectionId: conn.connectionId,
-                                            connectionName: conn.connectionName,
-                                            platformType: platform.platformType,
+                                            ...prev[poolId],
+                                            locationIds: [...current, locationId],
+                                            locationMetadata: currentMetadata,
                                           },
-                                        }))
-                                      }
-                                    >
-                                      {Logo ? <Logo width={20} height={20} /> : null}
-                                      <Text style={styles.platformSelectText}>{conn.connectionName}</Text>
-                                    </TouchableOpacity>
-                                  ))}
-                                </View>
-                              );
-                            })
-                          )}
-                        </View>
-                      )}
-
-                      {selection && (
-                        <View style={{ marginTop: 8 }}>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                            <Text style={styles.label}>Select Location</Text>
-                            <TouchableOpacity
-                              onPress={() => setManagePlatformSelectionByPool((prev) => ({ ...prev, [poolId]: null }))}
-                              style={{ marginLeft: 'auto' }}
-                            >
-                              <Icon name="close" size={16} color="#999" />
-                            </TouchableOpacity>
+                                        };
+                                      });
+                                      setManagePlatformSelectionByPool((prev) => {
+                                        const updated = { ...prev };
+                                        delete updated[poolId];
+                                        return updated;
+                                      });
+                                    }}
+                                  >
+                                    <Text style={styles.dropdownItemText}>{loc.locationName}</Text>
+                                  </TouchableOpacity>
+                                ))}
+                              </ScrollView>
+                            </View>
                           </View>
-                          <View style={styles.dropdownContainer}>
-                            <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
-                              {getFilteredAvailableLocations(selection.connectionId).map((loc) => (
-                                <TouchableOpacity
-                                  key={loc.platformLocationId}
-                                  style={styles.dropdownItem}
-                                  onPress={() => {
-                                    const locationId = loc.platformLocationId;
-                                    const meta = availableLocationById.get(locationId);
-                                    setDraftPools((prev) => {
-                                      const current = prev[poolId]?.locationIds || [];
-                                      const currentMetadata = prev[poolId]?.locationMetadata || new Map();
-                                      if (current.includes(locationId)) return prev;
-                                      if (meta) {
-                                        currentMetadata.set(locationId, meta);
-                                      }
-                                      return {
-                                        ...prev,
-                                        [poolId]: {
-                                          ...prev[poolId],
-                                          locationIds: [...current, locationId],
-                                          locationMetadata: currentMetadata,
-                                        },
-                                      };
-                                    });
-                                    setManagePlatformSelectionByPool((prev) => {
-                                      const updated = { ...prev };
-                                      delete updated[poolId];
-                                      return updated;
-                                    });
-                                  }}
-                                >
-                                  <Text style={styles.dropdownItemText}>{loc.locationName}</Text>
-                                </TouchableOpacity>
-                              ))}
-                            </ScrollView>
-                          </View>
-                        </View>
-                      )}
-                    </View>
-                  );
-                }
-                return null;
-              }}
-              keyExtractor={(item) => item.key}
-              onDragEnd={({ data }) => {
-                const newDrafts: Record<string, DraftPool> = {};
-                Object.keys(draftPools).forEach(pid => {
-                  newDrafts[pid] = { ...draftPools[pid], locationIds: [], locationMetadata: new Map() };
-                });
+                        )}
+                      </View>
+                    );
+                  }
+                  return null;
+                }}
+                keyExtractor={(item) => item.key}
+                onDragEnd={({ data }) => {
+                  const newDrafts: Record<string, DraftPool> = {};
+                  Object.keys(draftPools).forEach(pid => {
+                    newDrafts[pid] = { ...draftPools[pid], locationIds: [], locationMetadata: new Map() };
+                  });
 
-                let currentPoolId: string | null = null;
+                  let currentPoolId: string | null = null;
 
-                data.forEach(item => {
-                  if (item.type === 'header') {
-                    currentPoolId = item.poolId;
-                  } else if (item.type === 'location') {
-                    if (currentPoolId && newDrafts[currentPoolId]) {
-                      newDrafts[currentPoolId].locationIds.push(item.id);
-                      const oldPool = draftPools[item.poolId];
-                      const meta = oldPool?.locationMetadata?.get(item.id) || availableLocationById.get(item.id);
-                      if (meta) {
-                        newDrafts[currentPoolId].locationMetadata!.set(item.id, meta);
+                  data.forEach(item => {
+                    if (item.type === 'header') {
+                      currentPoolId = item.poolId;
+                    } else if (item.type === 'location') {
+                      if (currentPoolId && newDrafts[currentPoolId]) {
+                        newDrafts[currentPoolId].locationIds.push(item.id);
+                        const oldPool = draftPools[item.poolId];
+                        const meta = oldPool?.locationMetadata?.get(item.id) || availableLocationById.get(item.id);
+                        if (meta) {
+                          newDrafts[currentPoolId].locationMetadata!.set(item.id, meta);
+                        }
                       }
                     }
-                  }
-                });
-                setDraftPools(newDrafts);
-              }}
-            />
+                  });
+                  setDraftPools(newDrafts);
+                }}
+              />
+
+              <View style={styles.footerRow}>
+                <Button title="Confirm Updates" onPress={confirmManageChanges} loading={saving} style={{ flex: 1 }} />
+                <Button title="Cancel" outlined onPress={() => setViewMode('default')} style={{ flex: 1 }} />
+              </View>
+            </>
           )}
-
-
-          <View style={styles.footerRow}>
-            <Button title="Confirm Updates" onPress={confirmManageChanges} loading={saving} style={{ flex: 1 }} />
-            <Button title="Cancel" outlined onPress={() => setViewMode('default')} style={{ flex: 1 }} />
-          </View>
-        </ScrollView>
+        </View>
       </View>
     );
   }
@@ -2177,152 +2204,105 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
       {deleteState.visible && (
         <Modal visible animationType="fade" transparent>
           <View style={styles.modalOverlay}>
-            <View style={[styles.modalCard, { maxWidth: 360, paddingBottom: 0 }]}>
-              {/* Header */}
-              <View style={[styles.modalHeader, { borderBottomWidth: 1, borderBottomColor: '#f0f0f0', paddingBottom: 12 }]}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <View style={{ backgroundColor: '#fee2e2', borderRadius: 8, padding: 8 }}>
-                    <Icon name="delete-outline" size={20} color="#dc2626" />
-                  </View>
-                  <Text style={[styles.modalTitle, { color: '#dc2626' }]}>Delete Pool</Text>
-                </View>
-                <TouchableOpacity onPress={() => setDeleteState((prev) => ({ ...prev, visible: false }))}>
-                  <Icon name="close" size={22} color="#999" />
-                </TouchableOpacity>
-              </View>
-
-              {/* Pool Info */}
-              <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12 }}>
-                <Text style={{ fontSize: 14, color: '#666', marginBottom: 4 }}>
-                  You're deleting this pool:
+            <View style={[styles.modalCard, { maxWidth: 340, padding: 20 }]}>
+              {/* Minimal Header */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <Text style={{ fontSize: 17, fontWeight: '600', color: '#1f2937' }}>
+                  Delete "{deleteState.poolName}"?
                 </Text>
-                <View style={{ backgroundColor: '#fef3c7', padding: 12, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <Icon name="folder-outline" size={18} color="#d97706" />
-                  <Text style={{ fontSize: 15, fontWeight: '600', color: '#92400e' }}>
-                    {deleteState.poolName || 'Unknown Pool'}
-                  </Text>
-                </View>
-              </View>
-
-              {/* Options Section */}
-              <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
-                <Text style={{ fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 10 }}>
-                  What happens to the locations inside?
-                </Text>
-
-                {/* Option 1: Ungroup */}
                 <TouchableOpacity
-                  style={[
-                    {
-                      borderWidth: 2,
-                      borderColor: deleteState.mergeTarget === 'none' ? '#10b981' : '#e5e7eb',
-                      backgroundColor: deleteState.mergeTarget === 'none' ? '#ecfdf5' : '#fff',
-                      borderRadius: 10,
-                      padding: 12,
-                      marginBottom: 10,
-                    },
-                  ]}
-                  onPress={() => setDeleteState((prev) => ({ ...prev, mergeTarget: 'none' }))}
+                  onPress={() => setDeleteState((prev) => ({ ...prev, visible: false }))}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 >
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                    <View style={{ backgroundColor: deleteState.mergeTarget === 'none' ? '#d1fae5' : '#f3f4f6', borderRadius: 6, padding: 6 }}>
-                      <Icon name="link-off" size={18} color={deleteState.mergeTarget === 'none' ? '#059669' : '#6b7280'} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 14, fontWeight: '600', color: deleteState.mergeTarget === 'none' ? '#059669' : '#374151' }}>
-                        Ungroup locations
-                      </Text>
-                      <Text style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-                        Each location becomes independent (no shared inventory)
-                      </Text>
-                    </View>
-                    {deleteState.mergeTarget === 'none' && (
-                      <Icon name="check-circle" size={20} color="#10b981" />
-                    )}
-                  </View>
+                  <Icon name="close" size={20} color="#9ca3af" />
                 </TouchableOpacity>
+              </View>
 
-                {/* Option 2: Merge into another pool */}
-                {deleteState.availablePools.length > 0 && (
-                  <>
-                    <Text style={{ fontSize: 12, color: '#9ca3af', marginBottom: 8, marginTop: 4 }}>
-                      Or move locations to another pool:
-                    </Text>
-                    <ScrollView style={{ maxHeight: 150 }} showsVerticalScrollIndicator={false}>
-                      {deleteState.availablePools.map((pool) => (
-                        <TouchableOpacity
-                          key={pool.id}
-                          style={[
-                            {
-                              borderWidth: 2,
-                              borderColor: deleteState.mergeTarget === pool.id ? '#3b82f6' : '#e5e7eb',
-                              backgroundColor: deleteState.mergeTarget === pool.id ? '#eff6ff' : '#fff',
-                              borderRadius: 10,
-                              padding: 12,
-                              marginBottom: 8,
-                            },
-                          ]}
-                          onPress={() => setDeleteState((prev) => ({ ...prev, mergeTarget: pool.id }))}
-                        >
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                            <View style={{ backgroundColor: deleteState.mergeTarget === pool.id ? '#dbeafe' : '#f3f4f6', borderRadius: 6, padding: 6 }}>
-                              <Icon name="folder-move-outline" size={18} color={deleteState.mergeTarget === pool.id ? '#2563eb' : '#6b7280'} />
-                            </View>
-                            <View style={{ flex: 1 }}>
-                              <Text style={{ fontSize: 14, fontWeight: '600', color: deleteState.mergeTarget === pool.id ? '#2563eb' : '#374151' }}>
-                                Move to "{pool.name}"
-                              </Text>
-                              <Text style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-                                Locations will join this pool's shared inventory
-                              </Text>
-                            </View>
-                            {deleteState.mergeTarget === pool.id && (
-                              <Icon name="check-circle" size={20} color="#3b82f6" />
-                            )}
-                          </View>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  </>
-                )}
+              {/* Simple prompt */}
+              <Text style={{ fontSize: 14, color: '#6b7280', marginBottom: 20 }}>
+                Select a pool to move these locations to.
+              </Text>
 
-                {deleteState.availablePools.length === 0 && (
-                  <View style={{ backgroundColor: '#f9fafb', padding: 12, borderRadius: 8, marginTop: 4 }}>
-                    <Text style={{ fontSize: 12, color: '#6b7280', textAlign: 'center' }}>
+              {/* Options - compact style */}
+              <View style={{ gap: 8, marginBottom: 24 }}>
+                {/* Move to other pools */}
+                {deleteState.availablePools.length > 0 ? (
+                  <ScrollView style={{ maxHeight: 200 }} showsVerticalScrollIndicator={false}>
+                    {deleteState.availablePools.map((pool) => (
+                      <TouchableOpacity
+                        key={pool.id}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          paddingVertical: 12,
+                          paddingHorizontal: 14,
+                          borderRadius: 8,
+                          borderWidth: 1.5,
+                          borderColor: deleteState.mergeTarget === pool.id ? theme.colors.primary : '#e5e7eb',
+                          backgroundColor: deleteState.mergeTarget === pool.id ? theme.colors.primary + '08' : '#fff',
+                          marginBottom: 8,
+                        }}
+                        onPress={() => setDeleteState((prev) => ({ ...prev, mergeTarget: pool.id }))}
+                      >
+                        <Icon
+                          name="folder-move-outline"
+                          size={18}
+                          color={deleteState.mergeTarget === pool.id ? theme.colors.primary : '#9ca3af'}
+                        />
+                        <Text style={{
+                          flex: 1,
+                          marginLeft: 10,
+                          fontSize: 14,
+                          fontWeight: '500',
+                          color: deleteState.mergeTarget === pool.id ? theme.colors.primary : '#374151'
+                        }}>
+                          Move to "{pool.name}"
+                        </Text>
+                        {deleteState.mergeTarget === pool.id && (
+                          <Icon name="check" size={18} color={theme.colors.primary} />
+                        )}
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                ) : (
+                  <View style={{ backgroundColor: '#f9fafb', padding: 16, borderRadius: 8, alignItems: 'center' }}>
+                    <Text style={{ fontSize: 14, color: '#6b7280', textAlign: 'center' }}>
                       No other pools available. Locations will become independent.
                     </Text>
                   </View>
                 )}
               </View>
 
-              {/* Footer Buttons */}
-              <View style={[styles.footerRow, { borderTopWidth: 1, borderTopColor: '#f0f0f0', paddingTop: 16, paddingBottom: 16 }]}>
+              {/* Action buttons - side by side */}
+              <View style={{ flexDirection: 'row', gap: 10 }}>
                 <TouchableOpacity
                   onPress={() => setDeleteState((prev) => ({ ...prev, visible: false }))}
-                  style={[styles.primaryBtn, { flex: 1, minHeight: 40, backgroundColor: '#f3f4f6', marginRight: 10 }]}
+                  style={{
+                    flex: 1,
+                    paddingVertical: 12,
+                    borderRadius: 8,
+                    backgroundColor: '#f3f4f6',
+                    alignItems: 'center',
+                  }}
                 >
-                  <Text style={{ color: '#374151', fontWeight: '600', fontSize: 15 }}>Cancel</Text>
+                  <Text style={{ fontSize: 14, fontWeight: '600', color: '#6b7280' }}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={confirmDeletePool}
-                  disabled={deleteState.loading || deleteState.mergeTarget === null}
-                  style={[
-                    styles.primaryBtn,
-                    {
-                      flex: 1,
-                      minHeight: 40,
-                      backgroundColor: deleteState.mergeTarget === null ? '#fca5a5' : '#dc2626',
-                      opacity: deleteState.mergeTarget === null ? 0.5 : 1,
-                    },
-                  ]}
+                  disabled={deleteState.loading || (deleteState.availablePools.length > 0 && !deleteState.mergeTarget)}
+                  style={{
+                    flex: 1,
+                    paddingVertical: 12,
+                    borderRadius: 8,
+                    backgroundColor: '#ef4444',
+                    alignItems: 'center',
+                    opacity: (deleteState.loading || (deleteState.availablePools.length > 0 && !deleteState.mergeTarget)) ? 0.5 : 1,
+                  }}
                 >
                   {deleteState.loading ? (
-                    <ActivityIndicator color="#fff" />
+                    <ActivityIndicator color="#fff" size="small" />
                   ) : (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <Icon name="delete-outline" size={18} color="#fff" />
-                      <Text style={[styles.primaryBtnText, { fontSize: 15 }]}>Delete Pool</Text>
-                    </View>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#fff' }}>Delete</Text>
                   )}
                 </TouchableOpacity>
               </View>
@@ -2335,3 +2315,595 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
 };
 
 export default LocationsManagerV2;
+
+const styles = StyleSheet.create({
+  root: {},
+  card: {
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#1f2937',
+  },
+  manageBtn: {
+    borderWidth: 1,
+    borderColor: '#d9d9d9',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#f6f6f6',
+    minWidth: 20,
+  },
+  manageBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  sectionTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#9ca3af',
+    marginBottom: 10,
+    marginTop: 20,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  listItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#f3f4f6',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 16,
+    marginBottom: 10,
+    minHeight: 52,
+    backgroundColor: '#fff',
+  },
+  listItemPoolActive: {
+    backgroundColor: '#fffbeb',
+    borderColor: '#fcd34d',
+  },
+  listItemSingleActive: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#bfdbfe',
+  },
+  listItemText: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#374151',
+    flex: 1,
+    marginRight: 8,
+  },
+  confirmBtn: {
+    width: '100%',
+    marginTop: 12,
+    backgroundColor: '#8BC34A',
+    borderRadius: 8,
+    paddingVertical: 16,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  confirmBtnText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 15,
+  },
+  manageCard: {
+    padding: 0,
+    marginTop: 0,
+  },
+  poolCard: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  poolHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  poolNameInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#1f2937',
+    minHeight: 44,
+    backgroundColor: '#f9fafb',
+  },
+  poolLocations: {
+    marginBottom: 8,
+  },
+  poolLocationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  addMoreRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    gap: 8,
+    minHeight: 44,
+  },
+  addMoreText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6b7280',
+  },
+  selectedLocationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f0f9ff',
+    borderLeftWidth: 3,
+    borderLeftColor: '#bae6fd',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    marginBottom: 8,
+    borderRadius: 8,
+    minHeight: 56,
+  },
+  selectedLocationRowActive: {
+    backgroundColor: '#ecfdf5',
+    borderLeftColor: '#34d399',
+  },
+  selectedLocationLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  selectedLocationText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1f2937',
+    flex: 1,
+  },
+  selectedLocationSubText: {
+    fontSize: 13,
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  platformCard: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#edf2f7',
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  platformCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  platformCardHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  platformCardHeaderText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1f2937',
+    flex: 1,
+    marginRight: 8,
+  },
+  platformLocationSelectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    marginTop: 4,
+    backgroundColor: '#f9fafb',
+  },
+  platformLocationSelectText: {
+    fontSize: 14,
+    color: '#374151',
+    flex: 1,
+    marginRight: 8,
+  },
+  platformSelectButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    marginBottom: 8,
+    gap: 12,
+    minHeight: 52,
+    backgroundColor: '#fff',
+  },
+  platformSelectText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#374151',
+    flex: 1,
+  },
+  dropdownContainer: {
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    overflow: 'hidden',
+    marginTop: 4,
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+    minHeight: 52,
+  },
+  dropdownItemText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#374151',
+    flex: 1,
+    marginRight: 8,
+  },
+  dropdownItemTimezone: {
+    fontSize: 12,
+    color: '#9ca3af',
+    marginTop: 2,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  modalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 20,
+    maxHeight: '85%',
+    width: '100%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  tabsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 12,
+    marginBottom: 16,
+  },
+  tab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+  },
+  tabGhost: {
+    borderColor: '#e5e7eb',
+    backgroundColor: '#f9fafb',
+  },
+  tabActive: {
+    borderColor: '#fcd34d',
+    backgroundColor: '#fffbeb',
+  },
+  tabText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6b7280',
+  },
+  tabTextActive: {
+    color: '#d97706',
+  },
+  inputGroup: {
+    marginBottom: 16,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#4b5563',
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    padding: 14,
+    fontSize: 15,
+    minHeight: 50,
+    color: '#1f2937',
+    backgroundColor: '#fff',
+  },
+  connRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  connLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  connName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  comboShell: {
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#fff',
+  },
+  inlineChipsRow: {
+    alignItems: 'center',
+  },
+  chip: {
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginRight: 8,
+    backgroundColor: '#f9fafb',
+  },
+  chipSelected: {
+    borderColor: '#10b981',
+    backgroundColor: '#ecfdf5',
+  },
+  chipText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#4b5563',
+  },
+  chipTextSelected: {
+    color: '#059669',
+  },
+  addAnotherRow: {
+    marginTop: 16,
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    backgroundColor: '#f9fafb',
+  },
+  addAnotherText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6b7280',
+  },
+  footerRow: {
+    flexDirection: 'column',
+    gap: 10,
+    paddingTop: 16,
+    marginTop: 8,
+  },
+  dropZone: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ecfdf5',
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: '#34d399',
+    borderRadius: 12,
+    padding: 20,
+    marginTop: 12,
+    gap: 8,
+  },
+  dropZoneText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#059669',
+  },
+  reauthButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: '#ecfdf5',
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  reauthButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#059669',
+  },
+  emptyState: {
+    alignItems: 'stretch',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 0,
+  },
+  emptyStateTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#1f2937',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptyStateSubtitle: {
+    fontSize: 14,
+    color: '#9ca3af',
+    marginTop: 8,
+    maxWidth: 300,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  backBtn: {
+    marginRight: 10,
+    padding: 4,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 15,
+    color: '#1f2937',
+  },
+  primaryBtn: {
+    backgroundColor: '#10b981',
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+  },
+  primaryBtnText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 15,
+  },
+  secondaryBtn: {
+    backgroundColor: '#f3f4f6',
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+  },
+  accordionContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#f0f0f0',
+    marginBottom: 10,
+    overflow: 'hidden',
+  },
+  accordionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    minHeight: 60,
+  },
+  accordionHeaderOpen: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  accordionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: 10,
+  },
+  accordionHeaderRight: {
+    marginLeft: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  accordionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  accordionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f3f4f6',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  accordionBadgeText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#4b5563',
+  },
+  accordionIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  accordionContent: {
+    backgroundColor: '#fff',
+  },
+  accordionItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f9fafb',
+  },
+  accordionItemText: {
+    fontSize: 14,
+    color: '#374151',
+    fontWeight: '500',
+  },
+  singleLocationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    backgroundColor: '#fff',
+  },
+  noConnectionsText: {
+    fontSize: 14,
+    color: '#999',
+    textAlign: 'center',
+    fontStyle: 'italic',
+    marginBottom: 16,
+  },
+});

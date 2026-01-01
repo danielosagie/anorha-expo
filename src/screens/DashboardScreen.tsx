@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useEffect, useContext, useCallback } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, Dimensions, Image, Modal, Pressable } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import PagerView from 'react-native-pager-view';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
@@ -19,6 +20,9 @@ import { useProductVariantRealtime } from '../hooks/useProductVariantRealtime';
 import { useOrgNudges, trackInsightAction } from '../hooks/useOrgNudges';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { QuickSellCard } from '../components/liquidation/QuickSellCard';
+import ShopifySvg from '../assets/shopify.svg';
+import SquareSvg from '../assets/square.svg';
+import CloverSvg from '../assets/clover.svg';
 
 
 // User-relevant event types for activity display (excludes system/webhook events)
@@ -159,6 +163,117 @@ const DashboardScreen = () => {
   const [activeTimeframe, setActiveTimeframe] = useState<'Last 7d' | '30d' | '90d' | 'YTD' | '1Y'>('Last 7d');
   const [showPoolsMode, setShowPoolsMode] = useState(true); // true = pools, false = locations
   const [sourcesVisible, setSourcesVisible] = useState(false);
+
+  // Fallback state for when Legend observables are empty
+  const [directFetchVariants, setDirectFetchVariants] = useState<Record<string, any>>({});
+  const [directFetchLevels, setDirectFetchLevels] = useState<Record<string, any>>({});
+
+  // Partner FTUX modal - shows for partners with forked products but no platforms
+  const [showPartnerWelcome, setShowPartnerWelcome] = useState(false);
+  const [partnerSourceName, setPartnerSourceName] = useState('');
+
+  // Detect if user is a partner FTUX (has forked products, no platforms, modal not dismissed)
+  useEffect(() => {
+    const checkPartnerFTUX = async () => {
+      // Check if connections exist - if so, no need for welcome modal
+      const hasConnections = connections && connections.length > 0;
+      if (hasConnections) return;
+
+      // Check if dismissed
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData?.user?.id;
+      if (!userId) return;
+
+      const dismissedKey = `partner_welcome_dismissed_dashboard_${userId}`;
+      const dismissed = await AsyncStorage.getItem(dismissedKey);
+      if (dismissed === 'true') return;
+
+      // Check for forked products (have SourceVariantId)
+      const { data: forkedProducts } = await supabase
+        .from('ProductVariants')
+        .select('Id, SourceVariantId, SourceOrgId')
+        .eq('UserId', userId)
+        .not('SourceVariantId', 'is', null)
+        .limit(1);
+
+      if (forkedProducts && forkedProducts.length > 0) {
+        // Get source org name
+        const sourceOrgId = forkedProducts[0].SourceOrgId;
+        if (sourceOrgId) {
+          const { data: sourceOrg } = await supabase
+            .from('Organizations')
+            .select('Name')
+            .eq('Id', sourceOrgId)
+            .single();
+          setPartnerSourceName(sourceOrg?.Name || 'your partner');
+        } else {
+          setPartnerSourceName('your partner');
+        }
+        setShowPartnerWelcome(true);
+      }
+    };
+
+    checkPartnerFTUX();
+  }, [connections]);
+
+  const handleDismissPartnerWelcome = useCallback(async () => {
+    setShowPartnerWelcome(false);
+    const { data: userData } = await supabase.auth.getUser();
+    if (userData?.user?.id) {
+      await AsyncStorage.setItem(`partner_welcome_dismissed_dashboard_${userData.user.id}`, 'true');
+    }
+  }, []);
+
+  // Fetch data directly from Supabase when Legend is empty
+  useEffect(() => {
+    const fetchDirectData = async () => {
+      const legendVariants = legendCtx?.productVariants$?.get?.() ?? {};
+      const legendLevels = legendCtx?.inventoryLevels$?.get?.() ?? {};
+
+      // Only fetch if Legend is empty and we have a user
+      if (Object.keys(legendVariants).length === 0 || Object.keys(legendLevels).length <= 1) {
+        try {
+          const { data: userData } = await supabase.auth.getUser();
+          if (!userData?.user?.id) return;
+
+          const { data: variants, error: variantErr } = await supabase
+            .from('ProductVariants')
+            .select('*')
+            .eq('UserId', userData.user.id);
+
+          if (!variantErr && variants) {
+            const variantMap: Record<string, any> = {};
+            const variantIds: string[] = [];
+            variants.forEach((v: any) => {
+              variantMap[v.Id] = v;
+              variantIds.push(v.Id);
+            });
+            setDirectFetchVariants(variantMap);
+            console.log(`[Dashboard] Direct fetch: ${variants.length} variants`);
+
+            // Also fetch levels
+            if (variantIds.length > 0) {
+              const { data: levels, error: levelErr } = await supabase
+                .from('InventoryLevels')
+                .select('*')
+                .in('ProductVariantId', variantIds);
+
+              if (!levelErr && levels) {
+                const levelMap: Record<string, any> = {};
+                levels.forEach((l: any) => { levelMap[l.Id] = l; });
+                setDirectFetchLevels(levelMap);
+                console.log(`[Dashboard] Direct fetch: ${levels.length} inventory levels`);
+              }
+            }
+          }
+        } catch (e) {
+          console.error('[Dashboard] Direct fetch error:', e);
+        }
+      }
+    };
+
+    fetchDirectData();
+  }, [legendCtx?.productVariants$, legendCtx?.inventoryLevels$]);
 
   // AI-generated insights
   const { insight, loading: loadingInsight, error: insightError, cacheExpiresAt: insightCacheExpiresAt, refetch: refetchInsight, forceRefresh: forceRefreshInsight } = useOrgNudges(currentOrg?.id);
@@ -379,13 +494,18 @@ const DashboardScreen = () => {
       };
     }
 
-    const pv = legendCtx?.productVariants$?.get?.() ?? {};
-    const levels = legendCtx?.inventoryLevels$?.get?.() ?? {};
+    // Get data from Legend, with fallback to direct fetch
+    const legendPv = legendCtx?.productVariants$?.get?.() ?? {};
+    const legendLevels = legendCtx?.inventoryLevels$?.get?.() ?? {};
     const images = legendCtx?.productImages$?.get?.() ?? {};
 
-    // Guard against uninitialized legend-state - wait for data to load
+    // Use Legend data if available, otherwise fallback to direct fetch
+    const pv = Object.keys(legendPv).length > 0 ? legendPv : directFetchVariants;
+    const levels = Object.keys(legendLevels).length > 1 ? legendLevels : directFetchLevels;
+
+    // Guard against no data at all
     if (Object.keys(pv).length === 0 && Object.keys(levels).length === 0) {
-      console.log('[Dashboard] Legend-state not yet initialized, skipping low stock computation');
+      console.log('[Dashboard] No data available (Legend or fallback), skipping low stock computation');
       return {
         totalInventory: 0,
         lowStockItems: [],
@@ -437,7 +557,7 @@ const DashboardScreen = () => {
       lowStockItems: items,
       lowStockCount: Object.keys(variantQuantities).filter(vid => variantQuantities[vid] <= threshold).length
     };
-  }, [legendCtx?.productVariants$, legendCtx?.inventoryLevels$, legendCtx?.productImages$, currentOrg?.id, initialDataLoaded]);
+  }, [legendCtx?.productVariants$, legendCtx?.inventoryLevels$, legendCtx?.productImages$, currentOrg?.id, initialDataLoaded, directFetchVariants, directFetchLevels]);
 
   // 2. Fetch Recent Activity (filtered to user-relevant events only)
   const fetchActivity = async () => {
@@ -749,10 +869,10 @@ const DashboardScreen = () => {
               >
                 <View style={{ ...styles.insightGreenHeader, marginBottom: 0 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
-                    <Icon name="sprout-outline" size={20} color="#647653" />
-                    <Text style={[styles.todayTitle, { color: '#647653' }]}>Sprout's Insight</Text>
+                    <Icon name="sprout-outline" size={20} color="rgba(72, 72, 72, 1)" />
+                    <Text style={[styles.todayTitle, { color: 'rgba(72, 72, 72, 1)' }]}>Sprout's Insight</Text>
                   </View>
-                  <Text style={[styles.todayMeta, { color: '#647653' }]}>Ready to analyze</Text>
+                  <Text style={[styles.todayMeta, { color: 'rgba(72, 72, 72, 1)' }]}>Ready to analyze</Text>
                 </View>
                 <View style={styles.insideContainer}>
                   {/* Welcome headline */}
@@ -970,6 +1090,94 @@ const DashboardScreen = () => {
         )
       }
 
+      {/* Partner FTUX Welcome Modal */}
+      <Modal visible={showPartnerWelcome} transparent animationType="fade">
+        <View style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.7)',
+          justifyContent: 'center',
+          padding: 20,
+        }}>
+          <View style={{
+            backgroundColor: '#fff',
+            borderRadius: 24,
+            padding: 32,
+            alignItems: 'center',
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.3,
+            shadowRadius: 10,
+            elevation: 10,
+          }}>
+            <View style={{
+              width: 80,
+              height: 80,
+              borderRadius: 40,
+              backgroundColor: '#e6f4ea',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: 24,
+            }}>
+              <Icon name="handshake" size={40} color="#647653" />
+            </View>
+
+            <Text style={{
+              fontSize: 24,
+              fontWeight: 'bold',
+              textAlign: 'center',
+              marginBottom: 12,
+              color: '#111',
+            }}>
+              Welcome to {partnerSourceName}'s Network!
+            </Text>
+
+            <Text style={{
+              fontSize: 16,
+              color: '#666',
+              textAlign: 'center',
+              lineHeight: 24,
+              marginBottom: 32,
+            }}>
+              To start selling these products, you need to connect your own POS or E-commerce platform.
+            </Text>
+
+            <TouchableOpacity
+              onPress={() => {
+                handleDismissPartnerWelcome();
+                navigation.navigate('Profile');
+              }}
+              style={{
+                backgroundColor: '#93C822',
+                paddingVertical: 16,
+                paddingHorizontal: 32,
+                borderRadius: 12,
+                width: '100%',
+                alignItems: 'center',
+                shadowColor: '#93C822',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.3,
+                shadowRadius: 8,
+                elevation: 4,
+              }}
+            >
+              <Text style={{
+                color: '#fff',
+                fontSize: 18,
+                fontWeight: 'bold',
+              }}>
+                Connect Platform
+              </Text>
+            </TouchableOpacity>
+
+            <View style={{ marginTop: 24, flexDirection: 'row', gap: 12, opacity: 0.6 }}>
+              <ShopifySvg width={24} height={24} />
+              <SquareSvg width={24} height={24} />
+              <CloverSvg width={24} height={24} />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Floating Tab Bar provided by Navigator, but we ensure spacing */}
     </View >
   );
@@ -978,15 +1186,15 @@ const DashboardScreen = () => {
 const styles = StyleSheet.create({
   fullScreenContainer: {
     flex: 1,
-    backgroundColor: '#FEF4DD',
+    backgroundColor: 'rgba(254, 244, 221, 1)',
   },
   greenHeader: {
     position: 'absolute',
     top: 0,
     left: 0,
-    right: 0,
+    right: 0, 
     height: 60,
-    backgroundColor: '#FEF4DD',
+    backgroundColor: 'rgba(254, 244, 221, 1)',
   },
   container: {
     flex: 1,
@@ -995,7 +1203,8 @@ const styles = StyleSheet.create({
     marginTop: 60,
     borderTopRightRadius: 32,
     borderTopLeftRadius: 32,
-    backgroundColor: '#FAFAFA',
+    backgroundColor: 'rgba(255, 255, 255, 1)',
+    paddingBottom: 100,
   },
   loadingContainer: {
     justifyContent: 'center',

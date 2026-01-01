@@ -154,15 +154,15 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
             <View style={styles.cardContainer}>
                 <View style={styles.headerRow}>
                     <View style={styles.headerLeft}>
-                        <Icon name="sprout-outline" size={20} color="#1A2E05" />
+                        <Icon name="sprout-outline" size={20} color="rgba(72, 72, 72, 1)" />
                         <Text style={styles.headerTitle}>Sprout's Insight</Text>
                     </View>
                     <Text style={styles.headerTimestamp}>Thinking...</Text>
                 </View>
 
                 <View style={[styles.contentCard, { minHeight: 180, justifyContent: 'center', alignItems: 'center' }]}>
-                    <ActivityIndicator size="large" color="#84CC16" />
-                    <Text style={{ marginTop: 12, color: '#6B7280', fontSize: 13 }}>Analyzing inventory & market trends...</Text>
+                    <ActivityIndicator size="large" color="rgba(72, 72, 72, 1)" />
+                    <Text style={{ marginTop: 12, color: 'rgba(72, 72, 72, 1)', fontSize: 13 }}>Analyzing inventory & market trends...</Text>
                 </View>
             </View>
         );
@@ -226,7 +226,7 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
             {/* 1. Header */}
             <View style={styles.headerRow}>
                 <View style={styles.headerLeft}>
-                    <Icon name="sprout-outline" size={20} color="#647653" />
+                    <Icon name="sprout-outline" size={20} color="rgba(72, 72, 72, 1)" />
                     <Text style={styles.headerTitle}>
                         {insight.timeframe === 'short_term' ? 'This Week' :
                             insight.timeframe === 'medium_term' ? 'This Month' :
@@ -531,7 +531,7 @@ const styles = StyleSheet.create({
     headerTitle: {
         fontSize: 15,
         fontWeight: '700',
-        color: '#647653', // lime-950
+        color: 'rgba(72, 72, 72, 1)', // lime-950
         letterSpacing: -0.3,
     },
     headerRight: {
@@ -541,7 +541,7 @@ const styles = StyleSheet.create({
     },
     headerTimestamp: {
         fontSize: 12,
-        color: '#647653', // lime-600
+        color: 'rgba(72, 72, 72, 1)', // lime-600
         fontWeight: '500',
     },
     refreshBtnHeader: {

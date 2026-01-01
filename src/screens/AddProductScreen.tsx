@@ -2596,7 +2596,7 @@ const MatchResultsSheet: React.FC<{
         </View>
 
         <Text style={styles.selectionHint}>
-          Tap to select matches for generating listings
+          Tap to select matches for creating this listing
         </Text>
 
         <View style={styles.matchResults}>
@@ -2616,15 +2616,19 @@ const MatchResultsSheet: React.FC<{
                 <Image source={{ uri: candidate.imageUrl }} style={styles.matchImage} />
                 <View style={styles.matchInfo}>
                   <Text style={styles.matchTitle} numberOfLines={2}>{cleanMatchText(candidate.title) || 'Unknown Product'}</Text>
+                  {/*
                   <Text style={styles.matchDescription} numberOfLines={2}>
                     {cleanMatchText(candidate.description)}
                   </Text>
+                  */}
                   <Text style={styles.matchPrice}>${candidate.price}</Text>
+                  {/*
                   {candidate.sourceUrl && (
                     <Text style={styles.matchSource} numberOfLines={1}>
                       {new URL(candidate.sourceUrl).hostname.replace('www.', '')}
                     </Text>
                   )}
+                    */}
                 </View>
 
                 {/* Selection indicator overlay */}
@@ -2767,7 +2771,7 @@ const BulkItemsSheet: React.FC<{
       <PanGestureHandler
         onGestureEvent={(event) => {
           const { translationY } = event.nativeEvent;
-          const minY = SCREEN_HEIGHT * 0.2; // Maximum expanded (80% height)
+          const minY = SCREEN_HEIGHT * 0.1; // Maximum expanded (80% height)
           const maxY = SCREEN_HEIGHT * 0.6; // Minimum height (40% height)
           const currentY = SCREEN_HEIGHT * 0.6; // Current position (60% height)
 
@@ -3684,7 +3688,7 @@ const styles = StyleSheet.create({
   matchPrice: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#4CAF50',
+    color: '#93C822',
     marginBottom: 4,
   },
   matchSource: {

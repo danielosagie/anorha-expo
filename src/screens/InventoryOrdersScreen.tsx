@@ -152,10 +152,15 @@ const InventoryOrdersScreen = observer(() => {
     fetchPlatformData();
   }, [legendState?.userId]);
 
+  // Fallback state for when Legend observable is empty
+  const [directFetchVariants, setDirectFetchVariants] = useState<Record<string, ProductVariantData>>({});
+  const [directFetchLevels, setDirectFetchLevels] = useState<Record<string, InventoryLevel>>({});
+
   useEffect(() => {
     const directFetchProducts = async () => {
       if (supabase && legendState?.userId) {
         try {
+          // Fetch ProductVariants
           const { data, error } = await supabase
             .from('ProductVariants')
             .select('*')
@@ -165,6 +170,37 @@ const InventoryOrdersScreen = observer(() => {
             console.error('[InventoryScreen - Direct Fetch] Error fetching products:', error);
           } else {
             console.log('[InventoryScreen - Direct Fetch] Successfully fetched products:', data?.length);
+            // Store in fallback state, keyed by Id
+            if (data && data.length > 0) {
+              const variantMap: Record<string, ProductVariantData> = {};
+              const variantIds: string[] = [];
+              data.forEach((v: any) => {
+                variantMap[v.Id] = v;
+                variantIds.push(v.Id);
+              });
+              setDirectFetchVariants(variantMap);
+
+              // Also fetch InventoryLevels for these variants
+              if (variantIds.length > 0) {
+                const { data: levelsData, error: levelsError } = await supabase
+                  .from('InventoryLevels')
+                  .select('*')
+                  .in('ProductVariantId', variantIds);
+
+                if (levelsError) {
+                  console.error('[InventoryScreen - Direct Fetch] Error fetching inventory levels:', levelsError);
+                } else {
+                  console.log('[InventoryScreen - Direct Fetch] Successfully fetched inventory levels:', levelsData?.length);
+                  if (levelsData && levelsData.length > 0) {
+                    const levelsMap: Record<string, InventoryLevel> = {};
+                    levelsData.forEach((l: any) => {
+                      levelsMap[l.Id] = l;
+                    });
+                    setDirectFetchLevels(levelsMap);
+                  }
+                }
+              }
+            }
           }
         } catch (e) {
           console.error('[InventoryScreen - Direct Fetch] Exception during direct fetch:', e);
@@ -180,29 +216,44 @@ const InventoryOrdersScreen = observer(() => {
   // CRITICAL FIX: Use useSelector to properly track observable changes for real-time reactivity
   // Direct .get() calls outside useMemo don't trigger re-renders when data changes
   // useSelector creates a subscription that re-renders the component when the observable changes
-  const activeProductVariants = legendObservables?.productVariants$?.get() || {};
+  const legendProductVariants = legendObservables?.productVariants$?.get() || {};
   const activePlatformMappings = (legendObservables?.platformProductMappings$?.get() || {}) as Record<string, PlatformProductMapping>;
-  const activeInventoryLevels = (legendObservables?.inventoryLevels$?.get() || {}) as Record<string, InventoryLevel>;
+  const legendInventoryLevels = (legendObservables?.inventoryLevels$?.get() || {}) as Record<string, InventoryLevel>;
   const activeProductImages = (legendObservables?.productImages$?.get() || {}) as Record<string, ProductImage>;
   const activeMarketplaceListings = (legendObservables?.marketplaceListings$?.get() || {}) as Record<string, MarketplaceListing>;
+
+  // Use Legend data if available, otherwise fall back to direct fetch
+  const activeProductVariants = Object.keys(legendProductVariants).length > 0
+    ? legendProductVariants
+    : directFetchVariants;
+
+  // Use Legend InventoryLevels if available, otherwise fall back to direct fetch
+  const activeInventoryLevels = Object.keys(legendInventoryLevels).length > 1 // Need more than 1 level to be useful
+    ? legendInventoryLevels
+    : directFetchLevels;
 
   // Debug: Log when observables update (helps diagnose real-time issues)
   useEffect(() => {
     console.log('[InventoryOrdersScreen] Observable state updated:', {
       variantCount: Object.keys(activeProductVariants).length,
+      legendCount: Object.keys(legendProductVariants).length,
+      fallbackCount: Object.keys(directFetchVariants).length,
       levelCount: Object.keys(activeInventoryLevels).length,
+      legendLevelCount: Object.keys(legendInventoryLevels).length,
+      fallbackLevelCount: Object.keys(directFetchLevels).length,
       imageCount: Object.keys(activeProductImages).length,
       mappingCount: Object.keys(activePlatformMappings).length,
     });
-  }, [activeProductVariants, activeInventoryLevels, activeProductImages, activePlatformMappings]);
+  }, [activeProductVariants, legendProductVariants, directFetchVariants, activeInventoryLevels, legendInventoryLevels, directFetchLevels, activeProductImages, activePlatformMappings]);
 
   const enrichedProductVariants = useMemo((): EnrichedProductVariant[] => {
     const variants = activeProductVariants;
     const images = activeProductImages;
     const levels = activeInventoryLevels;
     const mappings = activePlatformMappings;
-
-    if (Object.keys(variants).length === 0 || platformConnections.length === 0) return [];
+    // CRITICAL: Don't require platformConnections - partners may have products shared with them
+    // without having connected any platforms yet
+    if (Object.keys(variants).length === 0) return [];
 
     // CRITICAL FIX: Group variants by ProductId to properly handle base/option architecture
     // Build a map of ProductId -> option variants for inventory aggregation
@@ -236,39 +287,38 @@ const InventoryOrdersScreen = observer(() => {
      * CRITICAL FIX: Helper to get inventory levels for a variant from PRIMARY platform only.
      * This prevents double-counting when the same product exists on multiple platforms.
      * Priority order: shopify > square > clover > amazon > ebay > facebook
+     * Also handles pool-based inventory (no platform connection) for partners
      */
     const getPrimaryPlatformInventory = (variantId: string): number => {
       const variantLevels = Object.values(levels).filter((level: InventoryLevel) =>
         level.ProductVariantId === variantId
       );
 
-      // DEBUG: Log the raw levels being found
-      console.log(`[getPrimaryPlatformInventory] variantId=${variantId.slice(0, 8)}, found ${variantLevels.length} levels:`,
-        variantLevels.map((l: InventoryLevel) => `loc=${l.PlatformLocationId?.slice(0, 10)}, qty=${l.Quantity}, conn=${l.PlatformConnectionId?.slice(0, 8)}`).join(' | '));
+      // If no levels found, return 0
+      if (variantLevels.length === 0) {
+        return 0;
+      }
 
-      // Group by platform
+      // Group by platform (or 'pool' for levels without connection)
       const byPlatform: Record<string, number> = {};
       variantLevels.forEach(level => {
-        const platform = connectionToPlatform.get(level.PlatformConnectionId) || 'unknown';
+        // For pool-based inventory (partner shares), use 'pool' as platform
+        const platform = level.PlatformConnectionId
+          ? (connectionToPlatform.get(level.PlatformConnectionId) || 'unknown')
+          : 'pool';
         byPlatform[platform] = (byPlatform[platform] || 0) + (level.Quantity || 0);
       });
 
-      // DEBUG: Log the grouping and connection lookup
-      console.log(`[getPrimaryPlatformInventory] byPlatform=${JSON.stringify(byPlatform)}, connectionToPlatform size=${connectionToPlatform.size}`);
-
-      // Pick PRIMARY platform only (priority order)
-      const platformPriority = ['shopify', 'square', 'clover', 'amazon', 'ebay', 'facebook'];
+      // Pick PRIMARY platform only (priority order) - include 'pool' at end for partners
+      const platformPriority = ['shopify', 'square', 'clover', 'amazon', 'ebay', 'facebook', 'pool'];
       for (const plat of platformPriority) {
         if (byPlatform[plat] !== undefined) {
-          console.log(`[getPrimaryPlatformInventory] PRIMARY=${plat}, qty=${byPlatform[plat]}`);
           return byPlatform[plat];
         }
       }
 
-      // Fallback: sum all if no known platform (shouldn't happen)
-      const fallback = Object.values(byPlatform).reduce((sum, qty) => sum + qty, 0);
-      console.log(`[getPrimaryPlatformInventory] FALLBACK (no known platform), total=${fallback}`);
-      return fallback;
+      // Fallback: sum all if no known platform
+      return Object.values(byPlatform).reduce((sum, qty) => sum + qty, 0);
     };
 
     // FILTER 1: Only show 'flat' or 'base' variants (not 'option' variants)

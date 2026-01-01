@@ -1,29 +1,41 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
-
+import {
+    View,
+    Text,
+    StyleSheet,
+    ScrollView,
+    TouchableOpacity,
+    ActivityIndicator,
+    Alert,
+    Dimensions,
+    Platform,
+    Modal,
+    SafeAreaView,
+} from 'react-native';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
-import { Picker } from '@react-native-picker/picker';
-import { ensureSupabaseJwt } from '../../lib/supabase';
+import { useAuth } from '@clerk/clerk-expo';
+import Animated, { FadeInUp, FadeIn } from 'react-native-reanimated';
 import PillTabs from '../components/ui/PillTabs';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 // Canonical Anorha fields that we map to
 const CANONICAL_FIELDS = [
-    { key: 'title', label: 'Title', required: true, example: 'Nike Air Max 90' },
-    { key: 'description', label: 'Description', required: false, example: 'Classic sneaker with Air cushioning...' },
-    { key: 'sku', label: 'SKU', required: true, example: 'NIKEAM90-001' },
-    { key: 'barcode', label: 'Barcode/UPC', required: false, example: '012345678901' },
-    { key: 'price', label: 'Price', required: true, example: '149.99' },
-    { key: 'quantity', label: 'Quantity', required: false, example: '25' },
-    { key: 'brand', label: 'Brand', required: false, example: 'Nike' },
-    { key: 'category', label: 'Category', required: false, example: 'Footwear > Sneakers' },
-    { key: 'condition', label: 'Condition', required: false, example: 'New' },
-    { key: 'size', label: 'Size', required: false, example: '10' },
-    { key: 'color', label: 'Color', required: false, example: 'White/Black' },
-    { key: 'weight', label: 'Weight', required: false, example: '1.5' },
-    { key: 'cost', label: 'Cost', required: false, example: '75.00' },
-    { key: 'imageUrl', label: 'Image URL', required: false, example: 'https://...' },
+    { key: 'title', label: 'Title', required: true, example: 'Nike Air Max 90', icon: 'format-title' },
+    { key: 'description', label: 'Description', required: false, example: 'Classic sneaker...', icon: 'text' },
+    { key: 'sku', label: 'SKU', required: true, example: 'NIKEAM90-001', icon: 'barcode' },
+    { key: 'barcode', label: 'Barcode/UPC', required: false, example: '012345678901', icon: 'barcode-scan' },
+    { key: 'price', label: 'Price', required: true, example: '149.99', icon: 'cash' },
+    { key: 'quantity', label: 'Quantity', required: false, example: '25', icon: 'package-variant' },
+    { key: 'brand', label: 'Brand', required: false, example: 'Nike', icon: 'tag-outline' },
+    { key: 'category', label: 'Category', required: false, example: 'Sneakers', icon: 'shape-outline' },
+    { key: 'condition', label: 'Condition', required: false, example: 'New', icon: 'star-outline' },
+    { key: 'size', label: 'Size', required: false, example: '10', icon: 'ruler' },
+    { key: 'color', label: 'Color', required: false, example: 'White', icon: 'palette-outline' },
+    { key: 'weight', label: 'Weight', required: false, example: '1.5', icon: 'weight' },
+    { key: 'cost', label: 'Cost', required: false, example: '75.00', icon: 'currency-usd' },
+    { key: 'imageUrl', label: 'Image URL', required: false, example: 'https://...', icon: 'image-outline' },
 ];
 
 interface RouteParams {
@@ -37,21 +49,28 @@ type CSVColumnMappingScreenRouteProp = RouteProp<{ CSVColumnMapping: RouteParams
 export function CSVColumnMappingScreen() {
     const navigation = useNavigation<any>();
     const route = useRoute<CSVColumnMappingScreenRouteProp>();
+    const { getToken } = useAuth();
 
+    // Default empty params if undefined to prevent crashes
     const { csvHeaders = [], csvData = [], sampleRow = {} } = route.params || {};
 
-    // Mapping state: canonical field key -> csv column name
     const [mappings, setMappings] = useState<Record<string, string>>({});
     const [isProcessing, setIsProcessing] = useState(false);
     const [isLoadingAI, setIsLoadingAI] = useState(false);
     const [activeTab, setActiveTab] = useState<'all' | 'required' | 'optional'>('all');
 
+    // Modal state for column selection
+    const [selectionModalVisible, setSelectionModalVisible] = useState(false);
+    const [currentFieldKey, setCurrentFieldKey] = useState<string | null>(null);
+
     // Auto-detect mappings using backend AI on mount
     useEffect(() => {
+        if (!csvHeaders.length) return;
+
         const fetchAIMappings = async () => {
             setIsLoadingAI(true);
             try {
-                const token = await ensureSupabaseJwt();
+                const token = await getToken();
                 if (!token) {
                     console.warn('[CSVColumnMapping] No auth token, falling back to basic matching');
                     fallbackToBasicMatching();
@@ -88,14 +107,11 @@ export function CSVColumnMappingScreen() {
         fetchAIMappings();
     }, [csvHeaders]);
 
-    // Fallback to basic string matching if AI fails
     const fallbackToBasicMatching = () => {
         const autoMappings: Record<string, string> = {};
-
         CANONICAL_FIELDS.forEach(field => {
             const fieldLower = field.key.toLowerCase();
             const labelLower = field.label.toLowerCase();
-
             const match = csvHeaders.find(header => {
                 const headerLower = header.toLowerCase().replace(/[_\-\s]/g, '');
                 return (
@@ -105,24 +121,15 @@ export function CSVColumnMappingScreen() {
                     fieldLower.includes(headerLower)
                 );
             });
-
             if (match) {
                 autoMappings[field.key] = match;
             }
         });
-
         setMappings(autoMappings);
     };
 
-    const handleMappingChange = (canonicalField: string, csvColumn: string) => {
-        setMappings(prev => ({
-            ...prev,
-            [canonicalField]: csvColumn === '' ? '' : csvColumn,
-        }));
-    };
-
     const handleConfirm = async () => {
-        // Validate required fields are mapped
+        // Validate required fields
         const missingRequired = CANONICAL_FIELDS
             .filter(f => f.required && !mappings[f.key])
             .map(f => f.label);
@@ -137,9 +144,7 @@ export function CSVColumnMappingScreen() {
         }
 
         setIsProcessing(true);
-
         try {
-            // Transform CSV data using the mappings
             const transformedData = csvData.map(row => {
                 const transformed: Record<string, any> = {};
                 Object.entries(mappings).forEach(([canonicalKey, csvColumn]) => {
@@ -150,7 +155,6 @@ export function CSVColumnMappingScreen() {
                 return transformed;
             });
 
-            // Navigate to MappingReviewScreen with the transformed data
             navigation.navigate('MappingReview', {
                 connectionId: 'csv-import',
                 platformName: 'CSV Import',
@@ -159,7 +163,7 @@ export function CSVColumnMappingScreen() {
             });
         } catch (error) {
             console.error('[CSVColumnMapping] Error processing data:', error);
-            Alert.alert('Error', 'Failed to process CSV data. Please try again.');
+            Alert.alert('Error', 'Failed to process CSV data.');
         } finally {
             setIsProcessing(false);
         }
@@ -168,122 +172,177 @@ export function CSVColumnMappingScreen() {
     const mappedCount = Object.values(mappings).filter(Boolean).length;
     const requiredCount = CANONICAL_FIELDS.filter(f => f.required).length;
     const mappedRequiredCount = CANONICAL_FIELDS.filter(f => f.required && mappings[f.key]).length;
+    const progressPercentage = (mappedCount / CANONICAL_FIELDS.length) * 100;
 
-    // Filter fields based on active tab
     const filteredFields = useMemo(() => {
-        if (activeTab === 'required') {
-            return CANONICAL_FIELDS.filter(f => f.required);
-        } else if (activeTab === 'optional') {
-            return CANONICAL_FIELDS.filter(f => !f.required);
-        }
+        if (activeTab === 'required') return CANONICAL_FIELDS.filter(f => f.required);
+        if (activeTab === 'optional') return CANONICAL_FIELDS.filter(f => !f.required);
         return CANONICAL_FIELDS;
     }, [activeTab]);
 
     const tabs = [
-        { key: 'all' as const, id: 'all' as const, label: `All (${CANONICAL_FIELDS.length})` },
-        { key: 'required' as const, id: 'required' as const, label: `Required (${requiredCount})` },
-        { key: 'optional' as const, id: 'optional' as const, label: `Optional (${CANONICAL_FIELDS.length - requiredCount})` },
+        { key: 'all' as const, id: 'all' as const, label: `All` },
+        { key: 'required' as const, id: 'required' as const, label: `Required` },
+        { key: 'optional' as const, id: 'optional' as const, label: `Optional` },
     ];
 
+    const openSelectionModal = (fieldKey: string) => {
+        setCurrentFieldKey(fieldKey);
+        setSelectionModalVisible(true);
+    };
+
+    const selectColumn = (column: string) => {
+        if (currentFieldKey) {
+            setMappings(prev => ({
+                ...prev,
+                [currentFieldKey]: column,
+            }));
+        }
+        setSelectionModalVisible(false);
+        setCurrentFieldKey(null);
+    };
+
     return (
-        <SafeAreaView style={styles.container}>
-            <View style={styles.header}>
-                <TouchableOpacity onPress={() => navigation.goBack()}>
-                    <MaterialCommunityIcons name="arrow-left" size={24} color="#111827" />
-                </TouchableOpacity>
-                <Text style={styles.headerTitle}>Map CSV Columns</Text>
-                <View style={{ width: 24 }} />
-            </View>
-
-            <View style={styles.progressBar}>
-                <View style={[styles.progressFill, { width: `${(mappedCount / CANONICAL_FIELDS.length) * 100}%` }]} />
-            </View>
-            <Text style={styles.progressText}>
-                {mappedCount}/{CANONICAL_FIELDS.length} fields mapped • {mappedRequiredCount}/{requiredCount} required
-            </Text>
-
-            {isLoadingAI && (
-                <View style={styles.loadingBanner}>
-                    <ActivityIndicator size="small" color="#6366f1" />
-                    <Text style={styles.loadingText}>AI analyzing columns...</Text>
-                </View>
-            )}
-
-            <View style={styles.tabsContainer}>
-                <PillTabs
-                    tabs={tabs}
-                    value={activeTab}
-                    onChange={(key) => setActiveTab(key as 'all' | 'required' | 'optional')}
-                />
-            </View>
-
-            <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
-                {filteredFields.map(field => (
-                    <View key={field.key} style={styles.fieldRow}>
-                        <View style={styles.fieldInfo}>
-                            <View style={styles.fieldLabelRow}>
-                                <Text style={styles.fieldLabel}>{field.label}</Text>
-                                {field.required && (
-                                    <View style={styles.requiredBadge}>
-                                        <Text style={styles.requiredText}>Required</Text>
-                                    </View>
-                                )}
-                            </View>
-                            <Text style={styles.fieldExample}>e.g., "{field.example}"</Text>
-                        </View>
-
-                        <View style={styles.pickerContainer}>
-                            <Picker
-                                selectedValue={mappings[field.key] || ''}
-                                onValueChange={(value) => handleMappingChange(field.key, value)}
-                                style={styles.picker}
-                            >
-                                <Picker.Item label="— Select column —" value="" />
-                                {csvHeaders.map(header => (
-                                    <Picker.Item
-                                        key={header}
-                                        label={header}
-                                        value={header}
-                                    />
-                                ))}
-                            </Picker>
-                        </View>
-
-                        {mappings[field.key] && sampleRow[mappings[field.key]] && (
-                            <View style={styles.previewContainer}>
-                                <Text style={styles.previewLabel}>Preview:</Text>
-                                <Text style={styles.previewValue} numberOfLines={1}>
-                                    {sampleRow[mappings[field.key]]}
-                                </Text>
-                            </View>
-                        )}
+        <View style={styles.container}>
+            <SafeAreaView style={styles.safeArea}>
+                {/* Header */}
+                <View style={styles.header}>
+                    <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconBtn}>
+                        <Icon name="arrow-left" size={24} color="#1f2937" />
+                    </TouchableOpacity>
+                    <View style={styles.headerContent}>
+                        <Text style={styles.headerTitle}>Map Columns</Text>
+                        <Text style={styles.headerSubtitle}>{csvHeaders.length} columns from CSV</Text>
                     </View>
-                ))}
-            </ScrollView>
+                    <View style={styles.progressBadge}>
+                        <Text style={[styles.progressBadgeText, mappedRequiredCount === requiredCount && styles.textSuccess]}>
+                            {mappedRequiredCount}/{requiredCount} Req.
+                        </Text>
+                    </View>
+                </View>
 
-            <View style={styles.footer}>
-                <TouchableOpacity
-                    style={styles.cancelButton}
-                    onPress={() => navigation.goBack()}
+                {/* AI Loading Indicator */}
+                {isLoadingAI && (
+                    <View style={styles.aiLoadingBar}>
+                        <ActivityIndicator size="small" color="#6366f1" />
+                        <Text style={styles.aiLoadingText}>AI is auto-mapping columns...</Text>
+                    </View>
+                )}
+
+                {/* Tabs */}
+                <View style={styles.tabsWrapper}>
+                    <PillTabs
+                        tabs={tabs}
+                        value={activeTab}
+                        onChange={(k) => setActiveTab(k as any)}
+                    />
+                </View>
+
+                {/* List */}
+                <ScrollView
+                    style={styles.content}
+                    contentContainerStyle={styles.contentContainer}
+                    showsVerticalScrollIndicator={false}
                 >
-                    <Text style={styles.cancelButtonText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.confirmButton, isProcessing && styles.confirmButtonDisabled]}
-                    onPress={handleConfirm}
-                    disabled={isProcessing}
-                >
-                    {isProcessing ? (
-                        <ActivityIndicator color="#fff" size="small" />
-                    ) : (
-                        <>
-                            <Text style={styles.confirmButtonText}>Continue</Text>
-                            <MaterialCommunityIcons name="arrow-right" size={20} color="#fff" />
-                        </>
-                    )}
-                </TouchableOpacity>
-            </View>
-        </SafeAreaView>
+                    {filteredFields.map((field, index) => {
+                        const mappedCol = mappings[field.key];
+                        const isMapped = !!mappedCol;
+
+                        return (
+                            <Animated.View
+                                key={field.key}
+                                entering={FadeInUp.delay(index * 30).springify()}
+                                style={[styles.card, isMapped && styles.cardMapped]}
+                            >
+                                <View style={styles.cardHeader}>
+                                    <View style={styles.cardIconBox}>
+                                        <Icon name={field.icon} size={20} color={isMapped ? '#10b981' : '#6b7280'} />
+                                    </View>
+                                    <View style={styles.cardTitleBox}>
+                                        <Text style={styles.cardTitle}>{field.label}</Text>
+                                        {field.required && <Text style={styles.reqTag}>Required</Text>}
+                                    </View>
+                                </View>
+
+                                <TouchableOpacity
+                                    style={[styles.selectorBtn, isMapped ? styles.selectorBtnActive : styles.selectorBtnEmpty]}
+                                    onPress={() => openSelectionModal(field.key)}
+                                >
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.selectorLabel, isMapped ? styles.selectorLabelActive : styles.selectorLabelEmpty]}>
+                                            {isMapped ? mappedCol : 'Select CSV Column...'}
+                                        </Text>
+                                        {isMapped && sampleRow[mappedCol] && (
+                                            <Text style={styles.sampleValue} numberOfLines={1}>
+                                                Sample: {sampleRow[mappedCol]}
+                                            </Text>
+                                        )}
+                                    </View>
+                                    <Icon name="chevron-down" size={20} color={isMapped ? '#10b981' : '#9ca3af'} />
+                                </TouchableOpacity>
+                            </Animated.View>
+                        );
+                    })}
+                    <View style={{ height: 100 }} />
+                </ScrollView>
+
+                {/* Footer */}
+                <View style={styles.footer}>
+                    <TouchableOpacity
+                        style={[styles.primaryBtn, isProcessing && styles.btnDisabled]}
+                        onPress={handleConfirm}
+                        disabled={isProcessing}
+                    >
+                        {isProcessing ? (
+                            <ActivityIndicator color="#fff" />
+                        ) : (
+                            <Text style={styles.primaryBtnText}>
+                                Import {csvData.length} Products
+                            </Text>
+                        )}
+                    </TouchableOpacity>
+                </View>
+            </SafeAreaView>
+
+            {/* Column Selection Modal */}
+            <Modal
+                visible={selectionModalVisible}
+                animationType="slide"
+                transparent={true}
+                onRequestClose={() => setSelectionModalVisible(false)}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContainer}>
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>Select Column</Text>
+                            <TouchableOpacity onPress={() => setSelectionModalVisible(false)}>
+                                <Icon name="close" size={24} color="#1f2937" />
+                            </TouchableOpacity>
+                        </View>
+                        <ScrollView style={styles.modalList}>
+                            <TouchableOpacity
+                                style={styles.modalItem}
+                                onPress={() => selectColumn('')}
+                            >
+                                <Text style={[styles.modalItemText, { color: '#ef4444' }]}>Clear Mapping</Text>
+                            </TouchableOpacity>
+                            {csvHeaders.map((header) => (
+                                <TouchableOpacity
+                                    key={header}
+                                    style={styles.modalItem}
+                                    onPress={() => selectColumn(header)}
+                                >
+                                    <Text style={styles.modalItemText}>{header}</Text>
+                                    <Text style={styles.modalItemSample} numberOfLines={1}>
+                                        {sampleRow[header]}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
+        </View>
     );
 }
 
@@ -292,163 +351,224 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: '#f9fafb',
     },
+    safeArea: {
+        flex: 1,
+    },
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: 16,
+        paddingHorizontal: 16,
+        paddingVertical: 12,
         backgroundColor: '#fff',
         borderBottomWidth: 1,
-        borderBottomColor: '#e5e7eb',
+        borderBottomColor: '#f3f4f6',
+    },
+    iconBtn: {
+        padding: 8,
+        marginRight: 8,
+    },
+    headerContent: {
+        flex: 1,
     },
     headerTitle: {
         fontSize: 18,
-        fontWeight: '600',
-        color: '#111827',
+        fontWeight: 'bold',
+        color: '#1f2937',
     },
-    progressBar: {
-        height: 4,
-        backgroundColor: '#e5e7eb',
-    },
-    progressFill: {
-        height: '100%',
-        backgroundColor: '#6366f1',
-    },
-    progressText: {
-        fontSize: 12,
+    headerSubtitle: {
+        fontSize: 13,
         color: '#6b7280',
-        textAlign: 'center',
-        paddingVertical: 8,
-        backgroundColor: '#fff',
     },
-    loadingBanner: {
+    progressBadge: {
+        backgroundColor: '#f3f4f6',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 12,
+    },
+    progressBadgeText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#6b7280',
+    },
+    textSuccess: {
+        color: '#10b981',
+    },
+    aiLoadingBar: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: 12,
-        paddingHorizontal: 16,
-        backgroundColor: '#eef2ff',
+        paddingVertical: 8,
+        backgroundColor: '#eff6ff',
         gap: 8,
     },
-    loadingText: {
-        fontSize: 14,
+    aiLoadingText: {
+        fontSize: 13,
         color: '#6366f1',
         fontWeight: '500',
     },
-    tabsContainer: {
-        padding: 16,
-        paddingBottom: 8,
-        backgroundColor: '#fff',
+    tabsWrapper: {
+        paddingVertical: 12,
+        paddingHorizontal: 16,
     },
-    scrollView: {
+    content: {
         flex: 1,
     },
-    scrollContent: {
-        padding: 16,
-        paddingBottom: 100,
+    contentContainer: {
+        paddingHorizontal: 16,
+        paddingBottom: 20,
     },
-    fieldRow: {
+    card: {
         backgroundColor: '#fff',
-        borderRadius: 12,
+        borderRadius: 16,
         padding: 16,
         marginBottom: 12,
         borderWidth: 1,
         borderColor: '#e5e7eb',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 8,
+        elevation: 2,
     },
-    fieldInfo: {
+    cardMapped: {
+        borderColor: '#10b981',
+        backgroundColor: '#f0fdf4',
+    },
+    cardHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
         marginBottom: 12,
     },
-    fieldLabelRow: {
+    cardIconBox: {
+        width: 32,
+        height: 32,
+        borderRadius: 8,
+        backgroundColor: '#f3f4f6',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 10,
+    },
+    cardTitleBox: {
+        flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
     },
-    fieldLabel: {
+    cardTitle: {
         fontSize: 15,
         fontWeight: '600',
-        color: '#111827',
+        color: '#374151',
     },
-    requiredBadge: {
-        backgroundColor: '#fef2f2',
-        paddingHorizontal: 8,
-        paddingVertical: 2,
-        borderRadius: 10,
-    },
-    requiredText: {
+    reqTag: {
         fontSize: 11,
-        color: '#dc2626',
-        fontWeight: '500',
-    },
-    fieldExample: {
-        fontSize: 12,
-        color: '#9ca3af',
-        marginTop: 4,
-    },
-    pickerContainer: {
-        backgroundColor: '#f3f4f6',
-        borderRadius: 8,
+        fontWeight: '700',
+        color: '#ef4444',
+        backgroundColor: '#fef2f2',
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
         overflow: 'hidden',
     },
-    picker: {
-        height: 50,
-    },
-    previewContainer: {
+    selectorBtn: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginTop: 8,
-        paddingTop: 8,
+        justifyContent: 'space-between',
+        padding: 12,
+        borderWidth: 1,
+        borderRadius: 10,
+        backgroundColor: '#fff',
+    },
+    selectorBtnEmpty: {
+        borderColor: '#e5e7eb',
+        borderStyle: 'dashed',
+    },
+    selectorBtnActive: {
+        borderColor: '#10b981',
+        backgroundColor: '#fff',
+    },
+    selectorLabel: {
+        fontSize: 14,
+        fontWeight: '500',
+    },
+    selectorLabelEmpty: {
+        color: '#9ca3af',
+    },
+    selectorLabelActive: {
+        color: '#1f2937',
+    },
+    sampleValue: {
+        fontSize: 12,
+        color: '#6b7280',
+        marginTop: 2,
+    },
+    footer: {
+        padding: 16,
+        backgroundColor: '#fff',
         borderTopWidth: 1,
         borderTopColor: '#f3f4f6',
     },
-    previewLabel: {
-        fontSize: 12,
-        color: '#6b7280',
-        marginRight: 8,
-    },
-    previewValue: {
-        flex: 1,
-        fontSize: 12,
-        color: '#22c55e',
-        fontWeight: '500',
-    },
-    footer: {
-        flexDirection: 'row',
-        padding: 16,
-        gap: 12,
-        backgroundColor: '#fff',
-        borderTopWidth: 1,
-        borderTopColor: '#e5e7eb',
-    },
-    cancelButton: {
-        flex: 1,
-        paddingVertical: 14,
-        borderRadius: 10,
-        backgroundColor: '#f3f4f6',
+    primaryBtn: {
+        backgroundColor: '#10b981',
+        paddingVertical: 16,
+        borderRadius: 12,
         alignItems: 'center',
+        shadowColor: '#10b981',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        elevation: 4,
     },
-    cancelButtonText: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#6b7280',
+    btnDisabled: {
+        backgroundColor: '#9ca3af',
+        shadowOpacity: 0,
     },
-    confirmButton: {
-        flex: 2,
-        flexDirection: 'row',
-        paddingVertical: 14,
-        borderRadius: 10,
-        backgroundColor: '#6366f1',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-    },
-    confirmButtonDisabled: {
-        opacity: 0.7,
-    },
-    confirmButtonText: {
-        fontSize: 16,
-        fontWeight: '600',
+    primaryBtnText: {
         color: '#fff',
+        fontSize: 16,
+        fontWeight: 'bold',
+    },
+    // Modal
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'flex-end',
+    },
+    modalContainer: {
+        backgroundColor: '#fff',
+        borderTopLeftRadius: 20,
+        borderTopRightRadius: 20,
+        maxHeight: '80%',
+        paddingBottom: 30,
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: 16,
+        borderBottomWidth: 1,
+        borderBottomColor: '#f3f4f6',
+    },
+    modalTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#1f2937',
+    },
+    modalList: {
+
+    },
+    modalItem: {
+        padding: 16,
+        borderBottomWidth: 1,
+        borderBottomColor: '#f3f4f6',
+    },
+    modalItemText: {
+        fontSize: 15,
+        fontWeight: '500',
+        color: '#374151',
+    },
+    modalItemSample: {
+        fontSize: 13,
+        color: '#9ca3af',
+        marginTop: 4,
     },
 });
-
-export default CSVColumnMappingScreen;

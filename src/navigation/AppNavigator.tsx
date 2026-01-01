@@ -50,7 +50,7 @@ import ActivityFeedScreen from '../screens/ActivityFeedScreen';
 import PublishConfirmationScreen from '../screens/PublishConfirmationScreen';
 import PartnerAcceptScreen from '../screens/PartnerAcceptScreen';
 import { BackfillOptimizerScreen } from '../screens/BackfillOptimizerScreen';
-import CSVColumnMappingScreen from '../screens/CSVColumnMappingScreen';
+import { CSVColumnMappingScreen } from '../screens/CSVColumnMappingScreen';
 import { isFeatureEnabled } from '../config/features';
 import { SessionContext } from '../context/SessionContext';
 
@@ -98,7 +98,7 @@ export type AppStackParamList = {
   };
   ProductDetail: { productId: string };
   PastScans: undefined;
-  MappingReview: { connectionId: string; platformName: string; jobId?: string; };
+  MappingReview: { connectionId: string; platformName: string; jobId?: string; importedProducts?: any[]; isCSVImport?: boolean; isScanning?: boolean; };
   SyncRules: { connectionId: string };
   Profile: { refresh?: number }; // Add Profile screen with optional refresh param
   Team: undefined;

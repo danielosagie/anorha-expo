@@ -718,7 +718,8 @@ const ProfileScreen = () => {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
         const finalRedirectUri = 'anorhaapp://auth-callback?platform=ebay';
-        const url = `${SSSYNC_API_BASE_URL}/api/auth/ebay/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
+        const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
+        const url = `${SSSYNC_API_BASE_URL}/api/auth/ebay/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}${orgIdParam}`;
         await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
       })();
     } else {
@@ -957,8 +958,9 @@ const ProfileScreen = () => {
     const finalRedirectUri = 'anorhaapp://auth-callback';
     const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
 
-    // Append BOTH userId and finalRedirectUri
-    const backendInitiationUrl = `${backendInitiationUrlBase}?userId=${userId}&finalRedirectUri=${encodedFinalRedirectUri}`;
+    // Append BOTH userId and finalRedirectUri plus orgId
+    const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
+    const backendInitiationUrl = `${backendInitiationUrlBase}?userId=${userId}&finalRedirectUri=${encodedFinalRedirectUri}${orgIdParam}`;
 
     console.log(`[ProfileScreen] Opening URL with Expo WebBrowser: ${backendInitiationUrl}`);
     try {
@@ -995,7 +997,8 @@ const ProfileScreen = () => {
     const finalRedirectUri = 'anorhaapp://auth-callback';
     const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
 
-    const directLoginUrl = `${directLoginUrlBase}?userId=${userId}&shop=${extractedShopName}&finalRedirectUri=${encodedFinalRedirectUri}`;
+    const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
+    const directLoginUrl = `${directLoginUrlBase}?userId=${userId}&shop=${extractedShopName}&finalRedirectUri=${encodedFinalRedirectUri}${orgIdParam}`;
     console.log(`[ProfileScreen] Opening Final Auth URL: ${directLoginUrl}`);
 
     try {
@@ -1087,59 +1090,49 @@ const ProfileScreen = () => {
   // --- NEW: Function to start platform scan ---
   const startPlatformScan = async (connectionId: string, platformName: string, isReconnect: boolean = false) => {
     console.log(`[ProfileScreen] Attempting to start scan for connection ID: ${connectionId} (${platformName})`);
-    try {
-      const token = await getApiToken();
-      if (!token) throw new Error('Authentication token not found for starting scan.');
 
-      // ✅ REMOVED: Backend now handles setting status to 'reconciling' when queuing the job
-      // No need to manually set it here - this was causing the previousStatus to be saved as 'reconciling'
+    // ✅ NAVIGATE IMMEDIATELY - Don't wait for API response
+    // The MappingReviewScreen will show loading state and receive progress updates via WebSocket
+    navigation.navigate('MappingReview', {
+      connectionId,
+      platformName,
+      isScanning: true, // Flag to indicate scan is in progress
+    });
 
-      // Show a loading notification
-      showStatusNotification('Processing', `Starting scan for ${platformName}...`, 'info');
+    // Start the scan in the background (non-blocking)
+    (async () => {
+      try {
+        const token = await getApiToken();
+        if (!token) throw new Error('Authentication token not found for starting scan.');
 
-      // Determine which endpoint to use based on isReconnect
-      const endpoint = isReconnect
-        ? `${SSSYNC_API_BASE_URL}/api/sync/connection/${connectionId}/reconcile` // Reconcile for reconnections
-        : `${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/start-scan`; // Regular scan for new connections
+        // Determine which endpoint to use based on isReconnect
+        const endpoint = isReconnect
+          ? `${SSSYNC_API_BASE_URL}/api/sync/connection/${connectionId}/reconcile` // Reconcile for reconnections
+          : `${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/start-scan`; // Regular scan for new connections
 
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-      });
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+        });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
-        throw new Error(errorData.message || `Failed to start scan for ${platformName}. Status: ${response.status}`);
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
+          throw new Error(errorData.message || `Failed to start scan for ${platformName}. Status: ${response.status}`);
+        }
+
+        const responseData = await response.json().catch(() => ({}));
+        console.log(`[ProfileScreen] Successfully initiated scan for ${platformName} (Connection ID: ${connectionId}). Job ID: ${responseData.jobId}`);
+
+      } catch (error: unknown) {
+        console.error(`[ProfileScreen] Error starting scan for ${platformName}:`, error);
+        const message = error instanceof Error ? error.message : String(error);
+        // Show error notification - user is already on MappingReviewScreen
+        showStatusNotification('Scan Error', `Could not start scan for ${platformName}: ${message}`, 'danger');
       }
-
-      const responseData = await response.json().catch(() => ({}));
-
-      // --- MODIFIED: Show notification and navigate with Job ID ---
-      showStatusNotification(
-        'Scan Initialized',
-        `Now analyzing products for ${platformName}. You can monitor the progress on the next screen.`,
-        'info' // Use 'info' as it's a start, not a final success
-      );
-
-      console.log(`[ProfileScreen] Successfully initiated scan for ${platformName} (Connection ID: ${connectionId}). Response:`, responseData);
-
-      // Navigate to MappingReviewScreen immediately, passing the jobId to monitor progress.
-      navigation.navigate('MappingReview', {
-        connectionId,
-        platformName,
-        jobId: responseData.jobId, // Pass the jobId from the API response
-      });
-
-    } catch (error: unknown) {
-      console.error(`[ProfileScreen] Error starting scan for ${platformName}:`, error);
-      const message = error instanceof Error ? error.message : String(error);
-
-      // Show an error notification
-      showStatusNotification('Error', `Could not start scan for ${platformName}: ${message}`, 'danger');
-    }
+    })();
   };
   // --- END Function to start platform scan ---
 
@@ -1159,8 +1152,9 @@ const ProfileScreen = () => {
       // 2. Define finalRedirectUri
       const finalRedirectUri = "anorhaapp://auth/callback?platform=clover"; // App-specific deep link
 
-      // 3. Construct Backend Authorization URL
-      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/clover/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
+      // 3. Construct Backend Authorization URL with orgId
+      const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
+      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/clover/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}${orgIdParam}`;
       console.log("[ProfileScreen] Clover Connect: Backend Auth URL:", backendAuthUrl);
 
       // 4. Open WebBrowser for OAuth flow, listening for finalRedirectUri
@@ -1241,8 +1235,9 @@ const ProfileScreen = () => {
       // 2. Define finalRedirectUri
       const finalRedirectUri = "anorhaapp://auth/callback?platform=square"; // App-specific deep link
 
-      // 3. Construct Backend Authorization URL
-      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/square/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
+      // 3. Construct Backend Authorization URL with orgId
+      const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
+      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/square/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}${orgIdParam}`;
       console.log("[ProfileScreen] Square Connect: Backend Auth URL:", backendAuthUrl);
 
       // 4. Open WebBrowser for OAuth flow, listening for finalRedirectUri
@@ -1319,8 +1314,9 @@ const ProfileScreen = () => {
       const finalRedirectUri = 'anorhaapp://auth-callback';
       const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
 
-      // Build the auth URL - now passing finalRedirectUri so backend knows where to return the user
-      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/facebook/login?userId=${user.id}&finalRedirectUri=${encodedFinalRedirectUri}`;
+      // Build the auth URL with orgId so backend can associate connection with organization
+      const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
+      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/facebook/login?userId=${user.id}&finalRedirectUri=${encodedFinalRedirectUri}${orgIdParam}`;
 
       console.log(`[ProfileScreen] Facebook Connect: Opening in ${USE_EXTERNAL_BROWSER_FOR_FACEBOOK ? 'External' : 'Internal'} browser...`);
 
@@ -2059,20 +2055,12 @@ const ProfileScreen = () => {
       {/* Locations & Pools Card (v2) - render unconditionally; component resolves orgId */}
       <Animated.View entering={FadeInUp.delay(250).duration(500)}>
         <Card style={styles.card}>
-          {(currentOrg?.name?.includes('Workspace') || currentOrg?.name?.includes('Personal')) &&
-            user?.organizationMemberships?.some(m => !m.organization.name.includes('Workspace')) ? (
-            <View style={{ padding: 30, alignItems: 'center' }}>
-              <ActivityIndicator size="small" color={theme.colors.primary} />
-              <Text style={{ marginTop: 10, color: '#666', fontSize: 14 }}>Switching to your organization...</Text>
-            </View>
-          ) : (
-            <LocationsManagerV2
-              orgId={currentOrg?.id}
-              platformConnections={platformConnections}
-              disableScroll={true}
-              onPressConnect={() => overlay.show()}
-            />
-          )}
+          <LocationsManagerV2
+            orgId={currentOrg?.id}
+            platformConnections={platformConnections}
+            disableScroll={true}
+            onPressConnect={() => overlay.show()}
+          />
         </Card>
       </Animated.View>
 

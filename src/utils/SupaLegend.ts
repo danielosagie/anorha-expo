@@ -94,21 +94,25 @@ export async function initializeLegendState(
     const currentUserId = userIdToInitialize;
     console.log(`[SupaLegend] currentUserId set to: ${currentUserId}`);
 
-    // --- BEGIN DIAGNOSTIC: Clear persisted caches for this user ---
-    const productVariantsPersistKey = `productVariants_user_${currentUserId}_v2`;
-    const inventoryLevelsPersistKey = `inventoryLevels_user_${currentUserId}_v3`;
+    // --- DIAGNOSTIC CACHE CLEAR DISABLED ---
+    // Commenting out aggressive cache clearing as it forces Legend to re-fetch from Supabase
+    // every time, causing empty state until network request completes.
+    // Only uncomment this if you're debugging cache corruption issues.
+    /*
+    const productVariantsPersistKey = `productVariants_user_${currentUserId}_v6`;
+    const inventoryLevelsPersistKey = `inventoryLevels_user_${currentUserId}_v5`;
     try {
         console.log(`[SupaLegend - DIAGNOSTIC] Attempting to remove AsyncStorage key: ${productVariantsPersistKey}`);
         await AsyncStorage.removeItem(productVariantsPersistKey);
         console.log(`[SupaLegend - DIAGNOSTIC] Successfully removed AsyncStorage key: ${productVariantsPersistKey}`);
 
-        // CRITICAL: Also clear inventoryLevels cache to remove stale/corrupted data
         console.log(`[SupaLegend - DIAGNOSTIC] Attempting to remove AsyncStorage key: ${inventoryLevelsPersistKey}`);
         await AsyncStorage.removeItem(inventoryLevelsPersistKey);
         console.log(`[SupaLegend - DIAGNOSTIC] Successfully removed AsyncStorage key: ${inventoryLevelsPersistKey}`);
     } catch (e) {
         console.error(`[SupaLegend - DIAGNOSTIC] Error removing AsyncStorage keys:`, e);
     }
+    */
     // --- END DIAGNOSTIC ---
 
     configureSyncedSupabase({

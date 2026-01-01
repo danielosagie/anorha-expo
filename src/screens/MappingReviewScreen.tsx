@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Alert, TouchableOpacity, Modal, Pressable, FlatList, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Alert, TouchableOpacity, Modal, Pressable, FlatList, TextInput, KeyboardAvoidingView, Platform, Image as RNImage } from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator'; // Assuming this is your stack param list
@@ -18,6 +18,7 @@ import * as Progress from 'react-native-progress';
 import PlaceholderImage from '../components/PlaceholderImage';
 import PillTabs from '../components/ui/PillTabs';
 import SearchBar from '../components/ui/SearchBar';
+import SearchBarWithScanner from '../components/SearchBarWithScanner';
 import MappingCard from '../components/mapping/MappingCard';
 import BottomActionBar from '../components/BottomActionBar';
 import { tokens } from '../design/tokens';
@@ -27,6 +28,8 @@ import CloverSvg from '../assets/clover.svg';
 import EbaySvg from '../assets/ebay.svg';
 import FacebookSvg from '../assets/facebook.svg';
 import AmazonSvg from '../assets/amazon.svg';
+const AnorhaLogo = require('../assets/rounded_anorha.png');
+import { CameraView } from 'expo-camera';
 
 
 interface MappingSuggestion {
@@ -42,8 +45,20 @@ interface MappingSuggestion {
     id: string | null;  // will be null for CREATE_NEW
     sku: string;
     title: string;
+    price?: number;
     imageUrl?: string | null;
   } | null;
+  // NEW: For bidirectional sync - Anorha item to push to platform
+  anorhaVariant?: {
+    id: string;
+    sku: string | null;
+    title: string | null;
+    price?: number;
+    barcode?: string | null;
+    imageUrl?: string | null;
+  } | null;
+  // NEW: Direction of sync
+  direction?: 'platform_to_anorha' | 'anorha_to_platform' | 'bidirectional';
   // This is the key part for your UI:
   // Default this to `true` for 'CREATE_NEW' and 'LINK_EXISTING'
   // Your UI should have a checkbox bound to this property.
@@ -55,6 +70,7 @@ interface MappingSuggestion {
   resolved?: boolean;
   prevTab?: 'matched' | 'review' | 'ignore';
   prevAction?: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE';
+  originalData?: any; // For CSV Import storage
 }
 
 // NEW: Interface for existing mappings from Supabase
@@ -161,7 +177,7 @@ const MappingReviewScreen = () => {
   const theme = useTheme();
   const route = useRoute<MappingReviewScreenRouteProp>();
   const navigation = useNavigation<MappingReviewScreenNavigationProp>();
-  const { connectionId, platformName, jobId } = route.params;
+  const { connectionId, platformName, jobId, importedProducts, isCSVImport, isScanning } = route.params;
   const legendState: LegendStateObservables | null = useLegendState();
   const [connection, setConnection] = useState<any>()
 
@@ -169,7 +185,8 @@ const MappingReviewScreen = () => {
   const [suggestions, setSuggestions] = useState<MappingSuggestion[] | null>(null);
   // Persist review progress
   const [hasLoadedDraft, setHasLoadedDraft] = useState(false);
-  const [loading, setLoading] = useState(true);
+  // ✅ CHANGED: Start loading=true when isScanning is true to show loading UI immediately
+  const [loading, setLoading] = useState(isScanning ?? true);
   const [error, setError] = useState<string | null>(null);
   const [summaryData, setSummaryData] = useState<any>(null); // Summary might not exist anymore
   const [syncing, setSyncing] = useState(false);
@@ -182,7 +199,7 @@ const MappingReviewScreen = () => {
   // --- NEW: State for WebSocket sync progress ---
   const { progress: syncProgress } = useSyncProgress(connectionId);
   const [currentJobId, setCurrentJobId] = useState<string | undefined>(jobId);
-  const [isPolling, setIsPolling] = useState(!!jobId); // Keep for compatibility
+  const [isPolling, setIsPolling] = useState(!!jobId || !!isScanning); // ✅ CHANGED: Enable polling when scanning
   const [jobProgress, setJobProgress] = useState<JobProgress | null>(null); // Keep for compatibility
   // --- END NEW ---
   // --- NEW: Add state for existing mappings ---
@@ -215,6 +232,8 @@ const MappingReviewScreen = () => {
 
   // --- NEW: UI state for filter/sort in list (separate from link search modal) ---
   const [listQuery, setListQuery] = useState('');
+  const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
+  const [showEffectAllDropdown, setShowEffectAllDropdown] = useState(false);
   const [sortBy, setSortBy] = useState<'title' | 'sku'>('title');
   // NEW: Scan summary
   const [scanSummary, setScanSummary] = useState<{ countProducts?: number; countVariants?: number; countLocations?: number } | null>(null);
@@ -226,12 +245,24 @@ const MappingReviewScreen = () => {
   const [selectedPlatformsState, setSelectedPlatformsState] = useState<string[]>([]);
   const [inventoryMergeMode, setInventoryMergeMode] = useState<'merged' | 'separate' | null>('merged');
 
-  // NEW: Product creation mode - controls how unLinked products are handled
-  // 'sync_everywhere' = Create missing products on all platforms (single source of truth)
-  // 'only_this_store' = Only add missing items to this specific platform
-  // 'ignore' = Don't add missing items anywhere, only sync existing matches
-  type ProductCreationMode = 'sync_everywhere' | 'only_this_store' | 'ignore';
-  const [productCreationMode, setProductCreationMode] = useState<ProductCreationMode>('only_this_store');
+  // Wizard step configuration - centralized titles and descriptions (description shown above divider)
+  const WIZARD_STEP_CONFIG: Record<number, { title: string; description?: string }> = {
+    0: { title: 'Should We Add Missing Items?', description: 'What happens when a product is missing from one platform?' },
+    1: { title: 'Add Platform To Pool', description: 'Which pool should this platform be added to?' },
+    2: { title: 'Set Sync Settings', description: 'Sync updates automatically or only on approval' },
+    3: { title: 'Set Sync Settings', description: 'Choose how auction listings behave (like FB, Ebay, Whatnot) ' },
+    4: { title: 'Set Sync Settings', description: 'Adjust prices by % per platform (Optional)' },
+    5: { title: 'Set Sync Settings', description: 'Final sync configuration' },
+    6: { title: 'Is This Right?', description: 'Review and confirm your settings' },
+  };
+
+
+  // 'sync_everywhere' = Add missing items to ALL platforms including this one (full bidirectional sync)
+  // 'pull_only' = Only add missing items TO this platform (import from others)
+  // 'push_only' = Push this platform's inventory to others, but don't pull items in
+  // 'do_nothing' = Don't create missing items on any platform
+  type ProductCreationMode = 'sync_everywhere' | 'pull_only' | 'push_only' | 'do_nothing';
+  const [productCreationMode, setProductCreationMode] = useState<ProductCreationMode>('pull_only');
 
 
   // Pools Selection State
@@ -290,9 +321,14 @@ const MappingReviewScreen = () => {
     );
   };
 
-  // Get current platform connection for user
+  // ✅ ENHANCED: Poll connection status and auto-transition when scan completes
   useEffect(() => {
-    const loadConnection = async () => {
+    let pollingInterval: ReturnType<typeof setInterval> | null = null;
+    let isMounted = true;
+
+    const pollConnectionStatus = async () => {
+      if (!isMounted) return;
+
       try {
         const token = await ensureSupabaseJwt();
         const response = await fetch(
@@ -308,17 +344,65 @@ const MappingReviewScreen = () => {
 
         if (response.ok) {
           const conn = await response.json();
-          setConnection(conn);  // Store full connection object
+          setConnection(conn);
+
+          // ✅ AUTO-TRANSITION: When status changes from scanning to review/active
+          // Fetch suggestions and stop loading
+          const status = conn.Status?.toLowerCase();
+          console.log(`[MappingReviewScreen] Polled status: ${status} (isScanning: ${isScanning})`);
+
+          if (isScanning && status && ['review', 'active', 'ready_to_sync'].includes(status)) {
+            console.log('[MappingReviewScreen] ✅ Scan complete! Fetching suggestions...');
+            // Stop polling
+            if (pollingInterval) {
+              clearInterval(pollingInterval);
+              pollingInterval = null;
+            }
+            // Fetch suggestions - this will set loading=false when done
+            fetchMappingSuggestions(connectionId);
+          } else if (isScanning && status === 'error') {
+            console.log('[MappingReviewScreen] ❌ Scan failed');
+            setError('Scan failed. Please try again.');
+            setLoading(false);
+            if (pollingInterval) {
+              clearInterval(pollingInterval);
+              pollingInterval = null;
+            }
+          }
         }
       } catch (error) {
-        console.error('Error loading connection:', error);
+        console.error('[MappingReviewScreen] Error polling connection:', error);
       }
     };
 
-    if (connectionId) {
-      loadConnection();
+    if (connectionId && connectionId !== 'csv-import') {
+      // Initial load
+      pollConnectionStatus();
+
+      // ✅ Start polling if scanning - poll every 3 seconds for status changes
+      if (isScanning || isPolling) {
+        console.log('[MappingReviewScreen] 🔄 Starting status polling...');
+        pollingInterval = setInterval(pollConnectionStatus, 3000);
+      }
     }
-  }, [connectionId]);
+
+    return () => {
+      isMounted = false;
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+      }
+    };
+  }, [connectionId, isScanning, isPolling]);
+
+  // ✅ ALSO: Listen for WebSocket progress and auto-transition on completion
+  useEffect(() => {
+    if (syncProgress?.status === 'review' || syncProgress?.status === 'active' || syncProgress?.status === 'completed') {
+      console.log(`[MappingReviewScreen] WebSocket status: ${syncProgress.status} - fetching suggestions`);
+      if (loading && (isScanning || isPolling)) {
+        fetchMappingSuggestions(connectionId);
+      }
+    }
+  }, [syncProgress?.status]);
 
   // Fetch current Pools on mount
   useEffect(() => {
@@ -477,7 +561,7 @@ const MappingReviewScreen = () => {
     };
 
     // Only run when we have connectionId and pools are done loading
-    if (connectionId && !isLoadingPools) {
+    if (connectionId && connectionId !== 'csv-import' && !isLoadingPools) {
       fetchConnectionLocations();
     }
   }, [connectionId, pools, isLoadingPools]); // Depend on pools being loaded
@@ -485,7 +569,7 @@ const MappingReviewScreen = () => {
   // Load existing quick settings on mount (for wizard pre-population)
   useEffect(() => {
     const loadExistingSettings = async () => {
-      if (!connectionId) return;
+      if (!connectionId || connectionId === 'csv-import') return;
 
       try {
         const token = await ensureSupabaseJwt();
@@ -660,7 +744,12 @@ const MappingReviewScreen = () => {
   // This is the main data-loading function that tries the API first,
   // then falls back to Supabase if the API returns no results
   const fetchMappingSuggestions = useCallback(async (currentConnectionId: string) => {
-    console.log(`[MappingReviewScreen] Fetching suggestions for connection: ${currentConnectionId}`);
+    // If CSV import, we don't fetch from backend
+    if (isCSVImport) return;
+
+    // Use currentConnectionId or fall back to route param
+    const connId = currentConnectionId || connectionId;
+    console.log(`[MappingReviewScreen] Fetching suggestions for connection: ${connId}`);
     setLoading(true);
     setError(null);
     setSuggestions(null); // Clear previous suggestions
@@ -671,7 +760,7 @@ const MappingReviewScreen = () => {
       const token = await ensureSupabaseJwt();
       if (!token) throw new Error("Authentication token not found. Please log in again.");
 
-      const response = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${currentConnectionId}/mapping-suggestions`, {
+      const response = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connId}/mapping-suggestions`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -699,6 +788,41 @@ const MappingReviewScreen = () => {
           let action: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE';
           let isSelected = true;
 
+          // NEW: Handle anorha_to_platform direction (push Anorha items to platform)
+          const direction = item.direction || 'platform_to_anorha';
+
+          if (direction === 'anorha_to_platform') {
+            // Anorha item to push to platform
+            action = 'CREATE_NEW'; // Will create on platform
+            isSelected = true;
+
+            return {
+              action,
+              // For anorha_to_platform, create synthetic platformProduct from anorhaVariant for unified display
+              platformProduct: {
+                id: item.anorhaVariant?.Id || item.anorhaVariant?.id || `anorha-${Date.now()}`,
+                sku: item.anorhaVariant?.Sku || item.anorhaVariant?.sku || '',
+                title: item.anorhaVariant?.Title || item.anorhaVariant?.title || 'Unnamed Item',
+                price: item.anorhaVariant?.Price || item.anorhaVariant?.price || 0,
+                imageUrl: item.anorhaVariant?.ImageUrl || item.anorhaVariant?.imageUrl || null,
+              },
+              anorhaVariant: item.anorhaVariant ? {
+                id: item.anorhaVariant.Id || item.anorhaVariant.id,
+                sku: item.anorhaVariant.Sku || item.anorhaVariant.sku,
+                title: item.anorhaVariant.Title || item.anorhaVariant.title,
+                price: item.anorhaVariant.Price || item.anorhaVariant.price,
+                barcode: item.anorhaVariant.Barcode || item.anorhaVariant.barcode,
+                imageUrl: item.anorhaVariant.ImageUrl || item.anorhaVariant.imageUrl,
+              } : null,
+              suggestedCanonicalProduct: null, // No canonical match for Anorha→platform push
+              direction: 'anorha_to_platform',
+              isSelected,
+              matchType: item.matchType || 'NONE',
+              confidence: 0,
+            };
+          }
+
+          // Standard platform_to_anorha or bidirectional handling
           if (item.matchType === 'NONE' || item.confidence === 0) {
             // No match found - these are new products to create
             action = 'CREATE_NEW';
@@ -720,17 +844,18 @@ const MappingReviewScreen = () => {
           return {
             action,
             platformProduct: {
-              id: item.platformProduct.id,
-              sku: item.platformProduct.sku || '', // Ensure SKU is not null
-              title: item.platformProduct.title,
-              price: item.platformProduct.price ? parseFloat(String(item.platformProduct.price)) : 0,
-              imageUrl: item.platformProduct.imageUrl,
+              id: item.platformProduct?.id || '',
+              sku: item.platformProduct?.sku || '', // Ensure SKU is not null
+              title: item.platformProduct?.title || '',
+              price: item.platformProduct?.price ? parseFloat(String(item.platformProduct.price)) : 0,
+              imageUrl: item.platformProduct?.imageUrl || null,
             },
             suggestedCanonicalProduct: item.suggestedCanonicalVariant ? {
               id: item.suggestedCanonicalVariant.Id,
               sku: item.suggestedCanonicalVariant.Sku,
               title: item.suggestedCanonicalVariant.Title,
             } : null,
+            direction: direction === 'bidirectional' ? 'bidirectional' : 'platform_to_anorha',
             isSelected,
             matchType: item.matchType,
             confidence: typeof item.confidence === 'number' ? item.confidence : undefined,
@@ -755,13 +880,28 @@ const MappingReviewScreen = () => {
         console.log(`[MappingReviewScreen] Processed legacy format: ${perfectMatches.length} matches, ${newFromPlatform.length} new, ${needsReview.length} review`);
       }
 
-      // Set the processed suggestions
-      setSuggestions(suggestionsArray);
+      // Deduplicate suggestions by platformProduct.id to prevent duplicate entries
+      const seenIds = new Set<string>();
+      const deduplicatedSuggestions = suggestionsArray.filter(suggestion => {
+        const id = suggestion.platformProduct?.id;
+        if (!id || seenIds.has(id)) {
+          return false;
+        }
+        seenIds.add(id);
+        return true;
+      });
+
+      if (deduplicatedSuggestions.length < suggestionsArray.length) {
+        console.log(`[MappingReviewScreen] Removed ${suggestionsArray.length - deduplicatedSuggestions.length} duplicate suggestions`);
+      }
+
+      // Set the processed and deduplicated suggestions
+      setSuggestions(deduplicatedSuggestions);
       // Fetch scan summary for header counts
       try {
         const token2 = await ensureSupabaseJwt();
         if (token2) {
-          const sumResp = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${currentConnectionId}/scan-summary`, { headers: { 'Authorization': `Bearer ${token2}` } });
+          const sumResp = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connId}/scan-summary`, { headers: { 'Authorization': `Bearer ${token2}` } });
           if (sumResp.ok) setScanSummary(await sumResp.json());
         }
       } catch { }
@@ -773,7 +913,7 @@ const MappingReviewScreen = () => {
 
         // Check connection status to understand why no suggestions
         try {
-          const connectionResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections/${currentConnectionId}`, {
+          const connectionResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections/${connId}`, {
             method: 'GET',
             headers: { 'Authorization': `Bearer ${token}` },
           });
@@ -787,7 +927,7 @@ const MappingReviewScreen = () => {
         }
 
         console.log('[MappingReviewScreen] Fetching existing mappings from Supabase as fallback...');
-        await fetchExistingMappingsFromSupabase(currentConnectionId);
+        await fetchExistingMappingsFromSupabase(connId);
       } else {
         console.log(`[MappingReviewScreen] Successfully loaded ${suggestionsArray.length} suggestions:`,
           suggestionsArray.map(s => ({ action: s.action, title: s.platformProduct.title })));
@@ -799,16 +939,16 @@ const MappingReviewScreen = () => {
 
       // If there was an error fetching suggestions, try to get existing mappings as fallback
       console.log('[MappingReviewScreen] Error fetching suggestions, trying to get existing mappings as fallback...');
-      await fetchExistingMappingsFromSupabase(currentConnectionId);
+      await fetchExistingMappingsFromSupabase(connId);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [connectionId, isCSVImport]);
 
   // Load any saved draft selections on mount/when connection changes
   useEffect(() => {
     (async () => {
-      if (!connectionId || hasLoadedDraft) return;
+      if (!connectionId || hasLoadedDraft || isCSVImport) return; // Skip draft loading for CSV import
       try {
         const token = await ensureSupabaseJwt();
         if (!token) return;
@@ -839,13 +979,13 @@ const MappingReviewScreen = () => {
       } catch { }
       setHasLoadedDraft(true);
     })();
-  }, [connectionId, suggestions, hasLoadedDraft]);
+  }, [connectionId, suggestions, hasLoadedDraft, isCSVImport]);
 
   // Debounced autosave of current review selections as draft
   useEffect(() => {
     const handle = setTimeout(async () => {
       try {
-        if (!connectionId || !Array.isArray(suggestions)) return;
+        if (!connectionId || !Array.isArray(suggestions) || isCSVImport) return; // Skip draft saving for CSV import
         const confirmedMatches = suggestions.map(s => ({
           platformProductId: s.platformProduct.id,
           sssyncVariantId: s.action === 'LINK_EXISTING' ? s.suggestedCanonicalProduct?.id : null,
@@ -861,7 +1001,7 @@ const MappingReviewScreen = () => {
       } catch { }
     }, 600);
     return () => clearTimeout(handle);
-  }, [suggestions, connectionId]);
+  }, [suggestions, connectionId, isCSVImport]);
 
   // --- NEW: Function to fetch existing mappings from Supabase ---
   // This is the fallback data source when the API returns no results
@@ -945,8 +1085,33 @@ const MappingReviewScreen = () => {
   useEffect(() => {
     console.log(`[MappingReviewScreen] Effect triggered - isPolling: ${isPolling}, connectionId: ${connectionId}, jobId: ${jobId}`);
 
-    // If not polling, fetch suggestions immediately (legacy or post-polling behavior)
-    if (!isPolling && connectionId) {
+    // Initial fetch
+    if (isCSVImport && importedProducts) {
+      // Initialize suggestions from CSV data
+      setLoading(true);
+      try {
+        const mappedSuggestions: MappingSuggestion[] = importedProducts.map((p: any, index: number) => ({
+          action: 'CREATE_NEW',
+          platformProduct: {
+            id: `csv-${index}`,
+            sku: p.sku || `CSV-${index}`,
+            title: p.title || 'Untitled',
+            price: Number(p.price) || 0,
+            imageUrl: p.imageUrl || null,
+          },
+          suggestedCanonicalProduct: null,
+          isSelected: true,
+          matchType: 'NONE',
+          confidence: 1.0,
+          originalData: p, // Store full data for import (added to interface implicitly via casting)
+        }));
+        setSuggestions(mappedSuggestions);
+        setLoading(false);
+      } catch (e) {
+        console.error("Error mapping CSV data:", e);
+        setLoading(false);
+      }
+    } else if (!isPolling && connectionId) {
       console.log(`[MappingReviewScreen] Not polling, fetching suggestions directly for connection: ${connectionId}`);
       fetchMappingSuggestions(connectionId);
     } else if (!connectionId) {
@@ -1213,6 +1378,105 @@ const MappingReviewScreen = () => {
   };
 
   /**
+   * Handles importing products from CSV
+   */
+  const handleImportCSV = async () => {
+    if (!suggestions || suggestions.filter(s => s.isSelected).length === 0) {
+      Alert.alert("Error", "No products selected for import.");
+      return;
+    }
+
+    setLoading(true);
+    // Use 'Syncing...' state to show progress overlay if available, or just keeping loading spinner
+    setSyncing(true);
+
+    try {
+      const token = await ensureSupabaseJwt();
+      if (!token) throw new Error("Authentication token not found.");
+
+      const selectedItems = suggestions.filter(s => s.isSelected);
+      let successCount = 0;
+      let failCount = 0;
+
+      const total = selectedItems.length;
+
+      // Iterate and create products strictly
+      for (let i = 0; i < total; i++) {
+        const item = selectedItems[i];
+        // Retrieve the full original data if possible, or reconstruct from platformProduct
+        // Since we mapped it, platformProduct has the basics.
+        // But importedProducts param has the full data. 
+        // We can look it up or just use what we have.
+        // Let's use the original imported object if we can find it by index/ID, 
+        // but for now relying on the mapped suggestion data is safer.
+
+        // Construct the DTO expected by POST /api/products
+        const productData = {
+          userId: (legendState?.userId) || '', // Will be validated by backend token anyway
+          variantData: {
+            Title: item.platformProduct.title,
+            Sku: item.platformProduct.sku,
+            Price: item.platformProduct.price,
+            Description: (item as any).originalData?.description || item.platformProduct.title, // Fallback
+            // Add other fields if captured in originalData
+            Barcode: (item as any).originalData?.barcode,
+            Quantity: (item as any).originalData?.quantity ? Number((item as any).originalData.quantity) : 0,
+            Cost: (item as any).originalData?.cost ? Number((item as any).originalData.cost) : undefined,
+            Weight: (item as any).originalData?.weight ? Number((item as any).originalData.weight) : undefined,
+            Size: (item as any).originalData?.size,
+            Color: (item as any).originalData?.color,
+            Brand: (item as any).originalData?.brand,
+            Category: (item as any).originalData?.category,
+            Condition: (item as any).originalData?.condition,
+            PrimaryImageUrl: item.platformProduct.imageUrl,
+          }
+        };
+
+        try {
+          const res = await fetch(`${SSSYNC_API_BASE_URL}/api/products`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(productData),
+          });
+
+          if (!res.ok) {
+            console.error(`Failed to import item ${i}: status ${res.status}`);
+            failCount++;
+          } else {
+            successCount++;
+          }
+        } catch (e) {
+          console.error(`Failed to import item ${i}:`, e);
+          failCount++;
+        }
+
+        // Optional: Update progress UI here if we had a detailed progress bar
+      }
+
+      Alert.alert(
+        "Import Complete",
+        `Successfully imported ${successCount} products.${failCount > 0 ? ` Failed: ${failCount}` : ''}`,
+        [{
+          text: "OK",
+          onPress: () => {
+            navigation.navigate('TabNavigator', { screen: 'InventoryOrders' } as any);
+          }
+        }]
+      );
+
+    } catch (error: any) {
+      console.error('[MappingReviewScreen] CSV Import Error:', error);
+      Alert.alert("Import Error", error.message || "Failed to import products.");
+    } finally {
+      setLoading(false);
+      setSyncing(false);
+    }
+  };
+
+  /**
    * Handles confirming individual item mappings
    */
   const handleConfirmMappings = async (mappingsToConfirm: any) => { // Type this based on actual payload
@@ -1456,7 +1720,9 @@ const MappingReviewScreen = () => {
         imageLeft={item.platformProduct.imageUrl}
         titleRight={item.suggestedCanonicalProduct?.title || undefined}
         skuRight={item.suggestedCanonicalProduct?.sku || undefined}
+        priceRight={item.suggestedCanonicalProduct?.price}
         imageRight={item.suggestedCanonicalProduct?.imageUrl || undefined}
+        direction={item.direction}
         selected={item.isSelected}
         onSelect={() => setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, isSelected: !s.isSelected, action: (!s.isSelected && s.action === 'IGNORE') ? 'CREATE_NEW' : s.action } : s))}
         onIgnore={() => {
@@ -3087,10 +3353,6 @@ const MappingReviewScreen = () => {
       paddingHorizontal: 20,
       paddingVertical: 10,
       flexDirection: 'column',
-      borderBottomWidth: 1,
-      borderBottomColor: '#ddd',
-      backgroundColor: theme.colors.surface,
-      gap: 10,
     },
     modernSearchBar: {
       flexDirection: 'row',
@@ -3126,14 +3388,14 @@ const MappingReviewScreen = () => {
     },
     modernEmptyState: {
       marginTop: 12,
-      minHeight: "25%",
+      minHeight: "35%",
       flex: 1,
       justifyContent: 'center',
       alignItems: 'center',
       padding: 20,
       backgroundColor: theme.colors.surface,
       borderWidth: 2,
-      borderColor: theme.colors.textSecondary,
+      borderColor: "rgba(0, 0, 0, 0.31)",
       borderRadius: 12,
     },
     emptyStateIcon: {
@@ -3141,8 +3403,8 @@ const MappingReviewScreen = () => {
     },
     emptyStateTitle: {
       fontSize: 18,
-      fontWeight: 'bold',
-      color: theme.colors.text,
+      fontWeight: '600',
+      color: "rgba(0, 0, 0, 0.76)",
       textAlign: 'center',
     },
     emptyStateDescription: {
@@ -3361,10 +3623,15 @@ const MappingReviewScreen = () => {
     },
   });
 
-  if (loading && isPolling) {
-    const progressValue = jobProgress?.progress || 0;
-    const progressPercent = Math.round(progressValue * 100);
-    const isStalled = jobProgress && !jobProgress.isActive && !jobProgress.isCompleted && !jobProgress.isFailed;
+  // ✅ UPDATED: Show loading with progress when isPolling or isScanning, using WebSocket data
+  if (loading && (isPolling || isScanning)) {
+    // ✅ Use syncProgress from WebSocket as primary source, fallback to jobProgress for compatibility
+    const wsProgress = syncProgress?.progress ? (syncProgress.progress / 100) : 0;
+    const localProgress = jobProgress?.progress || 0;
+    const progressValue = syncProgress ? wsProgress : localProgress;
+    const progressPercent = Math.round((syncProgress?.progress || localProgress * 100) || 0);
+    const isStalled = !syncProgress && jobProgress && !jobProgress.isActive && !jobProgress.isCompleted && !jobProgress.isFailed;
+    const progressDescription = syncProgress?.description || jobProgress?.description || 'Initializing scan...';
 
     return (
       <View style={styles.container}>
@@ -3374,7 +3641,7 @@ const MappingReviewScreen = () => {
         <View style={styles.centered}>
           <Text style={styles.progressMainTitle}>Analyzing Your Products</Text>
           <Text style={styles.progressDescription}>
-            {jobProgress?.description || `Connecting to ${platformName}...`}
+            {progressDescription}
           </Text>
 
           <View style={styles.progressBarContainer}>
@@ -3391,9 +3658,12 @@ const MappingReviewScreen = () => {
               <Text style={[styles.progressPercentText, isStalled && { color: theme.colors.warning }]}>
                 {`${progressPercent}%`}
               </Text>
-              {jobProgress?.total != null && (
+              {/* ✅ Show processed/total from WebSocket or fallback to jobProgress */}
+              {(syncProgress?.details?.productsProcessed != null || jobProgress?.total != null) && (
                 <Text style={styles.progressCountText}>
-                  {`${jobProgress.processed || 0} / ${jobProgress.total} items`}
+                  {syncProgress?.details?.productsProcessed != null
+                    ? `${syncProgress.details.productsProcessed} products processed`
+                    : `${jobProgress?.processed || 0} / ${jobProgress?.total} items`}
                 </Text>
               )}
             </View>
@@ -3408,40 +3678,46 @@ const MappingReviewScreen = () => {
 
           <View style={styles.activityListContainer}>
             <Text style={styles.activityListTitle}>Progress</Text>
+            {/* ✅ Real progress checkpoints based on connection status and progress */}
             <View style={styles.activityListItem}>
               <Icon name="check-circle" size={16} color={theme.colors.success} />
               <Text style={styles.activityListItemText}>Connection established</Text>
             </View>
             <View style={styles.activityListItem}>
-              <Icon name={progressValue > 0.1 ? "check-circle" : "sync"} size={16} color={progressValue > 0.1 ? theme.colors.success : theme.colors.textSecondary} />
-              <Text style={styles.activityListItemText}>Fetching product list...</Text>
+              <Icon
+                name={progressPercent >= 10 || connection?.Status === 'scanning' ? "check-circle" : "loading"}
+                size={16}
+                color={progressPercent >= 10 ? theme.colors.success : theme.colors.primary}
+              />
+              <Text style={styles.activityListItemText}>
+                {progressPercent >= 10 ? 'Product list retrieved' : 'Fetching products from ' + platformName + '...'}
+              </Text>
             </View>
             <View style={styles.activityListItem}>
-              <Icon name={progressValue > 0.5 ? "check-circle" : "sync"} size={16} color={progressValue > 0.5 ? theme.colors.success : theme.colors.textSecondary} />
-              <Text style={styles.activityListItemText}>Analyzing for matches...</Text>
+              <Icon
+                name={progressPercent >= 50 ? "check-circle" : progressPercent >= 10 ? "loading" : "circle-outline"}
+                size={16}
+                color={progressPercent >= 50 ? theme.colors.success : progressPercent >= 10 ? theme.colors.primary : theme.colors.textSecondary}
+              />
+              <Text style={styles.activityListItemText}>
+                {progressPercent >= 50 ? 'Match analysis complete' : progressPercent >= 10 ? 'Analyzing for matches...' : 'Waiting to analyze...'}
+              </Text>
             </View>
             <View style={styles.activityListItem}>
-              <Icon name={progressValue === 1 ? "check-circle" : "sync"} size={16} color={progressValue === 1 ? theme.colors.success : theme.colors.textSecondary} />
-              <Text style={styles.activityListItemText}>Finalizing suggestions...</Text>
+              <Icon
+                name={progressPercent >= 90 ? "check-circle" : progressPercent >= 50 ? "loading" : "circle-outline"}
+                size={16}
+                color={progressPercent >= 90 ? theme.colors.success : progressPercent >= 50 ? theme.colors.primary : theme.colors.textSecondary}
+              />
+              <Text style={styles.activityListItemText}>
+                {progressPercent >= 90 ? 'Suggestions ready!' : progressPercent >= 50 ? 'Finalizing suggestions...' : 'Waiting to finalize...'}
+              </Text>
             </View>
           </View>
 
-          <Text style={[styles.loadingText, { marginTop: 20, textAlign: 'center' }]}>
+          <Text style={[styles.loadingText, { marginTop: 20, textAlign: 'center', color: theme.colors.textSecondary }]}>
             This usually takes 1-2 minutes depending on your store size.
           </Text>
-
-          {/* Debug information in development */}
-          {__DEV__ && (
-            <View style={styles.debugInfo}>
-              <Text style={styles.debugText}>Debug Info:</Text>
-              <Text style={styles.debugText}>Job ID: {currentJobId}</Text>
-              <Text style={styles.debugText}>Connection: {connectionId}</Text>
-              <Text style={styles.debugText}>Platform: {platformName}</Text>
-              <Text style={styles.debugText}>Is Active: {jobProgress?.isActive ? 'Yes' : 'No'}</Text>
-              <Text style={styles.debugText}>Is Completed: {jobProgress?.isCompleted ? 'Yes' : 'No'}</Text>
-              <Text style={styles.debugText}>Is Failed: {jobProgress?.isFailed ? 'Yes' : 'No'}</Text>
-            </View>
-          )}
         </View>
       </View>
     );
@@ -3577,56 +3853,118 @@ const MappingReviewScreen = () => {
             onChange={(k) => setActiveTab(k as ActiveTab)}
           />
 
-          <SearchBar value={listQuery} onChangeText={setListQuery} placeholder={`Search this ${platformName} account's products`} />
+          <View style={styles.searchSection}>
+            <SearchBarWithScanner
+              value={listQuery}
+              onChangeText={setListQuery}
+              placeholder={`Search this account's products`}
+              onScan={(barcode) => setListQuery(barcode)}
+              onScannerOpen={() => setShowBarcodeScanner(true)}
+            />
+          </View>
+
 
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 12, marginTop: 4, }}>
             {activeTab === 'matched' && (
               <Text style={{ fontWeight: "600", color: theme.colors.textSecondary }}>
-                Review Instant Matches
+                Review Matches
               </Text>
             )}
             {activeTab === 'review' && (
               <Text style={{ fontWeight: "600", color: theme.colors.textSecondary }}>
-                Verify & Review
+                Verify/Review
               </Text>
             )}
             {activeTab === 'ignore' && (
               <Text style={{ fontWeight: "600", color: theme.colors.textSecondary }}>
-                Ignoring These Products
+                Ignored Products
               </Text>
             )}
 
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              {activeTab === 'review' && (
+              {/* Effect All Dropdown */}
+              <View style={{ position: 'relative' }}>
                 <TouchableOpacity
-                  style={{ flexDirection: 'row', backgroundColor: "rgb(94, 41, 11, .8)", alignItems: 'center', paddingVertical: 6, paddingHorizontal: 12, borderWidth: 1, borderColor: 'rgb(94, 41, 11)', borderRadius: 8 }}
-                  onPress={() => {
-                    setSuggestions(prev => (prev || []).map(s => {
-                      const isReview = s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved;
-                      if (isReview && s.suggestedCanonicalProduct?.id) {
-                        return { ...s, action: 'LINK_EXISTING', resolved: true, isSelected: true };
-                      }
-                      return s;
-                    }));
-                  }}
+                  style={{ flexDirection: 'row', backgroundColor: theme.colors.primary, alignItems: 'center', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8 }}
+                  onPress={() => setShowEffectAllDropdown(!showEffectAllDropdown)}
                 >
-                  <Icon name="check-all" size={18} color="#FFF" />
-                  <Text style={{ marginLeft: 6, color: '#FFF', fontWeight: '700' }}>Approve All ({counts.review})</Text>
+                  <Icon name="playlist-edit" size={18} color="#FFF" />
+                  <Text style={{ marginLeft: 6, color: '#FFF', fontWeight: '700' }}>Effect All</Text>
+                  <Icon name={showEffectAllDropdown ? 'chevron-up' : 'chevron-down'} size={16} color="#FFF" style={{ marginLeft: 4 }} />
                 </TouchableOpacity>
-              )}
-              {/* Refresh Platform Button */}
-              <TouchableOpacity
-                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: theme.colors.primary + '50', borderRadius: 8, backgroundColor: theme.colors.primary + '10' }}
-                onPress={handleRefreshPlatform}
-                disabled={isRefreshing}
-              >
-                {isRefreshing ? (
-                  <ActivityIndicator size="small" color={theme.colors.primary} />
-                ) : (
-                  <Icon name="refresh" size={18} color={theme.colors.primary} />
+                {showEffectAllDropdown && (
+                  <View style={{
+                    position: 'absolute',
+                    top: 40,
+                    right: 0,
+                    backgroundColor: '#fff',
+                    borderRadius: 8,
+                    borderWidth: 1,
+                    borderColor: '#E5E7EB',
+                    shadowColor: '#000',
+                    shadowOpacity: 0.15,
+                    shadowRadius: 8,
+                    shadowOffset: { width: 0, height: 4 },
+                    elevation: 8,
+                    zIndex: 1000,
+                    minWidth: 180,
+                  }}>
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' }}
+                      onPress={() => {
+                        setSuggestions(prev => (prev || []).map(s => {
+                          const isReview = s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved;
+                          if (isReview && s.suggestedCanonicalProduct?.id) {
+                            return { ...s, action: 'LINK_EXISTING', resolved: true, isSelected: true };
+                          }
+                          return s;
+                        }));
+                        setShowEffectAllDropdown(false);
+                      }}
+                    >
+                      <Icon name="check-all" size={18} color="#10B981" />
+                      <Text style={{ marginLeft: 8, color: '#374151', fontWeight: '600' }}>Match All</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' }}
+                      onPress={() => {
+                        setSuggestions(prev => (prev || []).map(s => {
+                          const isReview = s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved;
+                          if (isReview) {
+                            return { ...s, action: 'CREATE_NEW', resolved: true, isSelected: true };
+                          }
+                          return s;
+                        }));
+                        setShowEffectAllDropdown(false);
+                      }}
+                    >
+                      <Icon name="plus-circle" size={18} color="#93C822" />
+                      <Text style={{ marginLeft: 8, color: '#374151', fontWeight: '600' }}>Create All as New</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', padding: 12 }}
+                      onPress={() => {
+                        setSuggestions(prev => (prev || []).map(s => {
+                          const isInCurrentTab = activeTab === 'matched'
+                            ? (s.action === 'LINK_EXISTING' || s.resolved === true)
+                            : activeTab === 'review'
+                              ? (s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved)
+                              : s.action === 'IGNORE';
+                          if (isInCurrentTab && s.action !== 'IGNORE') {
+                            return { ...s, prevAction: s.action, action: 'IGNORE', isSelected: false, resolved: false };
+                          }
+                          return s;
+                        }));
+                        setShowEffectAllDropdown(false);
+                      }}
+                    >
+                      <Icon name="close-circle" size={18} color="#EF4444" />
+                      <Text style={{ marginLeft: 8, color: '#374151', fontWeight: '600' }}>Ignore All</Text>
+                    </TouchableOpacity>
+                  </View>
                 )}
-                <Text style={{ marginLeft: 6, color: theme.colors.primary, fontWeight: '600' }}>{isRefreshing ? 'Scanning...' : 'Rescan'}</Text>
-              </TouchableOpacity>
+              </View>
+              {/* Sort Button - Removed Rescan button per user request */}
               <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8 }} onPress={() => setSortBy(sortBy === 'title' ? 'sku' : 'title')} accessibilityLabel="Sort by">
                 <Icon name="sort" size={18} color={theme.colors.textSecondary} />
                 <Text style={{ marginLeft: 6, color: theme.colors.textSecondary, fontWeight: '600' }}>Sort By: {sortBy === 'title' ? 'Title' : 'SKU'}</Text>
@@ -3646,6 +3984,7 @@ const MappingReviewScreen = () => {
                 imageLeft={item.platformProduct.imageUrl}
                 titleRight={item.suggestedCanonicalProduct?.title || undefined}
                 skuRight={item.suggestedCanonicalProduct?.sku || undefined}
+                priceRight={item.suggestedCanonicalProduct?.price}
                 imageRight={item.suggestedCanonicalProduct?.imageUrl || undefined}
                 selected={item.isSelected}
                 isResolvedNew={item.action === 'CREATE_NEW' && !!item.resolved}
@@ -3677,8 +4016,12 @@ const MappingReviewScreen = () => {
                 <View style={styles.emptyStateIcon}>
                   <Icon name={listQuery ? 'magnify' : 'package-variant-closed'} size={48} color={theme.colors.textSecondary} />
                 </View>
-                <Text style={styles.emptyStateTitle}>{listQuery ? 'No matching products' : 'No items in this category'}</Text>
-                <Text style={styles.emptyStateDescription}>{listQuery ? 'Try adjusting your search terms' : 'Items will appear after processing'}</Text>
+                <Text style={styles.emptyStateTitle}>
+                  {listQuery ? 'No matching products' : 'No items in this category'}
+                </Text>
+                <Text style={styles.emptyStateDescription}>
+                  {listQuery ? 'Try adjusting your search terms' : 'Items will appear after processing'}
+                </Text>
               </View>
             )}
             onEndReachedThreshold={0.6}
@@ -3688,9 +4031,18 @@ const MappingReviewScreen = () => {
           />
 
           <BottomActionBar
-            primaryLabel={`Confirm Mapping (${(suggestions || []).filter(s => s.isSelected).length})`}
-            onPrimary={() => setWizardVisible(true)}
-            primaryDisabled={(suggestions || []).filter(s => s.isSelected).length === 0}
+            primaryLabel={isCSVImport
+              ? `Import ${(suggestions || []).filter(s => s.isSelected).length} Products`
+              : (suggestions || []).length === 0 ? 'Continue Setup' : `Confirm Mapping (${(suggestions || []).filter(s => s.isSelected).length})`}
+            onPrimary={() => {
+              if (isCSVImport) {
+                handleImportCSV();
+                return;
+              }
+              // Always open wizard - even with 0 items, user needs to configure settings
+              setWizardVisible(true);
+            }}
+            primaryDisabled={false}
             secondaryLabel="Cancel import"
             secondaryDisabled={false}
             onSecondary={() => navigation.goBack()}
@@ -3710,18 +4062,12 @@ const MappingReviewScreen = () => {
                   nestedScrollEnabled={true}
                 >
                   <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 20, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 3, paddingBottom: 32, }}>
-                    {/* Stepper header aligning to mock */}
-                    <View style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#E5E5E5', alignItems: 'center' }}>
-                      <Text style={{ fontWeight: '700', color: theme.colors.text, fontSize: 18 }}>{
-                        wizardStep === 0 ? 'How Should Products Sync?' : wizardStep === 1 ? 'Add Platform To Pool' : wizardStep === 2 ? 'Set Sync Settings' : wizardStep === 3 ? 'Set Sync Settings' : wizardStep === 4 ? 'Set Sync Settings' : wizardStep === 5 ? 'Set Sync Settings' : 'Is This Right?'}</Text>
-                    </View>
-
-                    {/* NEW Step 0: Product Creation Mode */}
-                    {wizardStep === 0 && (
-                      <View style={{ paddingHorizontal: 0, paddingTop: 24, minHeight: 400 }}>
-                        {/* Reselect Matches link - gray */}
+                    {/* Wizard Header */}
+                    <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+                      {/* Back link - ONLY on Step 0 */}
+                      {wizardStep === 0 && (
                         <TouchableOpacity
-                          style={{ alignSelf: 'center', marginBottom: 20 }}
+                          style={{ alignSelf: 'center', marginBottom: 12 }}
                           onPress={() => setWizardVisible(false)}
                         >
                           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -3729,18 +4075,30 @@ const MappingReviewScreen = () => {
                             <Text style={{ color: '#6B7280', fontSize: 14 }}>Reselect Matches</Text>
                           </View>
                         </TouchableOpacity>
+                      )}
 
-                        {/* Title */}
-                        <Text style={{ fontSize: 22, fontWeight: '700', color: theme.colors.text, textAlign: 'center', marginBottom: 10 }}>
-                          Should We Add Missing Items?
-                        </Text>
-                        <Text style={{ color: theme.colors.textSecondary, marginBottom: 32, textAlign: 'center', fontSize: 15, lineHeight: 22 }}>
-                          Adds missing items to other platforms & vice-versa
-                        </Text>
+                      {/* Title */}
+                      <Text style={{ fontSize: 18, fontWeight: '700', color: theme.colors.text, textAlign: 'center' }}>
+                        {WIZARD_STEP_CONFIG[wizardStep]?.title || 'Setup'}
+                      </Text>
 
+                      {/* Description - ABOVE divider */}
+                      {WIZARD_STEP_CONFIG[wizardStep]?.description && (
+                        <Text style={{ color: theme.colors.textSecondary, textAlign: 'center', fontSize: 14, marginTop: 8 }}>
+                          {WIZARD_STEP_CONFIG[wizardStep]?.description}
+                        </Text>
+                      )}
+                    </View>
+
+                    {/* Divider */}
+                    <View style={{ height: 1, backgroundColor: '#E5E5E5', marginBottom: 16 }} />
+
+                    {/* Step 0: Product Creation Mode - 3 cards + skip button */}
+                    {wizardStep === 0 && (
+                      <View style={{ paddingHorizontal: 0, minHeight: 300 }}>
                         {/* Three horizontal option cards */}
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 10, marginBottom: 32 }}>
-                          {/* Option 1: Yes, all stores - Dynamic platform icon stack */}
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 10, marginBottom: 24 }}>
+                          {/* Option 1: Sync Everywhere - Dynamic platform icon stack */}
                           <TouchableOpacity
                             style={{
                               flex: 1,
@@ -3762,15 +4120,30 @@ const MappingReviewScreen = () => {
                               height: 52,
                               width: '100%',
                             }}>
-                              {/* Show stacked icons for all connected platforms */}
                               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
-                                {platformConnections.slice(0, 3).map((conn, index) => {
+                                {/* Anorha logo first in the stack */}
+                                <View style={{
+                                  backgroundColor: '#fff',
+                                  borderRadius: 8,
+                                  padding: 3,
+                                  borderWidth: 2,
+                                  borderColor: theme.colors.primary,
+                                  zIndex: 5,
+                                  shadowColor: '#000',
+                                  shadowOpacity: 0.08,
+                                  shadowRadius: 2,
+                                  shadowOffset: { width: 0, height: 1 },
+                                  elevation: 2,
+                                }}>
+                                  <RNImage source={AnorhaLogo} style={{ width: 32, height: 32, borderRadius: 6 }} />
+                                </View>
+                                {platformConnections.slice(0, 2).map((conn, index) => {
                                   const platformType = conn.PlatformType?.toLowerCase() || '';
                                   return (
                                     <View
                                       key={conn.Id}
                                       style={{
-                                        marginLeft: index === 0 ? 0 : -12,
+                                        marginLeft: -12,
                                         backgroundColor: '#fff',
                                         borderRadius: 8,
                                         padding: 3,
@@ -3796,7 +4169,6 @@ const MappingReviewScreen = () => {
                                     </View>
                                   );
                                 })}
-                                {/* Show +N indicator if more than 3 platforms */}
                                 {platformConnections.length > 3 && (
                                   <View style={{
                                     marginLeft: -10,
@@ -3818,104 +4190,128 @@ const MappingReviewScreen = () => {
                                 )}
                               </View>
                             </View>
-                            <Text style={{
-                              fontSize: 13,
-                              fontWeight: '600',
-                              color: theme.colors.text,
-                              textAlign: 'center',
-                            }}>
-                              Yes, all stores
+                            <Text style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text, textAlign: 'center' }}>
+                              Sync Everywhere
+                            </Text>
+                            <Text style={{ fontSize: 11, color: theme.colors.textSecondary, textAlign: 'center', marginTop: 4 }}>
+                              Adds missing items to ALL platforms
                             </Text>
                           </TouchableOpacity>
 
-                          {/* Option 2: Only this store */}
+                          {/* Option 2: Pull Only - Other platforms → arrow → This platform */}
                           <TouchableOpacity
                             style={{
                               flex: 1,
                               borderWidth: 2,
-                              borderColor: productCreationMode === 'only_this_store' ? theme.colors.primary : '#E5E7EB',
+                              borderColor: productCreationMode === 'pull_only' ? theme.colors.primary : '#E5E7EB',
                               borderRadius: 12,
                               paddingVertical: 16,
-                              paddingHorizontal: 8,
-                              backgroundColor: productCreationMode === 'only_this_store' ? theme.colors.primary + '15' : '#fff',
+                              paddingHorizontal: 4,
+                              backgroundColor: productCreationMode === 'pull_only' ? theme.colors.primary + '15' : '#fff',
                               alignItems: 'center',
                             }}
-                            onPress={() => setProductCreationMode('only_this_store')}
+                            onPress={() => setProductCreationMode('pull_only')}
                           >
-                            {/* Platform icon - show current platform */}
-                            <View style={{
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              marginBottom: 10,
-                              height: 52,
-                            }}>
-                              {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={48} height={48} />}
-                              {platformName?.toLowerCase().includes('square') && <SquareSvg width={48} height={48} />}
-                              {platformName?.toLowerCase().includes('clover') && <CloverSvg width={48} height={48} />}
-                              {platformName?.toLowerCase().includes('ebay') && <EbaySvg width={48} height={48} />}
-                              {platformName?.toLowerCase().includes('facebook') && <FacebookSvg width={48} height={48} />}
-                              {platformName?.toLowerCase().includes('amazon') && <AmazonSvg width={48} height={48} />}
-                              {!platformName?.toLowerCase().match(/shopify|square|clover|ebay|facebook|amazon/) && (
-                                <Icon name="store" size={48} color={theme.colors.primary} />
-                              )}
+                            {/* Visual flow: This platform → arrow → Anorha */}
+                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 10, height: 52, gap: 6 }}>
+                              {/* Current platform (Square/Shopify/etc) on LEFT */}
+                              <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 1.5, borderColor: '#E5E7EB' }}>
+                                {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={32} height={32} />}
+                                {platformName?.toLowerCase().includes('square') && <SquareSvg width={32} height={32} />}
+                                {platformName?.toLowerCase().includes('clover') && <CloverSvg width={32} height={32} />}
+                                {platformName?.toLowerCase().includes('ebay') && <EbaySvg width={32} height={32} />}
+                                {platformName?.toLowerCase().includes('facebook') && <FacebookSvg width={32} height={32} />}
+                                {platformName?.toLowerCase().includes('amazon') && <AmazonSvg width={32} height={32} />}
+                                {!platformName?.toLowerCase().match(/shopify|square|clover|ebay|facebook|amazon/) && <Icon name="store" size={32} color="#9CA3AF" />}
+                              </View>
+                              {/* Arrow pointing right */}
+                              <Icon name="arrow-right" size={20} color={theme.colors.primary} />
+                              {/* Anorha logo on RIGHT */}
+                              <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 2, borderColor: theme.colors.primary }}>
+                                <RNImage source={AnorhaLogo} style={{ width: 32, height: 32, borderRadius: 6 }} />
+                              </View>
                             </View>
-                            <Text style={{
-                              fontSize: 13,
-                              fontWeight: '600',
-                              color: theme.colors.text,
-                              textAlign: 'center',
-                            }}>
-                              Only this store
+                            <Text style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text, textAlign: 'center' }}>
+                              Import to Anorha
+                            </Text>
+                            <Text style={{ fontSize: 11, color: theme.colors.textSecondary, textAlign: 'center', marginTop: 4 }}>
+                              Pull items from {platformName || 'platform'}
                             </Text>
                           </TouchableOpacity>
 
-                          {/* Option 3: Ignore/Skip */}
+                          {/* Option 3: Push Only - Anorha → arrow → This platform */}
                           <TouchableOpacity
                             style={{
                               flex: 1,
                               borderWidth: 2,
-                              borderColor: productCreationMode === 'ignore' ? theme.colors.primary : '#E5E7EB',
+                              borderColor: productCreationMode === 'push_only' ? theme.colors.primary : '#E5E7EB',
                               borderRadius: 12,
                               paddingVertical: 16,
-                              paddingHorizontal: 8,
-                              backgroundColor: productCreationMode === 'ignore' ? theme.colors.primary + '15' : '#fff',
+                              paddingHorizontal: 4,
+                              backgroundColor: productCreationMode === 'push_only' ? theme.colors.primary + '15' : '#fff',
                               alignItems: 'center',
                             }}
-                            onPress={() => setProductCreationMode('ignore')}
+                            onPress={() => setProductCreationMode('push_only')}
                           >
-                            {/* Skip icon */}
-                            <View style={{
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              marginBottom: 10,
-                              height: 52,
-                            }}>
-                              <Icon name="cancel" size={48} color="#6B7280" />
+                            {/* Visual flow: Anorha → arrow → This platform */}
+                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 10, height: 52, gap: 6 }}>
+                              {/* Anorha logo on LEFT */}
+                              <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 1.5, borderColor: '#E5E7EB' }}>
+                                <RNImage source={AnorhaLogo} style={{ width: 32, height: 32, borderRadius: 6 }} />
+                              </View>
+                              {/* Arrow pointing right */}
+                              <Icon name="arrow-right" size={20} color={theme.colors.primary} />
+                              {/* Current platform on RIGHT */}
+                              <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 2, borderColor: theme.colors.primary }}>
+                                {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={32} height={32} />}
+                                {platformName?.toLowerCase().includes('square') && <SquareSvg width={32} height={32} />}
+                                {platformName?.toLowerCase().includes('clover') && <CloverSvg width={32} height={32} />}
+                                {platformName?.toLowerCase().includes('ebay') && <EbaySvg width={32} height={32} />}
+                                {platformName?.toLowerCase().includes('facebook') && <FacebookSvg width={32} height={32} />}
+                                {platformName?.toLowerCase().includes('amazon') && <AmazonSvg width={32} height={32} />}
+                                {!platformName?.toLowerCase().match(/shopify|square|clover|ebay|facebook|amazon/) && <Icon name="store" size={32} color={theme.colors.primary} />}
+                              </View>
                             </View>
-                            <Text style={{
-                              fontSize: 13,
-                              fontWeight: '600',
-                              color: theme.colors.text,
-                              textAlign: 'center',
-                            }}>
-                              Ignore/Skip
+                            <Text style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text, textAlign: 'center' }}>
+                              Push to {platformName || 'Platform'}
+                            </Text>
+                            <Text style={{ fontSize: 11, color: theme.colors.textSecondary, textAlign: 'center', marginTop: 4 }}>
+                              Send Anorha items here
                             </Text>
                           </TouchableOpacity>
                         </View>
 
-                        {/* Continue button for step 0 */}
+                        {/* Continue button */}
                         <TouchableOpacity
                           style={{
-                            backgroundColor: theme.colors.primary,
-                            borderRadius: 28,
-                            paddingVertical: 18,
-                            paddingHorizontal: 24,
+                            backgroundColor: "#5C9B00",
+                            borderRadius: 12,
+                            paddingVertical: 14,
                             alignItems: 'center',
+                            marginBottom: 10,
                           }}
                           onPress={() => setWizardStep(1)}
                         >
-                          <Text style={{ color: '#fff', fontWeight: '700', fontSize: 17 }}>
+                          <Text style={{ color: '#fff', fontWeight: '600', fontSize: 16 }}>
                             Continue
+                          </Text>
+                        </TouchableOpacity>
+
+                        {/* Gray Skip button for "Do Nothing" */}
+                        <TouchableOpacity
+                          style={{
+                            backgroundColor: '#E5E5E5',
+                            borderRadius: 12,
+                            paddingVertical: 14,
+                            alignItems: 'center',
+                          }}
+                          onPress={() => {
+                            setProductCreationMode('do_nothing');
+                            setWizardStep(1);
+                          }}
+                        >
+                          <Text style={{ color: '#71717A', fontWeight: '600', fontSize: 16 }}>
+                            Skip - Don't create missing items
                           </Text>
                         </TouchableOpacity>
                       </View>
@@ -3923,11 +4319,7 @@ const MappingReviewScreen = () => {
 
                     {/* Step 1: Pool Assignment (was Step 0) */}
                     {wizardStep === 1 && (
-                      <View style={{ paddingHorizontal: 0, paddingTop: 20 }}>
-                        <Text style={{ color: theme.colors.textSecondary, marginBottom: 16, textAlign: 'center' }}>
-                          Assign each location to an inventory pool
-                        </Text>
-
+                      <View style={{ paddingHorizontal: 0, paddingTop: 0 }}>
                         {(isLoadingPools || isLoadingLocations) ? (
                           <View style={{ padding: 40, alignItems: 'center' }}>
                             <ActivityIndicator size="large" color={theme.colors.primary} />
@@ -3936,12 +4328,14 @@ const MappingReviewScreen = () => {
                             </Text>
                           </View>
                         ) : connectionLocations.length === 0 ? (
-                          <View style={{ padding: 20, alignItems: 'center' }}>
-                            <Icon name="map-marker-off" size={48} color={theme.colors.textSecondary} />
+                          <View style={{ padding: 0, alignItems: 'center' }}>
+
+                            {/*<Icon name="map-marker-off" size={48} color={theme.colors.textSecondary} />
                             <Text style={{ marginTop: 12, color: theme.colors.textSecondary, textAlign: 'center' }}>
                               No locations found for this connection.{'\n'}Sync will use default location.
                             </Text>
-                            {/* Show simple pool selection fallback */}
+                            */}
+                            {/* Show simple pool selection */}
                             <View style={{ width: '100%', marginTop: 20 }}>
                               {pools.length > 0 && pools.map((pool) => (
                                 <TouchableOpacity
@@ -4157,8 +4551,7 @@ const MappingReviewScreen = () => {
                     )}
 
                     {wizardStep === 2 && (
-                      <View style={{ paddingTop: 20 }}>
-                        <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Sync updates automatically or only on approval</Text>
+                      <View style={{ paddingTop: 8 }}>
                         <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
                           <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: syncMode === 'auto' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setSyncMode('auto')}>
 
@@ -4182,7 +4575,7 @@ const MappingReviewScreen = () => {
 
                     {wizardStep === 3 && (
                       <View style={{ paddingTop: 20 }}>
-                        <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Choose how auction listings behave (FB & Ebay) </Text>
+                        {/*<Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Choose how auction listings behave (FB & Ebay) </Text>*/}
                         <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
                           <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: delistMode === 'auto' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setDelistMode('auto')}>
                             <View style={{ marginBottom: 12 }}>
@@ -4204,7 +4597,7 @@ const MappingReviewScreen = () => {
 
                     {wizardStep === 4 && (
                       <View style={{ paddingTop: 20 }}>
-                        <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Adjust prices by % per platform (Optional)</Text>
+                        {/*<Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Adjust prices by % per platform (Optional)</Text>*/}
                         <View style={{ marginBottom: 24 }}>
                           {platformConnections.map((connection) => (
                             <View key={connection.Id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 12 }}>
@@ -4279,9 +4672,78 @@ const MappingReviewScreen = () => {
 
                     {wizardStep === 6 && (
                       <View style={{ paddingTop: 20 }}>
+                        {/* Dynamic sync action summary */}
+                        <View style={{ backgroundColor: '#F0F9EB', borderRadius: 12, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: '#93C822' }}>
+                          <Text style={{ fontWeight: '700', color: '#4A6C1C', marginBottom: 8 }}>What will happen:</Text>
+                          <Text style={{ color: '#5B8325', fontSize: 14, lineHeight: 22 }}>
+                            {productCreationMode === 'sync_everywhere'
+                              ? `• Importing ${counts.matched + counts.review} items from ${platformName || 'platform'} → Anorha\n• Creating ${counts.review} new items on Anorha\n• Syncing ALL items to all connected platforms`
+                              : productCreationMode === 'pull_only'
+                                ? `• Importing ${counts.matched + counts.review} items from ${platformName || 'platform'} → Anorha\n• Creating ${counts.review} new items on Anorha\n• Linking ${counts.matched} existing matches`
+                                : productCreationMode === 'push_only'
+                                  ? `• Pushing Anorha items → ${platformName || 'platform'}\n• ${counts.matched} items will sync to ${platformName || 'platform'}`
+                                  : `• Linking ${counts.matched} matched items\n• ${counts.review} items need review`
+                            }
+                          </Text>
+                        </View>
                         <View style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 24 }}>
                           <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Matched/New/Ignored</Text>
                           <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>{counts.matched} matched • {counts.review} review → new • {counts.ignore} ignored</Text>
+
+                          <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Sync Direction</Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16, gap: 8 }}>
+                            {productCreationMode === 'sync_everywhere' && (
+                              <>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                  <View style={{ backgroundColor: '#fff', borderRadius: 6, padding: 2, borderWidth: 1.5, borderColor: theme.colors.primary }}>
+                                    <RNImage source={AnorhaLogo} style={{ width: 20, height: 20, borderRadius: 4 }} />
+                                  </View>
+                                  <Icon name="sync" size={14} color={theme.colors.primary} />
+                                  <View style={{ backgroundColor: '#fff', borderRadius: 6, padding: 2, borderWidth: 1.5, borderColor: '#E5E7EB' }}>
+                                    {platformName?.toLowerCase().includes('square') && <SquareSvg width={20} height={20} />}
+                                    {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={20} height={20} />}
+                                    {!platformName?.toLowerCase().match(/square|shopify/) && <Icon name="store" size={20} color="#6B7280" />}
+                                  </View>
+                                </View>
+                                <Text style={{ color: theme.colors.textSecondary, fontSize: 13 }}>Sync Everywhere</Text>
+                              </>
+                            )}
+                            {productCreationMode === 'pull_only' && (
+                              <>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                  <View style={{ backgroundColor: '#fff', borderRadius: 6, padding: 2, borderWidth: 1.5, borderColor: theme.colors.primary }}>
+                                    {platformName?.toLowerCase().includes('square') && <SquareSvg width={20} height={20} />}
+                                    {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={20} height={20} />}
+                                    {!platformName?.toLowerCase().match(/square|shopify/) && <Icon name="store" size={20} color={theme.colors.primary} />}
+                                  </View>
+                                  <Icon name="arrow-right" size={14} color={theme.colors.primary} />
+                                  <View style={{ backgroundColor: '#fff', borderRadius: 6, padding: 2, borderWidth: 1.5, borderColor: theme.colors.primary }}>
+                                    <RNImage source={AnorhaLogo} style={{ width: 20, height: 20, borderRadius: 4 }} />
+                                  </View>
+                                </View>
+                                <Text style={{ color: theme.colors.textSecondary, fontSize: 13 }}>Import to Anorha</Text>
+                              </>
+                            )}
+                            {productCreationMode === 'push_only' && (
+                              <>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                  <View style={{ backgroundColor: '#fff', borderRadius: 6, padding: 2, borderWidth: 1.5, borderColor: theme.colors.primary }}>
+                                    <RNImage source={AnorhaLogo} style={{ width: 20, height: 20, borderRadius: 4 }} />
+                                  </View>
+                                  <Icon name="arrow-right" size={14} color={theme.colors.primary} />
+                                  <View style={{ backgroundColor: '#fff', borderRadius: 6, padding: 2, borderWidth: 1.5, borderColor: theme.colors.primary }}>
+                                    {platformName?.toLowerCase().includes('square') && <SquareSvg width={20} height={20} />}
+                                    {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={20} height={20} />}
+                                    {!platformName?.toLowerCase().match(/square|shopify/) && <Icon name="store" size={20} color={theme.colors.primary} />}
+                                  </View>
+                                </View>
+                                <Text style={{ color: theme.colors.textSecondary, fontSize: 13 }}>Push to {platformName}</Text>
+                              </>
+                            )}
+                            {productCreationMode === 'do_nothing' && (
+                              <Text style={{ color: theme.colors.textSecondary, fontSize: 13 }}>Link Only (no new items)</Text>
+                            )}
+                          </View>
 
                           <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Selected Platforms</Text>
                           <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>{selectedPlatformsState.join(', ') || 'None'}</Text>
@@ -4312,14 +4774,31 @@ const MappingReviewScreen = () => {
                                 // Transform to match backend DTO: ConfirmMappingsDto
                                 const confirmedMappings = (suggestions || [])
                                   .filter(item => item.isSelected)
-                                  .map(item => ({
-                                    platformProductId: item.platformProduct.id,
-                                    platformVariantId: item.platformProduct.id, // Same as product ID for now
-                                    platformProductSku: item.platformProduct.sku,
-                                    platformProductTitle: item.platformProduct.title,
-                                    sssyncVariantId: item.suggestedCanonicalProduct?.id || null,
-                                    action: item.action === 'CREATE_NEW' ? 'create' : item.action === 'LINK_EXISTING' ? 'link' : 'ignore'
-                                  }));
+                                  .map(item => {
+                                    // For anorha_to_platform direction, send 'push' action
+                                    let action: string;
+                                    if (item.direction === 'anorha_to_platform') {
+                                      action = 'push';
+                                    } else if (item.action === 'CREATE_NEW') {
+                                      action = 'create';
+                                    } else if (item.action === 'LINK_EXISTING') {
+                                      action = 'link';
+                                    } else {
+                                      action = 'ignore';
+                                    }
+
+                                    return {
+                                      platformProductId: item.platformProduct.id,
+                                      platformVariantId: item.platformProduct.id, // Same as product ID for now
+                                      platformProductSku: item.platformProduct.sku,
+                                      platformProductTitle: item.platformProduct.title,
+                                      // For push action, sssyncVariantId is the Anorha variant ID to push
+                                      sssyncVariantId: item.direction === 'anorha_to_platform'
+                                        ? item.anorhaVariant?.id || item.platformProduct.id  // Use anorhaVariant ID for push
+                                        : item.suggestedCanonicalProduct?.id || null,
+                                      action: action as 'link' | 'create' | 'ignore' | 'push'
+                                    };
+                                  });
 
                                 console.log('[MappingReview] Confirming mappings:', confirmedMappings.length);
 
@@ -4531,8 +5010,61 @@ const MappingReviewScreen = () => {
           </Modal>
         </>
       )}
+
+      {/* Barcode Scanner Modal */}
+      {showBarcodeScanner && (
+        <View style={scannerStyles.scannerDock} pointerEvents="box-none">
+          <View style={scannerStyles.scannerCard}>
+            <CameraView
+              style={{ width: '100%', height: 240 }}
+              facing="back"
+              onBarcodeScanned={(result: any) => {
+                const code = result?.data || result?.rawValue;
+                if (code) {
+                  setListQuery(code);
+                  setShowBarcodeScanner(false);
+                }
+              }}
+              barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'] }}
+            />
+            <TouchableOpacity
+              onPress={() => setShowBarcodeScanner(false)}
+              style={scannerStyles.scannerClose}
+            >
+              <Text style={{ color: '#fff', fontSize: 24 }}>×</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
     </View>
   );
 };
+
+// Barcode scanner modal styles
+const scannerStyles = StyleSheet.create({
+  scannerDock: {
+    position: 'absolute',
+    top: 80,
+    left: 20,
+    right: 20,
+    zIndex: 5000
+  },
+  scannerCard: {
+    backgroundColor: '#000',
+    borderRadius: 16,
+    overflow: 'hidden'
+  },
+  scannerClose: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+});
 
 export default MappingReviewScreen;

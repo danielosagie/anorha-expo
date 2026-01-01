@@ -427,10 +427,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     return () => { canceled = true };
   }, [(route.params as any)?.variantId, results === null ? null : results]);
 
-  // Debug (safe)
-  console.log('[GEN-DETAILS] route.params keys:', Object.keys((route.params || {}) as any));
-  console.log('[GEN-DETAILS] jobId:', jobId, 'status:', status);
-  console.log('[GEN-DETAILS] results raw:', Array.isArray(results) ? `len=${results.length}` : typeof results);
+  // Debug logs moved to useEffect to prevent spam on every render
+  useEffect(() => {
+    console.log('[GEN-DETAILS] route.params keys:', Object.keys((route.params || {}) as any));
+    console.log('[GEN-DETAILS] jobId:', jobId, 'status:', status);
+    console.log('[GEN-DETAILS] results raw:', Array.isArray(results) ? `len=${results.length}` : typeof results);
+  }, [jobId, status, results, route.params]);
 
   const first: GeneratedResult | null = useMemo(() => (Array.isArray(results) && results.length > 0 ? results[0] : null), [results]);
 
@@ -833,28 +835,47 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }
   }, [jobsContext, jobId]);
 
+  // Ref to track which direction we're syncing to prevent infinite loops
+  const syncDirectionRef = useRef<'none' | 'context-to-local' | 'local-to-context'>('none');
+
   // Sync with JobsContext - merge context state into local state on mount
   useEffect(() => {
     if (!jobsContext || !matchJobId) return;
+    // Prevent infinite loop: don't sync back if we just synced to context
+    if (syncDirectionRef.current === 'local-to-context') {
+      syncDirectionRef.current = 'none';
+      return;
+    }
 
     // If context has generate jobs, merge into local state
     if (Object.keys(jobsContext.generateJobs).length > 0) {
+      syncDirectionRef.current = 'context-to-local';
       setItemGenerateJobs(prev => {
         const merged = { ...prev };
-        Object.entries(jobsContext.generateJobs).forEach(([indexStr, genJob]) => {
+        let hasChanges = false;
+        Object.entries(jobsContext.generateJobs).forEach(([indexStr, genJob]: [string, any]) => {
           const idx = parseInt(indexStr, 10);
           if (!merged[idx] || (genJob.status === 'completed' && merged[idx].status !== 'completed')) {
             merged[idx] = { jobId: genJob.jobId, status: genJob.status };
+            hasChanges = true;
           }
         });
-        return merged;
+        // Only update if there are actual changes
+        return hasChanges ? merged : prev;
       });
     }
-  }, [jobsContext, matchJobId]);
+  }, [jobsContext?.generateJobs, matchJobId]); // Use specific property, not entire context
 
   // Sync local itemGenerateJobs changes to context
   useEffect(() => {
     if (!jobsContext) return;
+    // Prevent infinite loop: don't sync back if we just synced from context
+    if (syncDirectionRef.current === 'context-to-local') {
+      syncDirectionRef.current = 'none';
+      return;
+    }
+
+    let didUpdate = false;
     Object.entries(itemGenerateJobs).forEach(([indexStr, job]) => {
       const idx = parseInt(indexStr, 10);
       const contextJob = jobsContext.generateJobs[idx];
@@ -862,13 +883,18 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (!contextJob || contextJob.jobId !== job.jobId || contextJob.status !== job.status) {
         if (!contextJob) {
           jobsContext.startGenerateJob(idx, job.jobId);
+          didUpdate = true;
         }
         if (job.status) {
           jobsContext.updateGenerateJob(idx, { status: job.status as any });
+          didUpdate = true;
         }
       }
     });
-  }, [itemGenerateJobs, jobsContext]);
+    if (didUpdate) {
+      syncDirectionRef.current = 'local-to-context';
+    }
+  }, [itemGenerateJobs]); // Remove jobsContext from deps - it's stable
 
   // Decide which platforms to publish and compute inventory per platform for confirmation
   const platformsToPublish = useMemo<string[]>(() => {

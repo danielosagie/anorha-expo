@@ -261,12 +261,22 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         }));
     }, [analysisData?.results, externalItems]);
 
-    // Sync with JobsContext - initialize from context if available
+    // Track if we're currently syncing to prevent circular updates
+    const isSyncingRef = React.useRef(false);
+    const hasInitializedFromContextRef = React.useRef(false);
+    // Track last feedback sent to prevent duplicate requests
+    const lastFeedbackKeyRef = React.useRef<string>('');
+    // Track if we've already auto-selected to prevent repeated selections
+    const hasAutoSelectedRef = React.useRef(false);
+
+    // Sync with JobsContext - initialize from context if available (ONE TIME ONLY)
     useEffect(() => {
         if (!jobsContext || !jobId) return;
+        if (isSyncingRef.current) return;
 
         // Initialize context with this match job's items when modalItems are ready
         if (modalItems.length > 0 && jobsContext.matchJobId !== jobId) {
+            isSyncingRef.current = true;
             jobsContext.initializeFromMatchJob(jobId, modalItems.map((item, idx) => ({
                 index: item.index,
                 title: item.title,
@@ -274,37 +284,42 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 matchesCount: item.matchesCount,
                 matchJobId: jobId,
             })));
+            // Reset sync flag after a tick
+            setTimeout(() => { isSyncingRef.current = false; }, 0);
         }
 
-        // If context has generate jobs for items in this job, merge into local state
-        if (Object.keys(jobsContext.generateJobs).length > 0) {
+        // Only merge context → local ONCE on initial load, not on every context change
+        if (!hasInitializedFromContextRef.current && Object.keys(jobsContext.generateJobs).length > 0) {
+            hasInitializedFromContextRef.current = true;
             setItemGenerateJobs(prev => {
                 const merged = { ...prev };
+                let hasChanges = false;
                 Object.entries(jobsContext.generateJobs).forEach(([indexStr, genJob]) => {
                     const idx = parseInt(indexStr, 10);
                     if (!merged[idx] || (genJob.status === 'completed' && merged[idx].status !== 'completed')) {
                         merged[idx] = { jobId: genJob.jobId, status: genJob.status };
+                        hasChanges = true;
                     }
                 });
-                return merged;
+                return hasChanges ? merged : prev;
             });
         }
     }, [jobsContext, jobId, modalItems]);
 
-    // Sync local itemGenerateJobs changes to context
+    // Sync local itemGenerateJobs changes to context - only for NEW jobs we create locally
     useEffect(() => {
         if (!jobsContext) return;
+        if (isSyncingRef.current) return;
+
         Object.entries(itemGenerateJobs).forEach(([indexStr, job]) => {
             const idx = parseInt(indexStr, 10);
             const contextJob = jobsContext.generateJobs[idx];
-            // Update context if local has newer/different state
-            if (!contextJob || contextJob.jobId !== job.jobId || contextJob.status !== job.status) {
-                if (!contextJob) {
-                    jobsContext.startGenerateJob(idx, job.jobId);
-                }
-                if (job.status) {
-                    jobsContext.updateGenerateJob(idx, { status: job.status as any });
-                }
+            // Only push to context if this is a NEW job that context doesn't know about
+            // Don't push if we're just echoing back what context already has
+            if (!contextJob && job.jobId) {
+                isSyncingRef.current = true;
+                jobsContext.startGenerateJob(idx, job.jobId);
+                setTimeout(() => { isSyncingRef.current = false; }, 0);
             }
         });
     }, [itemGenerateJobs, jobsContext]);
@@ -826,29 +841,41 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         return idx >= 0 ? idx : null;
     }, [analysisData, currentProductIndex]);
 
-    // Auto-select best only if rerankedResults exist and nothing selected
+    // Auto-select best only if rerankedResults exist and nothing selected (ONE TIME ONLY)
     useEffect(() => {
-        if (selectedIndices.length > 0) return;
+        // Skip if already auto-selected or user has made a selection
+        if (hasAutoSelectedRef.current) return;
+        if (selectedIndices.length > 0) {
+            hasAutoSelectedRef.current = true; // User made a selection, don't auto-select
+            return;
+        }
         if (bestIndex !== null) {
+            hasAutoSelectedRef.current = true;
             setSelectedIndices([bestIndex]);
             setBottomNavState('selection');
         }
-    }, [bestIndex]);
+    }, [bestIndex, selectedIndices.length]);
 
     // Client-side rerank feedback: if background rerank reorders and user had already selected a different item
+    // OPTIMIZED: Only send feedback ONCE per unique selection (prevents spam requests)
     useEffect(() => {
         if (!CLIENT_RERANK_ENABLED) return;
         if (!clientRerankedSerp) return;
         if (selectedIndices.length === 0) return; // no selection yet
         if (!SSSYNC_API_BASE_URL_FE) return;
 
+        // Create a unique key for this feedback to prevent duplicates
+        const feedbackKey = `${currentProductIndex}-${selectedIndices.join(',')}`;
+        if (lastFeedbackKeyRef.current === feedbackKey) return;
+
         // Determine top pick in client rerank and current user pick
         const rerankerTop = clientRerankedSerp[0];
         const userPick = serpApiData[selectedIndices[0]];
         if (!rerankerTop || !userPick) return;
 
-        // If they differ, log feedback (non-blocking, fire once per change)
+        // If they differ, log feedback (non-blocking, fire once per unique selection)
         if (rerankerTop.link !== userPick.link || rerankerTop.title !== userPick.title) {
+            lastFeedbackKeyRef.current = feedbackKey; // Mark as sent BEFORE async call
             (async () => {
                 try {
                     const token = await getToken();
@@ -868,13 +895,12 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                             userFeedback: JSON.stringify(payload),
                         }),
                     });
-                    // Also log to new rerank feedback endpoint if added in future
                 } catch {
                     // swallow
                 }
             })();
         }
-    }, [clientRerankedSerp, selectedIndices, currentProductIndex]);
+    }, [clientRerankedSerp, selectedIndices, currentProductIndex, serpApiData, jobId]);
 
     // --- Render Logic ---
     if (isLoading) return <View style={styles.centerContainer}><ActivityIndicator size="large" color="#93C822" /><Text style={styles.infoText}>Finding matches…</Text></View>;

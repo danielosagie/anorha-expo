@@ -50,14 +50,19 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const token = await ensureSupabaseJwt();
+      console.log('[OrgContext] Fetching orgs with token prefix:', token?.substring(0, 20) + '...');
 
       // Fetch user's organizations from /api/organizations
       const orgsResponse = await fetch(`${API_BASE}/api/organizations`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
 
+      console.log('[OrgContext] Response status:', orgsResponse.status, orgsResponse.statusText);
+
       if (!orgsResponse.ok) {
-        throw new Error('Failed to fetch orgs');
+        const errorBody = await orgsResponse.text();
+        console.error('[OrgContext] API error response:', { status: orgsResponse.status, body: errorBody });
+        throw new Error(`Failed to fetch orgs: ${orgsResponse.status} - ${errorBody}`);
       }
 
       let orgsData = await orgsResponse.json();
@@ -108,9 +113,13 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Failed to load orgs';
       console.error('[OrgContext] Load orgs error:', err);
-      if (err instanceof Error && err.message.includes('Failed to fetch')) {
-        console.log('[OrgContext] Fetch failed, possible auth issue');
-      }
+
+      // Set empty state - user should have created org during signup
+      // If they don't have one, the app should guide them to create one
+      console.log('[OrgContext] No orgs found, setting empty state');
+      setAvailableOrgs([]);
+      setCurrentOrg(null);
+      setError('No organization found. Please complete signup to create one.');
     }
   }, [isSignedIn]);
 

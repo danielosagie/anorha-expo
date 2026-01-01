@@ -21,7 +21,11 @@ export type MappingCardProps = {
 
   titleRight?: string;
   skuRight?: string;
+  priceRight?: number;
   imageRight?: string | null;
+
+  // NEW: Direction indicator for bidirectional sync
+  direction?: 'platform_to_anorha' | 'anorha_to_platform' | 'bidirectional';
 
   onSelect?: () => void;
   onIgnore?: () => void;
@@ -43,7 +47,9 @@ const MappingCard: React.FC<MappingCardProps> = ({
   imageLeft,
   titleRight,
   skuRight,
+  priceRight,
   imageRight,
+  direction,
   onSelect,
   onIgnore,
   onRestore,
@@ -61,9 +67,27 @@ const MappingCard: React.FC<MappingCardProps> = ({
     return <Badge variant="warning">Review</Badge>;
   }, [variant]);
 
+  // Direction badge for bidirectional sync
+  const directionBadge = useMemo(() => {
+    if (direction === 'anorha_to_platform') {
+      return (
+        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#E0F2FE', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, marginBottom: 8 }}>
+          <RNImage source={brandImage} style={{ width: 16, height: 16, borderRadius: 4, marginRight: 4 }} />
+          <Icon name="arrow-right" size={12} color="#0284C7" />
+          <Icon name="store" size={16} color="#0284C7" style={{ marginLeft: 4 }} />
+          <Text style={{ color: '#0284C7', fontSize: 11, fontWeight: '600', marginLeft: 4 }}>Push to Platform</Text>
+        </View>
+      );
+    }
+    return null;
+  }, [direction]);
+
   return (
     <Animated.View entering={FadeInUp.duration(tokens.durations.fast)} layout={Layout.springify()}>
       <View style={[styles.card, selected ? styles.cardSelected : null]} accessibilityRole={"button" as AccessibilityRole}>
+
+        {/* Direction indicator for bidirectional sync */}
+        {directionBadge}
 
         {/* Content */}
         <View style={styles.row}>
@@ -92,9 +116,9 @@ const MappingCard: React.FC<MappingCardProps> = ({
                 <Icon name="plus-circle" size={24} color="#fff" />
                 <Text style={styles.newRightText}>New Item</Text>
               </View>
-            ) : ( (variant === 'matched' || (variant === 'review' && titleRight)) ? (
+            ) : ((variant === 'matched' || (variant === 'review' && titleRight)) ? (
               <TouchableOpacity style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }} onPress={onSearch} accessibilityLabel="Change match">
-                <View style={styles.rightIconCircleImg}> 
+                <View style={styles.rightIconCircleImg}>
                   {imageRight ? (
                     <RNImage source={{ uri: imageRight as string }} style={{ width: 40, height: 40, borderRadius: 6 }} />
                   ) : (
@@ -104,6 +128,7 @@ const MappingCard: React.FC<MappingCardProps> = ({
                 <View style={styles.details}>
                   <Text style={styles.title} numberOfLines={2}>{titleRight}</Text>
                   {!!skuRight && <Text style={styles.subtle}>SKU: {skuRight}</Text>}
+                  {priceRight != null && <Text style={styles.price}>${priceRight.toFixed(2)}</Text>}
                 </View>
               </TouchableOpacity>
             ) : (
@@ -137,7 +162,7 @@ const MappingCard: React.FC<MappingCardProps> = ({
             <>
               <View style={styles.actionsRow}>
                 <TouchableOpacity
-                  style={[styles.actionBtn, styles.create, styles.actionWide, { flexDirection: 'row', alignItems: 'center'}]}
+                  style={[styles.actionBtn, styles.create, styles.actionWide, { flexDirection: 'row', alignItems: 'center' }]}
                   onPress={onEditNew}
                   accessibilityLabel="Edit new item"
                 >
@@ -145,11 +170,11 @@ const MappingCard: React.FC<MappingCardProps> = ({
                   <Text style={{ textAlign: 'center', color: '#111', fontWeight: '600' }}>Edit</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.actionBtn, styles.ignore, styles.actionWide, { flexDirection: 'row', alignItems: 'center'}]}
+                  style={[styles.actionBtn, styles.ignore, styles.actionWide, { flexDirection: 'row', alignItems: 'center' }]}
                   onPress={onIgnore}
                   accessibilityLabel="Ignore item"
                 >
-                  <Icon name="close-box" size={18} color="#EF4444" style={{ marginRight: 6}} />
+                  <Icon name="close-box" size={18} color="#EF4444" style={{ marginRight: 6 }} />
                   <Text style={styles.dangerText}>Ignore Item</Text>
                 </TouchableOpacity>
               </View>
@@ -159,7 +184,7 @@ const MappingCard: React.FC<MappingCardProps> = ({
               <View style={styles.actionsRow}>
                 {variant !== 'matched' && !isResolvedNew && (
                   <TouchableOpacity
-                    style={[styles.actionBtn, styles.create, styles.actionWide, { flexDirection: 'row', alignItems: 'center'}]}
+                    style={[styles.actionBtn, styles.create, styles.actionWide, { flexDirection: 'row', alignItems: 'center' }]}
                     onPress={onCreate}
                     accessibilityLabel="Create as new"
                   >
@@ -169,7 +194,7 @@ const MappingCard: React.FC<MappingCardProps> = ({
                 )}
                 {variant === 'matched' || (variant === 'new' && isResolvedNew) ? (
                   <TouchableOpacity
-                    style={[styles.actionBtn, styles.ignore, styles.actionWide, { flexDirection: 'row', alignItems: 'center'}]}
+                    style={[styles.actionBtn, styles.ignore, styles.actionWide, { flexDirection: 'row', alignItems: 'center' }]}
                     onPress={onIgnore}
                     accessibilityLabel="Remove mapping"
                   >
@@ -178,11 +203,11 @@ const MappingCard: React.FC<MappingCardProps> = ({
                   </TouchableOpacity>
                 ) : (
                   <TouchableOpacity
-                    style={[styles.actionBtn, styles.ignore, styles.actionWide, { flexDirection: 'row', alignItems: 'center'}]}
+                    style={[styles.actionBtn, styles.ignore, styles.actionWide, { flexDirection: 'row', alignItems: 'center' }]}
                     onPress={onIgnore}
                     accessibilityLabel="Ignore item"
                   >
-                    <Icon name="close-box" size={18} color="#EF4444" style={{ marginRight: 6}} />
+                    <Icon name="close-box" size={18} color="#EF4444" style={{ marginRight: 6 }} />
                     <Text style={styles.dangerText}>Ignore Item</Text>
                   </TouchableOpacity>
                 )}
@@ -197,7 +222,7 @@ const MappingCard: React.FC<MappingCardProps> = ({
               {variant === 'review' && !!titleRight && !isResolvedNew && (
                 <View style={styles.actionsRow}>
                   <TouchableOpacity
-                    style={[styles.actionPrimaryBtn, styles.create, styles.actionWide, { flexDirection: 'row', alignItems: 'center'}]}
+                    style={[styles.actionPrimaryBtn, styles.create, styles.actionWide, { flexDirection: 'row', alignItems: 'center' }]}
                     onPress={onApproveMatch}
                     accessibilityLabel="Approve match"
                   >
@@ -371,7 +396,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   actionBtn: {
-    flex:1,
+    flex: 1,
     height: 44,
     borderRadius: 12,
     borderWidth: 1,
@@ -383,7 +408,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   actionPrimaryBtn: {
-    flex:1,
+    flex: 1,
     height: 44,
     borderRadius: 12,
     borderWidth: 2,
