@@ -1,7 +1,7 @@
 // sssync_mobile_test/src/context/OrgContext.tsx
 
 import React, { createContext, useState, useEffect, useCallback, useContext } from 'react';
-import { useUser } from '@clerk/clerk-expo';
+import { useUser, useOrganizationList } from '@clerk/clerk-expo';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { SessionContext } from './SessionContext';
 
@@ -18,6 +18,7 @@ export interface OrgContextType {
   availableOrgs: UserOrgAccess[];
   isLoading: boolean;
   error: string | null;
+  hasPendingInvites: boolean;
   switchOrg: (orgId: string) => Promise<void>;
   refreshOrgs: () => Promise<void>;
 }
@@ -27,17 +28,24 @@ export const OrgContext = createContext<OrgContextType>({
   availableOrgs: [],
   isLoading: true,
   error: null,
+  hasPendingInvites: false,
   switchOrg: async () => { },
   refreshOrgs: async () => { },
 });
 
 export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isSignedIn, user: clerkUser } = useUser();
+  const { userInvitations, isLoaded: invitationsLoaded } = useOrganizationList({
+    userInvitations: { infinite: true },
+  });
   const session = useContext(SessionContext);
   const [availableOrgs, setAvailableOrgs] = useState<UserOrgAccess[]>([]);
   const [currentOrg, setCurrentOrg] = useState<UserOrgAccess | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Derived state: check if user has pending org invitations
+  const hasPendingInvites = invitationsLoaded && (userInvitations?.data?.length ?? 0) > 0;
 
   const API_BASE = 'https://api.sssync.app';
 
@@ -209,6 +217,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         availableOrgs,
         isLoading,
         error,
+        hasPendingInvites,
         switchOrg,
         refreshOrgs,
       }}

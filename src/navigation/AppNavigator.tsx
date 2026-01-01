@@ -51,6 +51,7 @@ import PublishConfirmationScreen from '../screens/PublishConfirmationScreen';
 import PartnerAcceptScreen from '../screens/PartnerAcceptScreen';
 import { BackfillOptimizerScreen } from '../screens/BackfillOptimizerScreen';
 import { CSVColumnMappingScreen } from '../screens/CSVColumnMappingScreen';
+import PendingOrgInvitesScreen from '../screens/PendingOrgInvitesScreen';
 import { isFeatureEnabled } from '../config/features';
 import { SessionContext } from '../context/SessionContext';
 
@@ -67,6 +68,7 @@ type AuthStackParamList = {
 // Export the type
 export type AppStackParamList = {
   CreateAccountScreen: undefined;
+  PendingOrgInvitesScreen: undefined;
   TabNavigator: undefined;
   AddListing?: { // The entire params object for AddListing is optional
     initialData?: {
@@ -251,7 +253,7 @@ export type AppStackParamList = {
 
 type RootStackParamList = {
   AuthStack: { screen?: keyof AuthStackParamList };
-  AppStack: { screen?: keyof AppStackParamList, params?: { initialScreenName: 'CreateAccountScreen' | 'TabNavigator' } }; // Allow passing initial screen for AppStack
+  AppStack: { screen?: keyof AppStackParamList, params?: { initialScreenName: 'CreateAccountScreen' | 'TabNavigator' | 'PendingOrgInvitesScreen' } }; // Allow passing initial screen for AppStack
   // Add other root-level screens/stacks
   // PhoneAuthScreen: { phoneNumber: string } | undefined; // Removed
 };
@@ -387,12 +389,13 @@ const AuthStack = ({ isFirstLaunch, devForceOnboarding }: { isFirstLaunch: boole
   </AuthStackNav.Navigator>
 );
 
-const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScreen' | 'TabNavigator' }) => (
+const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScreen' | 'TabNavigator' | 'PendingOrgInvitesScreen' }) => (
   <AppStackNav.Navigator
     screenOptions={{ headerShown: false }}
     initialRouteName={initialScreenName}
   >
     <AppStackNav.Screen name="CreateAccountScreen" component={CreateAccountScreen} />
+    <AppStackNav.Screen name="PendingOrgInvitesScreen" component={PendingOrgInvitesScreen} />
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />
     <AppStackNav.Screen name="ProductDetail" component={ProductDetailScreen} />
     <AppStackNav.Screen name="PastScans" component={PastScansScreen} />
@@ -423,10 +426,10 @@ const AppNavigator = () => {
   const [isFirstLaunch, setIsFirstLaunch] = useState<boolean | null>(null);
   const [appIsReady, setAppIsReady] = useState(false);
   const [initialStackName, setInitialStackName] = useState<'AuthStack' | 'AppStack' | null>(null);
-  const [initialAppScreen, setInitialAppScreen] = useState<'CreateAccountScreen' | 'TabNavigator' | null>(null);
+  const [initialAppScreen, setInitialAppScreen] = useState<'CreateAccountScreen' | 'TabNavigator' | 'PendingOrgInvitesScreen' | null>(null);
 
   // Dev tools to test onboarding flow
-  const [devForceOnboarding] = useState(false); // Set this to true only when testing onboarding - FTUX
+  const [devForceOnboarding] = useState(true); // Set this to true only when testing onboarding - FTUX
   const [devExpireSession, setDevExpireSession] = useState(false); // Set true to make you have to login new each time you leave/after session expires
 
   const [fontsLoaded] = useFonts({
@@ -567,7 +570,7 @@ const AppNavigator = () => {
   }, [devExpireSession]);
 
   const checkOnboardingAndNavigate = async () => {
-    let destination: 'CreateAccountScreen' | 'TabNavigator' | null = null;
+    let destination: 'CreateAccountScreen' | 'TabNavigator' | 'PendingOrgInvitesScreen' | null = null;
     try {
       const { data: { user }, error: getUserError } = await supabase.auth.getUser();
 
@@ -596,7 +599,15 @@ const AppNavigator = () => {
         // Handle null userData explicitly for clarity
         const onboardingComplete = userData?.isOnboardingComplete ?? false; // Treat null userData as incomplete
         console.log(`[Onboarding Check] Determined Onboarding Status for ${user.email}: ${onboardingComplete}`);
-        destination = onboardingComplete ? 'TabNavigator' : 'CreateAccountScreen';
+
+        if (onboardingComplete) {
+          destination = 'TabNavigator';
+        } else {
+          // User hasn't completed onboarding - check if they have pending org invites
+          // The PendingOrgInvitesScreen will check for Clerk invitations
+          // and redirect to CreateAccountScreen if none found
+          destination = 'PendingOrgInvitesScreen';
+        }
       }
 
     } catch (error) {
@@ -609,26 +620,14 @@ const AppNavigator = () => {
     }
   };
 
-  // Fallback: if we're signed in and session bridge is ready but no destination after 1.5s, default to TabNavigator
-  useEffect(() => {
-    if (!clerkLoaded) return;
-    if (!isSignedIn) return;
-    if (initialAppScreen) return;
-    const t = setTimeout(() => {
-      if (!initialAppScreen) {
-        console.log('[AppNavigator] Fallback setting initialAppScreen=TabNavigator');
-        setInitialAppScreen('TabNavigator');
-        setIsLoading(false);
-      }
-    }, 1500);
-    return () => clearTimeout(t);
-  }, [clerkLoaded, isSignedIn, initialAppScreen]);
-
   // Keep UI hidden only until assets are ready (avoid full blank on auth state transitions)
   if (!appIsReady) {
     return null;
   }
 
+  if (isLoading || !clerkLoaded || (isSignedIn && !initialAppScreen)) {
+    return null; // Or show a SplashScreen component
+  }
   return (
     <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
       <AuthContext.Provider value={authContext}>

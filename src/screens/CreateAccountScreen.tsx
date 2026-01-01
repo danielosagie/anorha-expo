@@ -11,17 +11,22 @@ import {
   Dimensions,
   ActivityIndicator,
   ScrollView,
+  SafeAreaView,
 } from 'react-native';
 import DropDownPicker from 'react-native-dropdown-picker';
-import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
 import { AuthContext } from '../context/AuthContext';
 import { useNavigation } from '@react-navigation/native';
 import { Image } from 'react-native';
 import { StackNavigationProp } from '@react-navigation/stack';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useOrganizationList, useUser } from '@clerk/clerk-expo';
 import { useOrg } from '../context/OrgContext';
 import * as Crypto from 'expo-crypto';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+
+const { width } = Dimensions.get('window');
+const BRAND_GREEN = '#647653';
+const BG_COLOR = '#FFFCF5';
 
 type AppStackParamList = {
   CreateAccountScreen: undefined;
@@ -34,7 +39,6 @@ type AppStackParamList = {
 type CreateAccountScreenNavigationProp = StackNavigationProp<AppStackParamList, 'CreateAccountScreen'>;
 
 const CreateAccountScreen = () => {
-  // Profile form state
   const [businessName, setBusinessName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [region, setRegion] = useState<string | null>(null);
@@ -42,7 +46,6 @@ const CreateAccountScreen = () => {
   const [currency, setCurrency] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Dropdown state
   const [openRegion, setOpenRegion] = useState(false);
   const [openCurrency, setOpenCurrency] = useState(false);
 
@@ -52,14 +55,14 @@ const CreateAccountScreen = () => {
   const { refreshOrgs } = useOrg();
   const { user: clerkUser } = useUser();
 
-  const [regionItems, setRegionItems] = useState([
+  const [regionItems] = useState([
     { label: 'United States', value: 'US' },
     { label: 'Canada', value: 'CA' },
     { label: 'Europe', value: 'EU' },
     { label: 'Other', value: 'Other' },
   ]);
 
-  const [currencyItems, setCurrencyItems] = useState([
+  const [currencyItems] = useState([
     { label: 'USD ($)', value: 'USD' },
     { label: 'CAD (C$)', value: 'CAD' },
     { label: 'EUR (€)', value: 'EUR' },
@@ -74,33 +77,21 @@ const CreateAccountScreen = () => {
 
     setLoading(true);
     try {
-      // 1. Get current user from Clerk
-      if (!clerkUser?.id) {
-        throw new Error("User not found. Please log in again.");
-      }
+      if (!clerkUser?.id) throw new Error("User not found. Please log in again.");
       const userId = clerkUser.id;
       const userEmail = clerkUser.primaryEmailAddress?.emailAddress || '';
 
-      // Resolve/Generate UUID to satisfy "exactly as expects" (Users.Id is UUID)
       let dbUserId = '';
-
-      // Check if user already exists in legacy Users table by Email to reuse UUID
       const { data: existingUser } = await supabase
         .from('Users')
         .select('Id')
         .eq('Email', userEmail)
         .maybeSingle();
 
-      if (existingUser?.Id) {
-        dbUserId = existingUser.Id;
-      } else {
-        // Generate a new random UUID if no record exists
-        dbUserId = Crypto.randomUUID();
-      }
+      dbUserId = existingUser?.Id || Crypto.randomUUID();
 
-      // 2. Save profile to Supabase with strict UUID
       const { error: upsertError } = await supabase.from('Users').upsert({
-        Id: dbUserId, // Using strict UUID
+        Id: dbUserId,
         Email: userEmail,
         PhoneNumber: phoneNumber.startsWith('+') ? phoneNumber : `+1${phoneNumber}`,
         Region: region,
@@ -108,52 +99,33 @@ const CreateAccountScreen = () => {
         Currency: currency,
       }, { onConflict: 'Id' });
 
-      if (upsertError) {
-        console.error('[CreateAccountScreen] Users table upsert error:', upsertError);
-        throw upsertError;
-      }
+      if (upsertError) throw upsertError;
 
       await supabase.from('UserProfiles').upsert({
-        UserId: dbUserId, // Using strict UUID
+        UserId: dbUserId,
         DisplayName: businessName,
       }, { onConflict: 'UserId' });
 
-      // 3. Create Clerk organization using business name
-      console.log('[CreateAccountScreen] Creating Clerk organization:', businessName);
       if (createOrganization) {
         try {
           await createOrganization({ name: businessName });
-          console.log('[CreateAccountScreen] Clerk organization created successfully');
         } catch (orgError: any) {
-          // If org creation fails (e.g., name already exists), log but continue
           console.warn('[CreateAccountScreen] Clerk org creation warning:', orgError.message);
         }
       }
 
-      // 4. Mark onboarding as complete
-      await supabase.from('Users').update({
-        isOnboardingComplete: true,
-      }).eq('Id', dbUserId);
+      await supabase.from('Users').update({ isOnboardingComplete: true }).eq('Id', dbUserId);
+      if (refreshOrgs) await refreshOrgs();
 
-      // 5. Refresh org context to pick up new org
-      if (refreshOrgs) {
-        await refreshOrgs();
-      }
-
-      // 6. Navigate to Profile screen with flag to open add connection overlay
       navigation.reset({
         index: 0,
-        routes: [
-          {
-            name: 'TabNavigator',
-            state: {
-              routes: [
-                { name: 'Profile', params: { openAddConnection: true } }
-              ],
-              index: 0,
-            }
+        routes: [{
+          name: 'TabNavigator',
+          state: {
+            routes: [{ name: 'Profile', params: { openAddConnection: true } }],
+            index: 0,
           }
-        ],
+        }],
       });
 
     } catch (error: any) {
@@ -166,157 +138,182 @@ const CreateAccountScreen = () => {
 
   return (
     <View style={styles.container}>
-      <LinearGradient
-        colors={['#5c9c00', '#8cc63f', '#5c9c00']}
-        style={StyleSheet.absoluteFill}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-      />
-      <KeyboardAvoidingView
-        style={styles.keyboardView}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        {/* Header with Anorha logo */}
-        <View style={styles.header}>
-          <Image
-            source={require('../assets/anorha_logo.png')}
-            style={styles.logo}
-            resizeMode="contain"
-          />
-          <Text style={styles.headerText}>Anorha</Text>
-        </View>
-
-        {/* Scrollable Card */}
-        <ScrollView
-          style={styles.cardScroll}
-          contentContainerStyle={styles.cardScrollContent}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
+      <SafeAreaView style={styles.safeArea}>
+        <KeyboardAvoidingView
+          style={styles.keyboardView}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Tell us about your business</Text>
-            <Text style={styles.cardSubtitle}>Let's get you set up</Text>
-
-            <Text style={styles.label}>Business Name</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Your Business LLC"
-              placeholderTextColor="#9CA3AF"
-              value={businessName}
-              onChangeText={setBusinessName}
-            />
-
-            <Text style={styles.label}>Phone Number</Text>
-            <View style={styles.phoneRow}>
-              <View style={styles.countryCode}>
-                <Text style={styles.countryCodeText}>+1</Text>
+          <ScrollView
+            style={styles.scrollView}
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            {/* Header Area */}
+            <View style={styles.header}>
+              <View style={styles.logoBadge}>
+                <Image
+                  source={require('../assets/anorha_logo.png')}
+                  style={styles.logo}
+                  resizeMode="contain"
+                />
               </View>
-              <TextInput
-                style={[styles.input, styles.phoneInput]}
-                placeholder="(555) 000-0000"
-                placeholderTextColor="#9CA3AF"
-                keyboardType="phone-pad"
-                value={phoneNumber}
-                onChangeText={setPhoneNumber}
-              />
+              <Text style={styles.title}>Finish your setup</Text>
+              <Text style={styles.subtitle}>Let's get your business inventory synced.</Text>
             </View>
 
-            <Text style={styles.label}>Region</Text>
-            <DropDownPicker
-              open={openRegion}
-              value={region}
-              items={regionItems}
-              setOpen={setOpenRegion}
-              setValue={setRegion}
-              setItems={setRegionItems}
-              placeholder="Select region..."
-              style={styles.dropdown}
-              dropDownContainerStyle={styles.dropdownList}
-              placeholderStyle={styles.dropdownPlaceholder}
-              zIndex={3000}
-              onOpen={() => setOpenCurrency(false)}
-            />
+            {/* Form Card */}
+            <View style={styles.card}>
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Business Name</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="e.g. Acme Antiques"
+                  placeholderTextColor="#999"
+                  value={businessName}
+                  onChangeText={setBusinessName}
+                />
+              </View>
 
-            <Text style={styles.label}>Role</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g., Seller, Artist, Shop Owner"
-              placeholderTextColor="#9CA3AF"
-              value={occupation}
-              onChangeText={setOccupation}
-            />
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Phone Number</Text>
+                <View style={styles.phoneContainer}>
+                  <View style={styles.countryCode}>
+                    <Text style={styles.countryCodeText}>+1</Text>
+                  </View>
+                  <TextInput
+                    style={[styles.input, styles.phoneInput]}
+                    placeholder="(555) 000-0000"
+                    placeholderTextColor="#999"
+                    keyboardType="phone-pad"
+                    value={phoneNumber}
+                    onChangeText={setPhoneNumber}
+                  />
+                </View>
+              </View>
 
-            <Text style={styles.label}>Currency</Text>
-            <DropDownPicker
-              open={openCurrency}
-              value={currency}
-              items={currencyItems}
-              setOpen={setOpenCurrency}
-              setValue={setCurrency}
-              setItems={setCurrencyItems}
-              placeholder="Select currency..."
-              style={styles.dropdown}
-              dropDownContainerStyle={styles.dropdownList}
-              placeholderStyle={styles.dropdownPlaceholder}
-              zIndex={2000}
-              onOpen={() => setOpenRegion(false)}
-            />
+              <View style={[styles.inputGroup, { zIndex: 3000 }]}>
+                <Text style={styles.label}>Region</Text>
+                <DropDownPicker
+                  open={openRegion}
+                  value={region}
+                  items={regionItems}
+                  setOpen={setOpenRegion}
+                  setValue={setRegion}
+                  placeholder="Select region"
+                  style={styles.dropdown}
+                  dropDownContainerStyle={styles.dropdownContainer}
+                  placeholderStyle={styles.dropdownPlaceholder}
+                  textStyle={styles.dropdownText}
+                  onOpen={() => setOpenCurrency(false)}
+                />
+              </View>
 
-            <View style={{ height: 100 }} />
-          </View>
-        </ScrollView>
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Role / Occupation</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="e.g. Store Owner"
+                  placeholderTextColor="#999"
+                  value={occupation}
+                  onChangeText={setOccupation}
+                />
+              </View>
 
-        {/* Bottom Action */}
-        <View style={styles.bottomAction}>
-          <TouchableOpacity
-            style={[styles.primaryButton, loading && styles.buttonDisabled]}
-            onPress={handleCompleteOnboarding}
-            disabled={loading}
-          >
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.primaryButtonText}>Get Started</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-      </KeyboardAvoidingView>
+              <View style={[styles.inputGroup, { zIndex: 2000 }]}>
+                <Text style={styles.label}>Primary Currency</Text>
+                <DropDownPicker
+                  open={openCurrency}
+                  value={currency}
+                  items={currencyItems}
+                  setOpen={setOpenCurrency}
+                  setValue={setCurrency}
+                  placeholder="Select currency"
+                  style={styles.dropdown}
+                  dropDownContainerStyle={styles.dropdownContainer}
+                  placeholderStyle={styles.dropdownPlaceholder}
+                  textStyle={styles.dropdownText}
+                  onOpen={() => setOpenRegion(false)}
+                />
+              </View>
+
+              <TouchableOpacity
+                style={[styles.primaryButton, loading && styles.buttonDisabled]}
+                onPress={handleCompleteOnboarding}
+                disabled={loading}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Text style={styles.primaryButtonText}>Get Started</Text>
+                    <Icon name="arrow-right" size={20} color="#fff" style={{ marginLeft: 8 }} />
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ height: 40 }} />
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
     </View>
   );
 };
 
-const { width } = Dimensions.get('window');
-
 const styles = StyleSheet.create({
   container: {
+    flex: 1,
+    backgroundColor: BG_COLOR,
+  },
+  safeArea: {
     flex: 1,
   },
   keyboardView: {
     flex: 1,
   },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    padding: 24,
+    alignItems: 'center',
+  },
   header: {
     alignItems: 'center',
-    paddingTop: 60,
-    paddingBottom: 16,
-    flexDirection: 'row',
+    marginBottom: 40,
+    marginTop: 20,
+  },
+  logoBadge: {
+    width: 64,
+    height: 64,
+    borderRadius: 20,
+    backgroundColor: '#fff',
     justifyContent: 'center',
-    gap: 12,
+    alignItems: 'center',
+    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
   },
   logo: {
     width: 40,
     height: 40,
   },
-  headerText: {
-    fontSize: 40,
-    fontWeight: 'bold',
-    color: '#fff',
+  title: {
+    fontSize: 28,
     fontFamily: 'PlusJakartaSans_700Bold',
+    color: '#1a1a1a',
+    textAlign: 'center',
+    marginBottom: 8,
   },
-  cardScroll: {
-    flex: 1,
-  },
-  cardScrollContent: {
-    paddingBottom: 20,
+  subtitle: {
+    fontSize: 16,
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: '#666',
+    textAlign: 'center',
     paddingHorizontal: 20,
   },
   card: {
@@ -324,94 +321,97 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     padding: 24,
     width: '100%',
+    maxWidth: 400,
     shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.03,
+    shadowRadius: 20,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
   },
-  cardTitle: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#111',
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  cardSubtitle: {
-    fontSize: 15,
-    color: '#6B7280',
-    textAlign: 'center',
-    marginBottom: 24,
+  inputGroup: {
+    marginBottom: 20,
   },
   label: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#444',
     marginBottom: 8,
-    marginTop: 16,
+    marginLeft: 4,
   },
   input: {
-    backgroundColor: '#F9FAFB',
+    backgroundColor: '#FAFAFA',
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
-    padding: 14,
+    borderColor: '#EEE',
+    borderRadius: 14,
+    padding: 16,
     fontSize: 16,
-    color: '#111',
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: '#1a1a1a',
   },
-  phoneRow: {
+  phoneContainer: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    gap: 10,
   },
   countryCode: {
-    backgroundColor: '#F3F4F6',
+    backgroundColor: '#FAFAFA',
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
-    padding: 14,
+    borderColor: '#EEE',
+    borderRadius: 14,
+    paddingHorizontal: 16,
     justifyContent: 'center',
     alignItems: 'center',
   },
   countryCodeText: {
     fontSize: 16,
-    color: '#374151',
-    fontWeight: '500',
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#666',
   },
   phoneInput: {
     flex: 1,
   },
   dropdown: {
-    backgroundColor: '#F9FAFB',
+    backgroundColor: '#FAFAFA',
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
-    minHeight: 48,
+    borderColor: '#EEE',
+    borderRadius: 14,
+    minHeight: 56,
   },
-  dropdownList: {
+  dropdownContainer: {
     backgroundColor: '#fff',
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
+    borderColor: '#EEE',
+    borderRadius: 14,
     marginTop: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.1,
+    shadowRadius: 15,
+    elevation: 10,
   },
   dropdownPlaceholder: {
-    color: '#9CA3AF',
+    color: '#999',
+    fontFamily: 'PlusJakartaSans_400Regular',
   },
-  bottomAction: {
-    padding: 20,
-    paddingBottom: 40,
+  dropdownText: {
+    fontSize: 16,
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: '#1a1a1a',
   },
   primaryButton: {
-    backgroundColor: '#93C822',
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
+    backgroundColor: '#1a1a1a', // Focused Black
+    borderRadius: 16,
+    height: 60,
+    width: '100%',
     justifyContent: 'center',
+    alignItems: 'center',
     flexDirection: 'row',
+    marginTop: 10,
   },
   primaryButtonText: {
     color: '#fff',
     fontSize: 18,
-    fontWeight: '600',
+    fontFamily: 'PlusJakartaSans_700Bold',
   },
   buttonDisabled: {
     opacity: 0.6,

@@ -139,11 +139,7 @@ const MappingCard: React.FC<MappingCardProps> = ({
                 </Text>
               </TouchableOpacity>
             ))}
-            {variant === 'new' && isResolvedNew && (
-              <View style={styles.newPill}>
-                <Text style={styles.newPillText}>Adding As New Item</Text>
-              </View>
-            )}
+
           </View>
         </View>
 

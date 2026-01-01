@@ -27,6 +27,7 @@ const CANONICAL_FIELDS = [
     { key: 'sku', label: 'SKU', required: true, example: 'NIKEAM90-001', icon: 'barcode' },
     { key: 'barcode', label: 'Barcode/UPC', required: false, example: '012345678901', icon: 'barcode-scan' },
     { key: 'price', label: 'Price', required: true, example: '149.99', icon: 'cash' },
+    { key: 'compareAtPrice', label: 'Compare Price', required: false, example: '199.99', icon: 'tag-heart' },
     { key: 'quantity', label: 'Quantity', required: false, example: '25', icon: 'package-variant' },
     { key: 'brand', label: 'Brand', required: false, example: 'Nike', icon: 'tag-outline' },
     { key: 'category', label: 'Category', required: false, example: 'Sneakers', icon: 'shape-outline' },
@@ -224,7 +225,7 @@ export function CSVColumnMappingScreen() {
                 {/* AI Loading Indicator */}
                 {isLoadingAI && (
                     <View style={styles.aiLoadingBar}>
-                        <ActivityIndicator size="small" color="#6366f1" />
+                        <ActivityIndicator size="small" color="#93C822" />
                         <Text style={styles.aiLoadingText}>AI is auto-mapping columns...</Text>
                     </View>
                 )}
@@ -256,7 +257,7 @@ export function CSVColumnMappingScreen() {
                             >
                                 <View style={styles.cardHeader}>
                                     <View style={styles.cardIconBox}>
-                                        <Icon name={field.icon} size={20} color={isMapped ? '#10b981' : '#6b7280'} />
+                                        <Icon name={field.icon} size={20} color={isMapped ? '#93C822' : '#6b7280'} />
                                     </View>
                                     <View style={styles.cardTitleBox}>
                                         <Text style={styles.cardTitle}>{field.label}</Text>
@@ -278,7 +279,7 @@ export function CSVColumnMappingScreen() {
                                             </Text>
                                         )}
                                     </View>
-                                    <Icon name="chevron-down" size={20} color={isMapped ? '#10b981' : '#9ca3af'} />
+                                    <Icon name="chevron-down" size={20} color={isMapped ? '#93C822' : '#9ca3af'} />
                                 </TouchableOpacity>
                             </Animated.View>
                         );
@@ -391,19 +392,19 @@ const styles = StyleSheet.create({
         color: '#6b7280',
     },
     textSuccess: {
-        color: '#10b981',
+        color: '#93C822',
     },
     aiLoadingBar: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         paddingVertical: 8,
-        backgroundColor: '#eff6ff',
+        backgroundColor: '#f0fdf4',
         gap: 8,
     },
     aiLoadingText: {
         fontSize: 13,
-        color: '#6366f1',
+        color: '#93C822',
         fontWeight: '500',
     },
     tabsWrapper: {
@@ -431,8 +432,8 @@ const styles = StyleSheet.create({
         elevation: 2,
     },
     cardMapped: {
-        borderColor: '#10b981',
-        backgroundColor: '#f0fdf4',
+        borderColor: '#93C822',
+        backgroundColor: '#f7fee7',
     },
     cardHeader: {
         flexDirection: 'row',
@@ -483,7 +484,7 @@ const styles = StyleSheet.create({
         borderStyle: 'dashed',
     },
     selectorBtnActive: {
-        borderColor: '#10b981',
+        borderColor: '#93C822',
         backgroundColor: '#fff',
     },
     selectorLabel: {
@@ -508,11 +509,11 @@ const styles = StyleSheet.create({
         borderTopColor: '#f3f4f6',
     },
     primaryBtn: {
-        backgroundColor: '#10b981',
+        backgroundColor: '#93C822',
         paddingVertical: 16,
         borderRadius: 12,
         alignItems: 'center',
-        shadowColor: '#10b981',
+        shadowColor: '#93C822',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.2,
         shadowRadius: 8,

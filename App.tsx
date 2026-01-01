@@ -58,36 +58,49 @@ const App: React.FC = () => {
 
     // Deep Link Handling scoped to AuthedApp
     useEffect(() => {
+      const handleDeepLink = (url: string) => {
+        try {
+          // Handle auth callback
+          if (url.startsWith('anorhaapp://auth-callback') || url.startsWith('anorhaapp://auth/callback')) {
+            const urlObject = new URL(url);
+            const status = urlObject.searchParams.get('status');
+            if (status === 'success') {
+              navigationRef.current?.navigate('AppStack', { screen: 'TabNavigator', params: { screen: 'Profile', params: { refresh: Date.now() } } });
+            }
+            return;
+          }
+
+          // Handle partner invite deep link
+          if (url.startsWith('anorhaapp://partner/accept')) {
+            const urlObject = new URL(url);
+            const token = urlObject.searchParams.get('token');
+            if (token) {
+              console.log('[App] Partner invite deep link received, token:', token);
+              navigationRef.current?.navigate('AppStack', {
+                screen: 'PartnerAccept',
+                params: { inviteCode: token }
+              });
+            }
+            return;
+          }
+        } catch (e) {
+          console.error('[App] Deep link handling error:', e);
+        }
+      };
+
       const handleInitialUrl = async () => {
         const initialUrl = await Linking.getInitialURL();
-        if (!initialUrl) return;
-        if (!initialUrl.startsWith('anorhaapp://auth-callback') && !initialUrl.startsWith('anorhaapp://auth/callback')) return;
-        try {
-          const urlObject = new URL(initialUrl);
-          const status = urlObject.searchParams.get('status');
-          const platform = urlObject.searchParams.get('platform');
-          if (status === 'success') {
-            navigationRef.current?.navigate('AppStack', { screen: 'TabNavigator', params: { screen: 'Profile', params: { refresh: Date.now() } } });
-          } else if (status === 'error') {
-            // keep default error handling (no success notification)
-          }
-        } catch { }
+        if (initialUrl) {
+          handleDeepLink(initialUrl);
+        }
       };
+
       handleInitialUrl();
+
       const subscription = Linking.addEventListener('url', (event: { url: string }) => {
-        const url = event.url;
-        if (!url.startsWith('anorhaapp://auth-callback') && !url.startsWith('anorhaapp://auth/callback')) return;
-        try {
-          const urlObject = new URL(url);
-          const status = urlObject.searchParams.get('status');
-          const platform = urlObject.searchParams.get('platform');
-          if (status === 'success') {
-            navigationRef.current?.navigate('AppStack', { screen: 'TabNavigator', params: { screen: 'Profile', params: { refresh: Date.now() } } });
-          } else if (status === 'error') {
-            // keep default error handling (no success notification)
-          }
-        } catch { }
+        handleDeepLink(event.url);
       });
+
       return () => subscription.remove();
     }, []);
 
