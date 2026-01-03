@@ -99,7 +99,7 @@ const OnboardingSlides = ({ navigation }: { navigation: any }) => {
           </View>
 
           <Button
-            title={currentIndex === slides.length - 1 ? "Start Journeya" : "Continue"}
+            title={currentIndex === slides.length - 1 ? "Let's get started" : "Continue"}
             onPress={handleNext}
             style={styles.button}
             textStyle={styles.buttonText}
@@ -113,7 +113,7 @@ const OnboardingSlides = ({ navigation }: { navigation: any }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFCF5', // Off-white/Creamy background
+    backgroundColor: '#FEF4DD', // Off-white/Creamy background
   },
   safeArea: {
     flex: 1,
@@ -135,7 +135,8 @@ const styles = StyleSheet.create({
   },
   imageContainer: {
     width: width * 0.85,
-    height: height * 0.45,
+    height: height * 0.35,
+    maxHeight: height * 0.35,
     borderRadius: 32,
     backgroundColor: '#fff',
     shadowColor: '#000',
@@ -160,14 +161,14 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 32,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1a1a1a',
+    color: '#313131ff',
     textAlign: 'center',
     marginBottom: 16,
     lineHeight: 40,
   },
   description: {
     fontSize: 17,
-    fontFamily: 'PlusJakartaSans_400Regular',
+    fontFamily: 'PlusJakartaSans_500Regular',
     color: '#666',
     textAlign: 'center',
     lineHeight: 26,
@@ -190,11 +191,11 @@ const styles = StyleSheet.create({
     marginHorizontal: 5,
   },
   activeDot: {
-    backgroundColor: '#1a1a1a',
+    backgroundColor: '#5c9c00',
     width: 24,
   },
   button: {
-    backgroundColor: '#1a1a1a',
+    backgroundColor: '#5c9c00',
     borderRadius: 16,
     height: 60,
     width: '100%',

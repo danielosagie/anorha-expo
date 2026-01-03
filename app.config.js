@@ -2,7 +2,7 @@ export default {
   name: "Anorha",
   slug: "sssync",
   owner: "anorha",
-  version: "1.0.1",
+  version: "1.0.2",
   scheme: "anorhaapp",
   android: {
     package: "anorha.alpha",

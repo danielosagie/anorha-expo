@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Modal, Pressable, FlatList, SectionList, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Modal, Pressable, FlatList, SectionList, Alert, ActivityIndicator } from 'react-native';
 import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
 import { Paths, Directory, File } from 'expo-file-system/next';
 import * as ImagePicker from 'expo-image-picker';
@@ -11,7 +11,9 @@ import EbaySvg from '../assets/ebay.svg';
 import CloverSvg from '../assets/clover.svg';
 import SquareSvg from '../assets/square.svg';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { Boxes, X, Sparkles } from 'lucide-react-native';
+import { Boxes, X, Sparkles, Car, Package, MapPin, Truck } from 'lucide-react-native';
+import { Dropdown as ElementDropdown } from 'react-native-element-dropdown';
+import InteractiveMapModal from './InteractiveMapModal';
 import { black, grey400 } from 'react-native-paper/lib/typescript/styles/themes/v2/colors';
 import { overlay } from 'react-native-paper';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
@@ -164,6 +166,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
   const [variantImagePicker, setVariantImagePicker] = useState<{ variantId: string; open: boolean } | null>(null);
   const [showPlatformPicker, setShowPlatformPicker] = useState<boolean>(false);
   const [generatingPlatforms, setGeneratingPlatforms] = useState<Set<string>>(new Set());
+  const [locationPickerVisible, setLocationPickerVisible] = useState<boolean>(false);
 
   useImperativeHandle(ref, () => ({
     openPlatformPicker: () => setShowPlatformPicker(true),
@@ -1027,14 +1030,33 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                   />
 
                 </View>
-                <View style={{ width: "25%", marginBottom: 12 }}>
-                  <Dropdown
-                    label="USD"
-                    options={["USD", "CAD", "EUR", "GBP"]}
-                    value={(activeData as any).currency || 'USD'}
-                    onChange={(v) => patchField('currency', v)}
-                  />
-                </View>
+                <ElementDropdown
+                  style={[styles.input, { height: 50, paddingHorizontal: 12 }]}
+                  containerStyle={{
+                    backgroundColor: 'white',
+                    borderRadius: 12,
+                    marginTop: 4,
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: 4 },
+                    shadowOpacity: 0.1,
+                    shadowRadius: 12,
+                    elevation: 5,
+                    padding: 4,
+                    borderWidth: 0
+                  }}
+                  itemContainerStyle={{ borderRadius: 8, marginVertical: 2, paddingHorizontal: 8 }}
+                  itemTextStyle={{ fontSize: 14, color: '#374151' }}
+                  selectedTextStyle={{ fontSize: 14, color: '#000', fontWeight: '500' }}
+                  activeColor="#F0F9FF"
+                  placeholderStyle={{ fontSize: 14, color: '#9CA3AF' }}
+                  iconStyle={{ width: 20, height: 20, tintColor: '#6B7280' }}
+                  data={["USD", "CAD", "EUR", "GBP"].map(c => ({ label: c, value: c }))}
+                  labelField="label"
+                  valueField="value"
+                  placeholder="USD"
+                  value={(activeData as any).currency || 'USD'}
+                  onChange={(item) => patchField('currency', item.value)}
+                />
               </View>
             </View>
           );
@@ -1044,8 +1066,34 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
           <View style={{ flex: 1 }}>
             <Field label="Shipping Weight" value={String(activeData.weight ?? '')} onChangeText={(t) => patchField('weight', t)} onInfo={() => onOpenFieldPanel?.('weight')} />
           </View>
-          <View style={{ width: 120, marginBottom: 12 }}>
-            <Dropdown label="Ounces" options={["Ounces", "Pounds", "Grams", "Kilograms"]} value={activeData.weightUnit || 'Ounces'} onChange={(v) => patchField('weightUnit', v)} />
+          <View style={{ width: 140, marginBottom: 12 }}>
+            <ElementDropdown
+              style={[styles.input, { height: 50, paddingHorizontal: 12 }]}
+              containerStyle={{
+                backgroundColor: 'white',
+                borderRadius: 12,
+                marginTop: 4,
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.1,
+                shadowRadius: 12,
+                elevation: 5,
+                padding: 4,
+                borderWidth: 0
+              }}
+              itemContainerStyle={{ borderRadius: 8, marginVertical: 2, paddingHorizontal: 8 }}
+              itemTextStyle={{ fontSize: 14, color: '#374151' }}
+              selectedTextStyle={{ fontSize: 14, color: '#000', fontWeight: '500' }}
+              activeColor="#F0F9FF"
+              placeholderStyle={{ fontSize: 14, color: '#9CA3AF' }}
+              iconStyle={{ width: 20, height: 20, tintColor: '#6B7280' }}
+              data={["Ounces", "Pounds", "Grams", "Kilograms"].map(u => ({ label: u, value: u }))}
+              labelField="label"
+              valueField="value"
+              placeholder="Ounces"
+              value={activeData.weightUnit || 'Ounces'}
+              onChange={(item) => patchField('weightUnit', item.value)}
+            />
           </View>
         </View>
 
@@ -1264,6 +1312,169 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
           )}
 
 
+
+        </View>
+      )}
+
+
+      {/* Facebook Marketplace Settings - ASSIMILATED UI */}
+      {activePlatformKey === 'facebook' && (
+        <View style={{ marginTop: 8, paddingBottom: 16 }}>
+
+
+          {/* Condition - Dropdown Style */}
+          <View style={{ marginBottom: 20 }}>
+            <Text style={styles.fieldLabel}>Condition</Text>
+            <ElementDropdown
+              style={[styles.input, { height: 50, paddingHorizontal: 12 }]}
+              containerStyle={{
+                backgroundColor: 'white',
+                borderRadius: 12,
+                marginTop: 4,
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.1,
+                shadowRadius: 12,
+                elevation: 5,
+                padding: 4,
+                borderWidth: 0 // Remove default border
+              }}
+              itemContainerStyle={{
+                borderRadius: 8,
+                marginVertical: 2,
+                paddingHorizontal: 8
+              }}
+              itemTextStyle={{ fontSize: 14, color: '#374151' }}
+              selectedTextStyle={{ fontSize: 14, color: '#000', fontWeight: '500' }}
+              activeColor="#F0F9FF" // Light blue/green tint for active
+              placeholderStyle={{ fontSize: 14, color: '#9CA3AF' }}
+              iconStyle={{ width: 20, height: 20, tintColor: '#6B7280' }}
+              data={[
+                { label: 'New', value: 'new' },
+                { label: 'Like New', value: 'like_new' },
+                { label: 'Good', value: 'good' },
+                { label: 'Fair', value: 'fair' },
+                { label: 'Used', value: 'used' },
+                { label: 'Refurbished', value: 'refurbished' },
+              ]}
+              maxHeight={260}
+              labelField="label"
+              valueField="value"
+              placeholder="Select condition..."
+              value={activeData.condition}
+              onChange={item => {
+                patchField('condition', item.value);
+              }}
+            />
+          </View>
+
+          {/* Delivery Method */}
+          <View style={{ marginBottom: 20 }}>
+            <Text style={styles.fieldLabel}>how to handoff</Text>
+            <View style={{ flexDirection: 'row', gap: 12, marginTop: 12 }}>
+              {(['in_person', 'shipping', 'both'] as const).map((method) => {
+                const isActive = activeData.pickupLocation?.deliveryMethod === method;
+                const config = {
+                  in_person: { label: 'Pickup', icon: Car },
+                  shipping: { label: 'Shipping', icon: Package },
+                  both: { label: 'Both', icon: Truck },
+                }[method];
+
+                const IconComp = config.icon;
+
+                return (
+                  <TouchableOpacity
+                    key={method}
+                    activeOpacity={0.8}
+                    style={{
+                      flex: 1,
+                      backgroundColor: isActive ? 'rgba(147,200,34,0.1)' : '#fff',
+                      borderRadius: 12,
+                      padding: 16,
+                      alignItems: 'center',
+                      borderWidth: 2,
+                      borderColor: isActive ? '#93C822' : '#F3F4F6', // Changed to Brand Green
+                    }}
+                    onPress={() => patchField('pickupLocation', {
+                      ...activeData.pickupLocation,
+                      deliveryMethod: method
+                    })}
+                  >
+                    <IconComp size={24} color={isActive ? '#93C822' : '#6B7280'} strokeWidth={2} />
+                    <Text style={{
+                      marginTop: 8,
+                      color: isActive ? '#93C822' : '#374151',
+                      fontSize: 13,
+                      fontWeight: isActive ? '700' : '600',
+                    }}>
+                      {config.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* Location - Map Interaction */}
+          {(activeData.pickupLocation?.deliveryMethod === 'in_person' || activeData.pickupLocation?.deliveryMethod === 'both') && (
+            <View>
+              <Text style={styles.fieldLabel}>Item Location</Text>
+
+              <TouchableOpacity
+                activeOpacity={0.8}
+                style={{
+                  marginTop: 12,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 12,
+                  paddingVertical: 16,
+                  paddingHorizontal: 16,
+                  backgroundColor: '#fff',
+                  borderWidth: 1,
+                  borderColor: '#E5E5E5',
+                  borderRadius: 12,
+                }}
+                onPress={() => setLocationPickerVisible(true)}
+              >
+                <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(147,200,34,0.1)', alignItems: 'center', justifyContent: 'center' }}>
+                  <MapPin size={18} color="#93C822" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{
+                    color: activeData.pickupLocation?.locationName ? '#111827' : '#9CA3AF',
+                    fontSize: 15,
+                    fontWeight: activeData.pickupLocation?.locationName ? '600' : '400'
+                  }}>
+                    {activeData.pickupLocation?.locationName || 'Tap to set location on map...'}
+                  </Text>
+                  {activeData.pickupLocation?.locationName && (
+                    <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
+                      {activeData.pickupLocation.latitude?.toFixed(4)}, {activeData.pickupLocation.longitude?.toFixed(4)}
+                    </Text>
+                  )}
+                </View>
+                <View style={{ backgroundColor: '#F3F4F6', padding: 6, borderRadius: 8 }}>
+                  <Icon name="chevron-right" size={20} color="#9CA3AF" />
+                </View>
+              </TouchableOpacity>
+
+              <InteractiveMapModal
+                visible={locationPickerVisible}
+                onClose={() => setLocationPickerVisible(false)}
+                onSelect={(loc) => {
+                  patchField('pickupLocation', {
+                    ...activeData.pickupLocation,
+                    locationName: loc.name,
+                    latitude: loc.lat,
+                    longitude: loc.lng
+                  });
+                  setLocationPickerVisible(false);
+                }}
+                initialLat={activeData.pickupLocation?.latitude}
+                initialLng={activeData.pickupLocation?.longitude}
+              />
+            </View>
+          )}
         </View>
       )}
 
@@ -1645,113 +1856,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
 
       </View>
 
-      {/* Facebook Marketplace Pickup Location - only show for Facebook platform */}
-      {activePlatformKey === 'facebook' && (
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>📍 Marketplace Settings</Text>
-          <Text style={styles.subtle}>Configure how buyers can get this item</Text>
-
-          {/* Delivery Method */}
-          <View style={{ marginTop: 12 }}>
-            <Text style={{ fontSize: 14, fontWeight: '600', color: '#333' }}>Delivery Method</Text>
-            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-              {(['in_person', 'shipping', 'both'] as const).map((method) => (
-                <TouchableOpacity
-                  key={method}
-                  style={[
-                    styles.btnSecondary,
-                    {
-                      backgroundColor: activeData.pickupLocation?.deliveryMethod === method ? '#4CAF50' : '#f0f0f0',
-                      paddingHorizontal: 12,
-                      paddingVertical: 8,
-                    }
-                  ]}
-                  onPress={() => patchField('pickupLocation', {
-                    ...activeData.pickupLocation,
-                    deliveryMethod: method
-                  })}
-                >
-                  <Text style={{
-                    color: activeData.pickupLocation?.deliveryMethod === method ? '#fff' : '#333',
-                    fontSize: 13,
-                  }}>
-                    {method === 'in_person' ? '🚗 Local Pickup' : method === 'shipping' ? '📦 Shipping' : '🚗📦 Both'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-
-          {/* Condition */}
-          <View style={{ marginTop: 12 }}>
-            <Text style={{ fontSize: 14, fontWeight: '600', color: '#333' }}>Condition</Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
-              {(['new', 'like_new', 'good', 'fair', 'used', 'refurbished'] as const).map((cond) => (
-                <TouchableOpacity
-                  key={cond}
-                  style={[
-                    styles.btnSecondary,
-                    {
-                      backgroundColor: activeData.condition === cond ? '#2196F3' : '#f0f0f0',
-                      paddingHorizontal: 10,
-                      paddingVertical: 6,
-                    }
-                  ]}
-                  onPress={() => patchField('condition', cond)}
-                >
-                  <Text style={{
-                    color: activeData.condition === cond ? '#fff' : '#333',
-                    fontSize: 12,
-                  }}>
-                    {cond.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-
-          {/* Location fields - only show if local pickup is selected */}
-          {(activeData.pickupLocation?.deliveryMethod === 'in_person' || activeData.pickupLocation?.deliveryMethod === 'both') && (
-            <>
-              <Field
-                label="Pickup Location Name (e.g., Atlanta, GA)"
-                value={activeData.pickupLocation?.locationName || ''}
-                onChangeText={(t) => patchField('pickupLocation', {
-                  ...activeData.pickupLocation,
-                  locationName: t
-                })}
-              />
-              <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
-                <View style={{ flex: 1 }}>
-                  <Field
-                    label="Latitude (e.g., 33.7490)"
-                    value={activeData.pickupLocation?.latitude?.toString() || ''}
-                    keyboardType="numeric"
-                    onChangeText={(t) => patchField('pickupLocation', {
-                      ...activeData.pickupLocation,
-                      latitude: t ? parseFloat(t) : undefined
-                    })}
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Field
-                    label="Longitude (e.g., -84.3880)"
-                    value={activeData.pickupLocation?.longitude?.toString() || ''}
-                    keyboardType="numeric"
-                    onChangeText={(t) => patchField('pickupLocation', {
-                      ...activeData.pickupLocation,
-                      longitude: t ? parseFloat(t) : undefined
-                    })}
-                  />
-                </View>
-              </View>
-              <Text style={[styles.subtle, { marginTop: 4 }]}>
-                💡 Tip: Get coordinates from Google Maps - right-click any location
-              </Text>
-            </>
-          )}
-        </View>
-      )}
 
 
       {/* Additional fields basic toggle */}
@@ -2108,27 +2212,6 @@ function LocationDropdown({
   );
 }
 
-// Original dropdown for simple string options
-function Dropdown({ label, options, value, onChange }: { label: string; options: string[]; value: string; onChange: (v: string) => void }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <View style={{ position: 'relative', zIndex: open ? 1000 : 1 }}>
-      <TouchableOpacity style={styles.dropdown} onPress={() => setOpen(o => !o)}>
-        <Text style={{ color: '#000' }}>{value || label}</Text>
-        <Icon name="chevron-down" size={18} color="#000" />
-      </TouchableOpacity>
-      {open && (
-        <View style={[styles.dropdownMenu, { position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 1000, marginTop: 0 }]}>
-          {options.map(opt => (
-            <TouchableOpacity key={opt} style={styles.dropdownItem} onPress={() => { onChange(opt); setOpen(false); }}>
-              <Text style={{ color: '#000' }}>{opt}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      )}
-    </View>
-  );
-}
 
 const styles = StyleSheet.create({
   mediaRow: { paddingVertical: 10, borderBottomColor: '#E5E5E5', borderBottomWidth: 1, paddingBottom: 10, marginBottom: 10, gap: 8 },
@@ -2228,5 +2311,3 @@ const styles = StyleSheet.create({
   suggestionChip: { borderWidth: 1, borderColor: '#E5E5E5', borderStyle: 'dashed', borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
   modalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)' },
 });
-
-

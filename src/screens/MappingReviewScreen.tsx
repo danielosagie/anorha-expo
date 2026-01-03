@@ -604,6 +604,59 @@ const MappingReviewScreen = () => {
     loadExistingSettings();
   }, [connectionId]);
 
+  // ✅ SYNC EVERYWHERE FIX: Update suggestions selection based on productCreationMode
+  // This ensures the correct items are selected for import based on the user's mode choice in wizard step 0
+  useEffect(() => {
+    if (!suggestions || suggestions.length === 0) return;
+
+    console.log(`[MappingReviewScreen] Updating suggestion selections for mode: ${productCreationMode}`);
+
+    setSuggestions(prevSuggestions => prevSuggestions?.map(suggestion => {
+      const direction = suggestion.direction || 'platform_to_anorha';
+
+      switch (productCreationMode) {
+        case 'sync_everywhere':
+          // Select ALL items - both directions (full bidirectional sync)
+          // This adds missing products to ALL platforms including this one
+          return { ...suggestion, isSelected: suggestion.action !== 'IGNORE' };
+
+        case 'pull_only':
+          // Only select platform_to_anorha and bidirectional items
+          // Deselect anorha_to_platform items (don't push Anorha items to this platform)
+          if (direction === 'anorha_to_platform') {
+            return { ...suggestion, isSelected: false };
+          }
+          return { ...suggestion, isSelected: suggestion.action !== 'IGNORE' };
+
+        case 'push_only':
+          // Only select anorha_to_platform items (push Anorha items to this platform)
+          // Deselect platform_to_anorha CREATE_NEW items (don't import new products from platform)
+          if (direction === 'anorha_to_platform') {
+            return { ...suggestion, isSelected: true };
+          }
+          // Keep bidirectional/linked items, deselect CREATE_NEW for platform items
+          if (suggestion.action === 'CREATE_NEW') {
+            return { ...suggestion, isSelected: false };
+          }
+          return { ...suggestion, isSelected: suggestion.action !== 'IGNORE' };
+
+        case 'do_nothing':
+          // Only keep bidirectional/linked items, no creates or pushes
+          // This mode links existing matches but doesn't add missing items anywhere
+          if (direction === 'anorha_to_platform') {
+            return { ...suggestion, isSelected: false };
+          }
+          if (suggestion.action === 'CREATE_NEW') {
+            return { ...suggestion, isSelected: false };
+          }
+          return { ...suggestion, isSelected: suggestion.action !== 'IGNORE' };
+
+        default:
+          return suggestion;
+      }
+    }) || []);
+  }, [productCreationMode]);
+
   // ✅ POOLS: Create new pool
   const handleCreatePool = async () => {
     if (!poolNameInput.trim()) {
@@ -1680,8 +1733,11 @@ const MappingReviewScreen = () => {
     const list = suggestions || [];
     const matched = list.filter(s => s.action === 'LINK_EXISTING' || s.resolved === true).length;
     const ignore = list.filter(s => s.action === 'IGNORE').length;
-    const review = Math.max(0, list.length - matched - ignore);
-    return { matched, review, ignore } as any;
+    const review = Math.max(0, list.filter(s => s.direction !== 'anorha_to_platform' && s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved).length);
+    // NEW: Count push items (Anorha items to push to this platform)
+    const push = list.filter(s => s.direction === 'anorha_to_platform' && s.isSelected).length;
+    const pushTotal = list.filter(s => s.direction === 'anorha_to_platform').length;
+    return { matched, review, ignore, push, pushTotal } as any;
   }, [suggestions]);
 
   // Current list by active tab + query + sort
@@ -4213,7 +4269,7 @@ const MappingReviewScreen = () => {
                             onPress={() => setProductCreationMode('pull_only')}
                           >
                             {/* Visual flow: This platform → arrow → Anorha */}
-                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 10, height: 52, gap: 6 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 10, height: 52, gap: 2 }}>
                               {/* Current platform (Square/Shopify/etc) on LEFT */}
                               <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 1.5, borderColor: '#E5E7EB' }}>
                                 {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={32} height={32} />}
@@ -4677,18 +4733,20 @@ const MappingReviewScreen = () => {
                           <Text style={{ fontWeight: '700', color: '#4A6C1C', marginBottom: 8 }}>What will happen:</Text>
                           <Text style={{ color: '#5B8325', fontSize: 14, lineHeight: 22 }}>
                             {productCreationMode === 'sync_everywhere'
-                              ? `• Importing ${counts.matched + counts.review} items from ${platformName || 'platform'} → Anorha\n• Creating ${counts.review} new items on Anorha\n• Syncing ALL items to all connected platforms`
+                              ? `• Importing ${counts.matched + counts.review} items from ${platformName || 'platform'} → Anorha\n• Creating ${counts.review} new items on Anorha\n• Pushing ${counts.push} Anorha items → ${platformName || 'platform'}\n• All platforms will share the same unified inventory`
                               : productCreationMode === 'pull_only'
                                 ? `• Importing ${counts.matched + counts.review} items from ${platformName || 'platform'} → Anorha\n• Creating ${counts.review} new items on Anorha\n• Linking ${counts.matched} existing matches`
                                 : productCreationMode === 'push_only'
-                                  ? `• Pushing Anorha items → ${platformName || 'platform'}\n• ${counts.matched} items will sync to ${platformName || 'platform'}`
+                                  ? `• Pushing ${counts.push} Anorha items → ${platformName || 'platform'}\n• Linking ${counts.matched} matched items`
                                   : `• Linking ${counts.matched} matched items\n• ${counts.review} items need review`
                             }
                           </Text>
                         </View>
                         <View style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 24 }}>
-                          <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Matched/New/Ignored</Text>
-                          <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>{counts.matched} matched • {counts.review} review → new • {counts.ignore} ignored</Text>
+                          <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Items Summary</Text>
+                          <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>
+                            {counts.matched} matched • {counts.review} new from {platformName || 'platform'} • {counts.push > 0 ? `${counts.push} push to ${platformName || 'platform'} • ` : ''}{counts.ignore} ignored
+                          </Text>
 
                           <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Sync Direction</Text>
                           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16, gap: 8 }}>

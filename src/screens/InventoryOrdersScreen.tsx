@@ -8,7 +8,7 @@ import { mockOrders } from '../data/mockData';
 import { observer } from '@legendapp/state/react';
 import { useLegendState } from '../context/LegendStateContext';
 import { ProductVariant as ProductVariantData, ProductImage, InventoryLevel, PlatformProductMapping, LegendStateObservables, MarketplaceListing, PlatformLocation, PlatformConnection } from '../utils/SupaLegend';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
@@ -37,6 +37,7 @@ type EnrichedProductVariant = ProductVariantData & {
   VariantType?: 'flat' | 'base' | 'option' | null;
   IsArchived?: boolean;
   optionVariantCount?: number; // Count of option variants for this product
+  CreatedAt?: string; // For date-based sorting
 };
 
 interface MockOrderItemData {
@@ -212,6 +213,89 @@ const InventoryOrdersScreen = observer(() => {
       directFetchProducts();
     }
   }, [legendState]);
+
+  // Track if this is the first render to avoid double-fetching on initial mount
+  const isFirstRender = useRef(true);
+
+  // CRITICAL: Refresh data when screen comes into focus (e.g., after CSV import)
+  // This ensures newly imported products appear without requiring a full app restart
+  // Uses a lightweight count check to minimize egress - only re-fetches if count changed
+  useFocusEffect(
+    useCallback(() => {
+      // Skip the first render since directFetchProducts already runs on mount
+      if (isFirstRender.current) {
+        isFirstRender.current = false;
+        return;
+      }
+
+      const refreshOnFocus = async () => {
+        if (!legendState?.userId) return;
+
+        console.log('[InventoryOrdersScreen] Screen focused - checking for new products...');
+
+        try {
+          // Quick count check to see if we need to refresh (minimal egress)
+          const { count, error } = await supabase
+            .from('ProductVariants')
+            .select('Id', { count: 'exact', head: true })
+            .eq('UserId', legendState.userId);
+
+          if (error) {
+            console.error('[InventoryOrdersScreen] Error checking product count:', error);
+            return;
+          }
+
+          // Use directFetchVariants count for comparison (we don't reference legendProductVariants
+          // here since it's declared after this hook - the Legend observable handles its own sync)
+          const currentLocalCount = Object.keys(directFetchVariants).length;
+
+          console.log(`[InventoryOrdersScreen] Count check: server=${count}, local=${currentLocalCount}`);
+
+          // Only re-fetch if count increased (new products added)
+          if (count && count > currentLocalCount) {
+            console.log('[InventoryOrdersScreen] New products detected, refreshing...');
+
+            // Fetch new products
+            const { data, error: fetchError } = await supabase
+              .from('ProductVariants')
+              .select('*')
+              .eq('UserId', legendState.userId);
+
+            if (!fetchError && data) {
+              const variantMap: Record<string, ProductVariantData> = {};
+              const variantIds: string[] = [];
+              data.forEach((v: any) => {
+                variantMap[v.Id] = v;
+                variantIds.push(v.Id);
+              });
+              setDirectFetchVariants(variantMap);
+
+              // Also refresh inventory levels
+              if (variantIds.length > 0) {
+                const { data: levelsData } = await supabase
+                  .from('InventoryLevels')
+                  .select('*')
+                  .in('ProductVariantId', variantIds);
+
+                if (levelsData && levelsData.length > 0) {
+                  const levelsMap: Record<string, InventoryLevel> = {};
+                  levelsData.forEach((l: any) => {
+                    levelsMap[l.Id] = l;
+                  });
+                  setDirectFetchLevels(levelsMap);
+                }
+              }
+              console.log('[InventoryOrdersScreen] Refresh complete, now showing', data.length, 'products');
+            }
+          }
+        } catch (e) {
+          console.error('[InventoryOrdersScreen] Error during focus refresh:', e);
+        }
+      };
+
+      refreshOnFocus();
+    }, [legendState?.userId, directFetchVariants])
+  );
 
   // CRITICAL FIX: Use useSelector to properly track observable changes for real-time reactivity
   // Direct .get() calls outside useMemo don't trigger re-renders when data changes
@@ -478,6 +562,7 @@ const InventoryOrdersScreen = observer(() => {
         VariantType: variantWithType.VariantType,
         IsArchived: variantWithType.IsArchived,
         optionVariantCount: optionVariants.length,
+        CreatedAt: variant.CreatedAt, // Pass through for date sorting
       };
     });
 
@@ -542,12 +627,17 @@ const InventoryOrdersScreen = observer(() => {
         break;
       case 'date':
       default:
-        // Keep existing order
+        // Sort by CreatedAt descending (most recent first)
+        filtered.sort((a, b) => {
+          const dateA = a.CreatedAt ? new Date(a.CreatedAt).getTime() : 0;
+          const dateB = b.CreatedAt ? new Date(b.CreatedAt).getTime() : 0;
+          return dateB - dateA;
+        });
         break;
     }
 
     return filtered;
-  }, [enrichedProductVariants, searchQuery, scannedBarcode, sortBy]);
+  }, [enrichedProductVariants, searchQuery, scannedBarcode, sortBy, lowStockOnly]);
 
   const inventoryToDisplay = useMemo(() => {
     return filteredInventory.slice(0, displayCount);

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, Linking, ActivityIndicator, Image, Alert } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -70,10 +70,98 @@ interface InsightCardProps {
     cacheExpiresAt?: string; // ISO timestamp when insight cache expires (for refresh timer)
 }
 
+// -------------------------------------------------------------------------
+// STREAMING TEXT COMPONENT (defined outside InsightCard for stable identity)
+// -------------------------------------------------------------------------
+interface StreamingTextProps {
+    text: string;
+    style?: any;
+    speed?: number;
+    startDelay?: number;
+    onComplete?: () => void;
+    shouldStream?: boolean;
+}
+
+const StreamingText: React.FC<StreamingTextProps> = React.memo(({
+    text,
+    style,
+    speed = 20,
+    startDelay = 0,
+    onComplete,
+    shouldStream = true
+}) => {
+    const [displayedText, setDisplayedText] = useState('');
+    const timeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+    const intervalRef = React.useRef<NodeJS.Timeout | null>(null);
+    const completedRef = React.useRef(false);
+    const lastTextRef = React.useRef<string>('');
+
+    useEffect(() => {
+        // Only restart animation if text actually changed
+        if (lastTextRef.current === text && displayedText.length > 0) {
+            return;
+        }
+        lastTextRef.current = text;
+
+        // Clear any existing timers on mount/update
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        if (intervalRef.current) clearInterval(intervalRef.current);
+        completedRef.current = false;
+
+        if (!shouldStream) {
+            setDisplayedText(text);
+            if (!completedRef.current) {
+                completedRef.current = true;
+                onComplete?.();
+            }
+            return;
+        }
+
+        // Reset for new text
+        setDisplayedText('');
+        let charIndex = 0;
+
+        timeoutRef.current = setTimeout(() => {
+            intervalRef.current = setInterval(() => {
+                if (charIndex < text.length) {
+                    // Use slice to build string - prevents undefined issues
+                    setDisplayedText(text.slice(0, charIndex + 1));
+                    charIndex++;
+                } else {
+                    if (intervalRef.current) clearInterval(intervalRef.current);
+                    if (!completedRef.current) {
+                        completedRef.current = true;
+                        onComplete?.();
+                    }
+                }
+            }, speed);
+        }, startDelay);
+
+        // Cleanup function
+        return () => {
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            if (intervalRef.current) clearInterval(intervalRef.current);
+        };
+    }, [text, shouldStream, speed, startDelay]); // onComplete intentionally excluded to prevent loops
+
+    return <Text style={style}>{displayedText}</Text>;
+});
+
 const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAction, onRefresh, onFeedback, cacheExpiresAt }) => {
     const [sourcesVisible, setSourcesVisible] = useState(false);
     const [feedbackGiven, setFeedbackGiven] = useState<'up' | 'down' | null>(null);
     const [copied, setCopied] = useState(false);
+
+    // Stage 0: Start (Headline streams)
+    // Stage 1: Headline done (Description streams)
+    // Stage 2: Description done (Metrics & Actions reveal)
+    // IMPORTANT: This must be at the top level, before any early returns, to follow Rules of Hooks
+    const [streamStage, setStreamStage] = useState<0 | 1 | 2>(0);
+
+    // Reset stage when insight changes
+    useEffect(() => {
+        setStreamStage(0);
+    }, [insight]);
 
     // Copy insight + sources to clipboard
     const handleCopy = useCallback(async () => {
@@ -197,8 +285,29 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
     }
 
     // -------------------------------------------------------------------------
+    // SKELETON COMPONENT
+    // -------------------------------------------------------------------------
+
+    const MetricSkeleton = () => (
+        <Animated.View entering={FadeInUp.duration(400)} style={styles.metricsContainer}>
+            <View style={styles.metricColumn}>
+                <View style={{ height: 12, width: 60, backgroundColor: '#E5E7EB', borderRadius: 4, marginBottom: 8 }} />
+                <View style={{ height: 24, width: 80, backgroundColor: '#E5E7EB', borderRadius: 4 }} />
+                <View style={{ height: 12, width: 100, backgroundColor: '#E5E7EB', borderRadius: 4, marginTop: 6 }} />
+            </View>
+            <View style={styles.metricDivider} />
+            <View style={styles.metricColumn}>
+                <View style={{ height: 12, width: 70, backgroundColor: '#E5E7EB', borderRadius: 4, marginBottom: 8 }} />
+                <View style={{ height: 24, width: 90, backgroundColor: '#E5E7EB', borderRadius: 4 }} />
+                <View style={{ height: 12, width: 60, backgroundColor: '#E5E7EB', borderRadius: 4, marginTop: 6 }} />
+            </View>
+        </Animated.View>
+    );
+
+    // -------------------------------------------------------------------------
     // SUCCESS STATE
     // -------------------------------------------------------------------------
+
     const { topDIN, bottomDIN, severity, timestamp } = insight;
 
     // Format timestamp (e.g., "Updated 2m ago")
@@ -244,132 +353,158 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
             <View style={styles.contentCard}>
 
                 {/* Headline */}
-                <Text style={styles.headlineText}>{topDIN.headline}</Text>
+                <StreamingText
+                    text={topDIN.headline}
+                    style={styles.headlineText}
+                    speed={15}
+                    shouldStream={true}
+                    onComplete={() => setStreamStage(prev => prev < 1 ? 1 : prev)}
+                />
 
                 {/* Description with possible links (simplified for now) */}
-                <Text style={styles.descriptionText} numberOfLines={3}>
-                    {bottomDIN.description}
-                </Text>
+                {streamStage >= 1 && (
+                    <StreamingText
+                        text={bottomDIN.description}
+                        style={styles.descriptionText}
+                        speed={10} // slightly faster
+                        startDelay={100}
+                        shouldStream={true}
+                        onComplete={() => setStreamStage(prev => prev < 2 ? 2 : prev)}
+                    />
+                )}
 
-                {/* Comparison Metrics Box */}
-                {bottomDIN.metrics && bottomDIN.metrics.length >= 2 && (
-                    <View style={styles.metricsContainer}>
-                        {/* Left: Current */}
-                        <View style={styles.metricColumn}>
-                            <Text style={styles.metricLabel}>{primaryMetric?.label || 'Current'}</Text>
-                            <Text style={styles.metricValueMain}>{primaryMetric?.value}</Text>
-                            <Text style={styles.metricSub}>
-                                {/* Dynamic idle days from first affected product, or fallback */}
-                                {bottomDIN.affectedProducts?.[0]?.daysSinceSale
-                                    ? `idle for ${bottomDIN.affectedProducts[0].daysSinceSale}d`
-                                    : (primaryMetric as any)?.status === 'warning' ? 'needs attention' : ''}
-                            </Text>
-                        </View>
+                {/* Placeholder to prevent layout jump if description is not yet streaming? 
+                    Actually, we want it to "appear" line by line, so no placeholder needed for description itself, 
+                    but we might want to reserve space if we cared about fixed height. Dynamic is fine here. 
+                */}
 
-                        {/* Vertical Divider */}
-                        <View style={styles.metricDivider} />
-
-                        {/* Right: Potential */}
-                        <View style={styles.metricColumn}>
-                            <Text style={styles.metricLabel}>{secondaryMetric?.label || 'Projected'}</Text>
-                            <View style={styles.metricValueRow}>
-                                <Text style={styles.metricValueMain}>{secondaryMetric?.value}</Text>
-                                {/* Dynamic discount % from products, or derive from labels */}
-                                {(() => {
-                                    const discountPct = bottomDIN.affectedProducts?.[0]?.discountPercent;
-                                    if (discountPct) return <Text style={styles.metricGainText}> (@{discountPct}% off)</Text>;
-                                    // Try to extract from label like "Expected recovery @30%"
-                                    const labelMatch = secondaryMetric?.label?.match(/@(\d+)%/);
-                                    if (labelMatch) return <Text style={styles.metricGainText}> (@{labelMatch[1]}%)</Text>;
-                                    return null;
-                                })()}
+                {/* Comparison Metrics Box - Show Skeleton until Stage 2 */}
+                {streamStage < 2 ? (
+                    bottomDIN.metrics && bottomDIN.metrics.length >= 2 ? <MetricSkeleton /> : null
+                ) : (
+                    bottomDIN.metrics && bottomDIN.metrics.length >= 2 && (
+                        <Animated.View entering={FadeInUp.duration(500)} style={styles.metricsContainer}>
+                            {/* Left: Current */}
+                            <View style={styles.metricColumn}>
+                                <Text style={styles.metricLabel}>{primaryMetric?.label || 'Current'}</Text>
+                                <Text style={styles.metricValueMain}>{primaryMetric?.value}</Text>
+                                <Text style={styles.metricSub}>
+                                    {/* Dynamic idle days from first affected product, or fallback */}
+                                    {bottomDIN.affectedProducts?.[0]?.daysSinceSale
+                                        ? `idle for ${bottomDIN.affectedProducts[0].daysSinceSale}d`
+                                        : (primaryMetric as any)?.status === 'warning' ? 'needs attention' : ''}
+                                </Text>
                             </View>
-                            <Text style={[styles.metricSub, { color: '#84CC16' }]}>Recoverable</Text>
-                        </View>
-                    </View>
+
+                            {/* Vertical Divider */}
+                            <View style={styles.metricDivider} />
+
+                            {/* Right: Potential */}
+                            <View style={styles.metricColumn}>
+                                <Text style={styles.metricLabel}>{secondaryMetric?.label || 'Projected'}</Text>
+                                <View style={styles.metricValueRow}>
+                                    <Text style={styles.metricValueMain}>{secondaryMetric?.value}</Text>
+                                    {/* Dynamic discount % from products, or derive from labels */}
+                                    {(() => {
+                                        const discountPct = bottomDIN.affectedProducts?.[0]?.discountPercent;
+                                        if (discountPct) return <Text style={styles.metricGainText}> (@{discountPct}% off)</Text>;
+                                        // Try to extract from label like "Expected recovery @30%"
+                                        const labelMatch = secondaryMetric?.label?.match(/@(\d+)%/);
+                                        if (labelMatch) return <Text style={styles.metricGainText}> (@{labelMatch[1]}%)</Text>;
+                                        return null;
+                                    })()}
+                                </View>
+                                <Text style={[styles.metricSub, { color: '#84CC16' }]}>Recoverable</Text>
+                            </View>
+                        </Animated.View>
+                    )
                 )}
 
                 {/* Recommendation Spot (Replaces Giant Button) */}
-                <View style={styles.recommendationContainer}>
-                    <View style={styles.recommendationHeader}>
-                        <Icon name="lightbulb-on-outline" size={16} color="#854D0E" />
-                        <Text style={styles.recommendationTitle}>Recommendation</Text>
-                    </View>
-
-                    <Text style={styles.recommendationText}>
-                        {insight.suggestionText || bottomDIN.action?.label || 'Review these products to determine next steps.'}
-                    </Text>
-
-                    {/* Execute Action button hidden for now - suggestion only mode */}
-                </View>
-
-                {/* Footer Actions Row */}
-                <View style={styles.footerRow}>
-                    {/* Feedback Actions */}
-                    <View style={styles.leftActions}>
-                        <TouchableOpacity style={styles.iconBtn} onPress={handleCopy}>
-                            <Icon name={copied ? "check" : "content-copy"} size={18} color={copied ? "#22C55E" : "#9CA3AF"} />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={styles.iconBtn}
-                            onPress={() => handleFeedback('up')}
-                            disabled={feedbackGiven !== null}
-                        >
-                            <Icon
-                                name={feedbackGiven === 'up' ? "thumb-up" : "thumb-up-outline"}
-                                size={18}
-                                color={feedbackGiven === 'up' ? "#22C55E" : "#9CA3AF"}
-                            />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={styles.iconBtn}
-                            onPress={() => handleFeedback('down')}
-                            disabled={feedbackGiven !== null}
-                        >
-                            <Icon
-                                name={feedbackGiven === 'down' ? "thumb-down" : "thumb-down-outline"}
-                                size={18}
-                                color={feedbackGiven === 'down' ? "#EF4444" : "#9CA3AF"}
-                            />
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={onRefresh} style={styles.refreshBtnHeader}>
-                            <Icon name="refresh" size={18} color="#9CA3AF" />
-                            {getRefreshTimeText() && (
-                                <Text style={{ fontSize: 10, color: '#9CA3AF', marginLeft: 2 }}>
-                                    {getRefreshTimeText()}
-                                </Text>
-                            )}
-                        </TouchableOpacity>
-                    </View>
-
-                    {/* Sources Toggle */}
-                    <TouchableOpacity
-                        style={styles.sourcesPill}
-                        onPress={() => setSourcesVisible(true)}
-                    >
-                        <View style={styles.avatarPile}>
-                            {/* Show Anorha logo for DB + Favicons for Web */}
-                            <View style={[styles.avatarCircle, { backgroundColor: '#fff', zIndex: 3, borderWidth: 1, borderColor: '#E5E7EB' }]}>
-                                {/* Anorha Placeholder Icon */}
-                                <Icon name="leaf" size={10} color="#84CC16" />
+                {streamStage >= 2 && (
+                    <Animated.View entering={FadeInUp.delay(200).duration(500)}>
+                        <View style={styles.recommendationContainer}>
+                            <View style={styles.recommendationHeader}>
+                                <Icon name="lightbulb-on-outline" size={16} color="#854D0E" />
+                                <Text style={styles.recommendationTitle}>Recommendation</Text>
                             </View>
 
-                            {insight.sources?.filter(s => s.type === 'web').slice(0, 2).map((src, idx) => (
-                                <View key={idx} style={[styles.avatarCircle, { zIndex: 2 - idx, marginLeft: -6, backgroundColor: '#fff' }]}>
-                                    {getFaviconUrl(src.url) ? (
-                                        <Image
-                                            source={{ uri: getFaviconUrl(src.url) || '' }}
-                                            style={{ width: 14, height: 14, borderRadius: 7 }}
-                                        />
-                                    ) : (
-                                        <Icon name="web" size={10} color="#9CA3AF" />
-                                    )}
-                                </View>
-                            ))}
+                            <Text style={styles.recommendationText}>
+                                {insight.suggestionText || bottomDIN.action?.label || 'Review these products to determine next steps.'}
+                            </Text>
+
+                            {/* Execute Action button hidden for now - suggestion only mode */}
                         </View>
-                        <Text style={styles.sourcesText}>Sources</Text>
-                    </TouchableOpacity>
-                </View>
+
+                        {/* Footer Actions Row */}
+                        <View style={styles.footerRow}>
+                            {/* Feedback Actions */}
+                            <View style={styles.leftActions}>
+                                <TouchableOpacity style={styles.iconBtn} onPress={handleCopy}>
+                                    <Icon name={copied ? "check" : "content-copy"} size={18} color={copied ? "#22C55E" : "#9CA3AF"} />
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.iconBtn}
+                                    onPress={() => handleFeedback('up')}
+                                    disabled={feedbackGiven !== null}
+                                >
+                                    <Icon
+                                        name={feedbackGiven === 'up' ? "thumb-up" : "thumb-up-outline"}
+                                        size={18}
+                                        color={feedbackGiven === 'up' ? "#22C55E" : "#9CA3AF"}
+                                    />
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.iconBtn}
+                                    onPress={() => handleFeedback('down')}
+                                    disabled={feedbackGiven !== null}
+                                >
+                                    <Icon
+                                        name={feedbackGiven === 'down' ? "thumb-down" : "thumb-down-outline"}
+                                        size={18}
+                                        color={feedbackGiven === 'down' ? "#EF4444" : "#9CA3AF"}
+                                    />
+                                </TouchableOpacity>
+                                <TouchableOpacity onPress={onRefresh} style={styles.refreshBtnHeader}>
+                                    <Icon name="refresh" size={18} color="#9CA3AF" />
+                                    {getRefreshTimeText() && (
+                                        <Text style={{ fontSize: 10, color: '#9CA3AF', marginLeft: 2 }}>
+                                            {getRefreshTimeText()}
+                                        </Text>
+                                    )}
+                                </TouchableOpacity>
+                            </View>
+
+                            {/* Sources Toggle */}
+                            <TouchableOpacity
+                                style={styles.sourcesPill}
+                                onPress={() => setSourcesVisible(true)}
+                            >
+                                <View style={styles.avatarPile}>
+                                    {/* Show Anorha logo for DB + Favicons for Web */}
+                                    <View style={[styles.avatarCircle, { backgroundColor: '#fff', zIndex: 3, borderWidth: 1, borderColor: '#E5E7EB' }]}>
+                                        {/* Anorha Placeholder Icon */}
+                                        <Icon name="leaf" size={10} color="#84CC16" />
+                                    </View>
+
+                                    {insight.sources?.filter(s => s.type === 'web').slice(0, 2).map((src, idx) => (
+                                        <View key={idx} style={[styles.avatarCircle, { zIndex: 2 - idx, marginLeft: -6, backgroundColor: '#fff' }]}>
+                                            {getFaviconUrl(src.url) ? (
+                                                <Image
+                                                    source={{ uri: getFaviconUrl(src.url) || '' }}
+                                                    style={{ width: 14, height: 14, borderRadius: 7 }}
+                                                />
+                                            ) : (
+                                                <Icon name="web" size={10} color="#9CA3AF" />
+                                            )}
+                                        </View>
+                                    ))}
+                                </View>
+                                <Text style={styles.sourcesText}>Sources</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </Animated.View>
+                )}
 
             </View>
 
@@ -502,7 +637,7 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
 const styles = StyleSheet.create({
     // Main Container
     cardContainer: {
-        backgroundColor: '#FEF4DD', // lime-50
+        backgroundColor: '#FEF4DD',
         borderRadius: 20, // Slightly more rounded
         padding: 16,
         borderWidth: 1,
