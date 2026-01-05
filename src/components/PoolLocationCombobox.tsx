@@ -93,6 +93,17 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
   const locationMetadataMap = useMemo(() => {
     const map = new Map<string, LocationMetadata>();
     singleLocations.forEach(loc => {
+      // Special handling for virtual partner locations (created in loadData)
+      if (loc.PlatformConnectionId === 'virtual-partner-connection') {
+        map.set(loc.PlatformLocationId, {
+          platformLocationId: loc.PlatformLocationId,
+          locationName: loc.Name || 'Partner Pool',
+          platformType: 'partner', // New type
+          connectionName: 'Shared Inventory',
+        });
+        return;
+      }
+
       const conn = connectionById.get(loc.PlatformConnectionId);
       if (conn) {
         map.set(loc.PlatformLocationId, {
@@ -152,6 +163,48 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
         }
       } else {
         setSingleLocations([]);
+      }
+
+      // CRITICAL FIX: Detect Partner Pools (which have no locations) and add them as virtual locations
+      // This ensures they appear in the dropdown map
+      if (Array.isArray(poolsRes.ok ? await poolsRes.clone().json() : [])) {
+        const poolList = (await poolsRes.clone().json()) as (LocationPool & { isPartnerPool?: boolean })[];
+
+        // Find partner/shared/remote pools
+        const partnerPools = poolList.filter(p => p.isPartnerPool || p.name.toLowerCase().includes('partner'));
+
+        if (partnerPools.length > 0) {
+          console.log('[PoolLocationCombobox] Detected Partner Pools:', partnerPools.length);
+
+          setPools(prevPools => {
+            return prevPools.map(pool => {
+              // If it's a partner pool, modify it to include itself as a location ID
+              // This is a "virtual location" that represents the whole pool
+              if (pool.isPartnerPool || (partnerPools.find(pp => pp.id === pool.id))) {
+                const virtualLocationId = pool.id; // Use Pool ID as virtual Location ID
+
+                // Add to singleLocations so metadata map picks it up (needs mock connection)
+                setSingleLocations(prevLocs => {
+                  // Avoid duplicates
+                  if (prevLocs.find(l => l.PlatformLocationId === virtualLocationId)) return prevLocs;
+
+                  return [...prevLocs, {
+                    PlatformConnectionId: 'virtual-partner-connection',
+                    PlatformLocationId: virtualLocationId,
+                    Name: pool.name, // Use pool name as location name
+                  }];
+                });
+
+                // Return modified pool with virtual location ID
+                return {
+                  ...pool,
+                  locationIds: [...(pool.locationIds || []), virtualLocationId]
+                };
+              }
+              return pool;
+            });
+          });
+        }
       }
     } catch (error) {
       console.error('[PoolLocationCombobox] Error loading data:', error);

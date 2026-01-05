@@ -33,13 +33,16 @@ import { CameraView } from 'expo-camera';
 
 
 interface MappingSuggestion {
-  action: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE';
+  action: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE' | 'UNMATCHED';
+  prevAction?: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE' | 'UNMATCHED'; // For restore functionality
   platformProduct: {
     id: string;         // e.g., "gid://shopify/ProductVariant/12345"
     sku: string;
     title: string;
     price: number;
     imageUrl: string | null;
+    parentId?: string | null; // NEW: For variant grouping
+    parentTitle?: string | null; // NEW: For variant grouping headers
   };
   suggestedCanonicalProduct: {
     id: string | null;  // will be null for CREATE_NEW
@@ -69,7 +72,6 @@ interface MappingSuggestion {
   // INTERNAL: resolution and restoration helpers (not sent to API)
   resolved?: boolean;
   prevTab?: 'matched' | 'review' | 'ignore';
-  prevAction?: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE';
   originalData?: any; // For CSV Import storage
 }
 
@@ -177,7 +179,7 @@ const MappingReviewScreen = () => {
   const theme = useTheme();
   const route = useRoute<MappingReviewScreenRouteProp>();
   const navigation = useNavigation<MappingReviewScreenNavigationProp>();
-  const { connectionId, platformName, jobId, importedProducts, isCSVImport, isScanning } = route.params;
+  const { connectionId, platformName, jobId, importedProducts, isCSVImport, isScanning, scanStartTime } = route.params as any;
   const legendState: LegendStateObservables | null = useLegendState();
   const [connection, setConnection] = useState<any>()
 
@@ -185,8 +187,8 @@ const MappingReviewScreen = () => {
   const [suggestions, setSuggestions] = useState<MappingSuggestion[] | null>(null);
   // Persist review progress
   const [hasLoadedDraft, setHasLoadedDraft] = useState(false);
-  // ✅ CHANGED: Start loading=true when isScanning is true to show loading UI immediately
-  const [loading, setLoading] = useState(isScanning ?? true);
+  // ✅ CHANGED: Start loading=true when scanning is detected
+  const [loading, setLoading] = useState(true); // Will be updated based on isScanningActive
   const [error, setError] = useState<string | null>(null);
   const [summaryData, setSummaryData] = useState<any>(null); // Summary might not exist anymore
   const [syncing, setSyncing] = useState(false);
@@ -198,8 +200,108 @@ const MappingReviewScreen = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('matched');
   // --- NEW: State for WebSocket sync progress ---
   const { progress: syncProgress } = useSyncProgress(connectionId);
+
+  // ✅ FIX: Derive scanning state from BOTH route param AND connection status
+  // This ensures progress bar shows even when navigating back to an active scan
+  const isScanningActive = useMemo(() => {
+    if (isScanning) return true;
+    const status = connection?.Status?.toLowerCase();
+    return status === 'scanning' || status === 'syncing' || status === 'pending';
+  }, [isScanning, connection?.Status]);
+
+  // --- NEW: Manual Search Modal State ---
+  const [showSearchModal, setShowSearchModal] = useState(false);
+  const [searchModalQuery, setSearchModalQuery] = useState('');
+  const [searchModalResults, setSearchModalResults] = useState<any[]>([]);
+  const [isSearchingProducts, setIsSearchingProducts] = useState(false);
+  const [itemToMatch, setItemToMatch] = useState<MappingSuggestion | null>(null);
+
+  // --- NEW: Expanded groups state for collapsible variant groups ---
+  // Empty set = all groups collapsed by default; stores parentIds of expanded groups
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+
+  const performProductSearch = useCallback(async (query: string) => {
+    if (!query || query.length < 2) return;
+    setIsSearchingProducts(true);
+    setSearchModalResults([]);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const cleanQuery = query.trim();
+
+      // First try to get user's org ID for org-based products
+      const { data: orgMember } = await supabase
+        .from('OrgMembers')
+        .select('OrgId')
+        .eq('UserId', session.user.id)
+        .single();
+
+      const orgId = orgMember?.OrgId;
+
+      // Build query - search by UserId OR OrgId to catch all products
+      let query_builder = supabase
+        .from('ProductVariants')
+        .select('Id, Sku, Title, Price, Barcode, ProductId, Products(Title)')
+        .or(`Title.ilike.%${cleanQuery}%,Sku.ilike.%${cleanQuery}%`)
+        .limit(20);
+
+      // Filter by user or org
+      if (orgId) {
+        query_builder = query_builder.or(`UserId.eq.${session.user.id},OrgId.eq.${orgId}`);
+      } else {
+        query_builder = query_builder.eq('UserId', session.user.id);
+      }
+
+      const { data, error } = await query_builder;
+
+      if (error) throw error;
+      setSearchModalResults((data || []).map(v => ({
+        id: v.Id,
+        sku: v.Sku,
+        title: v.Title, // Variant title
+        productTitle: Array.isArray(v.Products) ? (v.Products[0] as any)?.Title : (v.Products as any)?.Title, // Parent title
+        price: v.Price,
+        imageUrl: null
+      })));
+    } catch (err) {
+      console.error('Search error:', err);
+    } finally {
+      setIsSearchingProducts(false);
+    }
+  }, []);
+
+
+  const handleManualMatch = (canonicalVariant: any) => {
+    if (!itemToMatch) return;
+
+    setSuggestions(prev => (prev || []).map(s => {
+      if (s.platformProduct.id === itemToMatch.platformProduct.id) {
+        return {
+          ...s,
+          action: 'LINK_EXISTING',
+          isSelected: true,
+          matchType: 'MANUAL' as any,
+          suggestedCanonicalProduct: {
+            id: canonicalVariant.id,
+            sku: canonicalVariant.sku,
+            title: canonicalVariant.title,
+            price: canonicalVariant.price,
+            imageUrl: canonicalVariant.imageUrl
+          }
+        };
+      }
+      return s;
+    }));
+    setShowSearchModal(false);
+    setItemToMatch(null);
+    setSearchModalQuery('');
+    setSearchModalResults([]);
+  };
   const [currentJobId, setCurrentJobId] = useState<string | undefined>(jobId);
-  const [isPolling, setIsPolling] = useState(!!jobId || !!isScanning); // ✅ CHANGED: Enable polling when scanning
+  const [isPolling, setIsPolling] = useState(!!jobId); // Will be set to true when isScanningActive is detected
   const [jobProgress, setJobProgress] = useState<JobProgress | null>(null); // Keep for compatibility
   // --- END NEW ---
   // --- NEW: Add state for existing mappings ---
@@ -349,9 +451,18 @@ const MappingReviewScreen = () => {
           // ✅ AUTO-TRANSITION: When status changes from scanning to review/active
           // Fetch suggestions and stop loading
           const status = conn.Status?.toLowerCase();
-          console.log(`[MappingReviewScreen] Polled status: ${status} (isScanning: ${isScanning})`);
+          console.log(`[MappingReviewScreen] Polled status: ${status} (isScanningActive: ${isScanningActive})`);
 
-          if (isScanning && status && ['review', 'active', 'ready_to_sync'].includes(status)) {
+          if (isScanningActive && status && ['review', 'active', 'ready_to_sync'].includes(status)) {
+            // NEW: Check for race condition - if status is 'active' but LastSyncAttemptAt is older than scan start, it's stale
+            if (status === 'active' && scanStartTime) {
+              const lastSyncTime = conn.LastSyncAttemptAt ? new Date(conn.LastSyncAttemptAt).getTime() : 0;
+              // Allow a small buffer (e.g., 2000ms) for clock drift, but generally strict
+              if (lastSyncTime < scanStartTime) {
+                console.log(`[MappingReviewScreen] ⏳ Status is 'active' but LastSyncAttemptAt (${new Date(lastSyncTime).toISOString()}) is older than scan start (${new Date(scanStartTime).toISOString()}). Waiting...`);
+                return; // Keep polling
+              }
+            }
             console.log('[MappingReviewScreen] ✅ Scan complete! Fetching suggestions...');
             // Stop polling
             if (pollingInterval) {
@@ -360,7 +471,7 @@ const MappingReviewScreen = () => {
             }
             // Fetch suggestions - this will set loading=false when done
             fetchMappingSuggestions(connectionId);
-          } else if (isScanning && status === 'error') {
+          } else if (isScanningActive && status === 'error') {
             console.log('[MappingReviewScreen] ❌ Scan failed');
             setError('Scan failed. Please try again.');
             setLoading(false);
@@ -380,7 +491,7 @@ const MappingReviewScreen = () => {
       pollConnectionStatus();
 
       // ✅ Start polling if scanning - poll every 3 seconds for status changes
-      if (isScanning || isPolling) {
+      if (isScanningActive || isPolling) {
         console.log('[MappingReviewScreen] 🔄 Starting status polling...');
         pollingInterval = setInterval(pollConnectionStatus, 3000);
       }
@@ -392,17 +503,26 @@ const MappingReviewScreen = () => {
         clearInterval(pollingInterval);
       }
     };
-  }, [connectionId, isScanning, isPolling]);
+  }, [connectionId, isScanningActive, isPolling]);
 
   // ✅ ALSO: Listen for WebSocket progress and auto-transition on completion
   useEffect(() => {
     if (syncProgress?.status === 'review' || syncProgress?.status === 'active' || syncProgress?.status === 'completed') {
       console.log(`[MappingReviewScreen] WebSocket status: ${syncProgress.status} - fetching suggestions`);
-      if (loading && (isScanning || isPolling)) {
+      if (loading && (isScanningActive || isPolling)) {
         fetchMappingSuggestions(connectionId);
       }
     }
   }, [syncProgress?.status]);
+
+  // ✅ FIX: Auto-enable polling when isScanningActive becomes true (e.g., navigating back to active scan)
+  useEffect(() => {
+    if (isScanningActive && !isPolling) {
+      console.log('[MappingReviewScreen] 🔄 isScanningActive detected, enabling polling');
+      setIsPolling(true);
+      setLoading(true); // Show progress UI
+    }
+  }, [isScanningActive]);
 
   // Fetch current Pools on mount
   useEffect(() => {
@@ -613,40 +733,42 @@ const MappingReviewScreen = () => {
 
     setSuggestions(prevSuggestions => prevSuggestions?.map(suggestion => {
       const direction = suggestion.direction || 'platform_to_anorha';
+      // UNMATCHED items should remain unselected by default in all modes to prompt user review
+      // unless user explicitly interacts with them later
 
       switch (productCreationMode) {
         case 'sync_everywhere':
           // Select ALL items - both directions (full bidirectional sync)
-          // This adds missing products to ALL platforms including this one
-          return { ...suggestion, isSelected: suggestion.action !== 'IGNORE' };
+          // EXCEPTION: UNMATCHED items (no match found) start unselected to avoid accidental dupes
+          return { ...suggestion, isSelected: suggestion.action !== 'IGNORE' && suggestion.action !== 'UNMATCHED' };
 
         case 'pull_only':
           // Only select platform_to_anorha and bidirectional items
-          // Deselect anorha_to_platform items (don't push Anorha items to this platform)
+          // Deselect anorha_to_platform items
           if (direction === 'anorha_to_platform') {
             return { ...suggestion, isSelected: false };
           }
-          return { ...suggestion, isSelected: suggestion.action !== 'IGNORE' };
+          // EXCEPTION: UNMATCHED items
+          return { ...suggestion, isSelected: suggestion.action !== 'IGNORE' && suggestion.action !== 'UNMATCHED' };
 
         case 'push_only':
-          // Only select anorha_to_platform items (push Anorha items to this platform)
-          // Deselect platform_to_anorha CREATE_NEW items (don't import new products from platform)
+          // Only select anorha_to_platform items
+          // Deselect platform_to_anorha CREATE_NEW/UNMATCHED items
           if (direction === 'anorha_to_platform') {
             return { ...suggestion, isSelected: true };
           }
-          // Keep bidirectional/linked items, deselect CREATE_NEW for platform items
-          if (suggestion.action === 'CREATE_NEW') {
+          // Keep bidirectional/linked items, deselect CREATE_NEW/UNMATCHED for platform items
+          if (suggestion.action === 'CREATE_NEW' || suggestion.action === 'UNMATCHED') {
             return { ...suggestion, isSelected: false };
           }
           return { ...suggestion, isSelected: suggestion.action !== 'IGNORE' };
 
         case 'do_nothing':
           // Only keep bidirectional/linked items, no creates or pushes
-          // This mode links existing matches but doesn't add missing items anywhere
           if (direction === 'anorha_to_platform') {
             return { ...suggestion, isSelected: false };
           }
-          if (suggestion.action === 'CREATE_NEW') {
+          if (suggestion.action === 'CREATE_NEW' || suggestion.action === 'UNMATCHED') {
             return { ...suggestion, isSelected: false };
           }
           return { ...suggestion, isSelected: suggestion.action !== 'IGNORE' };
@@ -838,26 +960,38 @@ const MappingReviewScreen = () => {
         // Direct array of suggestions (newer API format)
         suggestionsArray = data.map((item: any): MappingSuggestion => {
           // Determine action based on matchType and confidence
-          let action: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE';
+          let action: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE' | 'UNMATCHED';
           let isSelected = true;
 
           // NEW: Handle anorha_to_platform direction (push Anorha items to platform)
           const direction = item.direction || 'platform_to_anorha';
 
+          // Extract parent info for grouping
+          const parentId = item.platformProduct?.parentId || null;
+          const parentTitle = item.platformProduct?.parentTitle || null;
+
           if (direction === 'anorha_to_platform') {
-            // Anorha item to push to platform
-            action = 'CREATE_NEW'; // Will create on platform
-            isSelected = true;
+            // Anorha item to push to platform - default to UNMATCHED so user picks link target
+            action = 'UNMATCHED';
+            isSelected = false; // Don't auto-select push items
+
+            // Extract parent product title - handle both object and array forms from Supabase
+            const productData = item.anorhaVariant?.Product;
+            const parentProductTitle = Array.isArray(productData)
+              ? productData[0]?.Title
+              : productData?.Title || null;
 
             return {
               action,
-              // For anorha_to_platform, create synthetic platformProduct from anorhaVariant for unified display
               platformProduct: {
                 id: item.anorhaVariant?.Id || item.anorhaVariant?.id || `anorha-${Date.now()}`,
                 sku: item.anorhaVariant?.Sku || item.anorhaVariant?.sku || '',
                 title: item.anorhaVariant?.Title || item.anorhaVariant?.title || 'Unnamed Item',
                 price: item.anorhaVariant?.Price || item.anorhaVariant?.price || 0,
                 imageUrl: item.anorhaVariant?.ImageUrl || item.anorhaVariant?.imageUrl || null,
+                // Use ProductId from anorhaVariant for grouping variants together
+                parentId: item.anorhaVariant?.ProductId || item.anorhaVariant?.productId || null,
+                parentTitle: parentProductTitle,
               },
               anorhaVariant: item.anorhaVariant ? {
                 id: item.anorhaVariant.Id || item.anorhaVariant.id,
@@ -877,21 +1011,21 @@ const MappingReviewScreen = () => {
 
           // Standard platform_to_anorha or bidirectional handling
           if (item.matchType === 'NONE' || item.confidence === 0) {
-            // No match found - these are new products to create
-            action = 'CREATE_NEW';
-            isSelected = true;
+            // No match found -> default to UNMATCHED (User intervention required)
+            action = 'UNMATCHED';
+            isSelected = false; // Do not auto-select
           } else if ((item.matchType === 'SKU' || item.matchType === 'BARCODE') && item.suggestedCanonicalVariant) {
             // Perfect match found - link to existing product
             action = 'LINK_EXISTING';
             isSelected = true;
           } else if (item.confidence > 0 && item.confidence < 0.8) {
-            // Low confidence match - needs review, default to create for now
-            action = 'CREATE_NEW';
-            isSelected = true;
+            // Low confidence match - needs review, show empty slot for user to pick
+            action = 'UNMATCHED';
+            isSelected = false;
           } else {
-            // Default to create new for anything else
-            action = 'CREATE_NEW';
-            isSelected = true;
+            // Default to UNMATCHED for anything else - user should review
+            action = 'UNMATCHED';
+            isSelected = false;
           }
 
           return {
@@ -902,6 +1036,8 @@ const MappingReviewScreen = () => {
               title: item.platformProduct?.title || '',
               price: item.platformProduct?.price ? parseFloat(String(item.platformProduct.price)) : 0,
               imageUrl: item.platformProduct?.imageUrl || null,
+              parentId,
+              parentTitle,
             },
             suggestedCanonicalProduct: item.suggestedCanonicalVariant ? {
               id: item.suggestedCanonicalVariant.Id,
@@ -914,6 +1050,32 @@ const MappingReviewScreen = () => {
             confidence: typeof item.confidence === 'number' ? item.confidence : undefined,
           };
         });
+
+        // DEBUG: Log parentId values to verify backend is sending them
+        const itemsWithParentId = suggestionsArray.filter(s => s.platformProduct.parentId);
+        console.log(`[MappingReviewScreen] DEBUG: ${itemsWithParentId.length}/${suggestionsArray.length} items have parentId`);
+
+        // DEBUG: Specifically log Anorha items (anorha_to_platform direction)
+        const anorhaItems = suggestionsArray.filter(s => s.direction === 'anorha_to_platform');
+        const anorhaWithParent = anorhaItems.filter(s => s.platformProduct.parentId);
+        console.log(`[MappingReviewScreen] DEBUG Anorha items: ${anorhaWithParent.length}/${anorhaItems.length} have parentId`);
+        if (anorhaItems.length > 0) {
+          console.log('[MappingReviewScreen] DEBUG Sample Anorha item:', JSON.stringify({
+            title: anorhaItems[0].platformProduct.title,
+            parentId: anorhaItems[0].platformProduct.parentId,
+            parentTitle: anorhaItems[0].platformProduct.parentTitle,
+            direction: anorhaItems[0].direction,
+          }));
+        }
+
+        if (suggestionsArray.length > 0) {
+          console.log('[MappingReviewScreen] DEBUG Sample item:', JSON.stringify({
+            title: suggestionsArray[0].platformProduct.title,
+            parentId: suggestionsArray[0].platformProduct.parentId,
+            parentTitle: suggestionsArray[0].platformProduct.parentTitle,
+          }));
+        }
+
         console.log(`[MappingReviewScreen] Processed ${suggestionsArray.length} suggestions from array response`);
       } else if (data && typeof data === 'object') {
         // Legacy format with separate arrays for different suggestion types
@@ -924,8 +1086,23 @@ const MappingReviewScreen = () => {
         // Combine all suggestion types into a single array for our UI
         suggestionsArray = [
           ...perfectMatches.map((item: any) => ({ ...item, action: 'LINK_EXISTING', isSelected: true })),
-          ...newFromPlatform.map((item: any) => ({ ...item, action: 'CREATE_NEW', isSelected: true })),
-          ...needsReview.map((item: any) => ({ ...item, action: 'IGNORE', isSelected: false }))
+          ...newFromPlatform.map((item: any) => {
+            const isPush = item.direction === 'anorha_to_platform';
+            // Default to UNMATCHED for push items (so they show 'Link Product' / empty slot)
+            // Default to CREATE_NEW for platform items (so they show 'New Item')
+            return {
+              ...item,
+              action: isPush ? 'UNMATCHED' : 'CREATE_NEW',
+              isSelected: !isPush, // Don't select push items by default
+              platformProduct: {
+                ...item.platformProduct,
+                // Ensure parentId is populated from anorhaVariant if missing (crucial for grouping)
+                parentId: item.platformProduct.parentId || item.anorhaVariant?.ProductId,
+                parentTitle: item.platformProduct.parentTitle || item.anorhaVariant?.Product?.Title,
+              }
+            };
+          }),
+          ...needsReview.map((item: any) => ({ ...item, action: 'UNMATCHED', isSelected: false }))
         ];
 
         // Keep the summary data for backward compatibility
@@ -1714,7 +1891,7 @@ const MappingReviewScreen = () => {
     setPreviewingItem(item);
   };
 
-  const updateSuggestionAction = (platformProductId: string, newAction: 'LINK_EXISTING' | 'CREATE_NEW' | 'IGNORE') => {
+  const updateSuggestionAction = (platformProductId: string, newAction: 'LINK_EXISTING' | 'CREATE_NEW' | 'IGNORE' | 'UNMATCHED') => {
     setSuggestions(currentSuggestions => {
       if (!currentSuggestions) return null;
       return currentSuggestions.map(suggestion => {
@@ -1733,7 +1910,7 @@ const MappingReviewScreen = () => {
     const list = suggestions || [];
     const matched = list.filter(s => s.action === 'LINK_EXISTING' || s.resolved === true).length;
     const ignore = list.filter(s => s.action === 'IGNORE').length;
-    const review = Math.max(0, list.filter(s => s.direction !== 'anorha_to_platform' && s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved).length);
+    const review = Math.max(0, list.filter(s => s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved).length);
     // NEW: Count push items (Anorha items to push to this platform)
     const push = list.filter(s => s.direction === 'anorha_to_platform' && s.isSelected).length;
     const pushTotal = list.filter(s => s.direction === 'anorha_to_platform').length;
@@ -1747,6 +1924,7 @@ const MappingReviewScreen = () => {
       if (activeTab === 'review') return s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved;
       return s.action === 'IGNORE';
     });
+
     const filtered = listQuery
       ? base.filter(item =>
         (item.platformProduct.title || '').toLowerCase().includes(listQuery.toLowerCase()) ||
@@ -1754,6 +1932,7 @@ const MappingReviewScreen = () => {
         (item.suggestedCanonicalProduct?.title || '').toLowerCase().includes(listQuery.toLowerCase())
       )
       : base;
+
     const sorted = [...filtered].sort((a, b) => {
       if (sortBy === 'title') {
         return (a.platformProduct.title || '').localeCompare(b.platformProduct.title || '');
@@ -1763,52 +1942,77 @@ const MappingReviewScreen = () => {
     return sorted;
   }, [suggestions, activeTab, listQuery, sortBy]);
 
-  // Item renderer (memoized)
-  const renderMappingItem = useCallback(({ item }: { item: MappingSuggestion }) => {
-    const isReview = (item.confidence != null && item.confidence > 0 && item.confidence < 0.8) || item.matchType === 'TITLE';
-    const variant = item.action === 'IGNORE' ? 'ignored' : (item.action === 'LINK_EXISTING' ? 'matched' : (isReview ? 'review' : 'new'));
-    return (
-      <MappingCard
-        variant={variant as any}
-        titleLeft={item.platformProduct.title}
-        skuLeft={item.platformProduct.sku}
-        priceLeft={item.platformProduct.price}
-        imageLeft={item.platformProduct.imageUrl}
-        titleRight={item.suggestedCanonicalProduct?.title || undefined}
-        skuRight={item.suggestedCanonicalProduct?.sku || undefined}
-        priceRight={item.suggestedCanonicalProduct?.price}
-        imageRight={item.suggestedCanonicalProduct?.imageUrl || undefined}
-        direction={item.direction}
-        selected={item.isSelected}
-        onSelect={() => setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, isSelected: !s.isSelected, action: (!s.isSelected && s.action === 'IGNORE') ? 'CREATE_NEW' : s.action } : s))}
-        onIgnore={() => {
-          // From matched -> send to review and clear resolved flag; otherwise -> move to ignored
-          setSuggestions(prev => (prev || []).map(s => {
-            if (s.platformProduct.id !== item.platformProduct.id) return s;
-            if (activeTab === 'matched') {
-              return { ...s, action: 'CREATE_NEW', matchType: 'TITLE', isSelected: true, resolved: false };
-            }
-            return { ...s, prevTab: activeTab, prevAction: s.action, action: 'IGNORE', isSelected: false, resolved: false };
-          }));
-        }}
-        onRestore={() => {
-          setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, action: s.prevAction || 'CREATE_NEW', isSelected: true } : s));
-        }}
-        onCreate={() => {
-          setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, action: 'CREATE_NEW', resolved: true, isSelected: true } : s));
-        }}
-        onApproveMatch={() => {
-          setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, action: 'LINK_EXISTING', resolved: true, isSelected: true } : s));
-        }}
-        onLink={() => setShowSearchResults(true)}
-        onSearch={() => {
-          setShowSearchResults(true); // keep open; do not clear immediately
-          setSearchQuery('');
-          (global as any).currentPlatformProduct = item.platformProduct;
-        }}
-      />
-    );
-  }, [updateSuggestionAction]);
+  // NEW: Grouping Logic
+  // Groups items by parentId to show variants together
+  const groupedList = useMemo(() => {
+    if (!currentList) return [];
+
+    // 1. Group items
+    const groups = new Map<string, { title: string, items: MappingSuggestion[] }>();
+    const looseItems: MappingSuggestion[] = [];
+
+    currentList.forEach(item => {
+      const parentId = item.platformProduct.parentId;
+      if (parentId) {
+        if (!groups.has(parentId)) {
+          groups.set(parentId, {
+            title: item.platformProduct.parentTitle || item.platformProduct.title || 'Product',
+            items: []
+          });
+        }
+        groups.get(parentId)!.items.push(item);
+      } else {
+        looseItems.push(item);
+      }
+    });
+
+    // 2. Build flat list with headers
+    const result: any[] = [];
+
+    // Add groups - only show header if there are multiple variants
+    groups.forEach((group, id) => {
+      if (group.items.length > 1) {
+        // Calculate price range for the group
+        const prices = group.items
+          .map(item => item.platformProduct.price)
+          .filter(p => p != null && p > 0);
+
+        const minPrice = prices.length > 0 ? Math.min(...prices) : null;
+        const maxPrice = prices.length > 0 ? Math.max(...prices) : null;
+
+        // Check if any item in the group is anorha_to_platform direction
+        const isAnorhaToplatform = group.items.some(item => item.direction === 'anorha_to_platform');
+        const isExpanded = expandedGroups.has(id);
+
+        // Multiple variants - show a group header with price range
+        result.push({
+          type: 'header',
+          title: group.title,
+          id,
+          count: group.items.length,
+          minPrice,
+          maxPrice,
+          isAnorhaToplatform,
+          isExpanded,
+          items: group.items, // Pass items for collapsed group actions
+        });
+
+        // Only add individual items if the group is expanded
+        if (isExpanded) {
+          result.push(...group.items.map(s => ({ type: 'item', suggestion: s, isChild: true })));
+        }
+      } else {
+        // Single item - no header, just add the item
+        result.push(...group.items.map(s => ({ type: 'item', suggestion: s, isChild: false })));
+      }
+    });
+
+    // Add loose items (no header needed for individual items)
+    result.push(...looseItems.map(s => ({ type: 'item', suggestion: s, isChild: false })));
+
+    return result;
+  }, [currentList, expandedGroups]);
+
   // --- END ALWAYS-CALLED HOOKS ---
 
   const renderTabButton = (tab: ActiveTab, title: string, count: number) => (
@@ -2129,7 +2333,8 @@ const MappingReviewScreen = () => {
         .from('ProductVariants')
         .select('Id, Sku, Title, Price, Barcode')
         .eq('UserId', user.id)
-        .or(`Sku.ilike.%${query}%,Title.ilike.%${query}%,Barcode.ilike.%${query}%`)
+        // Use simple ILIKE for broad matching on Title or SKU
+        .or(`Title.ilike.%${query}%,Sku.ilike.%${query}%`)
         .limit(20);
 
       if (error) {
@@ -2569,6 +2774,64 @@ const MappingReviewScreen = () => {
       flex: 1,
       backgroundColor: theme.colors.background,
       paddingTop: 50,
+    },
+    groupHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 12,
+      paddingHorizontal: 8,
+      backgroundColor: theme.colors.background,
+    },
+    groupHeaderActionable: {
+      backgroundColor: theme.colors.surface,
+      borderRadius: 12,
+      marginVertical: 4,
+      borderWidth: 1,
+      borderColor: theme.colors.textSecondary + '30', // 30 = 18% opacity
+    },
+    groupHeaderText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: theme.colors.text,
+    },
+    groupPriceRange: {
+      fontSize: 12,
+      fontWeight: '500',
+      color: theme.colors.success,
+      marginTop: 2,
+    },
+    variantCountBadge: {
+      backgroundColor: theme.colors.surface,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 12,
+      marginLeft: 8,
+    },
+    variantCountText: {
+      fontSize: 12,
+      fontWeight: '500',
+      color: theme.colors.textSecondary,
+    },
+    expandedGroupHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 12,
+      paddingHorizontal: 8,
+      backgroundColor: theme.colors.background,
+      marginTop: 8,
+    },
+    expandedGroupHeaderText: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: theme.colors.textSecondary,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+    expandedGroupLine: {
+      flex: 1,
+      height: 1,
+      backgroundColor: theme.colors.textSecondary + '20',
+      marginLeft: 10,
     },
     centered: {
       flex: 1,
@@ -3679,8 +3942,8 @@ const MappingReviewScreen = () => {
     },
   });
 
-  // ✅ UPDATED: Show loading with progress when isPolling or isScanning, using WebSocket data
-  if (loading && (isPolling || isScanning)) {
+  // ✅ UPDATED: Show loading with progress when isPolling or isScanningActive, using WebSocket data
+  if (loading && (isPolling || isScanningActive)) {
     // ✅ Use syncProgress from WebSocket as primary source, fallback to jobProgress for compatibility
     const wsProgress = syncProgress?.progress ? (syncProgress.progress / 100) : 0;
     const localProgress = jobProgress?.progress || 0;
@@ -3691,14 +3954,25 @@ const MappingReviewScreen = () => {
 
     return (
       <View style={styles.container}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Icon name="arrow-left" size={22} color={theme.colors.text} />
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={[styles.backButton, { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, marginTop: 20 }]}
+        >
+          <Icon name="arrow-left" size={20} color={theme.colors.text} />
+          <Text style={{ marginLeft: 6, fontSize: 16, fontWeight: '500', color: theme.colors.text }}>Back</Text>
         </TouchableOpacity>
         <View style={styles.centered}>
           <Text style={styles.progressMainTitle}>Analyzing Your Products</Text>
           <Text style={styles.progressDescription}>
             {progressDescription}
           </Text>
+
+          {/* ✅ Estimated Time Display */}
+          {(syncProgress?.details as any)?.estimatedSecondsRemaining != null && (syncProgress?.details as any)?.estimatedSecondsRemaining > 0 && (
+            <Text style={{ fontSize: 13, color: theme.colors.textSecondary, marginTop: 4, marginBottom: 8, fontStyle: 'italic' }}>
+              Estimated time remaining: {Math.ceil((syncProgress?.details as any)?.estimatedSecondsRemaining)}s
+            </Text>
+          )}
 
           <View style={styles.progressBarContainer}>
             <Progress.Bar
@@ -3773,6 +4047,9 @@ const MappingReviewScreen = () => {
 
           <Text style={[styles.loadingText, { marginTop: 20, textAlign: 'center', color: theme.colors.textSecondary }]}>
             This usually takes 1-2 minutes depending on your store size.
+          </Text>
+          <Text style={[styles.loadingText, { marginTop: 12, textAlign: 'center', color: theme.colors.textSecondary, fontSize: 13, opacity: 0.8 }]}>
+            You can leave this screen - your scan will continue in the background.
           </Text>
         </View>
       </View>
@@ -3945,7 +4222,7 @@ const MappingReviewScreen = () => {
                   onPress={() => setShowEffectAllDropdown(!showEffectAllDropdown)}
                 >
                   <Icon name="playlist-edit" size={18} color="#FFF" />
-                  <Text style={{ marginLeft: 6, color: '#FFF', fontWeight: '700' }}>Effect All</Text>
+                  <Text style={{ marginLeft: 6, color: '#FFF', fontWeight: '700' }}>Bulk Edit</Text>
                   <Icon name={showEffectAllDropdown ? 'chevron-up' : 'chevron-down'} size={16} color="#FFF" style={{ marginLeft: 4 }} />
                 </TouchableOpacity>
                 {showEffectAllDropdown && (
@@ -3954,16 +4231,17 @@ const MappingReviewScreen = () => {
                     top: 40,
                     right: 0,
                     backgroundColor: '#fff',
-                    borderRadius: 8,
+                    borderRadius: 12,
                     borderWidth: 1,
                     borderColor: '#E5E7EB',
                     shadowColor: '#000',
                     shadowOpacity: 0.15,
-                    shadowRadius: 8,
-                    shadowOffset: { width: 0, height: 4 },
-                    elevation: 8,
+                    shadowRadius: 10,
+                    shadowOffset: { width: 0, height: 6 },
+                    elevation: 10,
                     zIndex: 1000,
-                    minWidth: 180,
+                    minWidth: 200,
+                    overflow: 'hidden',
                   }}>
                     <TouchableOpacity
                       style={{ flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' }}
@@ -4029,44 +4307,158 @@ const MappingReviewScreen = () => {
           </View>
 
           <FlatList
-            data={currentList}
-            keyExtractor={(it, index) => `${it.platformProduct.id}-${index}`}
-            renderItem={({ item }) => (
-              <MappingCard
-                variant={(item.action === 'IGNORE' ? 'ignored' : (item.action === 'LINK_EXISTING' ? 'matched' : ((item.confidence != null && item.confidence > 0 && item.confidence < 0.8) || item.matchType === 'TITLE') ? 'review' : 'new')) as any}
-                titleLeft={item.platformProduct.title}
-                skuLeft={item.platformProduct.sku}
-                priceLeft={item.platformProduct.price}
-                imageLeft={item.platformProduct.imageUrl}
-                titleRight={item.suggestedCanonicalProduct?.title || undefined}
-                skuRight={item.suggestedCanonicalProduct?.sku || undefined}
-                priceRight={item.suggestedCanonicalProduct?.price}
-                imageRight={item.suggestedCanonicalProduct?.imageUrl || undefined}
-                selected={item.isSelected}
-                isResolvedNew={item.action === 'CREATE_NEW' && !!item.resolved}
-                onEditNew={() => setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, resolved: false } : s))}
-                onSelect={() => setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, isSelected: !s.isSelected, action: (!s.isSelected && s.action === 'IGNORE') ? 'CREATE_NEW' : s.action } : s))}
-                onIgnore={() => {
-                  setSuggestions(prev => (prev || []).map(s => {
-                    if (s.platformProduct.id !== item.platformProduct.id) return s;
-                    if (activeTab === 'matched' || (s.action === 'CREATE_NEW' && s.resolved)) {
-                      return { ...s, action: 'CREATE_NEW', matchType: 'TITLE', isSelected: true, resolved: false };
-                    }
-                    return { ...s, prevTab: activeTab, prevAction: s.action, action: 'IGNORE', isSelected: false, resolved: false };
-                  }));
-                }}
-                onRestore={() => setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, action: s.prevAction || 'CREATE_NEW', isSelected: true } : s))}
-                onCreate={() => setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, action: 'CREATE_NEW', isSelected: true, resolved: true } : s))}
-                onApproveMatch={() => setSuggestions(prev => (prev || []).map(s => s.platformProduct.id === item.platformProduct.id ? { ...s, action: 'LINK_EXISTING', resolved: true, isSelected: true } : s))}
-                onSearch={() => { setShowSearchResults(true); setSearchQuery(''); (global as any).currentPlatformProduct = item.platformProduct; }}
-              />
-            )}
+            // Use groupedList instead of currentList
+            data={groupedList}
+            keyExtractor={(item, index) => item.type === 'header' ? `header-${item.id}` : `item-${item.suggestion.platformProduct.id}-${index}`}
+            renderItem={({ item }) => {
+              if (item.type === 'header') {
+                // Format price range for display
+                let priceText = '';
+                if (item.minPrice != null && item.maxPrice != null) {
+                  if (item.minPrice === item.maxPrice) {
+                    priceText = `$${item.minPrice.toFixed(2)}`;
+                  } else {
+                    priceText = `$${item.minPrice.toFixed(2)} - $${item.maxPrice.toFixed(2)}`;
+                  }
+                }
+
+                if (item.isExpanded) {
+                  // Breadcrumb style for expanded group
+                  return (
+                    <TouchableOpacity
+                      style={styles.expandedGroupHeader}
+                      onPress={() => {
+                        setExpandedGroups(prev => {
+                          const newSet = new Set(prev);
+                          newSet.delete(item.id);
+                          return newSet;
+                        });
+                      }}
+                    >
+                      <Icon name="chevron-up" size={16} color={theme.colors.textSecondary} style={{ marginRight: 6 }} />
+                      <Text style={styles.expandedGroupHeaderText}>{item.title}</Text>
+                      <View style={styles.expandedGroupLine} />
+                    </TouchableOpacity>
+                  );
+                }
+
+                // Collapsed Group acts as a MappingCard
+                const groupItems = item.items as MappingSuggestion[];
+                const allIgnored = groupItems.every(s => s.action === 'IGNORE');
+                const allMatched = groupItems.every(s => s.action === 'LINK_EXISTING');
+                const allNew = groupItems.every(s => s.action === 'CREATE_NEW');
+
+                const groupVariant = allIgnored ? 'ignored' : allMatched ? 'matched' : allNew ? 'new' : 'review';
+
+                // Representative images/data
+                const firstItem = groupItems[0];
+
+                return (
+                  <MappingCard
+                    variant={groupVariant}
+                    titleLeft={item.title}
+                    variantCount={item.count}
+                    priceRange={priceText}
+                    imageLeft={firstItem.platformProduct.imageUrl}
+                    selected={groupItems.some(s => s.isSelected)}
+                    onSelect={() => {
+                      const anySelected = groupItems.some(s => s.isSelected);
+                      setSuggestions(prev => (prev || []).map(prevS =>
+                        groupItems.some(gi => gi.platformProduct.id === prevS.platformProduct.id)
+                          ? { ...prevS, isSelected: !anySelected }
+                          : prevS
+                      ));
+                    }}
+                    onIgnore={() => {
+                      setSuggestions(prev => (prev || []).map(prevS =>
+                        groupItems.some(gi => gi.platformProduct.id === prevS.platformProduct.id)
+                          ? { ...prevS, action: allIgnored ? 'UNMATCHED' : 'IGNORE', isSelected: false }
+                          : prevS
+                      ));
+                    }}
+                    onCreate={() => {
+                      setSuggestions(prev => (prev || []).map(prevS =>
+                        groupItems.some(gi => gi.platformProduct.id === prevS.platformProduct.id)
+                          ? { ...prevS, action: 'CREATE_NEW', isSelected: true, resolved: true }
+                          : prevS
+                      ));
+                    }}
+                    onSearch={() => {
+                      // Expand on search if it's a group, or we could support group-level link later
+                      setExpandedGroups(prev => new Set(prev).add(item.id));
+                      setItemToMatch(firstItem);
+                      setSearchModalQuery('');
+                      setSearchModalResults([]);
+                      setShowSearchModal(true);
+                    }}
+                    // Click the card itself (not buttons) to expand
+                    onPress={() => {
+                      setExpandedGroups(prev => new Set(prev).add(item.id));
+                    }}
+                  />
+                );
+              }
+
+              // It's a suggestion items
+              const s = item.suggestion;
+              // Map UNMATCHED action to 'review' variant style (empty slot) if not ignored
+              const visualVariant = s.action === 'IGNORE' ? 'ignored'
+                : s.action === 'LINK_EXISTING' ? 'matched'
+                  : s.action === 'UNMATCHED' ? 'review' // Shows empty Link Product slot
+                    : s.action === 'CREATE_NEW' ? 'new' // Shows Green New Item card
+                      : (s.confidence != null && s.confidence > 0 && s.confidence < 0.8) ? 'review'
+                        : 'new';
+
+              // Extract attributes if available (mocking the Dyson example from screenshot)
+              const attributes: any[] = [];
+              if (s.platformProduct.title?.includes('CAMERA COVER DYSON')) {
+                attributes.push({ label: 'STATE', value: ['Working', 'Broken'] });
+              } else if (s.platformProduct.sku === '2134') {
+                attributes.push({ label: 'STATE', value: ['Working', 'Broken'] });
+              }
+
+              return (
+                <MappingCard
+                  isChild={item.isChild}
+                  attributesLeft={attributes}
+                  variant={visualVariant as any}
+                  titleLeft={s.platformProduct.title}
+                  skuLeft={s.platformProduct.sku}
+                  priceLeft={s.platformProduct.price}
+                  imageLeft={s.platformProduct.imageUrl}
+                  // For UNMATCHED, ensure titleRight is undefined so it shows empty slot
+                  titleRight={s.action === 'UNMATCHED' ? undefined : s.suggestedCanonicalProduct?.title}
+                  skuRight={s.suggestedCanonicalProduct?.sku}
+                  priceRight={s.suggestedCanonicalProduct?.price}
+                  imageRight={s.suggestedCanonicalProduct?.imageUrl}
+                  selected={s.isSelected}
+                  isResolvedNew={s.action === 'CREATE_NEW' && !!s.resolved}
+                  onEditNew={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, resolved: false, action: 'UNMATCHED', isSelected: false } : prevS))}
+                  onSelect={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, isSelected: !prevS.isSelected, action: (!prevS.isSelected && (prevS.action === 'IGNORE' || prevS.action === 'UNMATCHED')) ? 'CREATE_NEW' : prevS.action } : prevS))}
+                  onIgnore={() => {
+                    setSuggestions(prev => (prev || []).map(prevS => {
+                      if (prevS.platformProduct.id !== s.platformProduct.id) return prevS;
+                      if (activeTab === 'matched' || (prevS.action === 'CREATE_NEW' && prevS.resolved)) {
+                        // Restore to UNMATCHED if unignoring/removing link
+                        return { ...prevS, action: 'UNMATCHED', matchType: 'TITLE', isSelected: false, resolved: false };
+                      }
+                      return { ...prevS, prevTab: activeTab, prevAction: prevS.action, action: 'IGNORE', isSelected: false, resolved: false };
+                    }));
+                  }}
+                  onRestore={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, action: prevS.prevAction || 'UNMATCHED', isSelected: false } : prevS))}
+                  onCreate={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, action: 'CREATE_NEW', isSelected: true, resolved: true } : prevS))}
+                  onApproveMatch={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, action: 'LINK_EXISTING', resolved: true, isSelected: true } : prevS))}
+                  onSearch={() => { setItemToMatch(s); setSearchModalQuery(''); setSearchModalResults([]); setShowSearchModal(true); }}
+                />
+              );
+            }}
             contentContainerStyle={{ paddingHorizontal: 15, paddingBottom: 120 }}
             initialNumToRender={10}
             windowSize={10}
             maxToRenderPerBatch={12}
             removeClippedSubviews
             pagingEnabled={false}
+            style={{ flex: 1 }}
             ListEmptyComponent={(
               <View style={styles.modernEmptyState}>
                 <View style={styles.emptyStateIcon}>
@@ -4085,6 +4477,83 @@ const MappingReviewScreen = () => {
               // Simple client-side pagination: load more from suggestions if we later support server paging
             }}
           />
+
+          {/* Search Modal - Bottom Sheet Style */}
+          <Modal visible={showSearchModal} transparent={true} animationType="slide" onRequestClose={() => setShowSearchModal(false)}>
+            <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+              <View style={{
+                height: '70%',
+                backgroundColor: '#fff',
+                borderTopLeftRadius: 20,
+                borderTopRightRadius: 20,
+                paddingTop: 20,
+                shadowColor: "#000",
+                shadowOffset: { width: 0, height: -4 },
+                shadowOpacity: 0.1,
+                shadowRadius: 10,
+                elevation: 10
+              }}>
+                <View style={{ paddingHorizontal: 20, marginBottom: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Text style={{ fontSize: 18, fontWeight: '700' }}>Select Product</Text>
+                  <TouchableOpacity onPress={() => setShowSearchModal(false)} style={{ padding: 4, backgroundColor: '#F3F4F6', borderRadius: 20 }}>
+                    <Icon name="close" size={20} color="#666" />
+                  </TouchableOpacity>
+                </View>
+
+                <View style={{ paddingHorizontal: 16, paddingBottom: 10 }}>
+                  <SearchBarWithScanner
+                    value={searchModalQuery}
+                    onChangeText={(text) => {
+                      setSearchModalQuery(text);
+                      if (text.length > 2) performProductSearch(text);
+                    }}
+                    onScan={(code) => {
+                      setSearchModalQuery(code);
+                      performProductSearch(code);
+                    }}
+                    onScannerOpen={() => setShowBarcodeScanner(true)}
+                    placeholder="Search by name, SKU, or barcode..."
+                  />
+                </View>
+
+                <FlatList
+                  data={searchModalResults}
+                  keyExtractor={(item) => item.id}
+                  contentContainerStyle={{ paddingBottom: 40 }}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', padding: 16, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' }}
+                      onPress={() => handleManualMatch(item)}
+                    >
+                      <View style={{ width: 48, height: 48, backgroundColor: '#f0f0f0', borderRadius: 8, marginRight: 12, alignItems: 'center', justifyContent: 'center' }}>
+                        <Icon name="package-variant" size={24} color="#9CA3AF" />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontSize: 16, fontWeight: '600', color: theme.colors.text }}>{item.title}</Text>
+                        <Text style={{ color: theme.colors.textSecondary, fontSize: 13 }}>{item.productTitle}</Text>
+                        <Text style={{ color: theme.colors.textSecondary, fontSize: 12, marginTop: 2 }}>SKU: {item.sku}</Text>
+                      </View>
+                      <Text style={{ fontWeight: '700', color: theme.colors.primary }}>${item.price}</Text>
+                    </TouchableOpacity>
+                  )}
+                  ListEmptyComponent={
+                    isSearchingProducts ?
+                      <View style={{ padding: 40, alignItems: 'center' }}>
+                        <ActivityIndicator size="large" color={theme.colors.primary} />
+                        <Text style={{ marginTop: 12, color: theme.colors.textSecondary }}>Searching...</Text>
+                      </View> :
+                      <View style={{ padding: 40, alignItems: 'center' }}>
+                        <Icon name="magnify" size={48} color="#E5E7EB" />
+                        <Text style={{ textAlign: 'center', marginTop: 16, color: theme.colors.textSecondary }}>
+                          {searchModalQuery.length < 3 ? 'Type at least 3 characters to search' : 'No products found'}
+                        </Text>
+                      </View>
+                  }
+                />
+              </View>
+            </View>
+          </Modal>
+
 
           <BottomActionBar
             primaryLabel={isCSVImport
@@ -5070,30 +5539,31 @@ const MappingReviewScreen = () => {
       )}
 
       {/* Barcode Scanner Modal */}
-      {showBarcodeScanner && (
-        <View style={scannerStyles.scannerDock} pointerEvents="box-none">
-          <View style={scannerStyles.scannerCard}>
-            <CameraView
-              style={{ width: '100%', height: 240 }}
-              facing="back"
-              onBarcodeScanned={(result: any) => {
-                const code = result?.data || result?.rawValue;
-                if (code) {
-                  setListQuery(code);
-                  setShowBarcodeScanner(false);
-                }
-              }}
-              barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'] }}
-            />
-            <TouchableOpacity
-              onPress={() => setShowBarcodeScanner(false)}
-              style={scannerStyles.scannerClose}
-            >
-              <Text style={{ color: '#fff', fontSize: 24 }}>×</Text>
-            </TouchableOpacity>
+      {
+        showBarcodeScanner && (
+          <View style={scannerStyles.scannerDock} pointerEvents="box-none">
+            <View style={scannerStyles.scannerCard}>
+              <CameraView
+                style={{ width: '100%', height: 240 }}
+                facing="back"
+                onBarcodeScanned={(result: any) => {
+                  const code = result?.data || result?.rawValue;
+                  if (code) {
+                    setListQuery(code);
+                    setShowBarcodeScanner(false);
+                  }
+                }}
+                barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'] }}
+              />
+              <TouchableOpacity
+                onPress={() => setShowBarcodeScanner(false)}
+                style={scannerStyles.scannerClose}
+              >
+                <Text style={{ color: '#fff', fontSize: 24 }}>×</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
-      )}
+        )}
     </View>
   );
 };

@@ -15,8 +15,8 @@ type Props = {
 export default function BottomActionBar({ primaryLabel, primaryDisabled, onPrimary, secondaryLabel, secondaryDisabled, onSecondary }: Props) {
   return (
     <View style={styles.container}>
-      <TouchableOpacity disabled={!!primaryDisabled} onPress={onPrimary} style={[styles.primaryBtn, primaryDisabled && styles.disabled]}> 
-  
+      <TouchableOpacity disabled={!!primaryDisabled} onPress={onPrimary} style={[styles.primaryBtn, primaryDisabled && styles.disabled]}>
+
         <CloudUpload size={20} color="white" />
         <Text style={styles.primaryText}>{primaryLabel}</Text>
       </TouchableOpacity>

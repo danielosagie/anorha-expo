@@ -1,6 +1,6 @@
 export default {
   name: "Anorha",
-  slug: "sssync",
+  slug: "sssync", //DONT CHANGE AT ALL EVER - Need for production builds
   owner: "anorha",
   version: "1.0.2",
   scheme: "anorhaapp",

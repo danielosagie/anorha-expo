@@ -14,18 +14,20 @@ export type MappingVariant = 'new' | 'matched' | 'review' | 'ignored';
 
 export type MappingCardProps = {
   variant: MappingVariant;
+  isChild?: boolean;
   titleLeft: string;
   skuLeft?: string;
   priceLeft?: number;
   imageLeft?: string | null;
+  variantCount?: number;
+  priceRange?: string;
 
   titleRight?: string;
   skuRight?: string;
   priceRight?: number;
   imageRight?: string | null;
 
-  // NEW: Direction indicator for bidirectional sync
-  direction?: 'platform_to_anorha' | 'anorha_to_platform' | 'bidirectional';
+  attributesLeft?: { label: string, value: string | string[] }[];
 
   onSelect?: () => void;
   onIgnore?: () => void;
@@ -37,6 +39,7 @@ export type MappingCardProps = {
   onApproveMatch?: () => void;
   isResolvedNew?: boolean;
   onEditNew?: () => void;
+  onPress?: () => void;
 };
 
 const MappingCard: React.FC<MappingCardProps> = ({
@@ -49,7 +52,6 @@ const MappingCard: React.FC<MappingCardProps> = ({
   skuRight,
   priceRight,
   imageRight,
-  direction,
   onSelect,
   onIgnore,
   onRestore,
@@ -60,6 +62,11 @@ const MappingCard: React.FC<MappingCardProps> = ({
   onApproveMatch,
   isResolvedNew = false,
   onEditNew,
+  isChild = false,
+  attributesLeft,
+  variantCount,
+  priceRange,
+  onPress,
 }) => {
   const actionBadge = useMemo(() => {
     if (variant === 'new') return <Badge variant="success">New</Badge>;
@@ -67,27 +74,20 @@ const MappingCard: React.FC<MappingCardProps> = ({
     return <Badge variant="warning">Review</Badge>;
   }, [variant]);
 
-  // Direction badge for bidirectional sync
-  const directionBadge = useMemo(() => {
-    if (direction === 'anorha_to_platform') {
-      return (
-        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#E0F2FE', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, marginBottom: 8 }}>
-          <RNImage source={brandImage} style={{ width: 16, height: 16, borderRadius: 4, marginRight: 4 }} />
-          <Icon name="arrow-right" size={12} color="#0284C7" />
-          <Icon name="store" size={16} color="#0284C7" style={{ marginLeft: 4 }} />
-          <Text style={{ color: '#0284C7', fontSize: 11, fontWeight: '600', marginLeft: 4 }}>Push to Platform</Text>
-        </View>
-      );
-    }
-    return null;
-  }, [direction]);
 
   return (
-    <Animated.View entering={FadeInUp.duration(tokens.durations.fast)} layout={Layout.springify()}>
-      <View style={[styles.card, selected ? styles.cardSelected : null]} accessibilityRole={"button" as AccessibilityRole}>
+    <Animated.View entering={FadeInUp.duration(tokens.durations.fast)} layout={Layout.springify()} style={isChild ? { marginLeft: 20 } : null}>
+      {isChild && (
+        <View style={styles.nestingConnector} />
+      )}
+      <TouchableOpacity
+        activeOpacity={onPress ? 0.7 : 1}
+        onPress={onPress}
+        style={[styles.card, selected ? styles.cardSelected : null]}
+        accessibilityRole={"button" as AccessibilityRole}
+      >
 
-        {/* Direction indicator for bidirectional sync */}
-        {directionBadge}
+        {/* Direction indicator removed */}
 
         {/* Content */}
         <View style={styles.row}>
@@ -96,13 +96,39 @@ const MappingCard: React.FC<MappingCardProps> = ({
               <Image source={{ uri: imageLeft }} style={styles.image} />
             ) : (
               <View style={styles.imagePlaceholder}>
-                <Icon name="cube-outline" size={22} color="#9CA3AF" />
+                <Icon name={variantCount && variantCount > 1 ? "layers-outline" : "cube-outline"} size={22} color="#9CA3AF" />
               </View>
             )}
             <View style={styles.details}>
               <Text style={styles.title} numberOfLines={2}>{titleLeft}</Text>
-              {!!skuLeft && <Text style={styles.subtle}>SKU: {skuLeft}</Text>}
-              {priceLeft != null && <Text style={styles.price}>${priceLeft.toFixed(2)}</Text>}
+              {variantCount != null && variantCount > 1 ? (
+                <View style={styles.groupInfo}>
+                  <Badge variant="outline">{variantCount} Variants</Badge>
+                  {priceRange ? <Text style={styles.price}>{priceRange}</Text> : null}
+                </View>
+              ) : (
+                <>
+                  {!!skuLeft && <Text style={styles.subtle}>SKU: {skuLeft}</Text>}
+                  {priceLeft != null && <Text style={styles.price}>${priceLeft.toFixed(2)}</Text>}
+                </>
+              )}
+
+              {attributesLeft && attributesLeft.length > 0 && (
+                <View style={styles.attributesContainer}>
+                  {attributesLeft.map((attr, idx) => (
+                    <View key={idx} style={styles.attributeGroup}>
+                      <Text style={styles.attributeLabel}>{attr.label}</Text>
+                      <View style={styles.pillRow}>
+                        {(Array.isArray(attr.value) ? attr.value : [attr.value]).map((val, vIdx) => (
+                          <Badge key={vIdx} variant={val === 'Working' ? 'success' : val === 'Broken' ? 'warning' : 'default'}>
+                            {val}
+                          </Badge>
+                        ))}
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
             </View>
           </View>
 
@@ -132,10 +158,12 @@ const MappingCard: React.FC<MappingCardProps> = ({
                 </View>
               </TouchableOpacity>
             ) : (
-              <TouchableOpacity onPress={onSearch} style={styles.emptyRight} accessibilityLabel="Link product">
-                <Icon name={variant === 'review' ? 'help-circle-outline' : 'plus-circle-outline'} size={24} color={variant === 'review' ? '#D97706' : '#6B7280'} />
+              <TouchableOpacity onPress={onSearch} style={[styles.emptyRight, variant === 'review' ? styles.emptyRightReview : null]} accessibilityLabel="Link product">
+                <View style={styles.emptyRightIconContainer}>
+                  <Icon name={variant === 'review' ? 'magnify' : 'plus-circle-outline'} size={22} color={variant === 'review' ? '#D97706' : '#6B7280'} />
+                </View>
                 <Text style={[styles.emptyText, variant === 'review' ? styles.warningText : null]}>
-                  {variant === 'review' ? 'Needs Review' : 'Link Product'}
+                  {variant === 'review' ? 'Find Match' : 'Link Product'}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -234,8 +262,7 @@ const MappingCard: React.FC<MappingCardProps> = ({
         {/*
         <TouchableOpacity style={[styles.actionBtn, styles.confirm]} onPress={onLink} accessibilityLabel="Confirm link"><Icon name="check" size={18} color="#fff" /></TouchableOpacity>
         */}
-
-      </View>
+      </TouchableOpacity>
     </Animated.View>
   );
 };
@@ -253,7 +280,9 @@ const styles = StyleSheet.create({
   },
   cardSelected: {
     borderWidth: 1,
-    borderColor: '#D9D9D9',
+    borderColor: tokens.spacing.md ? '#D9D9D9' : '#D9D9D9', // Keep existing fallback
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
   },
   topRow: {
     flexDirection: 'row',
@@ -446,6 +475,57 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700',
     marginLeft: 8,
+  },
+  nestingConnector: {
+    position: 'absolute',
+    left: -12,
+    top: -24,
+    bottom: '50%',
+    width: 2,
+    backgroundColor: '#E5E7EB',
+    borderBottomLeftRadius: 8,
+    borderLeftWidth: 0,
+    borderBottomWidth: 2,
+    borderColor: '#E5E7EB',
+  },
+  emptyRightReview: {
+    borderColor: '#FCD34D',
+    backgroundColor: '#FFFBEB',
+  },
+  emptyRightIconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+    ...tokens.elevation(1),
+  },
+  attributesContainer: {
+    marginTop: 8,
+    gap: 6,
+  },
+  attributeGroup: {
+    marginBottom: 4,
+  },
+  attributeLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#9CA3AF',
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  pillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+  },
+  groupInfo: {
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 4,
   },
 });
 

@@ -18,10 +18,13 @@ const BG_COLOR = '#FFFCF5';
 const CARD_BG = '#FFFFFF';
 
 const PendingOrgInvitesScreen = ({ navigation }: { navigation: any }) => {
-    const { userInvitations, isLoaded, setActive } = useOrganizationList({
+    const { userInvitations, userMemberships, isLoaded, setActive } = useOrganizationList({
         userInvitations: {
             infinite: true,
             keepPreviousData: true,
+        },
+        userMemberships: {
+            infinite: true,
         },
     });
 
@@ -89,6 +92,7 @@ const PendingOrgInvitesScreen = ({ navigation }: { navigation: any }) => {
     }
 
     const invitations = userInvitations?.data || [];
+    const hasOrgs = (userMemberships?.data?.length || 0) > 0;
 
     if (invitations.length === 0) {
         return (
@@ -100,12 +104,33 @@ const PendingOrgInvitesScreen = ({ navigation }: { navigation: any }) => {
                     <Text style={styles.emptyTitle}>No pending invites</Text>
                     <Text style={styles.emptySubtitle}>You don't have any organization invitations at the moment.</Text>
 
-                    <TouchableOpacity
-                        style={styles.primaryButton}
-                        onPress={() => navigation.navigate('CreateAccountScreen')}
-                    >
-                        <Text style={styles.primaryButtonText}>Create your own Org</Text>
-                    </TouchableOpacity>
+                    {hasOrgs ? (
+                        <TouchableOpacity
+                            style={styles.primaryButton}
+                            onPress={() => navigation.reset({
+                                index: 0,
+                                routes: [{ name: 'TabNavigator' }],
+                            })}
+                        >
+                            <Text style={styles.primaryButtonText}>Go to Dashboard</Text>
+                        </TouchableOpacity>
+                    ) : (
+                        <TouchableOpacity
+                            style={styles.primaryButton}
+                            onPress={() => navigation.navigate('CreateAccountScreen')}
+                        >
+                            <Text style={styles.primaryButtonText}>Create your own Org</Text>
+                        </TouchableOpacity>
+                    )}
+
+                    {hasOrgs && (
+                        <TouchableOpacity
+                            style={[styles.textActionButton, { marginTop: 16 }]}
+                            onPress={() => navigation.navigate('CreateAccountScreen')}
+                        >
+                            <Text style={styles.textActionText}>Create a new organization</Text>
+                        </TouchableOpacity>
+                    )}
                 </View>
             </SafeAreaView>
         );

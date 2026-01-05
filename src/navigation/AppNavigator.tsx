@@ -253,7 +253,7 @@ export type AppStackParamList = {
 
 type RootStackParamList = {
   AuthStack: { screen?: keyof AuthStackParamList };
-  AppStack: { screen?: keyof AppStackParamList, params?: { initialScreenName: 'CreateAccountScreen' | 'TabNavigator' | 'PendingOrgInvitesScreen' } }; // Allow passing initial screen for AppStack
+  AppStack: { screen?: keyof AppStackParamList, params?: { initialScreenName: 'CreateAccountScreen' | 'TabNavigator' } }; // Allow passing initial screen for AppStack
   // Add other root-level screens/stacks
   // PhoneAuthScreen: { phoneNumber: string } | undefined; // Removed
 };
@@ -389,7 +389,7 @@ const AuthStack = ({ isFirstLaunch, devForceOnboarding }: { isFirstLaunch: boole
   </AuthStackNav.Navigator>
 );
 
-const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScreen' | 'TabNavigator' | 'PendingOrgInvitesScreen' }) => (
+const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScreen' | 'TabNavigator' }) => (
   <AppStackNav.Navigator
     screenOptions={{ headerShown: false }}
     initialRouteName={initialScreenName}
@@ -426,7 +426,7 @@ const AppNavigator = () => {
   const [isFirstLaunch, setIsFirstLaunch] = useState<boolean | null>(null);
   const [appIsReady, setAppIsReady] = useState(false);
   const [initialStackName, setInitialStackName] = useState<'AuthStack' | 'AppStack' | null>(null);
-  const [initialAppScreen, setInitialAppScreen] = useState<'CreateAccountScreen' | 'TabNavigator' | 'PendingOrgInvitesScreen' | null>(null);
+  const [initialAppScreen, setInitialAppScreen] = useState<'CreateAccountScreen' | 'TabNavigator' | null>(null);
 
   // Dev tools to test onboarding flow
   const [devForceOnboarding] = useState(true); // Set this to true only when testing onboarding - FTUX
@@ -570,7 +570,10 @@ const AppNavigator = () => {
   }, [devExpireSession]);
 
   const checkOnboardingAndNavigate = async () => {
-    let destination: 'CreateAccountScreen' | 'TabNavigator' | 'PendingOrgInvitesScreen' | null = null;
+    // SIMPLIFIED: For signed-in users, always go to TabNavigator
+    // The OrgContext will handle org detection and can redirect to CreateAccountScreen if needed
+    // This avoids timing issues with RLS policies and JWT setup
+
     try {
       const { data: { user }, error: getUserError } = await supabase.auth.getUser();
 
@@ -580,42 +583,16 @@ const AppNavigator = () => {
         return;
       }
 
-      const { data: userData, error: fetchError } = await supabase
-        .from('Users')
-        .select('isOnboardingComplete')
-        .eq('Id', user.id)
-        .maybeSingle();
+      console.log(`[Onboarding Check] User ID: ${user.id} - Going to TabNavigator`);
 
-      // ---> ADDED Detailed Logging <---
-      console.log(`[Onboarding Check] User ID: ${user.id}`);
-      console.log(`[Onboarding Check] Fetched User Data:`, JSON.stringify(userData, null, 2));
-      console.log(`[Onboarding Check] Fetch Error:`, fetchError);
-      // ---> End Logging <---
-
-      if (fetchError) {
-        console.error("[Onboarding Check] Error fetching onboarding status:", fetchError);
-        destination = 'TabNavigator'; // Default to main app on error
-      } else {
-        // Handle null userData explicitly for clarity
-        const onboardingComplete = userData?.isOnboardingComplete ?? false; // Treat null userData as incomplete
-        console.log(`[Onboarding Check] Determined Onboarding Status for ${user.email}: ${onboardingComplete}`);
-
-        if (onboardingComplete) {
-          destination = 'TabNavigator';
-        } else {
-          // User hasn't completed onboarding - check if they have pending org invites
-          // The PendingOrgInvitesScreen will check for Clerk invitations
-          // and redirect to CreateAccountScreen if none found
-          destination = 'PendingOrgInvitesScreen';
-        }
-      }
+      // Always go to TabNavigator - OrgContext will handle org detection
+      setInitialAppScreen('TabNavigator');
 
     } catch (error) {
       console.error("Error during onboarding check:", error);
-      authContext.signOut();
-      return;
+      // On error, still try to go to dashboard
+      setInitialAppScreen('TabNavigator');
     } finally {
-      setInitialAppScreen(destination);
       setIsLoading(false);
     }
   };

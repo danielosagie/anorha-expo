@@ -480,20 +480,32 @@ const InventoryOrdersScreen = observer(() => {
         if (!variant) return false;
 
         // Check if base variant has inventory at selected locations
-        const baseHasInventory = Object.values(levels).some((level: InventoryLevel) =>
-          level.ProductVariantId === variantId &&
-          selectedLocationIds.includes(level.PlatformLocationId || 'unknown')
-        );
+        const baseHasInventory = Object.values(levels).some((level: InventoryLevel) => {
+          const locationId = level.PlatformLocationId || 'unknown';
+          const poolId = level.PoolId;
+
+          // Match if location ID is selected OR if Pool ID is selected (for partner pools)
+          const isLocationMatch = selectedLocationIds.includes(locationId);
+          const isPoolMatch = poolId && selectedLocationIds.includes(poolId);
+
+          return (level.ProductVariantId === variantId) && (isLocationMatch || isPoolMatch);
+        });
 
         if (baseHasInventory) return true;
 
         // Also check option variants for inventory
         const optionVariants = optionVariantsByProduct.get(variant.ProductId) || [];
         const optionHasInventory = optionVariants.some(ov =>
-          Object.values(levels).some((level: InventoryLevel) =>
-            level.ProductVariantId === ov.id &&
-            selectedLocationIds.includes(level.PlatformLocationId || 'unknown')
-          )
+          Object.values(levels).some((level: InventoryLevel) => {
+            const locationId = level.PlatformLocationId || 'unknown';
+            const poolId = level.PoolId;
+
+            // Match if location ID is selected OR if Pool ID is selected
+            const isLocationMatch = selectedLocationIds.includes(locationId);
+            const isPoolMatch = poolId && selectedLocationIds.includes(poolId);
+
+            return (level.ProductVariantId === ov.id) && (isLocationMatch || isPoolMatch);
+          })
         );
 
         return optionHasInventory;

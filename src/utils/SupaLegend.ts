@@ -203,11 +203,12 @@ export async function initializeLegendState(
         customSynced({
             collection: 'InventoryLevels',
             // Only fetch essential columns for inventory tracking
-            select: (from: any) => from.select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt'),
+            // IMPORTANT: PoolId and OrgId are needed for partner-shared inventory
+            select: (from: any) => from.select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt'),
             actions: ['read', 'create', 'update', 'delete'],
             realtime: true, // Live updates essential for inventory
             persist: {
-                name: `inventoryLevels_user_${currentUserId}_v5`, // Bumped for column change
+                name: `inventoryLevels_user_${currentUserId}_v6`, // Bumped to include PoolId
                 retrySync: true,
             },
         })
@@ -395,6 +396,8 @@ export interface InventoryLevel {
     ProductVariantId: string; // uuid
     PlatformConnectionId: string; // uuid
     PlatformLocationId?: string | null;
+    PoolId?: string | null; // Added for shared inventory
+    OrgId?: string | null; // Added for org-scoped inventory
     Quantity: number; // default 0
     Price?: number | null; // decimal
     CompareAtPrice?: number | null; // decimal

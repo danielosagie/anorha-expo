@@ -1633,9 +1633,20 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
 
               if (activeTab === 'all') {
                 // All tab: show all locations from all platforms
-                allLocs = Object.entries(platformLocations || {}).flatMap(([pk, locs]) =>
+                // CRITICAL FIX: Deduplicate by location id to prevent duplicate React keys
+                const allLocsRaw = Object.entries(platformLocations || {}).flatMap(([pk, locs]) =>
                   (locs || []).map((l: any) => ({ ...l, platformKey: pk }))
                 );
+                // Filter to unique location IDs - keep first occurrence
+                const seenIds = new Set<string>();
+                allLocs = allLocsRaw.filter(loc => {
+                  if (seenIds.has(loc.id)) {
+                    console.warn(`[ListingEditorForm] Filtered duplicate location: ${loc.id} (${loc.name})`);
+                    return false;
+                  }
+                  seenIds.add(loc.id);
+                  return true;
+                });
               } else {
                 // Platform tab: filter to only this platform's locations
                 const platformKey = activeTab.toLowerCase();

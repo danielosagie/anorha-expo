@@ -68,6 +68,7 @@ interface LocationsManagerV2Props {
   }>;
   disableScroll?: boolean;
   onPressConnect?: () => void;
+  refreshTrigger?: number;
 }
 
 interface LocationPool {
@@ -75,6 +76,7 @@ interface LocationPool {
   name: string;
   description?: string;
   locationIds?: string[];
+  isPartnerPool?: boolean;
 }
 
 interface AvailablePlatformGroup {
@@ -168,7 +170,9 @@ const PoolAccordionItem = ({
   }, [pool.locationIds, locationMetadataMap]);
 
   const locationCount = validLocationIds.length;
-  const isEmpty = locationCount === 0;
+  // Partner pools are never "empty" in the sense that they are valid containers for shared inventory
+  // even if they have no physical locations attached
+  const isEmpty = locationCount === 0 && !pool.isPartnerPool;
 
   // Deduplicate platform types for the closed state icons
   const platformTypes = useMemo(() => {
@@ -177,8 +181,10 @@ const PoolAccordionItem = ({
       const meta = locationMetadataMap.get(id);
       if (meta?.platformType) types.add(meta.platformType);
     });
+    // Add partner icon if it's a partner pool
+    if (pool.isPartnerPool) types.add('partner');
     return Array.from(types);
-  }, [validLocationIds, locationMetadataMap]);
+  }, [validLocationIds, locationMetadataMap, pool.isPartnerPool]);
 
   return (
     <View style={[styles.accordionContainer, isEmpty && { opacity: 0.8 }]}>
@@ -220,17 +226,26 @@ const PoolAccordionItem = ({
 
       {isExpanded && !isEmpty && (
         <View style={styles.accordionContent}>
-          {validLocationIds.map(locId => {
-            const meta = locationMetadataMap.get(locId);
-            const Logo = meta?.platformType ? PLATFORM_LOGOS[meta.platformType as keyof typeof PLATFORM_LOGOS] : null;
+          {pool.isPartnerPool && validLocationIds.length === 0 ? (
+            <View style={styles.accordionItemRow}>
+              <Text style={[styles.accordionItemText, { fontStyle: 'italic', color: '#666' }]}>
+                Shared Inventory Pool
+              </Text>
+              <Icon name="cloud-sync" size={16} color="#666" />
+            </View>
+          ) : (
+            validLocationIds.map(locId => {
+              const meta = locationMetadataMap.get(locId);
+              const Logo = meta?.platformType ? PLATFORM_LOGOS[meta.platformType as keyof typeof PLATFORM_LOGOS] : null;
 
-            return (
-              <View key={locId} style={styles.accordionItemRow}>
-                <Text style={styles.accordionItemText}>{meta?.locationName || locId}</Text>
-                {Logo && <Logo width={16} height={16} />}
-              </View>
-            );
-          })}
+              return (
+                <View key={locId} style={styles.accordionItemRow}>
+                  <Text style={styles.accordionItemText}>{meta?.locationName || locId}</Text>
+                  {Logo && <Logo width={16} height={16} />}
+                </View>
+              );
+            })
+          )}
         </View>
       )}
     </View>
@@ -331,7 +346,8 @@ const PartnerWelcomeOverlay: React.FC<{
   );
 };
 
-const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platformConnections, disableScroll = false, onPressConnect }) => {
+const LocationsManagerV2: React.FC<LocationsManagerV2Props> = (props) => {
+  const { orgId, platformConnections, disableScroll = false, onPressConnect } = props;
   const theme = useTheme();
   const [showWelcomeOverlay, setShowWelcomeOverlay] = useState(false);
   const [partnerNameForOverlay, setPartnerNameForOverlay] = useState('');
@@ -615,6 +631,13 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
     loadList();
   }, [loadList]);
 
+  // Trigger load on refreshTrigger change
+  useEffect(() => {
+    if (props.refreshTrigger !== undefined) {
+      loadList();
+    }
+  }, [props.refreshTrigger, loadList]);
+
   const sendPartnerInvite = async () => {
     if (!inviteEmail || !invitePoolId || !resolvedOrgId) {
       Alert.alert('Error', 'Please fill in all fields');
@@ -797,14 +820,24 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
         const currentPool = pools.find((p) => p.id === poolId);
         if (!currentPool) continue;
 
-        // Only save if something changed
-        if (draft.name !== currentPool.name || JSON.stringify(draft.locationIds) !== JSON.stringify(currentPool.locationIds)) {
+        // Filter out virtual location IDs (they start with "virtual-" and are only for local display)
+        // These are used for partner pools and should never be sent to the backend
+        const realLocationIds = (draft.locationIds || []).filter(
+          id => !id.startsWith('virtual-')
+        );
+
+        // Only save if something changed (compare with filtered IDs)
+        const currentRealLocationIds = (currentPool.locationIds || []).filter(
+          id => !id.startsWith('virtual-')
+        );
+
+        if (draft.name !== currentPool.name || JSON.stringify(realLocationIds) !== JSON.stringify(currentRealLocationIds)) {
           const res = await fetch(`${API_BASE_URL}/api/pools/${poolId}`, {
             method: 'PATCH',
             headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
               name: draft.name,
-              location_ids: draft.locationIds,
+              location_ids: realLocationIds,
             }),
           });
           if (!res.ok) {
@@ -1118,7 +1151,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
 
   // Render invite partner screen
   const renderInvitePartnerView = () => (
-    <View style={styles.card}>
+    <Card style={styles.card}>
       <View style={styles.headerRow}>
         <TouchableOpacity onPress={() => setViewMode('default')} style={styles.backBtn}>
           <Icon name="arrow-left" size={24} color={theme.colors.text} />
@@ -1211,7 +1244,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
           )}
         </TouchableOpacity>
       </View>
-    </View>
+    </Card>
 
   );
 
@@ -1222,7 +1255,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
     const hasAnyData = hasPools || hasLocations;
 
     return (
-      <View style={styles.card}>
+      <Card style={styles.card}>
         <View style={styles.headerRow}>
           <Text style={styles.headerTitle}>Locations/Pools</Text>
           {activeTab === 'locations' && (
@@ -1313,7 +1346,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
             else Alert.alert('Connection', 'Please go to Settings > Connections to connect a platform.');
           }}
         />
-      </View>
+      </Card>
     );
   };
 
@@ -1335,9 +1368,10 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
   }, [draftPools]);
 
   // Manage pools view: flattened list for cross-pool dragging
+  // Rendered inline relative to the parent container
   function renderManagePoolsView() {
     return (
-      <View style={styles.card}>
+      <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
         <View style={styles.headerRow}>
           <Text style={styles.headerTitle}>Managing Locations</Text>
           <TouchableOpacity onPress={() => setViewMode('default')}>
@@ -1345,7 +1379,6 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
           </TouchableOpacity>
         </View>
 
-        {/* Managing Locations content */}
         {/* Managing Locations content */}
         <View style={[styles.manageCard, { flex: 1 }]}>
           {loadingManage ? (
@@ -1404,6 +1437,11 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                     const metaFromDraft = oldPool?.locationMetadata?.get(locId);
                     const metaFromAvailable = availableLocationById.get(locId);
                     const meta = metaFromDraft || metaFromAvailable;
+
+                    // Skip virtual locations in the manage view (they are for display only)
+                    if (locId.startsWith('virtual-')) {
+                      return null;
+                    }
 
                     const connName = meta?.connectionName || 'Unknown connection';
                     const locName = meta?.locationName || locId;
@@ -1606,7 +1644,11 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
                         const oldPool = draftPools[item.poolId];
                         const meta = oldPool?.locationMetadata?.get(item.id) || availableLocationById.get(item.id);
                         if (meta) {
-                          newDrafts[currentPoolId].locationMetadata!.set(item.id, meta);
+                          newDrafts[currentPoolId].locationMetadata!.set(item.id, {
+                            ...meta,
+                            connectionName: meta.connectionName || 'Unknown',
+                            platformType: meta.platformType || '',
+                          });
                         }
                       }
                     }
@@ -1623,6 +1665,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
           )}
         </View>
       </View>
+
     );
   }
 
@@ -1632,7 +1675,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
   // Create location view - now with tabs to switch to pool
   function renderCreateLocationView() {
     return (
-      <View style={styles.card}>
+      <Card style={styles.card}>
         <View style={styles.headerRow}>
           <Text style={styles.headerTitle}>
             {manageTab === 'location' ? 'Create Location' : 'Create Location Pool'}
@@ -2188,7 +2231,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({ orgId, platform
             </>
           )}
         </View>
-      </View>
+      </Card>
     );
   }
 
@@ -2318,6 +2361,11 @@ export default LocationsManagerV2;
 
 const styles = StyleSheet.create({
   root: {},
+  modalContainer: {
+    flex: 1,
+    padding: 16,
+    paddingTop: 20,
+  },
   card: {
   },
   headerRow: {

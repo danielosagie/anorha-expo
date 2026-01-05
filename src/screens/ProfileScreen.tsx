@@ -38,6 +38,8 @@ import BottomNav from '../components/BottomNav';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { useOrg } from '../context/OrgContext';
 import CreateLocationPoolModal from '../components/CreateLocationPoolModal';
+import { useSyncProgress } from '../hooks/useSyncProgress';
+import * as Progress from 'react-native-progress';
 
 import LocationsManagerV2 from '../components/LocationsManagerV2';
 
@@ -287,27 +289,7 @@ const ProfileScreen = () => {
   const [refreshTrigger, setRefreshTrigger] = useState(routeRefreshParam);
   const isFocused = useIsFocused();
 
-  // Helper function for smart date formatting
-  const formatSyncDate = (dateString: string): string => {
-    const syncDate = new Date(dateString);
-    const now = new Date();
-    const diffMs = now.getTime() - syncDate.getTime();
-    const diffHours = diffMs / (1000 * 60 * 60);
 
-    const isToday = syncDate.toDateString() === now.toDateString();
-    const isThisYear = syncDate.getFullYear() === now.getFullYear();
-
-    if (isToday) {
-      // Show time only (e.g., "2:31 PM")
-      return syncDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    } else if (isThisYear) {
-      // Show date without year (e.g., "Dec 18")
-      return syncDate.toLocaleDateString([], { month: 'short', day: 'numeric' });
-    } else {
-      // Show full date with year (e.g., "Dec 18, 2024")
-      return syncDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
-    }
-  };
 
   useEffect(() => {
     if (route.params?.refresh) {
@@ -1097,6 +1079,7 @@ const ProfileScreen = () => {
       connectionId,
       platformName,
       isScanning: true, // Flag to indicate scan is in progress
+      scanStartTime: Date.now(), // NEW: Timestamp to prevent race condition
     });
 
     // Start the scan in the background (non-blocking)
@@ -1770,218 +1753,25 @@ const ProfileScreen = () => {
                   // Now map the filtered array
                   return filteredConnections.map((connection) => {
                     const platformConfig = AVAILABLE_PLATFORMS.find(p => p.key === connection.PlatformType);
-                    if (!platformConfig) {
-                      // console.log(`[ProfileScreen MAP DEBUG] Skipping connection ID: ${connection.Id} - No platform config found for type: ${connection.PlatformType}`);
-                      return null;
-                    }
-
-                    // console.log(`[ProfileScreen MAP DEBUG] Rendering item for connection ID: ${connection.Id}, Name: ${connection.DisplayName || platformConfig.name}`);
-
-                    // --- NEW: Parse Shopify Display Name ---
-                    let displayShopName = connection.DisplayName || platformConfig.name;
-                    if (connection.PlatformType === 'shopify' && connection.DisplayName.includes('.myshopify.com')) {
-                      displayShopName = connection.DisplayName.replace('.myshopify.com', '');
-                    }
-                    // --- END Parsing ---
-
-                    // Render connection item
-                    const PlatformIconComponent = getPlatformIcon(platformConfig.key);
+                    if (!platformConfig) return null;
 
                     return (
-                      <View key={connection.Id} style={styles.integrationItem}>
-
-
-                        {/* Left column: icon + name + status/timestamp */}
-                        <View style={styles.integrationLeft}>
-                          {/* Platform Icon (SVG) */}
-                          <View style={styles.platformIconContainer}>
-                            {PlatformIconComponent ? (
-                              <PlatformIconComponent width={32} height={32} />
-                            ) : (
-                              <Icon name="store" size={32} color="#555" />
-                            )}
-                          </View>
-
-                          <View style={styles.integrationMain}>
-                            {/* Display Name */}
-                            <Text
-                              style={styles.integrationName}
-                              numberOfLines={1}
-                              ellipsizeMode="tail"
-                            >
-                              {displayShopName}
-                            </Text>
-
-                            {/* Status + Last Synced under name (non-edit mode only) */}
-                            {!isEditMode && (
-                              <View style={styles.statusContainer}>
-                                {(() => {
-                                  const statusInfo = getStatusDisplay(connection.Status);
-                                  return (
-                                    <View style={styles.statusRow}>
-                                      {statusInfo.icon === 'loading' ? (
-                                        <ActivityIndicator
-                                          size="small"
-                                          color={statusInfo.color}
-                                          style={styles.statusIcon}
-                                        />
-                                      ) : (
-                                        <Icon
-                                          name={statusInfo.icon}
-                                          size={16}
-                                          color={statusInfo.color}
-                                          style={styles.statusIcon}
-                                        />
-                                      )}
-                                      <Text
-                                        style={[
-                                          styles.statusText,
-                                          { color: statusInfo.color },
-                                        ]}
-                                      >
-                                        {statusInfo.label}
-                                      </Text>
-                                    </View>
-                                  );
-                                })()}
-
-                                {connection.LastSyncSuccessAt && (
-                                  <Text style={styles.lastSyncText}>
-                                    Last synced: {formatSyncDate(connection.LastSyncSuccessAt)}
-                                  </Text>
-                                )}
-                              </View>
-                            )}
-                          </View>
-                        </View>
-
-                        {/* Right column: action buttons (non-edit mode only) */}
-                        {!isEditMode && connection && (
-
-                          <View style={styles.connectionActions}>
-                            {/* Pending: Start Scan */}
-                            {connection.Status === CONNECTION_STATUS.PENDING && (
-                              <TouchableOpacity
-                                style={[styles.actionButton, { backgroundColor: theme.colors.primary + '20' }]}
-                                onPress={() => startPlatformScan(connection.Id, platformConfig.name)}
-                              >
-                                <Icon name="play-circle" size={18} color={theme.colors.primary} />
-                                <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Start Scan</Text>
-                              </TouchableOpacity>
-                            )}
-
-                            {/* Review: Review products */}
-                            {connection.Status === CONNECTION_STATUS.REVIEW && (
-                              <TouchableOpacity
-                                style={[styles.actionButton, { backgroundColor: '#FF9500' + '20' }]}
-                                onPress={() => handleReviewAndSync(connection.Id, platformConfig.name)}
-                              >
-                                <Icon name="eye" size={18} color="#FF9500" />
-                                <Text style={[styles.actionButtonText, { color: '#FF9500' }]}>Review Products</Text>
-                              </TouchableOpacity>
-                            )}
-
-                            {connection.Status === CONNECTION_STATUS.READY_TO_SYNC && (
-                              <TouchableOpacity
-                                style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
-                                onPress={() => navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name })}
-                              >
-                                <Icon name="check-circle" size={18} color={theme.colors.success} />
-                                <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Ready to Sync</Text>
-                              </TouchableOpacity>
-                            )}
-
-                            {(connection.Status === CONNECTION_STATUS.INACTIVE) && (
-                              <TouchableOpacity
-                                style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
-                                onPress={() => startPlatformScan(connection.Id, platformConfig.name)}
-                              >
-                                <Icon name="play-circle" size={18} color={theme.colors.success} />
-                                <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Activate</Text>
-                              </TouchableOpacity>
-                            )}
-
-                            {/* For error state, show context-aware action */}
-                            {connection.Status === CONNECTION_STATUS.ERROR && (() => {
-                              const recommended = getRecommendedAction(connection, platformConfig.key);
-
-                              const handleAction = () => {
-                                switch (recommended.action) {
-                                  case 'reconnect':
-                                    handleReconnectPlatform(connection.Id, platformConfig.key, platformConfig.name);
-                                    break;
-                                  case 'rescan':
-                                    startPlatformScan(connection.Id, platformConfig.name, true);
-                                    break;
-                                  case 'fix_resume':
-                                    fixAndResumeConnection(connection.Id, platformConfig.name);
-                                    break;
-                                  case 'manage':
-                                    navigation.navigate('MappingReview', {
-                                      connectionId: connection.Id,
-                                      platformName: platformConfig.name,
-                                    });
-                                    break;
-                                }
-                              };
-
-                              return (
-                                <TouchableOpacity
-                                  style={[styles.actionButton, { backgroundColor: recommended.color + '15' }]}
-                                  onPress={handleAction}
-                                >
-                                  <Icon name={recommended.icon} size={18} color={recommended.color} />
-                                  <Text style={[styles.actionButtonText, { color: recommended.color }]}>
-                                    {recommended.label}
-                                  </Text>
-                                </TouchableOpacity>
-                              );
-                            })()}
-
-
-                            {/* Active connections: Manage (no reconnect in normal mode - moved to edit mode) */}
-                            {connection.Status === CONNECTION_STATUS.ACTIVE && (
-                              <TouchableOpacity
-                                style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
-                                onPress={() =>
-                                  navigation.navigate('MappingReview', {
-                                    connectionId: connection.Id,
-                                    platformName: platformConfig.name,
-                                  })
-                                }
-                              >
-                                <Icon name="cog" size={18} color={theme.colors.primary} />
-                                <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>
-                                  Manage
-                                </Text>
-                              </TouchableOpacity>
-                            )}
-                          </View>
-                        )}
-                        {/* Edit Mode: Refresh Login + Disconnect buttons */}
-                        {isEditMode && (
-                          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-                            {/* Refresh Login - for refreshing OAuth credentials (all OAuth platforms) */}
-                            {['square', 'shopify', 'facebook', 'clover', 'ebay'].includes(platformConfig.key) && (
-                              <TouchableOpacity
-                                style={[styles.actionButton, { backgroundColor: theme.colors.primary + '10' }]}
-                                onPress={() => handleReconnectPlatform(connection.Id, platformConfig.key, platformConfig.name)}
-                              >
-                                <Icon name="link-variant" size={18} color={theme.colors.primary} />
-                                <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Reconnect</Text>
-                              </TouchableOpacity>
-                            )}
-                            {/* Disconnect */}
-                            <TouchableOpacity
-                              style={styles.deleteButton}
-                              onPress={() => handleDisconnectPlatform(connection.Id, platformConfig.name)}
-                            >
-                              <Icon name="minus-circle-outline" size={24} color={theme.colors.error} />
-                              <Text style={{ color: "red", fontSize: 14 }}>Disconnect</Text>
-                            </TouchableOpacity>
-                          </View>
-                        )}
-                      </View>
+                      <ConnectedPlatformItem
+                        key={connection.Id}
+                        connection={connection}
+                        platformConfig={platformConfig}
+                        isEditMode={isEditMode}
+                        onStartScan={startPlatformScan}
+                        onReview={handleReviewAndSync}
+                        onReconnect={handleReconnectPlatform}
+                        onDisconnect={handleDisconnectPlatform}
+                        onFix={(id, name) => fixAndResumeConnection(id, name)}
+                        navigation={navigation}
+                      // Helper functions that are in scope
+                      // formatSyncDate is now global
+                      // getStatusDisplay is global
+                      // getRecommendedAction is global
+                      />
                     );
                   });
                 }
@@ -1989,9 +1779,11 @@ const ProfileScreen = () => {
 
               {/* Render "No active connections yet" text if needed */}
               {/* --- ADJUSTED CONDITION: Show text only if the connections array is truly empty --- */}
-              {platformConnections.length === 0 && (
-                <Text style={styles.noConnectionsText}>No connections yet.</Text>
-              )}
+              {
+                platformConnections.length === 0 && (
+                  <Text style={styles.noConnectionsText}>No connections yet.</Text>
+                )
+              }
               {/* --- END ADJUSTED CONDITION --- */}
               {/* Always render Add Connection Button (unless error/loading) */}
               <Button
@@ -2054,14 +1846,13 @@ const ProfileScreen = () => {
 
       {/* Locations & Pools Card (v2) - render unconditionally; component resolves orgId */}
       <Animated.View entering={FadeInUp.delay(250).duration(500)}>
-        <Card style={styles.card}>
-          <LocationsManagerV2
-            orgId={currentOrg?.id}
-            platformConnections={platformConnections}
-            disableScroll={true}
-            onPressConnect={() => overlay.show()}
-          />
-        </Card>
+        <LocationsManagerV2
+          orgId={currentOrg?.id}
+          platformConnections={platformConnections}
+          disableScroll={true}
+          onPressConnect={() => overlay.show()}
+          refreshTrigger={refreshTrigger}
+        />
       </Animated.View>
 
       {/* Menu Card */}
@@ -2263,7 +2054,7 @@ const ProfileScreen = () => {
         orgId={currentOrg?.id || ''}
         onClose={() => setShowCreatePool(false)}
         onSuccess={() => {
-          setRefreshTrigger((prev) => prev + 1);
+          setRefreshTrigger((prev) => (prev || 0) + 1);
           loadPools();
         }}
       />
@@ -2274,6 +2065,233 @@ const ProfileScreen = () => {
 
 export default ProfileScreen;
 
+
+// --- Global Helper ---
+const formatSyncDate = (dateString: string): string => {
+  const syncDate = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - syncDate.getTime();
+  const diffHours = diffMs / (1000 * 60 * 60);
+
+  const isToday = syncDate.toDateString() === now.toDateString();
+  const isThisYear = syncDate.getFullYear() === now.getFullYear();
+
+  if (isToday) {
+    // Show time only (e.g., "2:31 PM")
+    return syncDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  } else if (isThisYear) {
+    // Show date without year (e.g., "Dec 18")
+    return syncDate.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  } else {
+    // Show full date with year (e.g., "Dec 18, 2024")
+    return syncDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+};
+
+// --- NEW: Extracted Connection Item with Progress support ---
+const ConnectedPlatformItem = React.memo(({
+  connection,
+  platformConfig,
+  isEditMode,
+  onStartScan,
+  onReview,
+  onReconnect,
+  onDisconnect,
+  onFix,
+  navigation
+}: any) => {
+  const theme = useTheme();
+  const { progress } = useSyncProgress(connection.Id);
+
+  let displayShopName = connection.DisplayName || platformConfig.name;
+  if (connection.PlatformType === 'shopify' && connection.DisplayName.includes('.myshopify.com')) {
+    displayShopName = connection.DisplayName.replace('.myshopify.com', '');
+  }
+
+  const PlatformIconComponent = getPlatformIcon(platformConfig.key);
+
+  // Status Info
+  const statusInfo = getStatusDisplay(connection.Status);
+
+  // Determine if progress bar should be shown
+  // Show if:
+  // 1. progress object exists AND isActive is true
+  // 2. OR status is 'scanning'/'syncing'/'reconciling' (fallback if hook is slow)
+  const isProgressActive = progress?.status === 'scanning' || progress?.status === 'syncing' || progress?.status === 'reconciling';
+  const progressValue = (progress?.progress || 0) / 100;
+
+  return (
+    <View style={styles.integrationItem}>
+      {/* Left column: icon + name + status/timestamp */}
+      <View style={styles.integrationLeft}>
+        <View style={styles.platformIconContainer}>
+          {PlatformIconComponent ? (
+            <PlatformIconComponent width={32} height={32} />
+          ) : (
+            <Icon name="store" size={32} color="#555" />
+          )}
+        </View>
+
+        <View style={styles.integrationMain}>
+          <Text style={styles.integrationName} numberOfLines={1} ellipsizeMode="tail">
+            {displayShopName}
+          </Text>
+
+          {!isEditMode && (
+            <View style={styles.statusContainer}>
+              {/* Progress Bar Override */}
+              {isProgressActive ? (
+                <View style={{ width: '100%', marginTop: 4 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 }}>
+                    <Text style={{ fontSize: 10, color: theme.colors.primary }}>
+                      {progress?.description || statusInfo.label}
+                    </Text>
+                    <Text style={{ fontSize: 10, color: theme.colors.textSecondary }}>
+                      {Math.round((progress?.progress || 0))}%
+                    </Text>
+                  </View>
+                  <Progress.Bar
+                    progress={progressValue}
+                    width={null}
+                    height={4}
+                    color={theme.colors.primary}
+                    unfilledColor={theme.colors.border}
+                    borderWidth={0}
+                  />
+                </View>
+              ) : (
+                <>
+                  <View style={styles.statusRow}>
+                    {statusInfo.icon === 'loading' ? (
+                      <ActivityIndicator size="small" color={statusInfo.color} style={styles.statusIcon} />
+                    ) : (
+                      <Icon name={statusInfo.icon} size={16} color={statusInfo.color} style={styles.statusIcon} />
+                    )}
+                    <Text style={[styles.statusText, { color: statusInfo.color }]}>
+                      {statusInfo.label}
+                    </Text>
+                  </View>
+                  {connection.LastSyncSuccessAt && (
+                    <Text style={styles.lastSyncText}>
+                      Last synced: {formatSyncDate(connection.LastSyncSuccessAt)}
+                    </Text>
+                  )}
+                </>
+              )}
+            </View>
+          )}
+        </View>
+      </View>
+
+      {/* Right column: action buttons (non-edit mode only) */}
+      {!isEditMode && connection && !isProgressActive && (
+        <View style={styles.connectionActions}>
+          {connection.Status === CONNECTION_STATUS.PENDING && (
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: theme.colors.primary + '20' }]}
+              onPress={() => onStartScan(connection.Id, platformConfig.name)}
+            >
+              <Icon name="play-circle" size={18} color={theme.colors.primary} />
+              <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Start Scan</Text>
+            </TouchableOpacity>
+          )}
+
+          {connection.Status === CONNECTION_STATUS.REVIEW && (
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: '#FF9500' + '20' }]}
+              onPress={() => onReview(connection.Id, platformConfig.name)}
+            >
+              <Icon name="eye" size={18} color="#FF9500" />
+              <Text style={[styles.actionButtonText, { color: '#FF9500' }]}>Review</Text>
+            </TouchableOpacity>
+          )}
+
+          {connection.Status === CONNECTION_STATUS.READY_TO_SYNC && (
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
+              onPress={() => navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name })}
+            >
+              <Icon name="check-circle" size={18} color={theme.colors.success} />
+              <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Ready</Text>
+            </TouchableOpacity>
+          )}
+
+          {(connection.Status === CONNECTION_STATUS.INACTIVE) && (
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
+              onPress={() => onStartScan(connection.Id, platformConfig.name)}
+            >
+              <Icon name="play-circle" size={18} color={theme.colors.success} />
+              <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Activate</Text>
+            </TouchableOpacity>
+          )}
+
+          {connection.Status === CONNECTION_STATUS.ERROR && (() => {
+            const recommended = getRecommendedAction(connection, platformConfig.key);
+            const handleAction = () => {
+              switch (recommended.action) {
+                case 'reconnect': onReconnect(connection.Id, platformConfig.key, platformConfig.name); break;
+                case 'rescan': onStartScan(connection.Id, platformConfig.name, true); break;
+                case 'fix_resume': onFix(connection.Id, platformConfig.name); break;
+                case 'manage':
+                  navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name });
+                  break;
+              }
+            };
+            return (
+              <TouchableOpacity
+                style={[styles.actionButton, { backgroundColor: recommended.color + '15' }]}
+                onPress={handleAction}
+              >
+                <Icon name={recommended.icon} size={18} color={recommended.color} />
+                <Text style={[styles.actionButtonText, { color: recommended.color }]}>{recommended.label}</Text>
+              </TouchableOpacity>
+            );
+          })()}
+
+          {connection.Status === CONNECTION_STATUS.ACTIVE && (
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
+              onPress={() => navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name })}
+            >
+              <Icon name="cog" size={18} color={theme.colors.primary} />
+              <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Manage</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      {/* Edit Mode Actions */}
+      {isEditMode && (
+        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+          {['square', 'shopify', 'facebook', 'clover', 'ebay'].includes(platformConfig.key) && (
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: theme.colors.primary + '10' }]}
+              onPress={() => onReconnect(connection.Id, platformConfig.key, platformConfig.name)}
+            >
+              <Icon name="link-variant" size={18} color={theme.colors.primary} />
+              <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Reconnect</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={[styles.actionButton, { backgroundColor: '#FF9500' + '15' }]}
+            onPress={() => onStartScan(connection.Id, platformConfig.name, true)}
+          >
+            <Icon name="refresh" size={18} color="#FF9500" />
+            <Text style={[styles.actionButtonText, { color: '#FF9500' }]}>Rescan</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.deleteButton}
+            onPress={() => onDisconnect(connection.Id, platformConfig.name)}
+          >
+            <Icon name="minus-circle-outline" size={24} color={theme.colors.error} />
+            <Text style={{ color: "red", fontSize: 14 }}>Disconnect</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
+  );
+});
 
 // Move styles definition here to fix "used before declaration" errors
 const styles = StyleSheet.create({
