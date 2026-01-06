@@ -346,8 +346,13 @@ const PartnerWelcomeOverlay: React.FC<{
   );
 };
 
-const LocationsManagerV2: React.FC<LocationsManagerV2Props> = (props) => {
-  const { orgId, platformConnections, disableScroll = false, onPressConnect } = props;
+const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
+  orgId,
+  platformConnections,
+  disableScroll = false,
+  onPressConnect,
+  refreshTrigger
+}) => {
   const theme = useTheme();
   const [showWelcomeOverlay, setShowWelcomeOverlay] = useState(false);
   const [partnerNameForOverlay, setPartnerNameForOverlay] = useState('');
@@ -415,6 +420,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = (props) => {
 
   // Draft pools for manage mode (per-pool editing)
   const [draftPools, setDraftPools] = useState<Record<string, DraftPool>>({});
+  const [originalPools, setOriginalPools] = useState<Record<string, DraftPool>>({});
 
   // For create new location/pool
   const [newPoolName, setNewPoolName] = useState('');
@@ -633,10 +639,10 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = (props) => {
 
   // Trigger load on refreshTrigger change
   useEffect(() => {
-    if (props.refreshTrigger !== undefined) {
+    if (refreshTrigger !== undefined) {
       loadList();
     }
-  }, [props.refreshTrigger, loadList]);
+  }, [refreshTrigger, loadList]);
 
   const sendPartnerInvite = async () => {
     if (!inviteEmail || !invitePoolId || !resolvedOrgId) {
@@ -708,17 +714,18 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = (props) => {
           });
         }
 
-        setDraftPools((prev) => ({
-          ...prev,
-          [poolId]: {
-            name: pool.name,
-            locationIds: pool.locationIds || [],
-            locationMetadata,
-          },
-        }));
+        const draft: DraftPool = {
+          name: pool.name,
+          locationIds: pool.locationIds || [],
+          locationMetadata,
+          isPartnerPool: pool.isPartnerPool,
+        };
+        return draft;
+
       } catch (e) {
         console.error('[LocationsManagerV2] loadPoolForEditing error', e);
         Alert.alert('Error', 'Failed to load pool details');
+        return null;
       }
     },
     []
@@ -746,10 +753,15 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = (props) => {
       console.log('[LocationsManagerV2] enterManageMode: found', poolList.length, 'pools');
 
       // Load each pool's locations with metadata
-      // loadPoolForEditing will set the drafts with metadata via setDraftPools
+      const drafts: Record<string, DraftPool> = {};
       for (const pool of poolList) {
-        await loadPoolForEditing(pool.id);
+        const draft = await loadPoolForEditing(pool.id);
+        if (draft) {
+          drafts[pool.id] = draft;
+        }
       }
+      setDraftPools(drafts);
+      setOriginalPools(drafts);
 
       // Reset per-pool platform selection state (all closed by default)
       setManagePlatformSelectionByPool({});
@@ -1371,301 +1383,342 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = (props) => {
   // Rendered inline relative to the parent container
   function renderManagePoolsView() {
     return (
-      <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
-        <View style={styles.headerRow}>
-          <Text style={styles.headerTitle}>Managing Locations</Text>
-          <TouchableOpacity onPress={() => setViewMode('default')}>
-            <Icon name="close" size={22} />
-          </TouchableOpacity>
-        </View>
-
-        {/* Managing Locations content */}
-        <View style={[styles.manageCard, { flex: 1 }]}>
-          {loadingManage ? (
-            <View style={{ paddingVertical: 24 }}>
-              <ActivityIndicator size="large" color={theme.colors.primary} />
+      /* Managing Locations content */
+      <Card style={styles.card}>
+        {loadingManage ? (
+          <View style={{ paddingVertical: 24 }}>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+          </View>
+        ) : (
+          <>
+            <View style={styles.headerRow}>
+              <Text style={styles.headerTitle}>Managing Locations</Text>
+              <TouchableOpacity onPress={() => setViewMode('default')}>
+                <Icon name="close" size={22} />
+              </TouchableOpacity>
             </View>
-          ) : (
-            <>
-              <DraggableFlatList
-                containerStyle={{ flex: 1 }}
-                data={flatData}
-                renderItem={({ item, drag, isActive }) => {
-                  if (item.type === 'header') {
-                    const { poolId, draft } = item;
-                    return (
-                      <View style={{
-                        backgroundColor: '#f8fafc',
-                        padding: 10,
-                        borderTopLeftRadius: 12,
-                        borderTopRightRadius: 12,
-                        borderBottomWidth: 1,
-                        borderColor: '#e2e8f0',
-                        marginTop: 10,
-                        flexDirection: 'row',
-                        alignItems: 'center'
-                      }}>
-                        <TextInput
-                          value={draft.name}
-                          onChangeText={(text) =>
-                            setDraftPools((prev) => ({
-                              ...prev,
-                              [poolId]: { ...prev[poolId], name: text },
-                            }))
-                          }
-                          style={{
-                            flex: 1,
-                            fontSize: 16,
-                            fontWeight: '600',
-                            color: '#334155',
-                            padding: 4,
-                          }}
-                        />
+            <DraggableFlatList
+              containerStyle={{ minHeight: 100 }}
+              scrollEnabled={!disableScroll}
+              data={flatData}
+              renderItem={({ item, drag, isActive }) => {
+                if (item.type === 'header') {
+                  const { poolId, draft } = item;
+                  return (
+                    <View style={{
+                      backgroundColor: '#f8fafc',
+                      padding: 10,
+                      borderTopLeftRadius: 12,
+                      borderTopRightRadius: 12,
+                      borderBottomWidth: 1,
+                      borderColor: '#e2e8f0',
+                      marginTop: 10,
+                      flexDirection: 'row',
+                      alignItems: 'center'
+                    }}>
+                      <TextInput
+                        value={draft.name}
+                        onChangeText={(text) =>
+                          setDraftPools((prev) => ({
+                            ...prev,
+                            [poolId]: { ...prev[poolId], name: text },
+                          }))
+                        }
+                        style={{
+                          flex: 1,
+                          fontSize: 16,
+                          fontWeight: '600',
+                          color: '#334155',
+                          padding: 4,
+                        }}
+                      />
+
+                      {!draft.isPartnerPool && (
                         <TouchableOpacity
                           onPress={() => openDeletePool(poolId, draft.name)}
                           style={{ padding: 8 }}
                         >
                           <Icon name="delete-outline" size={20} color="#ff4444" />
                         </TouchableOpacity>
-                      </View>
-                    );
+                      )}
+                    </View>
+                  );
+                }
+
+                if (item.type === 'location') {
+                  const locId = item.id;
+                  const oldPool = draftPools[item.poolId];
+                  const metaFromDraft = oldPool?.locationMetadata?.get(locId);
+                  const metaFromAvailable = availableLocationById.get(locId);
+                  const meta = metaFromDraft || metaFromAvailable;
+
+                  // Skip virtual locations in the manage view (they are for display only)
+                  if (locId.startsWith('virtual-')) {
+                    return null;
                   }
 
-                  if (item.type === 'location') {
-                    const locId = item.id;
-                    const oldPool = draftPools[item.poolId];
-                    const metaFromDraft = oldPool?.locationMetadata?.get(locId);
-                    const metaFromAvailable = availableLocationById.get(locId);
-                    const meta = metaFromDraft || metaFromAvailable;
+                  const connName = meta?.connectionName || 'Unknown connection';
+                  const locName = meta?.locationName || locId;
+                  const platformType = meta?.platformType || '';
+                  const Logo = platformType && PLATFORM_LOGOS[platformType as keyof typeof PLATFORM_LOGOS];
 
-                    // Skip virtual locations in the manage view (they are for display only)
-                    if (locId.startsWith('virtual-')) {
-                      return null;
-                    }
+                  return (
+                    <ScaleDecorator>
+                      <TouchableOpacity
+                        activeOpacity={1}
+                        onLongPress={drag}
+                        disabled={isActive}
+                        style={{
+                          backgroundColor: isActive ? '#e0f2fe' : '#fff',
+                          padding: 12,
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          borderBottomWidth: 1,
+                          borderColor: '#f1f5f9',
+                          borderLeftWidth: 4,
+                          borderLeftColor: isActive ? '#3b82f6' : 'transparent',
+                        }}
+                      >
+                        <TouchableOpacity onPressIn={drag} style={{ paddingRight: 12 }}>
+                          <Icon name="drag-horizontal" size={20} color="#94a3b8" />
+                        </TouchableOpacity>
 
-                    const connName = meta?.connectionName || 'Unknown connection';
-                    const locName = meta?.locationName || locId;
-                    const platformType = meta?.platformType || '';
-                    const Logo = platformType && PLATFORM_LOGOS[platformType as keyof typeof PLATFORM_LOGOS];
+                        {Logo ? <Logo width={20} height={20} style={{ marginRight: 8 }} /> : null}
 
-                    return (
-                      <ScaleDecorator>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 14, fontWeight: '500', color: '#334155' }} numberOfLines={1}>
+                            {locName}
+                          </Text>
+                          <Text style={{ fontSize: 12, color: '#64748b' }} numberOfLines={1}>
+                            {connName}
+                          </Text>
+                        </View>
+
                         <TouchableOpacity
-                          activeOpacity={1}
-                          onLongPress={drag}
-                          disabled={isActive}
-                          style={{
-                            backgroundColor: isActive ? '#e0f2fe' : '#fff',
-                            padding: 12,
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            borderBottomWidth: 1,
-                            borderColor: '#f1f5f9',
-                            borderLeftWidth: 4,
-                            borderLeftColor: isActive ? '#3b82f6' : 'transparent',
+                          onPress={() => {
+                            let currentPoolIdOfLoc: string | null = null;
+                            Object.entries(draftPools).forEach(([pid, d]) => {
+                              if (d.locationIds.includes(locId)) currentPoolIdOfLoc = pid;
+                            });
+
+                            if (currentPoolIdOfLoc) {
+                              setDraftPools((prev) => ({
+                                ...prev,
+                                [currentPoolIdOfLoc!]: {
+                                  ...prev[currentPoolIdOfLoc!],
+                                  locationIds: prev[currentPoolIdOfLoc!].locationIds.filter(id => id !== locId)
+                                }
+                              }));
+                            }
                           }}
+                          style={{ padding: 4 }}
                         >
-                          <TouchableOpacity onPressIn={drag} style={{ paddingRight: 12 }}>
-                            <Icon name="drag-horizontal" size={20} color="#94a3b8" />
-                          </TouchableOpacity>
+                          <Icon name="close" size={18} color="#ff4444" />
+                        </TouchableOpacity>
+                      </TouchableOpacity>
+                    </ScaleDecorator>
+                  );
+                }
 
-                          {Logo ? <Logo width={20} height={20} style={{ marginRight: 8 }} /> : null}
+                if (item.type === 'footer') {
+                  const { poolId } = item;
+                  const selection = managePlatformSelectionByPool[poolId];
 
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ fontSize: 14, fontWeight: '500', color: '#334155' }} numberOfLines={1}>
-                              {locName}
-                            </Text>
-                            <Text style={{ fontSize: 12, color: '#64748b' }} numberOfLines={1}>
-                              {connName}
-                            </Text>
-                          </View>
+                  return (
+                    <View style={{
+                      padding: 10,
+                      backgroundColor: '#fff',
+                      borderBottomLeftRadius: 12,
+                      borderBottomRightRadius: 12,
+                      marginBottom: 10
+                    }}>
+                      {/* Only show Add Location if there are available locations ANYWHERE */}
+                      {(() => {
+                        const hasAnyAvailableLocs = available.some(p =>
+                          p.connections.some(c =>
+                            c.locations.some(l => !allSelectedLocationIds.has(l.platformLocationId))
+                          )
+                        );
 
+                        if (!hasAnyAvailableLocs) return null;
+
+                        return (
                           <TouchableOpacity
-                            onPress={() => {
-                              let currentPoolIdOfLoc: string | null = null;
-                              Object.entries(draftPools).forEach(([pid, d]) => {
-                                if (d.locationIds.includes(locId)) currentPoolIdOfLoc = pid;
-                              });
-
-                              if (currentPoolIdOfLoc) {
-                                setDraftPools((prev) => ({
-                                  ...prev,
-                                  [currentPoolIdOfLoc!]: {
-                                    ...prev[currentPoolIdOfLoc!],
-                                    locationIds: prev[currentPoolIdOfLoc!].locationIds.filter(id => id !== locId)
-                                  }
-                                }));
-                              }
+                            style={{
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              paddingVertical: 8
                             }}
-                            style={{ padding: 4 }}
+                            onPress={() =>
+                              setManagePlatformSelectionByPool((prev) => ({
+                                ...prev,
+                                [poolId]: null,
+                              }))
+                            }
                           >
-                            <Icon name="close" size={18} color="#ff4444" />
+                            <Icon name="plus" size={16} color="#64748b" />
+                            <Text style={{ fontSize: 13, color: '#64748b', marginLeft: 6 }}>Add Location from Platform</Text>
                           </TouchableOpacity>
-                        </TouchableOpacity>
-                      </ScaleDecorator>
-                    );
-                  }
+                        );
+                      })()}
 
-                  if (item.type === 'footer') {
-                    const { poolId } = item;
-                    const selection = managePlatformSelectionByPool[poolId];
+                      {selection === null && (
+                        <View style={{ marginTop: 8 }}>
+                          <Text style={styles.label}>Select Platform</Text>
+                          {available.length === 0 ? (
+                            <Text style={{ fontSize: 12, color: '#999' }}>No platforms available</Text>
+                          ) : (
+                            available.map((platform) => {
+                              const Logo = PLATFORM_LOGOS[platform.platformType as keyof typeof PLATFORM_LOGOS];
+                              // Filter connections that have unallocated locations
+                              const visibleConnections = platform.connections.filter(c =>
+                                c.locations.some(l => !allSelectedLocationIds.has(l.platformLocationId))
+                              );
 
-                    return (
-                      <View style={{
-                        padding: 10,
-                        backgroundColor: '#fff',
-                        borderBottomLeftRadius: 12,
-                        borderBottomRightRadius: 12,
-                        marginBottom: 10
-                      }}>
-                        <TouchableOpacity
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            paddingVertical: 8
-                          }}
-                          onPress={() =>
-                            setManagePlatformSelectionByPool((prev) => ({
-                              ...prev,
-                              [poolId]: null,
-                            }))
-                          }
-                        >
-                          <Icon name="plus" size={16} color="#64748b" />
-                          <Text style={{ fontSize: 13, color: '#64748b', marginLeft: 6 }}>Add Location from Platform</Text>
-                        </TouchableOpacity>
+                              if (visibleConnections.length === 0) return null;
 
-                        {selection === null && (
-                          <View style={{ marginTop: 8 }}>
-                            <Text style={styles.label}>Select Platform</Text>
-                            {available.length === 0 ? (
-                              <Text style={{ fontSize: 12, color: '#999' }}>No platforms available</Text>
-                            ) : (
-                              available.map((platform) => {
-                                const Logo = PLATFORM_LOGOS[platform.platformType as keyof typeof PLATFORM_LOGOS];
-                                return (
-                                  <View key={platform.platformType}>
-                                    {platform.connections.map((conn) => (
-                                      <TouchableOpacity
-                                        key={conn.connectionId}
-                                        style={styles.platformSelectButton}
-                                        onPress={() =>
-                                          setManagePlatformSelectionByPool((prev) => ({
-                                            ...prev,
-                                            [poolId]: {
-                                              connectionId: conn.connectionId,
-                                              connectionName: conn.connectionName,
-                                              platformType: platform.platformType,
-                                            },
-                                          }))
-                                        }
-                                      >
-                                        {Logo ? <Logo width={20} height={20} /> : null}
-                                        <Text style={styles.platformSelectText}>{conn.connectionName}</Text>
-                                      </TouchableOpacity>
-                                    ))}
-                                  </View>
-                                );
-                              })
-                            )}
-                          </View>
-                        )}
-
-                        {selection && (
-                          <View style={{ marginTop: 8 }}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                              <Text style={styles.label}>Select Location</Text>
-                              <TouchableOpacity
-                                onPress={() => setManagePlatformSelectionByPool((prev) => ({ ...prev, [poolId]: null }))}
-                                style={{ marginLeft: 'auto' }}
-                              >
-                                <Icon name="close" size={16} color="#999" />
-                              </TouchableOpacity>
-                            </View>
-                            <View style={styles.dropdownContainer}>
-                              <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
-                                {getFilteredAvailableLocations(selection.connectionId).map((loc) => (
-                                  <TouchableOpacity
-                                    key={loc.platformLocationId}
-                                    style={styles.dropdownItem}
-                                    onPress={() => {
-                                      const locationId = loc.platformLocationId;
-                                      const meta = availableLocationById.get(locationId);
-                                      setDraftPools((prev) => {
-                                        const current = prev[poolId]?.locationIds || [];
-                                        const currentMetadata = prev[poolId]?.locationMetadata || new Map();
-                                        if (current.includes(locationId)) return prev;
-                                        if (meta) {
-                                          currentMetadata.set(locationId, meta);
-                                        }
-                                        return {
+                              return (
+                                <View key={platform.platformType}>
+                                  {visibleConnections.map((conn) => (
+                                    <TouchableOpacity
+                                      key={conn.connectionId}
+                                      style={styles.platformSelectButton}
+                                      onPress={() =>
+                                        setManagePlatformSelectionByPool((prev) => ({
                                           ...prev,
                                           [poolId]: {
-                                            ...prev[poolId],
-                                            locationIds: [...current, locationId],
-                                            locationMetadata: currentMetadata,
+                                            connectionId: conn.connectionId,
+                                            connectionName: conn.connectionName,
+                                            platformType: platform.platformType,
                                           },
-                                        };
-                                      });
-                                      setManagePlatformSelectionByPool((prev) => {
-                                        const updated = { ...prev };
-                                        delete updated[poolId];
-                                        return updated;
-                                      });
-                                    }}
-                                  >
-                                    <Text style={styles.dropdownItemText}>{loc.locationName}</Text>
-                                  </TouchableOpacity>
-                                ))}
-                              </ScrollView>
-                            </View>
+                                        }))
+                                      }
+                                    >
+                                      {Logo ? <Logo width={20} height={20} /> : null}
+                                      <Text style={styles.platformSelectText}>{conn.connectionName}</Text>
+                                    </TouchableOpacity>
+                                  ))}
+                                </View>
+                              );
+                            })
+                          )}
+                        </View>
+                      )}
+
+                      {selection && (
+                        <View style={{ marginTop: 8 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                            <Text style={styles.label}>Select Location</Text>
+                            <TouchableOpacity
+                              onPress={() => setManagePlatformSelectionByPool((prev) => ({ ...prev, [poolId]: null }))}
+                              style={{ marginLeft: 'auto' }}
+                            >
+                              <Icon name="close" size={16} color="#999" />
+                            </TouchableOpacity>
                           </View>
-                        )}
-                      </View>
-                    );
-                  }
-                  return null;
-                }}
-                keyExtractor={(item) => item.key}
-                onDragEnd={({ data }) => {
-                  const newDrafts: Record<string, DraftPool> = {};
-                  Object.keys(draftPools).forEach(pid => {
-                    newDrafts[pid] = { ...draftPools[pid], locationIds: [], locationMetadata: new Map() };
-                  });
+                          <View style={styles.dropdownContainer}>
+                            <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
+                              {getFilteredAvailableLocations(selection.connectionId).map((loc) => (
+                                <TouchableOpacity
+                                  key={loc.platformLocationId}
+                                  style={styles.dropdownItem}
+                                  onPress={() => {
+                                    const locationId = loc.platformLocationId;
+                                    const meta = availableLocationById.get(locationId);
+                                    setDraftPools((prev) => {
+                                      const current = prev[poolId]?.locationIds || [];
+                                      const currentMetadata = prev[poolId]?.locationMetadata || new Map();
+                                      if (current.includes(locationId)) return prev;
+                                      if (meta) {
+                                        currentMetadata.set(locationId, meta);
+                                      }
+                                      return {
+                                        ...prev,
+                                        [poolId]: {
+                                          ...prev[poolId],
+                                          locationIds: [...current, locationId],
+                                          locationMetadata: currentMetadata,
+                                        },
+                                      };
+                                    });
+                                    setManagePlatformSelectionByPool((prev) => {
+                                      const updated = { ...prev };
+                                      delete updated[poolId];
+                                      return updated;
+                                    });
+                                  }}
+                                >
+                                  <Text style={styles.dropdownItemText}>{loc.locationName}</Text>
+                                </TouchableOpacity>
+                              ))}
+                            </ScrollView>
+                          </View>
+                        </View>
+                      )}
+                    </View>
+                  );
+                }
+                return null;
+              }}
+              keyExtractor={(item) => item.key}
+              onDragEnd={({ data }) => {
+                const newDrafts: Record<string, DraftPool> = {};
+                Object.keys(draftPools).forEach(pid => {
+                  newDrafts[pid] = { ...draftPools[pid], locationIds: [], locationMetadata: new Map() };
+                });
 
-                  let currentPoolId: string | null = null;
+                let currentPoolId: string | null = null;
 
-                  data.forEach(item => {
-                    if (item.type === 'header') {
-                      currentPoolId = item.poolId;
-                    } else if (item.type === 'location') {
-                      if (currentPoolId && newDrafts[currentPoolId]) {
-                        newDrafts[currentPoolId].locationIds.push(item.id);
-                        const oldPool = draftPools[item.poolId];
-                        const meta = oldPool?.locationMetadata?.get(item.id) || availableLocationById.get(item.id);
-                        if (meta) {
-                          newDrafts[currentPoolId].locationMetadata!.set(item.id, {
-                            ...meta,
-                            connectionName: meta.connectionName || 'Unknown',
-                            platformType: meta.platformType || '',
-                          });
-                        }
+                data.forEach(item => {
+                  if (item.type === 'header') {
+                    currentPoolId = item.poolId;
+                  } else if (item.type === 'location') {
+                    if (currentPoolId && newDrafts[currentPoolId]) {
+                      newDrafts[currentPoolId].locationIds.push(item.id);
+                      const oldPool = draftPools[item.poolId];
+                      const meta = oldPool?.locationMetadata?.get(item.id) || availableLocationById.get(item.id);
+                      if (meta) {
+                        newDrafts[currentPoolId].locationMetadata!.set(item.id, {
+                          ...meta,
+                          connectionName: meta.connectionName || 'Unknown',
+                          platformType: meta.platformType || '',
+                        });
                       }
                     }
-                  });
-                  setDraftPools(newDrafts);
-                }}
+                  }
+                });
+                setDraftPools(newDrafts);
+              }}
+            />
+
+            <View style={styles.footerRow}>
+              <Button title="Cancel" outlined onPress={() => setViewMode('default')} style={{ flex: 1 }} />
+              <Button
+                title="Confirm Updates"
+                onPress={confirmManageChanges}
+                loading={saving}
+                style={{ flex: 1 }}
+                disabled={(() => {
+                  const keys = Object.keys(draftPools);
+                  if (keys.length !== Object.keys(originalPools).length) return false;
+                  for (const pid of keys) {
+                    const d = draftPools[pid];
+                    const o = originalPools[pid];
+                    if (!o) return false;
+                    if (d.name !== o.name) return false;
+                    if (d.locationIds.length !== o.locationIds.length) return false;
+                    const s = new Set(d.locationIds);
+                    for (const l of o.locationIds) {
+                      if (!s.has(l)) return false;
+                    }
+                  }
+                  return true;
+                })()}
               />
-
-              <View style={styles.footerRow}>
-                <Button title="Confirm Updates" onPress={confirmManageChanges} loading={saving} style={{ flex: 1 }} />
-                <Button title="Cancel" outlined onPress={() => setViewMode('default')} style={{ flex: 1 }} />
-              </View>
-            </>
-          )}
-        </View>
-      </View>
-
+            </View>
+          </>
+        )}
+      </Card>
     );
   }
 
@@ -2373,6 +2426,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 16,
+    marginTop: 10,
   },
   headerTitle: {
     fontSize: 18,
@@ -2400,6 +2454,7 @@ const styles = StyleSheet.create({
     marginTop: 20,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+    borderRadius: 12,
   },
   listItem: {
     flexDirection: 'row',
