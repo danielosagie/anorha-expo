@@ -106,10 +106,8 @@ const styles = StyleSheet.create({
   },
   logoBox: {
     borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.2)',
     justifyContent: 'center',
     alignItems: 'center',
-
   },
   logoImage: {
     width: 100,

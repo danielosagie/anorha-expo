@@ -101,7 +101,24 @@ const MappingCard: React.FC<MappingCardProps> = ({
             )}
             <View style={styles.details}>
               <Text style={styles.title} numberOfLines={2}>{titleLeft}</Text>
-              {variantCount != null && variantCount > 1 ? (
+              {/* Priority: 1) Expanded options (attributesLeft), 2) Variant count badge, 3) Single item SKU/price */}
+              {attributesLeft && attributesLeft.length > 0 ? (
+                <View style={styles.attributesContainer}>
+                  {attributesLeft.map((attr, idx) => (
+                    <View key={idx} style={styles.attributeGroup}>
+                      <Text style={styles.attributeLabel}>{attr.label}</Text>
+                      <View style={styles.pillRow}>
+                        {(Array.isArray(attr.value) ? attr.value : [attr.value]).map((val, vIdx) => (
+                          <Badge key={vIdx} variant="outline">
+                            {val}
+                          </Badge>
+                        ))}
+                      </View>
+                    </View>
+                  ))}
+                  {priceRange ? <Text style={styles.price}>{priceRange}</Text> : null}
+                </View>
+              ) : variantCount != null && variantCount > 1 ? (
                 <View style={styles.groupInfo}>
                   <Badge variant="outline">{variantCount} Variants</Badge>
                   {priceRange ? <Text style={styles.price}>{priceRange}</Text> : null}
@@ -111,23 +128,6 @@ const MappingCard: React.FC<MappingCardProps> = ({
                   {!!skuLeft && <Text style={styles.subtle}>SKU: {skuLeft}</Text>}
                   {priceLeft != null && <Text style={styles.price}>${priceLeft.toFixed(2)}</Text>}
                 </>
-              )}
-
-              {attributesLeft && attributesLeft.length > 0 && (
-                <View style={styles.attributesContainer}>
-                  {attributesLeft.map((attr, idx) => (
-                    <View key={idx} style={styles.attributeGroup}>
-                      <Text style={styles.attributeLabel}>{attr.label}</Text>
-                      <View style={styles.pillRow}>
-                        {(Array.isArray(attr.value) ? attr.value : [attr.value]).map((val, vIdx) => (
-                          <Badge key={vIdx} variant={val === 'Working' ? 'success' : val === 'Broken' ? 'warning' : 'default'}>
-                            {val}
-                          </Badge>
-                        ))}
-                      </View>
-                    </View>
-                  ))}
-                </View>
               )}
             </View>
           </View>

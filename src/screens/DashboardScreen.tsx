@@ -526,14 +526,42 @@ const DashboardScreen = () => {
     });
 
     const threshold = 5;
-    const items = Object.keys(variantQuantities)
-      .filter(vid => variantQuantities[vid] <= threshold)
-      .map(vid => {
+
+    // CRITICAL: Only show 'base' or 'flat' variants, aggregate inventory from option variants
+    // Build product grouping map: ProductId -> { baseVariantId, totalQuantity }
+    const productGroups: Record<string, { baseVariantId: string; totalQuantity: number; optionQuantities: number }> = {};
+
+    Object.entries(pv).forEach(([vid, variant]: [string, any]) => {
+      const productId = variant?.ProductId;
+      if (!productId) return;
+
+      const variantType = variant?.VariantType || 'flat';
+      const qty = variantQuantities[vid] || 0;
+
+      if (!productGroups[productId]) {
+        productGroups[productId] = { baseVariantId: '', totalQuantity: 0, optionQuantities: 0 };
+      }
+
+      if (variantType === 'base' || variantType === 'flat') {
+        productGroups[productId].baseVariantId = vid;
+        productGroups[productId].totalQuantity += qty;
+      } else if (variantType === 'option') {
+        productGroups[productId].optionQuantities += qty;
+      }
+    });
+
+    // Aggregate option quantities into base
+    Object.values(productGroups).forEach(group => {
+      group.totalQuantity += group.optionQuantities;
+    });
+
+    const items = Object.values(productGroups)
+      .filter(group => group.baseVariantId && group.totalQuantity <= threshold)
+      .map(group => {
+        const vid = group.baseVariantId;
         const variant = pv[vid];
-        // Find image
         const img = Object.values(images).find((i: any) => i.ProductVariantId === vid);
 
-        // Determine platforms (mock logic if not strictly in variants, but we have OnShopify flags)
         const platforms = [];
         if (variant?.OnShopify) platforms.push('shopify');
         if (variant?.OnSquare) platforms.push('square');
@@ -542,10 +570,10 @@ const DashboardScreen = () => {
         return {
           id: vid,
           title: variant?.Title || 'Unknown Product',
-          quantity: variantQuantities[vid],
+          quantity: group.totalQuantity,
           sku: variant?.Sku,
           price: variant?.Price,
-          imageUrl: img?.ImageUrl,
+          imageUrl: img?.ImageUrl || variant?.PrimaryImageUrl,
           platformNames: platforms
         };
       })
@@ -555,7 +583,7 @@ const DashboardScreen = () => {
     return {
       totalInventory: total,
       lowStockItems: items,
-      lowStockCount: Object.keys(variantQuantities).filter(vid => variantQuantities[vid] <= threshold).length
+      lowStockCount: Object.values(productGroups).filter(g => g.baseVariantId && g.totalQuantity <= threshold).length
     };
   }, [legendCtx?.productVariants$, legendCtx?.inventoryLevels$, legendCtx?.productImages$, currentOrg?.id, initialDataLoaded, directFetchVariants, directFetchLevels]);
 
@@ -1192,7 +1220,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     left: 0,
-    right: 0, 
+    right: 0,
     height: 60,
     backgroundColor: 'rgba(254, 244, 221, 1)',
   },

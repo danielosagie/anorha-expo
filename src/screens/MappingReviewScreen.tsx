@@ -215,6 +215,8 @@ const MappingReviewScreen = () => {
   const [searchModalResults, setSearchModalResults] = useState<any[]>([]);
   const [isSearchingProducts, setIsSearchingProducts] = useState(false);
   const [itemToMatch, setItemToMatch] = useState<MappingSuggestion | null>(null);
+  // NEW: Track group items when matching from a collapsed group
+  const [groupItemsToMatch, setGroupItemsToMatch] = useState<MappingSuggestion[] | null>(null);
 
   // --- NEW: Expanded groups state for collapsible variant groups ---
   // Empty set = all groups collapsed by default; stores parentIds of expanded groups
@@ -277,13 +279,18 @@ const MappingReviewScreen = () => {
   const handleManualMatch = (canonicalVariant: any) => {
     if (!itemToMatch) return;
 
+    // If we have group items (from collapsed group search), map ALL items in the group
+    const itemsToMap = groupItemsToMatch || [itemToMatch];
+    const idsToMap = new Set(itemsToMap.map(i => i.platformProduct.id));
+
     setSuggestions(prev => (prev || []).map(s => {
-      if (s.platformProduct.id === itemToMatch.platformProduct.id) {
+      if (idsToMap.has(s.platformProduct.id)) {
         return {
           ...s,
           action: 'LINK_EXISTING',
           isSelected: true,
           matchType: 'MANUAL' as any,
+          resolved: true,
           suggestedCanonicalProduct: {
             id: canonicalVariant.id,
             sku: canonicalVariant.sku,
@@ -297,6 +304,7 @@ const MappingReviewScreen = () => {
     }));
     setShowSearchModal(false);
     setItemToMatch(null);
+    setGroupItemsToMatch(null);  // Clear group items
     setSearchModalQuery('');
     setSearchModalResults([]);
   };
@@ -1313,7 +1321,7 @@ const MappingReviewScreen = () => {
 
   // Effect to trigger initial data loading
   useEffect(() => {
-    console.log(`[MappingReviewScreen] Effect triggered - isPolling: ${isPolling}, connectionId: ${connectionId}, jobId: ${jobId}`);
+    console.log(`[MappingReviewScreen] Effect triggered - isPolling: ${isPolling}, connectionId: ${connectionId}, jobId: ${jobId}, loading: ${loading}`);
 
     // Initial fetch
     if (isCSVImport && importedProducts) {
@@ -1341,17 +1349,26 @@ const MappingReviewScreen = () => {
         console.error("Error mapping CSV data:", e);
         setLoading(false);
       }
-    } else if (!isPolling && connectionId) {
-      console.log(`[MappingReviewScreen] Not polling, fetching suggestions directly for connection: ${connectionId}`);
-      fetchMappingSuggestions(connectionId);
+    } else if (connectionId) {
+      // Only fetch if we are NOT polling and NOT scanning
+      // connection?.Status check ensures we don't race against the initial poll check
+      if (!isPolling && !isScanningActive && connection) {
+        console.log(`[MappingReviewScreen] Not polling and not scanning, fetching suggestions directly for connection: ${connectionId}`);
+        fetchMappingSuggestions(connectionId);
+      } else if (!connection) {
+        // Wait for connection to load...
+        console.log('[MappingReviewScreen] Waiting for connection status to load...');
+        setLoading(true);
+      } else {
+        console.log(`[MappingReviewScreen] Scanning/Polling active (Status: ${connection?.Status}), skipping suggestion fetch`);
+        setLoading(true); // Ensure loading stays true
+      }
     } else if (!connectionId) {
       console.error(`[MappingReviewScreen] No connection ID provided`);
       setError("Connection ID is missing.");
       setLoading(false);
-    } else {
-      console.log(`[MappingReviewScreen] Polling mode active for job: ${currentJobId}`);
     }
-  }, [connectionId, isPolling]); // Removed fetchMappingSuggestions to prevent circular dependency
+  }, [connectionId, isPolling, isScanningActive, connection]); // Added connection and isScanningActive dependencies
 
   // --- WebSocket sync progress handling ---
   useEffect(() => {
@@ -4353,6 +4370,30 @@ const MappingReviewScreen = () => {
                 // Representative images/data
                 const firstItem = groupItems[0];
 
+                // Extract variant options from item titles
+                // Option format examples: "Title - Option" or title contains unique suffix
+                const extractedOptions: { label: string; values: string[] } = { label: 'Options', values: [] };
+                const parentTitle = item.title || '';
+                groupItems.forEach(gi => {
+                  const variantTitle = gi.platformProduct.title || '';
+                  // Try to extract the variant part by removing the parent title
+                  let optionValue = variantTitle;
+                  if (parentTitle && variantTitle.startsWith(parentTitle)) {
+                    optionValue = variantTitle.slice(parentTitle.length).replace(/^[\s\-\/:]+/, '').trim();
+                  } else if (parentTitle && variantTitle.includes(' - ')) {
+                    // Common format: "Title - OptionValue"
+                    optionValue = variantTitle.split(' - ').pop()?.trim() || variantTitle;
+                  }
+                  if (optionValue && optionValue !== variantTitle && optionValue !== parentTitle) {
+                    extractedOptions.values.push(optionValue);
+                  }
+                });
+
+                // Build attributesLeft if we found options
+                const groupAttributes = extractedOptions.values.length > 0
+                  ? [{ label: extractedOptions.label, value: extractedOptions.values }]
+                  : undefined;
+
                 return (
                   <MappingCard
                     variant={groupVariant}
@@ -4361,6 +4402,7 @@ const MappingReviewScreen = () => {
                     priceRange={priceText}
                     imageLeft={firstItem.platformProduct.imageUrl}
                     selected={groupItems.some(s => s.isSelected)}
+                    attributesLeft={groupAttributes}
                     onSelect={() => {
                       const anySelected = groupItems.some(s => s.isSelected);
                       setSuggestions(prev => (prev || []).map(prevS =>
@@ -4384,9 +4426,9 @@ const MappingReviewScreen = () => {
                       ));
                     }}
                     onSearch={() => {
-                      // Expand on search if it's a group, or we could support group-level link later
-                      setExpandedGroups(prev => new Set(prev).add(item.id));
+                      // Set group items for bulk mapping when match is selected
                       setItemToMatch(firstItem);
+                      setGroupItemsToMatch(groupItems);  // Pass all group items
                       setSearchModalQuery('');
                       setSearchModalResults([]);
                       setShowSearchModal(true);
@@ -4409,18 +4451,9 @@ const MappingReviewScreen = () => {
                       : (s.confidence != null && s.confidence > 0 && s.confidence < 0.8) ? 'review'
                         : 'new';
 
-              // Extract attributes if available (mocking the Dyson example from screenshot)
-              const attributes: any[] = [];
-              if (s.platformProduct.title?.includes('CAMERA COVER DYSON')) {
-                attributes.push({ label: 'STATE', value: ['Working', 'Broken'] });
-              } else if (s.platformProduct.sku === '2134') {
-                attributes.push({ label: 'STATE', value: ['Working', 'Broken'] });
-              }
-
               return (
                 <MappingCard
                   isChild={item.isChild}
-                  attributesLeft={attributes}
                   variant={visualVariant as any}
                   titleLeft={s.platformProduct.title}
                   skuLeft={s.platformProduct.sku}
@@ -4448,7 +4481,7 @@ const MappingReviewScreen = () => {
                   onRestore={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, action: prevS.prevAction || 'UNMATCHED', isSelected: false } : prevS))}
                   onCreate={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, action: 'CREATE_NEW', isSelected: true, resolved: true } : prevS))}
                   onApproveMatch={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, action: 'LINK_EXISTING', resolved: true, isSelected: true } : prevS))}
-                  onSearch={() => { setItemToMatch(s); setSearchModalQuery(''); setSearchModalResults([]); setShowSearchModal(true); }}
+                  onSearch={() => { setItemToMatch(s); setGroupItemsToMatch(null); setSearchModalQuery(''); setSearchModalResults([]); setShowSearchModal(true); }}
                 />
               );
             }}
@@ -5351,7 +5384,15 @@ const MappingReviewScreen = () => {
 
                                 // Step 2: Update quick settings with wizard selections
                                 // CRITICAL: Include propagateCreates and propagateChanges to enable cross-platform sync
-                                // productCreationMode controls whether products sync to other platforms
+                                // productCreationMode controls whether products sync to other platforms:
+                                // - sync_everywhere: Products sync bidirectionally to ALL platforms
+                                // - push_only: Anorha items push TO this platform (propagateCreates = true)
+                                // - pull_only: Import from platform TO Anorha only (propagateCreates = false)
+                                // - do_nothing: No automatic product creation (propagateCreates = false)
+                                const shouldPropagateCreates =
+                                  productCreationMode === 'sync_everywhere' ||
+                                  productCreationMode === 'push_only';
+
                                 const quickSettings = {
                                   poolId: selectedPool || undefined,
                                   autoSyncMode: syncMode === 'auto',
@@ -5360,13 +5401,13 @@ const MappingReviewScreen = () => {
                                   inventoryBuffer: inventoryBuffer,
                                   // Cross-platform product propagation based on wizard Step 0 choice
                                   syncRules: {
-                                    propagateCreates: productCreationMode === 'sync_everywhere',  // Create products on all platforms
+                                    propagateCreates: shouldPropagateCreates,  // Create products on other platforms
                                     propagateUpdates: true,  // Sync updates to other platforms
                                     propagateDeletes: false, // Don't auto-delete (safer default)
                                     propagateInventory: true, // Sync inventory changes
                                     syncInventory: true,
                                     syncPricing: true,
-                                    productCreationMode: productCreationMode, // Store the raw choice too
+                                    productCreationMode: productCreationMode, // Store the raw choice for reference
                                   }
                                 };
 

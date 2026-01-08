@@ -64,8 +64,36 @@ const App: React.FC = () => {
           if (url.startsWith('anorhaapp://auth-callback') || url.startsWith('anorhaapp://auth/callback')) {
             const urlObject = new URL(url);
             const status = urlObject.searchParams.get('status');
+            const platform = urlObject.searchParams.get('connection') || urlObject.searchParams.get('platform') || 'platform';
+            const errorMessage = urlObject.searchParams.get('message');
+
+            console.log(`[App] Auth callback received: platform=${platform}, status=${status}`);
+
             if (status === 'success') {
-              navigationRef.current?.navigate('AppStack', { screen: 'TabNavigator', params: { screen: 'Profile', params: { refresh: Date.now() } } });
+              // Show brief success message
+              Alert.alert('Success', `${platform.charAt(0).toUpperCase() + platform.slice(1)} connected successfully!`);
+              // Navigate to Profile with a unique refresh timestamp to trigger data reload
+              navigationRef.current?.dispatch(
+                CommonActions.reset({
+                  index: 0,
+                  routes: [{
+                    name: 'AppStack',
+                    state: {
+                      routes: [{
+                        name: 'TabNavigator',
+                        state: {
+                          routes: [{ name: 'Profile', params: { refresh: Date.now() } }],
+                          index: 0
+                        }
+                      }]
+                    }
+                  }],
+                })
+              );
+            } else if (status === 'error') {
+              Alert.alert('Connection Failed', errorMessage || `Failed to connect ${platform}. Please try again.`);
+              // Still navigate to Profile to show the connection attempt result
+              navigationRef.current?.navigate('AppStack', { screen: 'TabNavigator', params: { screen: 'Profile' } });
             }
             return;
           }

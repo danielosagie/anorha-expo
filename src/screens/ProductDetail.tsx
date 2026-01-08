@@ -215,6 +215,8 @@ const ProductDetailScreen = observer(
 
     // Track if initial load has completed to prevent overwrites
     const hasLoadedInitialData = useRef(false);
+    // ⚡ CRITICAL: Track platform data loading separately to allow loading when ProductId becomes available
+    const hasLoadedPlatformData = useRef(false);
     const [isDangerZoneVisible, setIsDangerZoneVisible] = useState(false);
     // Track when we just saved to prevent useEffect from wiping state
     // CRITICAL: Use timestamp-based blocking instead of boolean to prevent race conditions
@@ -415,12 +417,14 @@ const ProductDetailScreen = observer(
 
         console.log('[ProductDetail] Loading platform data for variant:', detailedItem.Id, 'ProductId:', detailedItem.ProductId);
 
-        // Load all platform connections for the user
+        // Load all ACTIVE platform connections for the user
+        // Connections in 'review', 'scanning', or 'error' status shouldn't show their locations
         const { data: connectionsData, error: connectionsError } = await supabase
           .from('PlatformConnections')
           .select('*')
           .eq('UserId', user.id)
-          .eq('IsEnabled', true);
+          .eq('IsEnabled', true)
+          .eq('Status', 'active'); // Only show active connections
 
         if (connectionsError) {
           console.error('Error loading platform connections:', connectionsError);
@@ -553,6 +557,54 @@ const ProductDetailScreen = observer(
         if (inventoryData && inventoryData.length > 0) {
           inventoryData.forEach((level: InventoryLevel) => {
             const connection = platformConnections.find(conn => conn.Id === level.PlatformConnectionId);
+
+            // Handle pool-based inventory (partner shares) - no platform connection but has PoolId
+            // SKIP the virtual "Shared Stock" if there are real platform locations to show
+            // This check runs per-level, so we'll filter later after all levels are processed
+            if (!connection && (level as any).PoolId) {
+              // Count how many real platform locations exist in the inventory data
+              const hasRealPlatformLocations = inventoryData.some((lvl: InventoryLevel) => {
+                const conn = platformConnections.find(c => c.Id === lvl.PlatformConnectionId);
+                return conn !== undefined;
+              });
+
+              // Only add Shared Stock if there are NO real platform locations
+              if (hasRealPlatformLocations) {
+                console.log('[ProductDetail] Skipping Shared Stock - real platform locations exist');
+                return; // Skip adding the virtual location
+              }
+
+              const poolName = 'Partner Inventory';
+              if (!grouped[poolName]) {
+                grouped[poolName] = {
+                  platformType: 'pool',
+                  platformConnectionId: (level as any).PoolId,
+                  displayName: poolName,
+                  locations: []
+                };
+              }
+
+              // Check if location already exists
+              const existingLocation = grouped[poolName].locations.find(
+                loc => loc.locationId === (level as any).PoolId
+              );
+
+              if (existingLocation) {
+                existingLocation.quantity += (level.Quantity || 0);
+              } else {
+                grouped[poolName].locations.push({
+                  id: level.Id || (level as any).PoolId,
+                  locationId: (level as any).PoolId || 'pool',
+                  locationName: 'Shared Stock',
+                  platformConnectionId: (level as any).PoolId,
+                  platformName: poolName,
+                  platformType: 'pool',
+                  quantity: level.Quantity || 0
+                });
+              }
+              return;
+            }
+
             if (!connection) {
               console.warn('[ProductDetail] No connection found for inventory level:', level.PlatformConnectionId);
               return;
@@ -1110,16 +1162,21 @@ const ProductDetailScreen = observer(
 
       for (const asset of assets) {
         try {
-          const response = await fetch(asset.uri);
-          const blob = await response.blob();
-
           const fileExt = asset.uri.split('.').pop() || 'jpg';
           const fileName = `${detailedItem?.Id}-${Date.now()}.${fileExt}`;
           const filePath = `product-images/${fileName}`;
 
+          // React Native compatible upload: use fetch with arraybuffer
+          const response = await fetch(asset.uri);
+          const arrayBuffer = await response.arrayBuffer();
+          const uint8Array = new Uint8Array(arrayBuffer);
+
           const { data, error } = await supabase.storage
             .from('product-media')
-            .upload(filePath, blob);
+            .upload(filePath, uint8Array, {
+              contentType: `image/${fileExt}`,
+              upsert: false,
+            });
 
           if (error) {
             console.error('Upload error:', error);
@@ -1345,14 +1402,24 @@ const ProductDetailScreen = observer(
     }, [productId, passedItem]);
 
     // Load platform data when product is available - ONLY ONCE
+    // Load platform data when product is available - Handle case where ProductId might be missing initially
     useEffect(() => {
-      if (detailedItem && !hasLoadedInitialData.current) {
-        console.log('[ProductDetail] Loading data for product:', detailedItem.Id);
-        loadPlatformData();
-        loadProductDetails(); // Load additional product data
+      if (!detailedItem) return;
+
+      // 1. Load details if not done yet (gets us the ProductId if missing)
+      if (!hasLoadedInitialData.current) {
+        console.log('[ProductDetail] Loading initial details for:', detailedItem.Id);
+        loadProductDetails();
         hasLoadedInitialData.current = true;
       }
-    }, [detailedItem?.Id]); // Only depend on item ID to prevent loops
+
+      // 2. Load platform variants & inventory ONLY when we have the ProductId
+      if (detailedItem.ProductId && !hasLoadedPlatformData.current) {
+        console.log('[ProductDetail] ProductId available, loading platform data:', detailedItem.ProductId);
+        loadPlatformData();
+        hasLoadedPlatformData.current = true;
+      }
+    }, [detailedItem?.Id, detailedItem?.ProductId]); // Re-run when ProductId is populated
 
     // Helper: Hydrate inventory data from InventoryLevels into variant structure
     // ⚡ CRITICAL FIX: Use ProductVariants directly, not VariantPricing (which doesn't exist)

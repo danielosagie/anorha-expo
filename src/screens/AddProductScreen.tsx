@@ -201,7 +201,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [barcodeSearchResult, setBarcodeSearchResult] = useState<any | null>(null);
   const [barcodeSearching, setBarcodeSearching] = useState(false);
   const [showBarcodeResultModal, setShowBarcodeResultModal] = useState(false);
-  const [platformLocations, setPlatformLocations] = useState<{ id: string; name: string; platformType?: string }[]>([]);
+  const [platformLocations, setPlatformLocations] = useState<{ id: string; name: string; platformType?: string; connectionId: string }[]>([]);
 
   // Manifest state
   const [showManifestSheet, setShowManifestSheet] = useState(false);
@@ -218,12 +218,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         // Fetch locations with their connection's platformType
         const { data, error } = await supabase
           .from('PlatformLocations')
-          .select('Id, Name, PlatformLocationId, PlatformConnections!inner(PlatformType)');
+          .select('Id, Name, PlatformLocationId, PlatformConnectionId, PlatformConnections!inner(PlatformType)');
         if (data) {
           setPlatformLocations(data.map((l: any) => ({
             id: l.PlatformLocationId || l.Id,
             name: l.Name,
             platformType: l.PlatformConnections?.PlatformType,
+            connectionId: l.PlatformConnectionId,
           })));
         }
       } catch (e) {
@@ -2022,31 +2023,54 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 }
               }}
               onSave={async (updates) => {
-                console.log('[BARCODE SAVE] Saving updates:', updates);
+                console.log('[BARCODE SAVE] Saving updates via API:', updates);
                 try {
-                  // Use Supabase directly to update inventory
-                  // updates = [{ variantId, location, quantity, price }]
-                  const updatePromises = updates.map(async (update) => {
-                    const { variantId, location, quantity, price } = update;
+                  const token = await ensureSupabaseJwt();
+                  if (!token) throw new Error('No auth token');
 
-                    // Prepare payload
-                    const payload: any = {
-                      Quantity: quantity,
-                      UpdatedAt: new Date().toISOString(),
-                    };
-                    if (price !== undefined) payload.Price = price;
-
-                    // Update inventory level
-                    const { error } = await supabase
-                      .from('InventoryLevels')
-                      .update(payload)
-                      .eq('ProductVariantId', variantId)
-                      .eq('PlatformLocationId', location);
-
-                    if (error) throw error;
+                  // Group updates by variantId
+                  const updatesByVariant: Record<string, typeof updates> = {};
+                  updates.forEach(u => {
+                    if (!updatesByVariant[u.variantId]) updatesByVariant[u.variantId] = [];
+                    updatesByVariant[u.variantId].push(u);
                   });
 
-                  await Promise.all(updatePromises);
+                  const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+
+                  // Process per variant
+                  for (const [variantId, variantUpdates] of Object.entries(updatesByVariant)) {
+                    // Map to API payload structure
+                    const payloadUpdates = variantUpdates.map(u => {
+                      // Find connectionId for the location
+                      const locInfo = platformLocations.find(l => l.id === u.location);
+                      if (!locInfo?.connectionId) {
+                        console.warn(`[BARCODE SAVE] No connectionId found for location ${u.location}`);
+                        return null;
+                      }
+                      return {
+                        platformConnectionId: locInfo.connectionId,
+                        locationId: u.location,
+                        quantity: u.quantity,
+                        price: u.price // API now supports price
+                      };
+                    }).filter(Boolean); // Remove nulls
+
+                    if (payloadUpdates.length === 0) continue;
+
+                    const response = await fetch(`${API_BASE}/api/products/${variantId}/inventory`, {
+                      method: 'PUT',
+                      headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json',
+                      },
+                      body: JSON.stringify({ updates: payloadUpdates }),
+                    });
+
+                    if (!response.ok) {
+                      throw new Error(`API failed: ${response.status}`);
+                    }
+                  }
+
                   Alert.alert('Success', 'Inventory updated successfully');
 
                   // Close sheet after save? Or keep open?

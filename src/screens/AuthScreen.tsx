@@ -365,7 +365,7 @@ const styles = StyleSheet.create({
   logo: {
     width: 80,
     height: 80,
-    borderRadius: 16,
+    borderRadius: 8,
     overflow: 'hidden',
     marginBottom: 10,
   },

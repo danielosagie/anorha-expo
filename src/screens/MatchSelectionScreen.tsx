@@ -780,7 +780,35 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
     const baseSerpApiData = useMemo(() => {
         if (!analysisData || !analysisData.results || analysisData.results.length === 0) return [];
         const safeIndex = Math.min(Math.max(currentProductIndex, 0), analysisData.results.length - 1);
-        return analysisData.results[safeIndex]?.serpApiData || [];
+        const result = analysisData.results[safeIndex];
+        const rawSerp = result?.serpApiData || [];
+        const reranked = result?.rerankedResults;
+
+        // If backend provided reranked results, use them to reorder the list
+        if (Array.isArray(reranked) && reranked.length > 0) {
+            const reordered: SerpApiData[] = [];
+            const usedIndices = new Set<number>();
+
+            // 1. Add reranked items in order
+            reranked.forEach(r => {
+                // Ensure serpApiIndex is valid
+                if (typeof r.serpApiIndex === 'number' && rawSerp[r.serpApiIndex]) {
+                    reordered.push(rawSerp[r.serpApiIndex]);
+                    usedIndices.add(r.serpApiIndex);
+                }
+            });
+
+            // 2. Append remaining items that weren't in the top reranked list
+            rawSerp.forEach((item, idx) => {
+                if (!usedIndices.has(idx)) {
+                    reordered.push(item);
+                }
+            });
+
+            return reordered;
+        }
+
+        return rawSerp;
     }, [analysisData, currentProductIndex]);
 
     const [clientRerankedSerp, setClientRerankedSerp] = useState<SerpApiData[] | null>(null);
@@ -826,7 +854,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
 
     const selectedCount = selectedIndices.length;
 
-    // Find best reranked index for current item (only if rerankedResults exist)
+    // Find best reranked index for current item in the RENDERED LIST
     const bestIndex = useMemo(() => {
         if (!analysisData || !analysisData.results || analysisData.results.length === 0) return null;
         const safeIndex = Math.min(Math.max(currentProductIndex, 0), analysisData.results.length - 1);
@@ -834,12 +862,13 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         const rr = Array.isArray(resAny?.rerankedResults) ? resAny.rerankedResults : [];
         if (!rr.length) return null;
         const best = rr[0];
-        const serp = (analysisData.results[safeIndex]?.serpApiData || []) as SerpApiData[];
-        let idx = serp.findIndex(x => (best?.link && x.link === best.link));
+
+        // Search in serpApiData (the rendered list)
+        let idx = serpApiData.findIndex(x => (best?.link && x.link === best.link));
         if (idx >= 0) return idx;
-        idx = serp.findIndex(x => (best?.title && x.title === best.title));
+        idx = serpApiData.findIndex(x => (best?.title && x.title === best.title));
         return idx >= 0 ? idx : null;
-    }, [analysisData, currentProductIndex]);
+    }, [analysisData, currentProductIndex, serpApiData]);
 
     // Auto-select best only if rerankedResults exist and nothing selected (ONE TIME ONLY)
     useEffect(() => {

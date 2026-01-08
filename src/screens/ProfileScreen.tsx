@@ -281,8 +281,8 @@ const ProfileScreen = () => {
   const route = useRoute<RouteProp<ProfileScreenRouteParams, 'Profile'>>();
   const { resetLegendState } = useLegendStateControl();
   const { toggles } = usePlatformConnections();
-  // @ts-ignore - setOrg might not be in the type definition but is likely in the context value
-  const { currentOrg, setOrg } = useOrg();
+  // Use switchOrg from OrgContext for switching orgs
+  const { currentOrg, switchOrg, availableOrgs } = useOrg();
 
   // For refresh trigger from route params
   const routeRefreshParam = route.params?.refresh || 0;
@@ -436,14 +436,10 @@ const ProfileScreen = () => {
           !m.organization.name.includes('Personal')
         );
 
-        if (realOrgMem && setOrg) {
+        if (realOrgMem && switchOrg) {
           console.log('[ProfileScreen] Auto-switching to real org:', realOrgMem.organization.name);
-          // Update the global OrgContext
-          setOrg({
-            id: realOrgMem.organization.id,
-            name: realOrgMem.organization.name,
-            role: realOrgMem.role,
-          });
+          // Use switchOrg(orgId) from OrgContext
+          switchOrg(realOrgMem.organization.id);
         }
       }
     }, 500); // 500ms delay
@@ -1634,13 +1630,16 @@ const ProfileScreen = () => {
               {currentOrg?.name?.includes('Workspace') && (
                 <TouchableOpacity
                   onPress={() => {
-                    const real = user?.organizationMemberships?.find(m => !m.organization.name.includes('Workspace'));
-                    if (real && setOrg) setOrg({ id: real.organization.id, name: real.organization.name, role: real.role });
+                    // Find a non-workspace org to switch to from available orgs
+                    const realOrg = availableOrgs.find(o => !o.name.includes('Workspace'));
+                    if (realOrg) {
+                      switchOrg(realOrg.id); // switchOrg takes just the orgId
+                    }
                   }}
                   style={{ marginTop: 8 }}
                 >
                   <Text style={{ fontSize: 12, color: theme.colors.primary, fontWeight: 'bold', textDecorationLine: 'underline' }}>
-                    Switch to {user?.organizationMemberships?.find(m => !m.organization.name.includes('Workspace'))?.organization?.name || 'Real Org'}
+                    Switch to {availableOrgs.find(o => !o.name.includes('Workspace'))?.name || 'Real Org'}
                   </Text>
                 </TouchableOpacity>
               )}
@@ -1716,41 +1715,18 @@ const ProfileScreen = () => {
             </TouchableOpacity>
           </View>
 
-          {/* --- UPDATED Integrations Rendering --- */}
           {isLoadingConnections ? (
             <ActivityIndicator size="large" color={theme.colors.primary} style={{ marginVertical: 20 }} />
           ) : (
             <View style={styles.integrationsContainer}>
-              {/* Map over FETCHED connections, not AVAILABLE_PLATFORMS */}
               {(() => {
-                // Calculate filteredConnections first
-
-                // --- DEBUG: Log connections right before filter --- 
-                // console.log(`[ProfileScreen PRE-FILTER DEBUG] connections at filter time: ${JSON.stringify(platformConnections)}`);
-                // --- END DEBUG ---
-
-                // --- REMOVE THE FILTER BASED ON STATUS ---
                 const filteredConnections = platformConnections; // Display all connections
-                // --- END REMOVAL ---
-
-                // Perform logging and return JSX
                 if (!(platformConnections.length > 0)) {
-                  // console.log("[ProfileScreen RENDER DEBUG] connections.length is NOT > 0");
-                  // Note: This case might be redundant if filteredConnections handles it, but keep for explicit logging
                 } else {
-                  // console.log(`[ProfileScreen RENDER DEBUG] connections.length > 0 ? true`);
                 }
-
-                // console.log(`[ProfileScreen FILTERED DEBUG] Filtered connections count: ${filteredConnections.length}`);
-                // console.log(`[ProfileScreen FILTERED DEBUG] Filtered connections data: ${JSON.stringify(filteredConnections)}`);
-
                 if (filteredConnections.length === 0) {
-                  // console.log("[ProfileScreen RENDER DEBUG] No connections after filtering.");
-                  // Return null here, the text below will handle the message
                   return null;
                 } else {
-                  // console.log("[ProfileScreen RENDER DEBUG] Mapping filtered connections...");
-                  // Now map the filtered array
                   return filteredConnections.map((connection) => {
                     const platformConfig = AVAILABLE_PLATFORMS.find(p => p.key === connection.PlatformType);
                     if (!platformConfig) return null;
@@ -1767,25 +1743,17 @@ const ProfileScreen = () => {
                         onDisconnect={handleDisconnectPlatform}
                         onFix={(id, name) => fixAndResumeConnection(id, name)}
                         navigation={navigation}
-                      // Helper functions that are in scope
-                      // formatSyncDate is now global
-                      // getStatusDisplay is global
-                      // getRecommendedAction is global
                       />
                     );
                   });
                 }
               })()}
 
-              {/* Render "No active connections yet" text if needed */}
-              {/* --- ADJUSTED CONDITION: Show text only if the connections array is truly empty --- */}
               {
                 platformConnections.length === 0 && (
                   <Text style={styles.noConnectionsText}>No connections yet.</Text>
                 )
               }
-              {/* --- END ADJUSTED CONDITION --- */}
-              {/* Always render Add Connection Button (unless error/loading) */}
               <Button
                 title="Import Inventory/Connect Platform"
                 onPress={() => {
@@ -1796,11 +1764,8 @@ const ProfileScreen = () => {
                 }}
                 style={styles.addConnectionButton}
               />
-              {/* --- END Add Connection Button --- */}
-
             </View>
           )}
-          {/* --- END UPDATED Integrations Rendering --- */}
         </Card>
       </Animated.View>
 
@@ -2115,9 +2080,13 @@ const ConnectedPlatformItem = React.memo(({
 
   // Determine if progress bar should be shown
   // Show if:
-  // 1. progress object exists AND isActive is true
-  // 2. OR status is 'scanning'/'syncing'/'reconciling' (fallback if hook is slow)
-  const isProgressActive = progress?.status === 'scanning' || progress?.status === 'syncing' || progress?.status === 'reconciling';
+  // 1. progress object exists AND status is 'scanning'/'syncing'/'reconciling' (fallback if hook is slow)
+  const status = (progress?.status as any);
+  const isProgressActive = status === 'scanning' ||
+    status === 'syncing' ||
+    status === 'reconciling' ||
+    status === 'queued'; // Added queued
+
   const progressValue = (progress?.progress || 0) / 100;
 
   return (
@@ -2144,7 +2113,7 @@ const ConnectedPlatformItem = React.memo(({
                 <View style={{ width: '100%', marginTop: 4 }}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 }}>
                     <Text style={{ fontSize: 10, color: theme.colors.primary }}>
-                      {progress?.description || statusInfo.label}
+                      {progress?.description || statusInfo.label || 'Processing...'}
                     </Text>
                     <Text style={{ fontSize: 10, color: theme.colors.textSecondary }}>
                       {Math.round((progress?.progress || 0))}%

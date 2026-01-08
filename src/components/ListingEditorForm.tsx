@@ -803,6 +803,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
       {/* Media with Remove & Add Photo Management */}
       <View style={styles.mediaRow}>
         <ScrollView style={{ paddingVertical: 10 }} horizontal={true} showsHorizontalScrollIndicator={false}>
+          {/* Images first - Cover (index 0) appears on left */}
           {(images || []).map((uri, i) => (
             <View key={`${uri}-${i}`} style={{ position: 'relative', marginRight: 8 }}>
               <TouchableOpacity
@@ -848,20 +849,22 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
             </View>
           ))}
 
-          {/* Add Photo Slots (max 6 total) */}
-          {Array.from({ length: Math.max(0, Math.min(6 - (images?.length || 0), 1)) }).map((_, slotIdx) => (
+          {/* Single Add Photo button on the right (only show if under max photos) */}
+          {(images?.length || 0) < 6 && (
             <TouchableOpacity
-              key={`add-slot-${slotIdx}`}
-              style={[styles.thumbWrap, styles.addThumb]}
-              onPress={() => {
-                if (onOpenImageCapture) {
-                  onOpenImageCapture((uris: string[]) => onChangeImages?.([...(images || []), ...uris]));
+              style={[styles.thumbWrap, { backgroundColor: '#F3F4F6', borderStyle: 'dashed', borderColor: '#D1D5DB', borderWidth: 1 }]}
+              onPress={() => onOpenImageCapture?.((uris) => {
+                if (uris && uris.length > 0) {
+                  onChangeImages?.([...(images || []), ...uris]);
                 }
-              }}
+              })}
             >
-              <Icon name="plus" size={22} color="#666" />
+              <View style={{ alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}>
+                <Icon name="plus" size={24} color="#9CA3AF" />
+                <Text style={{ fontSize: 10, color: '#6B7280', marginTop: 4, fontWeight: '600' }}>Add Photo</Text>
+              </View>
             </TouchableOpacity>
-          ))}
+          )}
         </ScrollView>
         <Text style={styles.mediaHint}>Tap an image to set it as the cover</Text>
       </View>
@@ -1709,6 +1712,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                 });
                 preparedVariants = Array.from(variantMap.values());
 
+                // CRITICAL FIX: Filter out empty "Variant" placeholders when real named variants exist
+                // This handles the case where a base variant with no optionValues is mixed with option variants
+                const hasRealVariants = preparedVariants.some(v => v.name && v.name !== 'Variant' && v.name.trim() !== '');
+                if (hasRealVariants) {
+                  preparedVariants = preparedVariants.filter(v => v.name && v.name !== 'Variant' && v.name.trim() !== '');
+                }
+
               } else {
                 // Specific Platform
                 const pData = activeData; // activeData is platforms[activeTab]
@@ -1720,6 +1730,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                     defaultPrice: Number(v.price ?? pData.price ?? 0),
                     inventory: v.inventoryByLocation || {}
                   }));
+
+                  // CRITICAL FIX: Filter out empty "Variant" placeholders when real named variants exist
+                  const hasRealVariants = preparedVariants.some(v => v.name && v.name !== 'Variant' && v.name.trim() !== '');
+                  if (hasRealVariants) {
+                    preparedVariants = preparedVariants.filter(v => v.name && v.name !== 'Variant' && v.name.trim() !== '');
+                  }
                 }
               }
 
@@ -1819,31 +1835,23 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                 onChangePlatforms(nextPlatforms);
               };
 
-              const handleSelectImage = async (variantId: string) => {
-                try {
-                  const result = await ImagePicker.launchImageLibraryAsync({
-                    mediaTypes: ImagePicker.MediaTypeOptions.Images,
-                    allowsEditing: true,
-                    aspect: [1, 1],
-                    quality: 0.8,
-                  });
-                  if (!result.canceled && result.assets[0].uri) {
-                    const uri = result.assets[0].uri;
-                    const nextPlatforms = { ...platforms };
+              const handleSelectImage = (variantId: string) => {
+                onOpenImageCapture?.(async (uris) => {
+                  if (!uris || uris.length === 0) return;
 
-                    platformKeys.forEach(pk => {
-                      const pd = nextPlatforms[pk];
-                      if (pd && pd.variants) {
-                        pd.variants = pd.variants.map((v: any) =>
-                          v.id === variantId ? { ...v, image: uri } : v
-                        );
-                      }
-                    });
-                    onChangePlatforms(nextPlatforms);
-                  }
-                } catch (e) {
-                  console.error('Pick image error', e);
-                }
+                  const uri = uris[0];
+                  const nextPlatforms = { ...platforms };
+
+                  platformKeys.forEach(pk => {
+                    const pd = nextPlatforms[pk];
+                    if (pd && pd.variants) {
+                      pd.variants = pd.variants.map((v: any) =>
+                        v.id === variantId ? { ...v, image: uri } : v
+                      );
+                    }
+                  });
+                  onChangePlatforms(nextPlatforms);
+                });
               };
 
               return (

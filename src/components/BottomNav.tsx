@@ -171,7 +171,7 @@ const BottomNav: React.FC<Props> = ({
               <View style={{ width: 24 }} />
             </View>
             <View style={styles.platformGrid}>
-              {['shopify', 'square', 'facebook'].map((p) => (
+              {['shopify', 'square', 'ebay'].map((p) => (
                 <PlatformButton
                   key={p}
                   platform={p}
