@@ -44,6 +44,7 @@ type Props = {
   // Live external updates (green indicator for values changed while editing)
   externalUpdates?: Record<string, { value?: any; quantity?: number; price?: number; updatedAt: number }>;
   onAdoptExternalUpdate?: (key: string, value: any) => void;
+  pendingImages?: string[];
 };
 
 export type ListingEditorFormRef = { openPlatformPicker: () => void };
@@ -139,7 +140,7 @@ export const PRESET_OPTIONS = [
   }
 ];
 
-function ListingEditorFormInner({ platforms, updateCounter, images, platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate }: Props, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate }: Props, ref: React.Ref<ListingEditorFormRef>) {
   const platformKeys = useMemo(() => {
     const keys = Object.keys(platforms || {}).filter((k) => typeof k === 'string' && k.trim().length > 0);
     console.log('[ListingEditorForm] platformKeys:', keys);
@@ -846,6 +847,16 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
               >
                 <Icon name="close" size={12} color="#FFF" />
               </TouchableOpacity>
+            </View>
+          ))}
+
+          {/* Pending uploads (optimistic UI) */}
+          {(pendingImages || []).map((uri, i) => (
+            <View key={`pending-${i}`} style={[styles.thumbWrap, { opacity: 0.6 }]}>
+              <Image source={{ uri }} style={styles.thumb} />
+              <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: 12 }]}>
+                <ActivityIndicator size="small" color="#fff" />
+              </View>
             </View>
           ))}
 
@@ -1703,7 +1714,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
 
                     variantMap.set(vId, {
                       id: vId,
-                      name: Object.values(v.optionValues || {}).join(' / ') || 'Variant',
+                      name: Object.values(v.optionValues || {}).join(' / ') || v.title || v.sku || 'Variant',
                       image: v.image || existing?.image,
                       defaultPrice: v.price || existing?.defaultPrice,
                       inventory: inv
@@ -1725,7 +1736,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, platformLoca
                 if (pData && pData.variants) {
                   preparedVariants = pData.variants.map((v: any) => ({
                     id: v.id,
-                    name: Object.values(v.optionValues || {}).join(' / ') || 'Variant',
+                    name: Object.values(v.optionValues || {}).join(' / ') || v.title || v.sku || 'Variant',
                     image: v.image,
                     defaultPrice: Number(v.price ?? pData.price ?? 0),
                     inventory: v.inventoryByLocation || {}

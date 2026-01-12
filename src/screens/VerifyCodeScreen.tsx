@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react'
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Animated } from 'react-native';
 import { useSignUp, useAuth } from '@clerk/clerk-expo';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useTheme } from '../context/ThemeContext';
 
 type VerifyCodeRoute = {
   params?: {
@@ -22,10 +23,13 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
   const mode = route?.params?.mode ?? 'signup';
   const { signUp, isLoaded: isSignUpLoaded } = useSignUp();
   const auth = useAuth() as any;
+  const theme = useTheme();
 
   const [digits, setDigits] = useState<string[]>(Array(CELL_COUNT).fill(''));
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [resendTimer, setResendTimer] = useState(0);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const inputs = useRef<Array<TextInput | null>>([]);
   const code = useMemo(() => digits.join(''), [digits]);
   const errorShakeAnim = useRef(new Animated.Value(0)).current;
@@ -147,6 +151,34 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
     }
   }, [code]);
 
+  // Handle resend countdown
+  useEffect(() => {
+    if (resendTimer > 0) {
+      const timer = setTimeout(() => setResendTimer(resendTimer - 1), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [resendTimer]);
+
+  const handleResend = async () => {
+    if (resendTimer > 0 || !isSignUpLoaded || !signUp) return;
+
+    try {
+      setSubmitting(true);
+      setErrorMessage(null);
+      setSuccessMessage(null);
+
+      await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
+
+      setSuccessMessage('Verification code resent successfully!');
+      setResendTimer(60); // 60 second cooldown
+    } catch (e: any) {
+      const message = e?.errors?.[0]?.message || 'Failed to resend code. Please try again later.';
+      setErrorMessage(message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.card}>
@@ -181,11 +213,18 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
           ))}
         </Animated.View>
 
-        {/* Error Message - Styled inline instead of Alert */}
+        {/* Status Messages */}
         {errorMessage && (
           <View style={styles.errorContainer}>
             <Icon name="alert-circle-outline" size={18} color="#DC2626" />
             <Text style={styles.errorText}>{errorMessage}</Text>
+          </View>
+        )}
+
+        {successMessage && (
+          <View style={[styles.errorContainer, { backgroundColor: '#ECFDF5', borderColor: '#A7F3D0' }]}>
+            <Icon name="check-circle-outline" size={18} color="#059669" />
+            <Text style={[styles.errorText, { color: '#059669' }]}>{successMessage}</Text>
           </View>
         )}
 
@@ -208,9 +247,23 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
           )}
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.resendContainer} onPress={() => {/* TODO: resend logic */ }}>
+        <TouchableOpacity
+          style={styles.resendContainer}
+          onPress={handleResend}
+          disabled={resendTimer > 0 || submitting}
+        >
           <Text style={styles.resendText}>Didn't receive the code? </Text>
-          <Text style={styles.resendLink}>Resend</Text>
+          <Text style={[styles.resendLink, (resendTimer > 0 || submitting) && { opacity: 0.5 }]}>
+            {resendTimer > 0 ? `Resend in ${resendTimer}s` : 'Resend'}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={[styles.backButton, { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, marginTop: 20, alignSelf: 'center' }]}
+        >
+          <Icon name="arrow-left" size={20} color={theme.colors.text} />
+          <Text style={{ marginLeft: 6, fontSize: 16, fontWeight: '500', color: theme.colors.text }}>Back</Text>
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
@@ -335,6 +388,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     fontFamily: 'PlusJakartaSans_600SemiBold',
+  },
+  backButton: {
+    // Basic hit slop area
   },
 });
 

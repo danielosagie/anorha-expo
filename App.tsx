@@ -26,6 +26,8 @@ import { ProcessState, ProcessType } from './src/utils/ProcessPersistence';
 import SafeErrorBoundary from './src/utils/SafeErrorBoundary';
 import { OrgProvider } from './src/context/OrgContext';
 import { JobsProvider } from './src/context/JobsContext';
+import { SystemNotificationProvider } from './src/context/SystemNotificationContext';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 // Feature flag to disable new functionality during debugging
 const ENABLE_PROCESS_FEATURES = false;
@@ -394,7 +396,11 @@ const App: React.FC = () => {
 
   return (
     <ClerkProvider publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!} tokenCache={tokenCache}>
-      <DebugClerkState />
+      <SafeAreaProvider>
+        <SystemNotificationProvider>
+          <DebugClerkState />
+        </SystemNotificationProvider>
+      </SafeAreaProvider>
     </ClerkProvider>
   );
 };

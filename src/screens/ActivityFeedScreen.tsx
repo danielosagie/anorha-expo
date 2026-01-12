@@ -26,6 +26,7 @@ import InventoryListCard from '../components/InventoryListCard';
 import ActivityEventCard from '../components/ActivityEventCard';
 import PoolLocationCombobox from '../components/PoolLocationCombobox';
 import SortByDropdown from '../components/SortByDropdown';
+import CampaignCard from '../components/CampaignCard';
 import { PlatformConnection, PlatformLocation } from '../utils/SupaLegend';
 import { useProductVariantRealtime } from '../hooks/useProductVariantRealtime';
 import { useUser } from '@clerk/clerk-expo';
@@ -443,11 +444,33 @@ const ActivityFeedScreen = observer(() => {
   // TODO: Add realtime subscription when backend is ready
   // For now, we'll rely on pull-to-refresh for updates
 
+  // Campaigns Fetching
+  const [campaigns, setCampaigns] = useState<any[]>([]);
+  const fetchCampaigns = useCallback(async () => {
+    if (!currentOrg?.id) return;
+    try {
+      const token = await ensureSupabaseJwt();
+      const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app'}/api/liquidation/campaigns`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) setCampaigns(data.campaigns || []);
+      }
+    } catch (e) {
+      console.log('Error fetching campaigns', e);
+    }
+  }, [currentOrg?.id]);
+
+  useEffect(() => {
+    fetchCampaigns();
+  }, [fetchCampaigns]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await fetchActivityFeed();
+    await Promise.all([fetchActivityFeed(), fetchCampaigns()]);
     setRefreshing(false);
-  }, [fetchActivityFeed]);
+  }, [fetchActivityFeed, fetchCampaigns]);
 
   const loadMore = useCallback(async () => {
     if (!hasMore || loadingMore || !nextCursor) return;
@@ -798,6 +821,39 @@ const ActivityFeedScreen = observer(() => {
   return (
     <View style={[styles.background]}>
       <View style={[styles.container, { marginTop: 60, paddingTop: 20 }]}>
+
+        {/* Campaigns Section */}
+        {campaigns.length > 0 && (
+          <View style={{ marginBottom: 20 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, marginBottom: 12, alignItems: 'center' }}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: theme.colors.text }}>Active Liquidation</Text>
+              <TouchableOpacity onPress={() => navigation.navigate('CampaignsList' as any)}>
+                <Text style={{ color: theme.colors.primary, fontWeight: '600' }}>See All</Text>
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={campaigns}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ paddingHorizontal: 16 }}
+              keyExtractor={item => item.Id}
+              renderItem={({ item }) => (
+                <CampaignCard
+                  id={item.Id}
+                  name={item.DisplayName || item.Goal?.targetRevenue + ' Target'}
+                  itemsSold={item.ItemsSold || 0}
+                  totalItems={item.TotalItems || 0}
+                  revenue={item.RevenueGenerated || 0}
+                  daysRemaining={item.Goal?.timeframeDays - (item.Progress?.daysElapsed || 0) || 0}
+                  status={item.Status}
+                  onPress={() => navigation.navigate('CampaignDetail' as any, { campaignId: item.Id })}
+                />
+              )}
+            />
+          </View>
+        )}
+
+        {/* Global Search & Filter Header (Sticky) */}
         <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
 
 

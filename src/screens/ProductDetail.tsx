@@ -28,6 +28,7 @@ import {
 import { observer } from '@legendapp/state/react';
 import * as ImagePicker from 'expo-image-picker';
 import { useCollaboration } from '../hooks/useCollaboration';
+import { useOrg } from '../context/OrgContext';
 import LoadingOverlay from '../components/LoadingOverlay';
 // Base URL for API
 const SSSYNC_API_BASE_URL = 'https://api.sssync.app';
@@ -179,6 +180,7 @@ const ProductDetailScreen = observer(
     const theme = useTheme();
     const passedItem = route.params?.item;
     const productId = route.params?.productId || passedItem?.Id;
+    const { currentOrg } = useOrg();
 
     // 🚨 DEBUG: Intercept all fetch calls from this component
     React.useEffect(() => {
@@ -369,6 +371,7 @@ const ProductDetailScreen = observer(
 
     // State for sync loading
     const [isSyncing, setIsSyncing] = useState(false);
+    const [pendingImages, setPendingImages] = useState<string[]>([]);
 
     // Helper function to get proper location names from platform data
     const getLocationName = useCallback((level: InventoryLevel, connection: PlatformConnection, mapping?: PlatformProductMapping): string => {
@@ -1163,8 +1166,21 @@ const ProductDetailScreen = observer(
       for (const asset of assets) {
         try {
           const fileExt = asset.uri.split('.').pop() || 'jpg';
-          const fileName = `${detailedItem?.Id}-${Date.now()}.${fileExt}`;
-          const filePath = `product-images/${fileName}`;
+          const fileName = `${Date.now()}.${fileExt}`;
+
+          // CRITICAL: Path MUST be {orgId}/{variantId}/{filename} for RLS to work
+          // Try to find OrgId from currentOrg first, then connections, then fallback to UserId
+          const orgId = currentOrg?.id || connections.find(c => c.OrgId)?.OrgId || detailedItem?.UserId;
+          const variantId = detailedItem?.Id;
+
+          console.log(`[uploadImagesToSupabase] Resolved orgId: ${orgId}, variantId: ${variantId}`);
+
+          if (!orgId || !variantId) {
+            console.error('Missing OrgId or VariantId for upload', { orgId, variantId });
+            continue;
+          }
+
+          const filePath = `${orgId}/${variantId}/${fileName}`;
 
           // React Native compatible upload: use fetch with arraybuffer
           const response = await fetch(asset.uri);
@@ -1172,7 +1188,7 @@ const ProductDetailScreen = observer(
           const uint8Array = new Uint8Array(arrayBuffer);
 
           const { data, error } = await supabase.storage
-            .from('product-media')
+            .from('product-images')
             .upload(filePath, uint8Array, {
               contentType: `image/${fileExt}`,
               upsert: false,
@@ -1184,7 +1200,7 @@ const ProductDetailScreen = observer(
           }
 
           const { data: publicUrlData } = supabase.storage
-            .from('product-media')
+            .from('product-images')
             .getPublicUrl(filePath);
 
           uploadedUrls.push(publicUrlData.publicUrl);
@@ -1610,7 +1626,32 @@ const ProductDetailScreen = observer(
       // Group inventory levels by platform type using the connection lookup
       rawInventoryLevels?.forEach(level => {
         const platformType = connectionToPlatform.get(level.PlatformConnectionId);
-        if (!platformType) return;
+
+        // Handle pool-based inventory (forked products with PlatformConnectionId = null)
+        // These are shared products where PoolId is set but no platform connection yet
+        if (!platformType && (level as any).PoolId) {
+          // Add to a special 'pool' platform for shared inventory
+          const poolPlatform = 'pool';
+          if (!platformLocationState[poolPlatform]) {
+            platformLocationState[poolPlatform] = { locations: [], locationQuantities: {} };
+          }
+
+          const locId = level.PlatformLocationId || (level as any).PoolId || 'shared';
+          const existingLoc = platformLocationState[poolPlatform].locations.find(l => l.id === locId);
+          if (!existingLoc) {
+            platformLocationState[poolPlatform].locations.push({
+              id: locId,
+              name: 'Shared Inventory',
+              connectionId: (level as any).PoolId,
+              connectionName: 'Partner Pool',
+            });
+          }
+          platformLocationState[poolPlatform].locationQuantities[locId] =
+            (platformLocationState[poolPlatform].locationQuantities[locId] || 0) + (level.Quantity || 0);
+          return;
+        }
+
+        if (!platformType) return;  // Skip if no platform and no pool
 
         if (!platformLocationState[platformType]) {
           platformLocationState[platformType] = { locations: [], locationQuantities: {} };
@@ -1726,34 +1767,68 @@ const ProductDetailScreen = observer(
       // ⚡ UPDATED: Include platforms that have data in platformSpecificData, even without active connections
       // This allows platforms like Facebook (where we have AI-generated data but no connection yet) to appear as tabs
       const actualPlatformTypes = new Set(connections.map(c => c.PlatformType.toLowerCase()));
-      const platformKeys = Object.keys(platformSpecificData).filter(key => {
-        const keyLower = key.toLowerCase();
-        const platformData = platformSpecificData[key];
 
-        // Always include if we have actual connections for this platform type
+      // ⚡ CRITICAL FIX: Also include platforms from PlatformProductMappings!
+      // Forked products may have mappings to Square/Facebook but no platformSpecificData entry
+      // Build a set of platforms that have mappings for this product's variants
+      const mappedPlatformTypes = new Set<string>();
+      mappings.forEach(m => {
+        const conn = connections.find(c => c.Id === m.PlatformConnectionId);
+        if (conn) {
+          mappedPlatformTypes.add(conn.PlatformType.toLowerCase());
+        }
+      });
+      console.log('[ProductDetail] Platforms with mappings:', Array.from(mappedPlatformTypes));
+
+      // Combine: platforms from metadata + platforms from mappings + platforms from inventory
+      const allPlatformKeysSet = new Set<string>([
+        ...Object.keys(platformSpecificData).map(k => k.toLowerCase()),
+        ...Array.from(mappedPlatformTypes),
+        ...Object.keys(platformLocationState),
+      ]);
+
+      // Filter to only include platforms that make sense to show
+      const platformKeys = Array.from(allPlatformKeysSet).filter(keyLower => {
+        // Always include if we have actual mappings for this platform
+        if (mappedPlatformTypes.has(keyLower)) {
+          console.log(`[ProductDetail] Including platform '${keyLower}' - has mappings`);
+          return true;
+        }
+
+        // Always include if we have active connections for this platform type
         if (actualPlatformTypes.has(keyLower)) return true;
+
+        // Include pool-based inventory (forked/shared products)
+        if (keyLower === 'pool' && platformLocationState['pool']?.locations?.length > 0) {
+          console.log(`[ProductDetail] Including platform 'pool' - has shared inventory`);
+          return true;
+        }
 
         // Also include if there's meaningful data in platformSpecificData (for future publishing)
         // This allows platforms like Facebook to show even without a connection
+        const platformData = platformSpecificData[keyLower] || platformSpecificData[keyLower.charAt(0).toUpperCase() + keyLower.slice(1)];
         const hasMeaningfulData = platformData && (
           platformData.title ||
           platformData.description ||
           platformData.variants?.length > 0
         );
         if (hasMeaningfulData) {
-          console.log(`[ProductDetail] Including platform '${key}' - has data but no active connection (for future publishing)`);
+          console.log(`[ProductDetail] Including platform '${keyLower}' - has data but no active connection (for future publishing)`);
           return true;
         }
 
         // Skip truly empty platforms
-        console.log(`[ProductDetail] Filtering out empty platform '${key}' - no data and no connection`);
+        console.log(`[ProductDetail] Filtering out empty platform '${keyLower}' - no data and no connection`);
         return false;
       });
 
       if (platformKeys.length > 0) {
         platformKeys.forEach(platformKey => {
-          const platformData = platformSpecificData[platformKey] || {};
-          const platformKeyLower = platformKey.toLowerCase();
+          // platformKey is already lowercase from our normalization
+          // Look up the original casing in platformSpecificData
+          const originalKey = Object.keys(platformSpecificData).find(k => k.toLowerCase() === platformKey) || platformKey;
+          const platformData = platformSpecificData[originalKey] || {};
+          const platformKeyLower = platformKey; // Already lowercase
 
           // ⚡ CRITICAL FIX: Use per-platform locations from platformLocationState
           // This ensures each platform only sees its own locations, not all platforms mixed together
@@ -1837,7 +1912,7 @@ const ProductDetailScreen = observer(
       lastHydratedInventoryCountRef.current = currentInventoryCount;
       console.log('[ProductDetail] ✅ Initial hydration complete for product', detailedItem.Id,
         'with', Object.keys(allPlatforms).length, 'platforms');
-    }, [detailedItem?.Id, allProductVariants, rawInventoryLevels, hydrateInventoryFromDB, hasUnsavedChanges, isInSaveBlockingWindow, connections, platformLocationNames]); // Depend on real inventory data + connections + location names
+    }, [detailedItem?.Id, allProductVariants, rawInventoryLevels, hydrateInventoryFromDB, hasUnsavedChanges, isInSaveBlockingWindow, connections, platformLocationNames, mappings]); // Depend on real inventory data + connections + location names + mappings
 
     // Phase 2: Load drafts from backend (ONCE only, do NOT re-fetch when platforms change)
     // CRITICAL FIX: Removed displayedPlatforms from dependencies to prevent overwriting user edits
@@ -2378,6 +2453,7 @@ const ProductDetailScreen = observer(
               }}
               onChangeImages={(next) => { reorderImages(next); }}
               onOpenFieldPanel={undefined}
+              pendingImages={pendingImages}
               onOpenBarcodeScanner={(onResult) => {
                 setIsBarcodeScannerVisible(true);
                 // handler stored on closure
@@ -2397,10 +2473,17 @@ const ProductDetailScreen = observer(
                   });
                   if (!result.canceled && result.assets) {
                     setIsUploadingImages(true);
-                    const uploadedUrls = await uploadImagesToSupabase(result.assets);
-                    onResult(uploadedUrls);  // Call the callback with uploaded URLs
-                    await addImagesToProduct(uploadedUrls);
-                    setIsUploadingImages(false);
+                    const localUris = result.assets.map(a => a.uri);
+                    setPendingImages(prev => [...prev, ...localUris]);
+
+                    try {
+                      const uploadedUrls = await uploadImagesToSupabase(result.assets);
+                      onResult(uploadedUrls);  // Call the callback with uploaded URLs
+                      await addImagesToProduct(uploadedUrls);
+                    } finally {
+                      setPendingImages(prev => prev.filter(uri => !localUris.includes(uri)));
+                      setIsUploadingImages(false);
+                    }
                   }
                 } catch (error) {
                   console.error('Error picking images:', error);

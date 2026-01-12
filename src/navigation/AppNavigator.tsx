@@ -21,6 +21,7 @@ import {
 } from '@expo-google-fonts/plus-jakarta-sans';
 // import { CirclePlus } from 'lucide-react-native';
 import OnboardConnectionScreen from '../screens/OnboardConnectionScreen';
+import { usePushNotifications } from '../hooks/usePushNotifications';
 
 // Import the context from its new location
 import { AuthContext, AuthContextType } from '../context/AuthContext';
@@ -33,6 +34,7 @@ import DashboardScreen from '../screens/DashboardScreen';
 import InventoryOrdersScreen from '../screens/InventoryOrdersScreen';
 import MarketplaceScreen from '../screens/MarketplaceScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
 import ProductDetailScreen from '../screens/ProductDetail';
 import PhoneAuthScreen from '../screens/PhoneAuthScreen';
 import CreateAccountScreen from '../screens/CreateAccountScreen';
@@ -100,9 +102,10 @@ export type AppStackParamList = {
   };
   ProductDetail: { productId: string };
   PastScans: undefined;
-  MappingReview: { connectionId: string; platformName: string; jobId?: string; importedProducts?: any[]; isCSVImport?: boolean; isScanning?: boolean; };
+  MappingReview: { connectionId: string; platformName: string; jobId?: string; importedProducts?: any[]; isCSVImport?: boolean; isScanning?: boolean; scanStartTime?: number; };
   SyncRules: { connectionId: string };
   Profile: { refresh?: number }; // Add Profile screen with optional refresh param
+  NotificationSettings: undefined;
   Team: undefined;
   AddProduct: {
     firstPhotos: any[];
@@ -266,6 +269,7 @@ const Tab = createBottomTabNavigator();
 
 // Define TabNavigator separately - this fixes the "MainTabs doesn't exist" error
 const TabNavigator = () => {
+  usePushNotifications();
   // Create a custom tab bar style with rounded corners and horizontal padding
   const customTabBarStyle = {
     ...styles.tabBar,
@@ -402,6 +406,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="MappingReview" component={MappingReviewScreen} />
     <AppStackNav.Screen name="SyncRules" component={SyncRulesScreen} />
     <AppStackNav.Screen name="Profile" component={ProfileScreen} />
+    <AppStackNav.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
     <AppStackNav.Screen name="Team" component={TeamScreen} />
     <AppStackNav.Screen name="AddProduct" component={AddProductScreen} />
     <AppStackNav.Screen name="LoadingScreen" component={LoadingScreen} />
@@ -570,27 +575,43 @@ const AppNavigator = () => {
   }, [devExpireSession]);
 
   const checkOnboardingAndNavigate = async () => {
-    // SIMPLIFIED: For signed-in users, always go to TabNavigator
-    // The OrgContext will handle org detection and can redirect to CreateAccountScreen if needed
-    // This avoids timing issues with RLS policies and JWT setup
-
     try {
+      // Ensure Supabase is ready
+      await ensureSupabaseJwt();
+
+      // We use the shimmed getUser which returns DB user data
       const { data: { user }, error: getUserError } = await supabase.auth.getUser();
 
-      if (getUserError || !user) {
-        console.error("Error fetching user for onboarding check:", getUserError);
-        authContext.signOut();
+      // If they are signed into Clerk but we can't find them in the DB,
+      // it means they haven't finished the onboarding form yet.
+      if (!user) {
+        console.log("[Onboarding Check] Clerk authenticated but no DB user found. Going to CreateAccountScreen");
+        setInitialAppScreen('CreateAccountScreen');
+        setIsLoading(false);
         return;
       }
 
-      console.log(`[Onboarding Check] User ID: ${user.id} - Going to TabNavigator`);
+      // If we DID find them, check if they finished the onboarding steps
+      // Note: The 'me' view might already imply some consistency, but let's check the flag
+      const { data: dbUser, error: dbError } = await supabase
+        .from('Users')
+        .select('isOnboardingComplete')
+        .eq('Id', user.id)
+        .maybeSingle();
 
-      // Always go to TabNavigator - OrgContext will handle org detection
-      setInitialAppScreen('TabNavigator');
+      if (dbError) {
+        console.error("[Onboarding Check] DB fetch error:", dbError);
+        setInitialAppScreen('TabNavigator');
+      } else if (dbUser?.isOnboardingComplete) {
+        console.log(`[Onboarding Check] User ID: ${user.id} - Onboarding complete. Going to TabNavigator`);
+        setInitialAppScreen('TabNavigator');
+      } else {
+        console.log(`[Onboarding Check] User ID: ${user.id} - Onboarding INCOMPLETE in DB. Going to CreateAccountScreen`);
+        setInitialAppScreen('CreateAccountScreen');
+      }
 
     } catch (error) {
       console.error("Error during onboarding check:", error);
-      // On error, still try to go to dashboard
       setInitialAppScreen('TabNavigator');
     } finally {
       setIsLoading(false);

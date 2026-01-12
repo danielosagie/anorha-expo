@@ -51,6 +51,7 @@ interface ManifestReviewSheetProps {
     jobId: string;
     onClose: () => void;
     onAddToInventory?: (items: ManifestItem[]) => void;
+    onLiquidate?: (items: ManifestItem[]) => void;
 }
 
 const API_URL = process.env.EXPO_PUBLIC_SSSYNC_BACKEND_URL || 'https://sssync-bknd.onrender.com';
@@ -59,8 +60,12 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
     jobId,
     onClose,
     onAddToInventory,
+    onLiquidate,
 }) => {
     const theme = useTheme();
+    const colors = theme.colors;
+    const border = '#E5E7EB';
+
     const [jobStatus, setJobStatus] = useState<ManifestJobStatus | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -166,6 +171,21 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
         }
     };
 
+    // Handle liquidate
+    const handleLiquidate = () => {
+        const itemsToLiquidate = editedItems.filter(item => selectedItems.has(item.id));
+        if (itemsToLiquidate.length === 0) {
+            Alert.alert('No Items Selected', 'Please select at least one item to liquidate.');
+            return;
+        }
+
+        if (onLiquidate) {
+            onLiquidate(itemsToLiquidate);
+        } else {
+            Alert.alert('Coming Soon', 'Liquidation flow will be available in the next update.');
+        }
+    };
+
     // Calculate totals
     const totalItems = editedItems.length;
     const selectedCount = selectedItems.size;
@@ -176,14 +196,14 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
     return (
         <Animated.View
             entering={SlideInDown.duration(300)}
-            style={[styles.container, { backgroundColor: theme.background }]}
+            style={[styles.container, { backgroundColor: colors.background }]}
         >
             {/* Header */}
             <View style={styles.header}>
                 <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-                    <Icon name="close" size={24} color={theme.text} />
+                    <Icon name="close" size={24} color={colors.text} />
                 </TouchableOpacity>
-                <Text style={[styles.title, { color: theme.text }]}>Manifest Review</Text>
+                <Text style={[styles.title, { color: colors.text }]}>Manifest Review</Text>
                 <View style={{ width: 40 }} />
             </View>
 
@@ -195,7 +215,7 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
                             style={[styles.progressFill, { width: `${jobStatus.progress}%` }]}
                         />
                     </View>
-                    <Text style={[styles.progressText, { color: theme.secondaryText }]}>
+                    <Text style={[styles.progressText, { color: colors.textSecondary }]}>
                         {jobStatus.status === 'pending' ? 'Waiting...' :
                             jobStatus.status === 'processing' ? `Processing... ${jobStatus.progress}%` :
                                 jobStatus.status === 'failed' ? '❌ Failed' : 'Complete'}
@@ -206,8 +226,8 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
             {/* Loading State */}
             {loading && (
                 <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color={theme.primary} />
-                    <Text style={[styles.loadingText, { color: theme.secondaryText }]}>
+                    <ActivityIndicator size="large" color={colors.primary} />
+                    <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
                         Loading manifest...
                     </Text>
                 </View>
@@ -217,7 +237,7 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
             {error && (
                 <View style={styles.errorContainer}>
                     <Icon name="alert-circle" size={48} color="#f44336" />
-                    <Text style={[styles.errorText, { color: theme.text }]}>{error}</Text>
+                    <Text style={[styles.errorText, { color: colors.text }]}>{error}</Text>
                     <TouchableOpacity style={styles.retryButton} onPress={fetchJobStatus}>
                         <Text style={styles.retryButtonText}>Retry</Text>
                     </TouchableOpacity>
@@ -233,7 +253,7 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
                             entering={FadeInDown.delay(index * 50)}
                             style={[
                                 styles.itemCard,
-                                { backgroundColor: theme.card },
+                                { backgroundColor: colors.surface },
                                 selectedItems.has(item.id) && styles.itemCardSelected,
                             ]}
                         >
@@ -245,7 +265,7 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
                                 <Icon
                                     name={selectedItems.has(item.id) ? 'checkbox-marked' : 'checkbox-blank-outline'}
                                     size={24}
-                                    color={selectedItems.has(item.id) ? '#93C822' : theme.secondaryText}
+                                    color={selectedItems.has(item.id) ? '#93C822' : colors.textSecondary}
                                 />
                             </TouchableOpacity>
 
@@ -253,19 +273,19 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
                             <View style={styles.itemContent}>
                                 {/* Name */}
                                 <TextInput
-                                    style={[styles.itemName, { color: theme.text }]}
+                                    style={[styles.itemName, { color: colors.text }]}
                                     value={item.parsedName}
                                     onChangeText={(text) => updateItem(item.id, 'parsedName', text)}
                                     placeholder="Item name"
-                                    placeholderTextColor={theme.secondaryText}
+                                    placeholderTextColor={colors.textSecondary}
                                 />
 
                                 {/* Row: Qty, MSRP, Est Value */}
                                 <View style={styles.itemRow}>
                                     <View style={styles.itemField}>
-                                        <Text style={[styles.fieldLabel, { color: theme.secondaryText }]}>Qty</Text>
+                                        <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>Qty</Text>
                                         <TextInput
-                                            style={[styles.fieldInput, { color: theme.text, borderColor: theme.border }]}
+                                            style={[styles.fieldInput, { color: colors.text, borderColor: border }]}
                                             value={String(item.quantity)}
                                             onChangeText={(text) => updateItem(item.id, 'quantity', parseInt(text) || 1)}
                                             keyboardType="number-pad"
@@ -273,9 +293,9 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
                                     </View>
 
                                     <View style={styles.itemField}>
-                                        <Text style={[styles.fieldLabel, { color: theme.secondaryText }]}>MSRP</Text>
+                                        <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>MSRP</Text>
                                         <TextInput
-                                            style={[styles.fieldInput, { color: theme.text, borderColor: theme.border }]}
+                                            style={[styles.fieldInput, { color: colors.text, borderColor: border }]}
                                             value={item.msrp ? `$${item.msrp}` : '-'}
                                             onChangeText={(text) => updateItem(item.id, 'msrp', parseFloat(text.replace('$', '')) || null)}
                                             keyboardType="decimal-pad"
@@ -283,8 +303,8 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
                                     </View>
 
                                     <View style={styles.itemField}>
-                                        <Text style={[styles.fieldLabel, { color: theme.secondaryText }]}>Est.</Text>
-                                        <Text style={[styles.estimatedValue, { color: theme.primary }]}>
+                                        <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>Est.</Text>
+                                        <Text style={[styles.estimatedValue, { color: colors.primary }]}>
                                             {item.estimatedValue ? `$${item.estimatedValue.toFixed(2)}` : '???'}
                                         </Text>
                                     </View>
@@ -318,8 +338,8 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
             {/* Empty State */}
             {!loading && !error && editedItems.length === 0 && jobStatus?.status === 'completed' && (
                 <View style={styles.emptyContainer}>
-                    <Icon name="file-document-outline" size={64} color={theme.secondaryText} />
-                    <Text style={[styles.emptyText, { color: theme.secondaryText }]}>
+                    <Icon name="file-document-outline" size={64} color={colors.textSecondary} />
+                    <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
                         No items found in manifest
                     </Text>
                 </View>
@@ -327,24 +347,38 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
 
             {/* Bottom Action Bar */}
             {editedItems.length > 0 && (
-                <View style={[styles.actionBar, { backgroundColor: theme.card, borderTopColor: theme.border }]}>
+                <View style={[styles.actionBar, { backgroundColor: colors.surface, borderTopColor: border }]}>
                     <View style={styles.summaryRow}>
-                        <Text style={[styles.summaryText, { color: theme.secondaryText }]}>
+                        <Text style={[styles.summaryText, { color: colors.textSecondary }]}>
                             {selectedCount} of {totalItems} items
                         </Text>
-                        <Text style={[styles.totalValue, { color: theme.primary }]}>
+                        <Text style={[styles.totalValue, { color: colors.primary }]}>
                             Est. Total: ${totalValue.toFixed(2)}
                         </Text>
                     </View>
 
-                    <TouchableOpacity
-                        style={[styles.addButton, selectedCount === 0 && styles.addButtonDisabled]}
-                        onPress={handleAddToInventory}
-                        disabled={selectedCount === 0}
-                    >
-                        <Icon name="plus" size={20} color="#fff" />
-                        <Text style={styles.addButtonText}>Add to Inventory</Text>
-                    </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', gap: 12 }}>
+                        <TouchableOpacity
+                            style={[
+                                styles.addButton,
+                                { backgroundColor: colors.surface, borderWidth: 1, borderColor: '#FF9900', flex: 1 }
+                            ]}
+                            onPress={handleLiquidate}
+                            disabled={selectedCount === 0}
+                        >
+                            <Icon name="flash" size={20} color="#FF9900" />
+                            <Text style={[styles.addButtonText, { color: '#FF9900' }]}>Liquidate</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[styles.addButton, selectedCount === 0 && styles.addButtonDisabled, { flex: 1 }]}
+                            onPress={handleAddToInventory}
+                            disabled={selectedCount === 0}
+                        >
+                            <Icon name="plus" size={20} color="#fff" />
+                            <Text style={styles.addButtonText}>Add Inventory</Text>
+                        </TouchableOpacity>
+                    </View>
                 </View>
             )}
         </Animated.View>

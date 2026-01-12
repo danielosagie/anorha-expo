@@ -48,6 +48,9 @@ import ItemNavigationBar from '../components/camera/ItemNavigationBar';
 import QuickProductDetailSheet from '../components/QuickProductDetailSheet';
 import ManifestReviewSheet from '../components/ManifestReviewSheet';
 import ReceiptReviewSheet from '../components/ReceiptReviewSheet';
+import TierSelectorModal from '../components/TierSelectorModal';
+import UsageCounter from '../components/UsageCounter';
+import useFreemiumUsage from '../hooks/useFreemiumUsage';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { File, Directory, Paths } from 'expo-file-system';
 
@@ -269,6 +272,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [notificationMessage, setNotificationMessage] = useState('');
   const [showProgressBar, setShowProgressBar] = useState(false);
 
+  // Freemium / Paywall state
+  const { status: freemiumStatus, refresh: refreshFreemiumStatus, incrementLocalUsage } = useFreemiumUsage();
+  const [showTierSelector, setShowTierSelector] = useState(false);
+
   // Experimental Text Search
 
 
@@ -404,9 +411,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       case 'move_back': return 'Move back from product';
       case 'add_light': return 'Add more light to scene';
       case 'focus': return 'Tap to focus';
-      case 'processing': return 'Processing image...';
-      case 'matches_found': return `${matchData?.totalMatches || 0} matches found!`;
-      case 'no_matches': return 'No matches found';
+      case 'processing': return 'Analyzing image...';
+      case 'matches_found': return `${matchData?.totalMatches || 0} match${(matchData?.totalMatches || 0) > 1 ? 'es' : ''} found!`;
+      case 'no_matches': return 'No matches yet - try another angle';
       case 'barcode_scanned': return scannedBarcode || 'Barcode scanned';
       default: return cameraMode === 'camera' ? 'Point camera at product' : 'lol';
     }
@@ -1143,9 +1150,23 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         })
       });
 
+      // 🎯 FREEMIUM: Handle 402 Payment Required (free tier exhausted)
+      if (response.status === 402) {
+        const errorData = await response.json();
+        console.log('[QUICK SCAN] Free tier exhausted:', errorData);
+        if (errorData.error === 'FREE_TIER_EXHAUSTED') {
+          setShowTierSelector(true);
+          showNotificationMessage(`Free scans used (${errorData.usageCount}/${errorData.freeLimit}). Upgrade to continue!`, 4000);
+          return;
+        }
+      }
+
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
+
+      // Increment local usage count on successful scan
+      incrementLocalUsage();
 
       const result = await response.json();
 
@@ -1197,10 +1218,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         } else {
           showNotificationMessage(`✓ Match found!`, 2000);
         }
+        // Update instruction to show match count in center box
+        setCurrentInstruction('matches_found');
 
       } else {
         console.log('[QUICK SCAN] No matches found');
         showNotificationMessage('No quick matches found. Added to review.', 3000);
+        // Update instruction to show no matches in center box
+        setCurrentInstruction('no_matches');
       }
 
     } catch (error) {
@@ -1669,6 +1694,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   return (
     <GestureHandlerRootView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="black" />
+
+      {/* Freemium usage counter */}
+      {freemiumStatus && !freemiumStatus.hasSubscription && (
+        <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 50 : 10, left: 0, right: 0, zIndex: 100 }}>
+          <UsageCounter
+            usageCount={freemiumStatus.usageCount}
+            freeLimit={freemiumStatus.freeLimit}
+            onUpgradePress={() => setShowTierSelector(true)}
+            isSubscriber={freemiumStatus.hasSubscription}
+          />
+        </View>
+      )}
 
       {/* Camera View */}
       <CameraView
@@ -2162,6 +2199,22 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           </View>
         ) : null}
       </Modal>
+
+      {/* Tier Selector Modal (Paywall) */}
+      <TierSelectorModal
+        visible={showTierSelector}
+        onClose={() => setShowTierSelector(false)}
+        onSuccess={() => {
+          refreshFreemiumStatus();
+          setShowTierSelector(false);
+        }}
+        usageInfo={freemiumStatus ? {
+          usageCount: freemiumStatus.usageCount,
+          freeLimit: freemiumStatus.freeLimit,
+          remaining: freemiumStatus.remaining,
+        } : undefined}
+        hasSubscription={freemiumStatus?.hasSubscription || false}
+      />
     </GestureHandlerRootView>
   );
 };

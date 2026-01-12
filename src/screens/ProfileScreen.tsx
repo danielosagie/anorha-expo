@@ -40,8 +40,11 @@ import { useOrg } from '../context/OrgContext';
 import CreateLocationPoolModal from '../components/CreateLocationPoolModal';
 import { useSyncProgress } from '../hooks/useSyncProgress';
 import * as Progress from 'react-native-progress';
+import { useSystemNotifications } from '../context/SystemNotificationContext';
+import { Zap, ShieldCheck, CheckCircle as LucideCheckCircle, Bell as LucideBell } from 'lucide-react-native';
 
 import LocationsManagerV2 from '../components/LocationsManagerV2';
+import BaseModal from '../components/BaseModal';
 
 
 
@@ -180,9 +183,49 @@ const getStatusDisplay = (status: string): { label: string, color: string, icon:
 type RecommendedAction = 'reconnect' | 'rescan' | 'fix_resume' | 'manage';
 
 const getRecommendedAction = (
-  connection: { Status: string; LastSyncSuccessAt: string | null; IsEnabled: boolean; NeedsReauth?: boolean },
+  connection: { Status: string; LastSyncSuccessAt: string | null; IsEnabled: boolean; NeedsReauth?: boolean; RecommendedAction?: string },
   platformType: string
 ): { action: RecommendedAction; label: string; icon: string; color: string; description: string } => {
+  // ✅ 1. USE BACKEND SOURCE OF TRUTH (Prioritized)
+  if (connection.RecommendedAction) {
+    switch (connection.RecommendedAction) {
+      case 'reconnect':
+        return {
+          action: 'reconnect',
+          label: 'Reconnect',
+          icon: 'link-variant',
+          color: '#FF3B30', // error
+          description: 'Your account credentials have expired. Please re-authorize.'
+        };
+      case 'rescan':
+        return {
+          action: 'rescan',
+          label: 'Rescan', // Renamed from "Retry Scan" to be more generic
+          icon: 'refresh',
+          color: '#FF9500', // warning
+          description: 'Rescan products to fix sync issues' // Generic description
+        };
+      case 'fix_resume':
+        return {
+          action: 'fix_resume',
+          label: 'Re-enable',
+          icon: 'play-circle',
+          color: '#FF9500', // warning
+          description: 'Re-enable this connection and resume syncing'
+        };
+      case 'manage':
+      default:
+        return {
+          action: 'manage',
+          label: 'Manage',
+          icon: 'cog',
+          color: '#007AFF', // primary
+          description: 'View and manage sync settings'
+        };
+    }
+  }
+
+  // ⚠️ 2. FALLBACK HEURISTICS (for older API responses or unknown states)
   const status = connection.Status?.toLowerCase();
   const hasEverSynced = !!connection.LastSyncSuccessAt;
   const isEnabled = connection.IsEnabled;
@@ -200,7 +243,6 @@ const getRecommendedAction = (
   }
 
   // PRIORITY: If backend explicitly signals needsReauth, always show Reconnect
-  // This handles expired/revoked OAuth tokens regardless of previous sync success
   if (needsReauth) {
     return {
       action: 'reconnect',
@@ -273,6 +315,43 @@ const showStatusNotification = (title: string, message: string, type: 'success' 
   }
 };
 
+/**
+ * Parse OAuth callback result from WebBrowser.openAuthSessionAsync
+ * Returns { success: boolean, errorMessage?: string }
+ */
+const parseOAuthResult = (result: any, platformName: string): { success: boolean; errorMessage?: string } => {
+  console.log(`[parseOAuthResult] Parsing result for ${platformName}:`, result);
+
+  if (result.type === 'cancel' || result.type === 'dismiss') {
+    return { success: false, errorMessage: `You cancelled the ${platformName} connection.` };
+  }
+
+  if (result.type === 'success' && result.url) {
+    try {
+      const url = new URL(result.url);
+      const status = url.searchParams.get('status');
+      const message = url.searchParams.get('message');
+
+      if (status === 'error' && message) {
+        console.log(`[parseOAuthResult] OAuth error from ${platformName}:`, message);
+        return { success: false, errorMessage: message };
+      }
+
+      if (status === 'success' || !status) {
+        return { success: true };
+      }
+    } catch (e) {
+      console.warn('[parseOAuthResult] Failed to parse result URL:', e);
+    }
+  }
+
+  if (result.type !== 'success') {
+    return { success: false, errorMessage: `The connection process returned an unexpected status: ${result.type}. Please try again.` };
+  }
+
+  return { success: true };
+};
+
 const ProfileScreen = () => {
   const theme = useTheme();
   const navigation = useNavigation<ProfileScreenNavigationProp>();
@@ -283,6 +362,7 @@ const ProfileScreen = () => {
   const { toggles } = usePlatformConnections();
   // Use switchOrg from OrgContext for switching orgs
   const { currentOrg, switchOrg, availableOrgs } = useOrg();
+  const { showAlert, showToast, showWelcome } = useSystemNotifications();
 
   // For refresh trigger from route params
   const routeRefreshParam = route.params?.refresh || 0;
@@ -698,7 +778,19 @@ const ProfileScreen = () => {
         const finalRedirectUri = 'anorhaapp://auth-callback?platform=ebay';
         const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
         const url = `${SSSYNC_API_BASE_URL}/api/auth/ebay/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}${orgIdParam}`;
-        await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
+        const result = await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
+
+        // Parse result for errors
+        const parsed = parseOAuthResult(result, 'eBay');
+        if (!parsed.success && parsed.errorMessage) {
+          showAlert({
+            title: 'Connection Failed',
+            message: parsed.errorMessage,
+            type: 'error'
+          });
+        } else if (parsed.success) {
+          loadConnections(); // Refresh connections on success
+        }
       })();
     } else {
       Alert.alert('Connect', `Connect logic for ${platform} not implemented yet.`);
@@ -741,66 +833,74 @@ const ProfileScreen = () => {
     return token;
   }, []);
 
-  // --- NEW: Delete Connection Logic ---
-  const handleDisconnectPlatform = async (connectionId: string, platformName: string) => {
-    Alert.alert(
-      `Disconnect ${platformName}`,
-      `Are you sure you want to disconnect your ${platformName} account? This will stop syncing products.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Disconnect",
-          style: "destructive",
-          onPress: async () => {
-            console.log(`[ProfileScreen] Attempting to disconnect connection ID: ${connectionId}`);
+  // --- NEW: Delete Connection Logic & State ---
+  const [disconnectModalVisible, setDisconnectModalVisible] = useState(false);
+  const [disconnectTarget, setDisconnectTarget] = useState<{ id: string; name: string; type: string } | null>(null);
+  const [archiveProductsMobile, setArchiveProductsMobile] = useState(false);
+  const [isDisconnectingMobile, setIsDisconnectingMobile] = useState(false);
 
-            // ✅ Optimistically remove from UI immediately for instant feedback
-            const previousConnections = [...platformConnections];
-            setPlatformConnections(prev => prev.filter(c => c.Id !== connectionId));
-
-            try {
-              // 1. Get Auth Token
-              const token = await getApiToken();
-              if (!token) {
-                throw new Error("Authentication token not found.");
-              }
-
-              // 2. Make API Call 
-              const response = await fetch(`https://api.sssync.app/api/platform-connections/${connectionId}`, {
-                method: 'DELETE',
-                headers: {
-                  'Authorization': `Bearer ${token}`,
-                },
-              });
-
-              if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
-                throw new Error(errorData.message || `Failed to disconnect. Status: ${response.status}`);
-              }
-
-              console.log(`[ProfileScreen] Successfully disconnected connection ID: ${connectionId}`);
-              showStatusNotification('Disconnected', `${platformName} connection removed.`, 'success');
-
-              // --- Reset Legend State to clear out old data ---
-              await resetLegendState();
-              console.log('[ProfileScreen] Legend state reset successfully.');
-
-              // Refresh the connections list to ensure consistency
-              fetchConnections();
-
-            } catch (error: unknown) {
-              console.error("[ProfileScreen] Error disconnecting platform:", error);
-              const message = error instanceof Error ? error.message : String(error);
-
-              // ✅ Restore connections on failure
-              setPlatformConnections(previousConnections);
-              Alert.alert('Error', `Failed to disconnect ${platformName}: ${message}`);
-            }
-          },
-        },
-      ]
-    );
+  const requestDisconnect = (connectionId: string, platformName: string, platformType: string) => {
+    setDisconnectTarget({ id: connectionId, name: platformName, type: platformType });
+    setArchiveProductsMobile(false);
+    setDisconnectModalVisible(true);
   };
+
+  const performDisconnect = async () => {
+    if (!disconnectTarget) return;
+
+    try {
+      setIsDisconnectingMobile(true);
+      console.log(`[ProfileScreen] Attempting to disconnect connection ID: ${disconnectTarget.id} with strategy: ${archiveProductsMobile ? 'archive' : 'keep'}`);
+
+      // 1. Get Auth Token
+      const token = await getApiToken();
+      if (!token) {
+        throw new Error("Authentication token not found.");
+      }
+
+      // 2. Make API Call (POST /disconnect)
+      const cleanupStrategy = archiveProductsMobile ? 'soft_delete' : 'keep';
+      const response = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections/${disconnectTarget.id}/disconnect`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ cleanupStrategy }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
+        throw new Error(errorData.message || `Failed to disconnect. Status: ${response.status}`);
+      }
+
+      console.log(`[ProfileScreen] Successfully disconnected connection ID: ${disconnectTarget.id}`);
+
+      // Update UI
+      setPlatformConnections(prev => prev.filter(c => c.Id !== disconnectTarget.id));
+      showStatusNotification('Disconnected', `${disconnectTarget.name} connection removed.`, 'success');
+
+      // Close modal
+      setDisconnectModalVisible(false);
+      setDisconnectTarget(null);
+
+    } catch (err: any) {
+      console.error('[ProfileScreen] Disconnect error:', err);
+      Alert.alert('Disconnect Error', err.message || 'Failed to disconnect. Please try again.');
+    } finally {
+      setIsDisconnectingMobile(false);
+    }
+  };
+
+  // Deprecated wrapper for calling via old prop style if needed, but we invoke requestDisconnect directly
+  const handleDisconnectPlatform = async (connectionId: string, platformName: string) => {
+    // Determine type if possible, otherwise default to name or pass it in usage
+    // For now, we'll try to find it in platformConnections
+    const conn = platformConnections.find(c => c.Id === connectionId);
+    requestDisconnect(connectionId, platformName, conn?.PlatformType || 'unknown');
+  };
+
+  // --- END Delete Connection Logic ---
   // --- END Delete Connection Logic ---
 
   // --- NEW: Fix & Resume for error/disabled connections ---
@@ -985,15 +1085,13 @@ const ProfileScreen = () => {
         finalRedirectUri
       );
       console.log('[ProfileScreen] Final WebBrowser Auth Result: ', result);
-      // Success is handled by the deep link handler in App.tsx refreshing state
-      // You might want to add a user-facing confirmation here or after the deep link handler works
-      if (result.type === 'cancel' || result.type === 'dismiss') {
-        Alert.alert('Connection Cancelled', 'You cancelled or dismissed the final Shopify connection step.');
-      } else if (result.type !== 'success') {
-        // Log the actual result type for debugging if it's not success/cancel/dismiss
-        console.warn('[ProfileScreen] Unexpected WebBrowser Auth Result type:', result.type, result);
-        // Provide a generic error, or handle specific types like 'locked' if necessary
-        Alert.alert('Connection Issue', `The connection process returned an unexpected status: ${result.type}. Please try again.`);
+
+      // Parse result for errors (handles error query params from backend)
+      const parsed = parseOAuthResult(result, 'Shopify');
+      if (!parsed.success && parsed.errorMessage) {
+        Alert.alert('Shopify Connection Failed', parsed.errorMessage);
+      } else if (parsed.success) {
+        loadConnections(); // Refresh connections on success
       }
 
     } catch (error: unknown) {
@@ -1428,6 +1526,11 @@ const ProfileScreen = () => {
       onPress: () => handleOpenTeams()
     },
     {
+      icon: 'bell-outline',
+      title: 'Notifications',
+      onPress: () => navigation.navigate('NotificationSettings' as any),
+    },
+    {
       icon: 'help-circle',
       title: 'Please Give Feedback',
       onPress: async () => {
@@ -1741,7 +1844,7 @@ const ProfileScreen = () => {
                         onReview={handleReviewAndSync}
                         onReconnect={handleReconnectPlatform}
                         onDisconnect={handleDisconnectPlatform}
-                        onFix={(id, name) => fixAndResumeConnection(id, name)}
+                        onFix={(id: string, name: string) => fixAndResumeConnection(id, name)}
                         navigation={navigation}
                       />
                     );
@@ -1820,6 +1923,76 @@ const ProfileScreen = () => {
         />
       </Animated.View>
 
+      {/* System Notifications Test Card
+      <Animated.View entering={FadeInUp.delay(350).duration(500)}>
+        <Card style={styles.card}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>System Notifications</Text>
+          </View>
+          <View style={{ gap: 12, marginTop: 8 }}>
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: '#007AFF15', height: 48 }]}
+              onPress={() => showAlert({
+                title: 'Confirm Action',
+                message: 'Are you sure you want to perform this system action? This follows the Apple default style.',
+                actions: [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Confirm', onPress: () => showToast({ title: 'Confirmed!', type: 'success' }) }
+                ]
+              })}
+            >
+              <Icon name="alert-circle-outline" size={20} color="#007AFF" />
+              <Text style={{ color: '#007AFF', fontWeight: '600', marginLeft: 8 }}>Test iOS Alert</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: '#34C75915', height: 48 }]}
+              onPress={() => showToast({
+                title: 'Sync Successful',
+                message: 'All inventory items have been updated.',
+                type: 'success'
+              })}
+            >
+              <Icon name="check-circle-outline" size={20} color="#34C759" />
+              <Text style={{ color: '#34C759', fontWeight: '600', marginLeft: 8 }}>Test iOS Toast</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: '#5856D615', height: 48 }]}
+              onPress={() => showWelcome({
+                title: 'Welcome, Partner!',
+                subtitle: 'We are excited to have you on board. Here is what you can do next:',
+                buttonText: 'Get Started',
+                features: [
+                  {
+                    icon: <Zap size={24} color="#5856D6" />,
+                    title: 'Live Sync',
+                    description: 'Your inventory stays in sync across all platforms in real-time.',
+                    iconBgColor: '#5856D615'
+                  },
+                  {
+                    icon: <ShieldCheck size={24} color="#34C759" />,
+                    title: 'Secure Access',
+                    description: 'Only authorized team members can manage your shared locations.',
+                    iconBgColor: '#34C75915'
+                  },
+                  {
+                    icon: <LucideCheckCircle size={24} color="#FF9500" />,
+                    title: 'Smart Matching',
+                    description: 'Auto-detect products across different stores and link them together.',
+                    iconBgColor: '#FF950015'
+                  }
+                ]
+              })}
+            >
+              <Icon name="star-outline" size={20} color="#5856D6" />
+              <Text style={{ color: '#5856D6', fontWeight: '600', marginLeft: 8 }}>Test Welcome Modal</Text>
+            </TouchableOpacity>
+          </View>
+        </Card>
+      </Animated.View>
+      */}
+
       {/* Menu Card */}
       <Animated.View entering={FadeInUp.delay(400).duration(500)}>
         <Card style={styles.card}>
@@ -1871,8 +2044,21 @@ const ProfileScreen = () => {
                     const { data: { user } } = await supabase.auth.getUser();
                     if (!user) return;
                     const finalRedirectUri = 'anorhaapp://auth-callback?platform=ebay';
-                    const url = `${SSSYNC_API_BASE_URL}/api/auth/ebay/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}`;
-                    await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
+                    const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
+                    const url = `${SSSYNC_API_BASE_URL}/api/auth/ebay/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}${orgIdParam}`;
+                    const result = await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
+
+                    // Parse result for errors
+                    const parsed = parseOAuthResult(result, 'eBay');
+                    if (!parsed.success && parsed.errorMessage) {
+                      showAlert({
+                        title: 'Connection Failed',
+                        message: parsed.errorMessage,
+                        type: 'error'
+                      });
+                    } else if (parsed.success) {
+                      loadConnections(); // Refresh connections on success
+                    }
                   })();
                 } else {
                   Alert.alert('Connect', `Connect logic for ${platform} not implemented yet.`);
@@ -2023,6 +2209,66 @@ const ProfileScreen = () => {
           loadPools();
         }}
       />
+
+      {/* Disconnect Alert Modal */}
+      <BaseModal
+        visible={disconnectModalVisible}
+        onClose={() => !isDisconnectingMobile && setDisconnectModalVisible(false)}
+        showCloseButton={!isDisconnectingMobile}
+      >
+        <View style={{ width: '100%', alignItems: 'center' }}>
+          <View style={{
+            width: 48, height: 48, borderRadius: 24, backgroundColor: '#FEE2E2',
+            justifyContent: 'center', alignItems: 'center', marginBottom: 16
+          }}>
+            <Icon name="alert" size={24} color="#DC2626" />
+          </View>
+
+          <Text style={{ fontSize: 18, fontWeight: '600', marginBottom: 8, textAlign: 'center', color: '#111827' }}>
+            Disconnect {disconnectTarget?.name}?
+          </Text>
+
+          <Text style={{ fontSize: 14, color: '#666', textAlign: 'center', marginBottom: 24 }}>
+            This will stop inventory sync and updates for this platform.
+          </Text>
+
+          <View style={{
+            width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+            backgroundColor: '#F9FAFB', padding: 12, borderRadius: 8, marginBottom: 24,
+            borderWidth: 1, borderColor: '#E5E7EB'
+          }}>
+            <View style={{ flex: 1, paddingRight: 10 }}>
+              <Text style={{ fontSize: 14, fontWeight: '500', color: '#111827' }}>Archive imported products?</Text>
+              <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
+                Hide items imported solely from this platform
+              </Text>
+            </View>
+            <Switch
+              value={archiveProductsMobile}
+              onValueChange={setArchiveProductsMobile}
+              trackColor={{ false: '#D1D5DB', true: '#DC2626' }}
+              thumbColor={'#fff'}
+            />
+          </View>
+
+          <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
+            <Button
+              title="Cancel"
+              onPress={() => setDisconnectModalVisible(false)}
+              style={{ flex: 1, backgroundColor: '#F3F4F6' }}
+              textStyle={{ color: '#374151' }}
+              disabled={isDisconnectingMobile}
+            />
+            <Button
+              title={isDisconnectingMobile ? "Disconnecting..." : "Disconnect"}
+              onPress={performDisconnect}
+              style={{ flex: 1, backgroundColor: '#DC2626' }}
+              textStyle={{ color: 'white' }}
+              disabled={isDisconnectingMobile}
+            />
+          </View>
+        </View>
+      </BaseModal>
 
     </ScrollView>
   );
@@ -2231,24 +2477,29 @@ const ConnectedPlatformItem = React.memo(({
       )}
 
       {/* Edit Mode Actions */}
+
+      {/*
+        <TouchableOpacity
+          style={[styles.actionButton, { backgroundColor: theme.colors.primary + '10' }]}
+          onPress={() => onReconnect(connection.Id, platformConfig.key, platformConfig.name)}
+        >
+          <Icon name="link-variant" size={18} color={theme.colors.primary} />
+          <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Reconnect</Text>
+        </TouchableOpacity>
+      */}
+
+
       {isEditMode && (
         <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
           {['square', 'shopify', 'facebook', 'clover', 'ebay'].includes(platformConfig.key) && (
             <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: theme.colors.primary + '10' }]}
-              onPress={() => onReconnect(connection.Id, platformConfig.key, platformConfig.name)}
+              style={[styles.actionButton, { backgroundColor: '#FF9500' + '15' }]}
+              onPress={() => onStartScan(connection.Id, platformConfig.name, true)}
             >
-              <Icon name="link-variant" size={18} color={theme.colors.primary} />
-              <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Reconnect</Text>
+              <Icon name="refresh" size={18} color="#FF9500" />
+              <Text style={[styles.actionButtonText, { color: '#FF9500' }]}>Rescan</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity
-            style={[styles.actionButton, { backgroundColor: '#FF9500' + '15' }]}
-            onPress={() => onStartScan(connection.Id, platformConfig.name, true)}
-          >
-            <Icon name="refresh" size={18} color="#FF9500" />
-            <Text style={[styles.actionButtonText, { color: '#FF9500' }]}>Rescan</Text>
-          </TouchableOpacity>
           <TouchableOpacity
             style={styles.deleteButton}
             onPress={() => onDisconnect(connection.Id, platformConfig.name)}

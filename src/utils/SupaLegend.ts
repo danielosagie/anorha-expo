@@ -506,6 +506,7 @@ export interface PlatformLocation {
 export interface PlatformConnection {
     Id: string; // uuid
     UserId: string; // uuid
+    OrgId?: string | null; // uuid
     PlatformType: string; // e.g., 'Shopify', 'Square', 'Clover'
     DisplayName: string;
     Credentials: any; // jsonb - Opaque, store encrypted OAuth credentials or API keys

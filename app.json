@@ -19,7 +19,8 @@
       "buildNumber": "2",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSLocationWhenInUseUsageDescription": "Anorha may access your location to provide enhanced features through third-party services. Location access is optional and can be disabled in your device settings."
+        "NSLocationWhenInUseUsageDescription": "Anorha may access your location to provide enhanced features through third-party services. Location access is optional and can be disabled in your device settings.",
+        "NSFaceIDUsageDescription": "Allow Anorha to use Face ID for quick and secure access to your account."
       }
     },
     "android": {
@@ -64,6 +65,12 @@
         "react-native-vision-camera",
         {
           "enableCodeScanner": true
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow Anorha to use Face ID for quick and secure access to your account."
         }
       ]
     ],

@@ -249,6 +249,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   pricingContainer: {
+    paddingTop: 16,
     marginBottom: 16,
   },
   pricingCard: {

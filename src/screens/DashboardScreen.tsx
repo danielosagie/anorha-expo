@@ -23,6 +23,7 @@ import { QuickSellCard } from '../components/liquidation/QuickSellCard';
 import ShopifySvg from '../assets/shopify.svg';
 import SquareSvg from '../assets/square.svg';
 import CloverSvg from '../assets/clover.svg';
+import { PartnerWelcomeModal } from '../components/PartnerWelcomeModal';
 
 
 // User-relevant event types for activity display (excludes system/webhook events)
@@ -905,14 +906,14 @@ const DashboardScreen = () => {
                 <View style={styles.insideContainer}>
                   {/* Welcome headline */}
                   <Text style={styles.insightGreenHeadline}>
-                    {currentOrg ? `Let's grow ${currentOrg.name}` : "Welcome to Anorha"}
+                    {currentOrg ? `Ready to grow ${currentOrg.name}?` : "Let's get you started!"}
                   </Text>
 
                   {/* Description based on state */}
                   <Text style={styles.insightGreenDesc}>
                     {lowStockCount > 0 || totalInventory > 0
                       ? `You have ${totalInventory} items tracked. Tap to get insights about your inventory.`
-                      : "Connect your first platform to get started"}
+                      : "Connect a platform and watch your business bloom"}
                   </Text>
 
                   {/* Quick metrics if we have data */}
@@ -1119,92 +1120,12 @@ const DashboardScreen = () => {
       }
 
       {/* Partner FTUX Welcome Modal */}
-      <Modal visible={showPartnerWelcome} transparent animationType="fade">
-        <View style={{
-          flex: 1,
-          backgroundColor: 'rgba(0,0,0,0.7)',
-          justifyContent: 'center',
-          padding: 20,
-        }}>
-          <View style={{
-            backgroundColor: '#fff',
-            borderRadius: 24,
-            padding: 32,
-            alignItems: 'center',
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 4 },
-            shadowOpacity: 0.3,
-            shadowRadius: 10,
-            elevation: 10,
-          }}>
-            <View style={{
-              width: 80,
-              height: 80,
-              borderRadius: 40,
-              backgroundColor: '#e6f4ea',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginBottom: 24,
-            }}>
-              <Icon name="handshake" size={40} color="#647653" />
-            </View>
-
-            <Text style={{
-              fontSize: 24,
-              fontWeight: 'bold',
-              textAlign: 'center',
-              marginBottom: 12,
-              color: '#111',
-            }}>
-              Welcome to {partnerSourceName}'s Network!
-            </Text>
-
-            <Text style={{
-              fontSize: 16,
-              color: '#666',
-              textAlign: 'center',
-              lineHeight: 24,
-              marginBottom: 32,
-            }}>
-              To start selling these products, you need to connect your own POS or E-commerce platform.
-            </Text>
-
-            <TouchableOpacity
-              onPress={() => {
-                handleDismissPartnerWelcome();
-                navigation.navigate('Profile');
-              }}
-              style={{
-                backgroundColor: '#93C822',
-                paddingVertical: 16,
-                paddingHorizontal: 32,
-                borderRadius: 12,
-                width: '100%',
-                alignItems: 'center',
-                shadowColor: '#93C822',
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.3,
-                shadowRadius: 8,
-                elevation: 4,
-              }}
-            >
-              <Text style={{
-                color: '#fff',
-                fontSize: 18,
-                fontWeight: 'bold',
-              }}>
-                Connect Platform
-              </Text>
-            </TouchableOpacity>
-
-            <View style={{ marginTop: 24, flexDirection: 'row', gap: 12, opacity: 0.6 }}>
-              <ShopifySvg width={24} height={24} />
-              <SquareSvg width={24} height={24} />
-              <CloverSvg width={24} height={24} />
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <PartnerWelcomeModal
+        visible={showPartnerWelcome}
+        partnerName={partnerSourceName}
+        onDismiss={handleDismissPartnerWelcome}
+        onConnectPlatform={() => navigation.navigate('Profile')}
+      />
 
       {/* Floating Tab Bar provided by Navigator, but we ensure spacing */}
     </View >
