@@ -11,6 +11,7 @@ import { useTheme } from '../context/ThemeContext';
 import PlaceholderImage from './PlaceholderImage';
 import PlatformAvatar from './PlatformAvatar';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import Animated, { FadeInLeft, FadeOutLeft, Layout } from 'react-native-reanimated';
 
 /*
   InventoryListCard - Matches "Needs Attention" design
@@ -27,6 +28,9 @@ interface InventoryListCardProps {
   totalQuantity?: number;
   platformNames?: string[];
   onPress: () => void;
+  onLongPress?: () => void;
+  isSelectionMode?: boolean;
+  isSelected?: boolean;
 }
 
 const InventoryListCard: React.FC<InventoryListCardProps> = ({
@@ -40,6 +44,9 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
   totalQuantity,
   platformNames = [],
   onPress,
+  onLongPress,
+  isSelectionMode,
+  isSelected,
 }) => {
   const theme = useTheme();
 
@@ -80,9 +87,29 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
     <TouchableOpacity
       style={styles.cardContainer}
       onPress={onPress}
+      onLongPress={onLongPress}
       activeOpacity={0.7}
+      delayLongPress={300}
     >
-      <View style={[styles.card, { backgroundColor: 'rgba(228, 228, 228, 0.01)', }]}>
+      <View style={[styles.card, { backgroundColor: isSelected ? 'rgba(132, 204, 22, 0.1)' : 'rgba(228, 228, 228, 0.01)', borderColor: isSelected ? '#84CC16' : 'transparent', borderWidth: 1 }]}>
+
+
+        {/* Selection Indicator */}
+        {isSelectionMode && (
+          <Animated.View
+            entering={FadeInLeft.duration(300)}
+            exiting={FadeOutLeft.duration(300)}
+            layout={Layout.springify()}
+            style={styles.selectionIndicatorContainer}
+          >
+            <Icon
+              name={isSelected ? "check-circle" : "circle-outline"}
+              size={24}
+              color={isSelected ? "#84CC16" : "#C7C7CC"}
+            />
+          </Animated.View>
+        )}
+
         {/* Left side - Image */}
         <View style={styles.imageContainer}>
           {imageUrl ? (
@@ -94,7 +121,6 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
           ) : (
             <PlaceholderImage
               size={90}
-              height={120}
               borderRadius={8}
               type="gradient"
               icon="cube"
@@ -250,6 +276,10 @@ const styles = StyleSheet.create({
     marginLeft: -4,
     marginRight: -2,
 
+  },
+  selectionIndicatorContainer: {
+    justifyContent: 'center',
+    paddingRight: 12,
   },
 });
 

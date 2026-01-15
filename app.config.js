@@ -15,7 +15,7 @@ export default {
     bundleIdentifier: "anorha.alpha",
     supportsTablet: true,
     buildNumber: "2",
-    icon: "./src/assets/anorha_logo.png",
+    icon: "./src/assets/1024_anorha.png",
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
       NSLocationWhenInUseUsageDescription: "Anorha may access your location to provide enhanced features through third-party services. Location access is optional and can be disabled in your device settings."

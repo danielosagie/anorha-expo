@@ -23,6 +23,7 @@ import StepLoader from '../components/StepLoader';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import ItemJobsModal from '../components/ItemJobsModal';
 import { Boxes } from 'lucide-react-native';
+import { useJobProgress } from '../hooks/useJobProgress'; // Import the hook
 
 
 type LoadingScreenProps = StackScreenProps<AppStackParamList, 'LoadingScreen'>;
@@ -101,6 +102,78 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
   // Poll job status using the jobId
   const [navigatedEarly, setNavigatedEarly] = useState(false);
   const BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
+
+  // Socket updates
+  const { jobState: socketJobState } = useJobProgress(jobId);
+
+  // Process socket updates
+  useEffect(() => {
+    if (!socketJobState) return;
+
+    console.log(`[SOCKET] Update for ${jobId}: ${socketJobState.status} / ${socketJobState.currentStage}`);
+    setJobStatus(socketJobState.status);
+
+    // Update Stage
+    if (socketJobState.currentStage) {
+      // Map backend stages to frontend stage index
+      const rawStage = socketJobState.currentStage;
+      const mappedStage = stageNameMap[rawStage] || rawStage;
+      const stageIndex = activeStages.indexOf(mappedStage);
+
+      if (stageIndex >= 0 && mappedStage !== lastStage) {
+        console.log('[SOCKET-ANIMATION] Stage changed to', mappedStage);
+        setLastStage(mappedStage);
+        setBackendStageIndex(stageIndex);
+        setCurrentStageIndex(stageIndex);
+      }
+    }
+
+    // Check for early results (match only)
+    if (processType === 'match' && !navigatedEarly && Array.isArray(socketJobState.results) && socketJobState.results.length > 0) {
+      // We can use the result directly
+      // Logic duplicating the early nav below
+      // For safety, we can just let the polling logic pick it up OR trigger it here.
+      // Let's trigger it here for speed.
+      handleEarlyNavigation(socketJobState.results, socketJobState.jobId);
+    }
+  }, [socketJobState, lastStage, activeStages, navigatedEarly, processType]);
+
+  // Extracted logic for early navigation
+  const handleEarlyNavigation = useCallback((results: any[], currentJobId: string) => {
+    if (navigatedEarly) return;
+    setNavigatedEarly(true);
+
+    const itemsForModal = (results || []).map((res: any, idx: number) => {
+      const first = res?.serpApiData?.[0];
+      return {
+        index: idx,
+        title: first?.title || `Item ${idx + 1}`,
+        thumb: first?.image || first?.thumbnail || '',
+        matchesCount: Array.isArray(res?.serpApiData) ? res.serpApiData.length : 0,
+      };
+    });
+    setModalItems(itemsForModal);
+
+    const prevResponse = ((onCompleteRoute?.params as any)?.response) || {};
+    const sourceBulk = prevResponse?.bulkItems || (payload?.bulkItems);
+    const userImagesByIndex: Record<number, string[]> = {};
+    if (Array.isArray(sourceBulk)) {
+      sourceBulk.forEach((item: any, i: number) => {
+        const photos = Array.isArray(item?.photos) ? item.photos : [];
+        const uris = photos
+          .map((p: any) => (typeof p === 'string' ? p : (p?.uri || p?.url || '')))
+          .filter((u: string) => typeof u === 'string' && u.length > 0);
+        if (uris.length) userImagesByIndex[i] = uris;
+      });
+    }
+
+    navigation.replace(onCompleteRoute.screen, {
+      ...onCompleteRoute.params,
+      response: { ...(onCompleteRoute?.params as any)?.response, jobId: currentJobId },
+      items: itemsForModal,
+      userImagesByIndex: (onCompleteRoute?.params as any)?.userImagesByIndex || (Object.keys(userImagesByIndex).length ? userImagesByIndex : undefined),
+    });
+  }, [navigatedEarly, onCompleteRoute, payload, navigation]);
 
   useEffect(() => {
     if (!jobId) return;
@@ -194,38 +267,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
 
           // Early navigate: as soon as we have initial results, go to selection screen (non-blocking rerank/embeddings continue server-side)
           if (!navigatedEarly && Array.isArray(status.results) && status.results.length > 0) {
-            setNavigatedEarly(true);
-            const itemsForModal = (status.results || []).map((res: any, idx: number) => {
-              const first = res?.serpApiData?.[0];
-              return {
-                index: idx,
-                title: first?.title || `Item ${idx + 1}`,
-                thumb: first?.image || first?.thumbnail || '',
-                matchesCount: Array.isArray(res?.serpApiData) ? res.serpApiData.length : 0,
-              };
-            });
-            // Update modalItems with real data from results
-            setModalItems(itemsForModal);
-            // Build userImagesByIndex if bulkItems were provided
-            const prevResponse = ((onCompleteRoute?.params as any)?.response) || {};
-            const sourceBulk = prevResponse?.bulkItems || (payload?.bulkItems);
-            const userImagesByIndex: Record<number, string[]> = {};
-            if (Array.isArray(sourceBulk)) {
-              sourceBulk.forEach((item: any, i: number) => {
-                const photos = Array.isArray(item?.photos) ? item.photos : [];
-                const uris = photos
-                  .map((p: any) => (typeof p === 'string' ? p : (p?.uri || p?.url || '')))
-                  .filter((u: string) => typeof u === 'string' && u.length > 0);
-                if (uris.length) userImagesByIndex[i] = uris;
-              });
-            }
-            navigation.replace(onCompleteRoute.screen, {
-              ...onCompleteRoute.params,
-              // Preserve any existing response fields and merge jobId
-              response: { ...(onCompleteRoute?.params as any)?.response, jobId: status.jobId },
-              items: itemsForModal,
-              userImagesByIndex: (onCompleteRoute?.params as any)?.userImagesByIndex || (Object.keys(userImagesByIndex).length ? userImagesByIndex : undefined),
-            });
+            handleEarlyNavigation(status.results, status.jobId);
             return; // stop further handling in this tick
           }
 
@@ -254,7 +296,9 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
 
     // Start polling immediately, then every 2 seconds
     pollJobStatus();
-    const interval = setInterval(pollJobStatus, 2000);
+    // Start polling immediately, then every 4 seconds (slow fallback)
+    pollJobStatus();
+    const interval = setInterval(pollJobStatus, 4000);
 
     return () => clearInterval(interval);
   }, [jobId, processType, navigation, onCompleteRoute, activeStages]);

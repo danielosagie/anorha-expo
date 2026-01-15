@@ -121,9 +121,10 @@ const AllTabRow: React.FC<{
         <View style={styles.qtyContainer}>
           <TouchableOpacity
             onPress={() => handleQtyChange(String(Math.max(0, Number(localQty || 0) - 1)))}
-            style={styles.qtyBtn}
+            style={styles.qtyBtnLeft}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 5 }}
           >
-            <Icon name="minus" size={12} color="#666" />
+            <Icon name="minus" size={14} color="#374151" />
           </TouchableOpacity>
           <TextInput
             style={styles.qtyInput}
@@ -134,9 +135,10 @@ const AllTabRow: React.FC<{
           />
           <TouchableOpacity
             onPress={() => handleQtyChange(String(Number(localQty || 0) + 1))}
-            style={styles.qtyBtn}
+            style={styles.qtyBtnRight}
+            hitSlop={{ top: 10, bottom: 10, left: 5, right: 10 }}
           >
-            <Icon name="plus" size={12} color="#666" />
+            <Icon name="plus" size={14} color="#374151" />
           </TouchableOpacity>
         </View>
       </View>
@@ -348,60 +350,77 @@ const styles = StyleSheet.create({
   // Input Groups
   inputGroup: {
     alignItems: 'center',
-    gap: 2,
+    gap: 4,
   },
   inputLabel: {
-    color: '#666',
-    fontSize: 10,
+    color: '#6B7280',
+    fontSize: 11,
+    fontWeight: '500',
+    textTransform: 'uppercase',
   },
   qtyContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 1,
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
-    borderRadius: 6,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 999, // Pill shape
+    height: 36,
+    paddingHorizontal: 2,
   },
-  qtyBtn: {
-    paddingHorizontal: 5,
-    paddingVertical: 4,
+  qtyBtnLeft: {
+    paddingHorizontal: 10,
+    height: '100%',
+    justifyContent: 'center',
+    borderRightWidth: 1,
+    borderRightColor: '#E5E7EB',
+  },
+  qtyBtnRight: {
+    paddingHorizontal: 10,
+    height: '100%',
+    justifyContent: 'center',
+    borderLeftWidth: 1,
+    borderLeftColor: '#E5E7EB',
   },
   qtyInput: {
-    color: '#000',
+    color: '#111827',
     fontWeight: '600',
-    width: 32,
+    width: 40,
     textAlign: 'center',
-    fontSize: 13,
-    paddingVertical: 4,
+    fontSize: 14,
+    height: '100%',
+    padding: 0,
   },
   priceInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#E5E5E5',
-    borderRadius: 6,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
     backgroundColor: '#FFF',
+    height: 36,
   },
   priceInputShopify: {
-    borderColor: '#1976D2',
-    backgroundColor: '#E3F2FD',
+    borderColor: '#93C822', // Brand Green
+    backgroundColor: '#F0Fdf4', // Light green
+    borderWidth: 1.5,
   },
   currencySymbol: {
-    color: '#666',
-    paddingLeft: 6,
+    color: '#9CA3AF',
+    paddingLeft: 8,
     fontSize: 13,
+    fontWeight: '500',
   },
   priceInput: {
-    color: '#000',
+    color: '#111827',
     fontWeight: '600',
-    width: 60,
-    textAlign: 'center',
-    fontSize: 13,
-    paddingVertical: 6,
-    paddingRight: 6,
+    width: 70,
+    textAlign: 'left',
+    fontSize: 14,
+    paddingVertical: 0,
+    paddingHorizontal: 4,
+    height: '100%',
   },
   priceInputTextShopify: {
-    color: '#1976D2',
+    color: '#166534', // Dark green text
   },
 });
 

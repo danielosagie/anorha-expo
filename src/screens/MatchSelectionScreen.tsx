@@ -131,22 +131,31 @@ async function getToken() {
 // --- Reusable Components ---
 
 // Optimized ProductGridItem with instant feedback
-const ProductGridItem = React.memo(({ item, isSelected, onSelect, isBest }: {
+const ProductGridItem = React.memo(({ item, index, isSelected, onSelect, isBest }: {
     item: SerpApiData,
+    index: number,
     isSelected: boolean,
-    onSelect: () => void,
+    onSelect: (index: number) => void,
     isBest?: boolean,
 }) => {
+    const handlePress = useCallback(() => {
+        onSelect(index);
+    }, [index, onSelect]);
+
     return (
         <Pressable
-            onPress={onSelect}
+            onPress={handlePress}
             style={({ pressed }) => [
                 styles.itemContainer,
                 isSelected && styles.itemSelected,
                 pressed && styles.itemPressed
             ]}
         >
-            <Image source={{ uri: item.thumbnail || item.image }} style={styles.itemImage} />
+            <Image
+                source={{ uri: item.thumbnail || item.image }}
+                style={styles.itemImage}
+                resizeMode="cover"
+            />
             {isBest ? (
                 <View style={{ position: 'absolute', top: 6, left: 6, backgroundColor: 'rgba(147,200,34,0.95)', borderRadius: 10, paddingVertical: 2, paddingHorizontal: 6 }}>
                     <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>BEST</Text>
@@ -982,16 +991,19 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 extraData={selectedIndices}
                 numColumns={COLUMNS}
                 contentContainerStyle={{ padding: GRID_PADDING, paddingBottom: 140 }}
-                keyExtractor={(item, index) => `${item.position}-${index}`}
+                // Use a more stable key if possible to prevent recreation
+                keyExtractor={(item, index) => item.link || item.position?.toString() || index.toString()}
+                estimatedItemSize={220}
                 renderItem={({ item, index }) => (
                     <ProductGridItem
                         item={item}
+                        index={index}
                         isSelected={selectedIndices.includes(index)}
-                        onSelect={() => handleSelectProduct(index)}
+                        onSelect={handleSelectProduct}
                         isBest={index === (bestIndex ?? 0)}
                     />
                 )}
-                removeClippedSubviews={false}
+                removeClippedSubviews={true} // Re-enable for performance
             />
 
             {/* Prompt when nothing is selected - HIDDEN: BottomNav handles this now

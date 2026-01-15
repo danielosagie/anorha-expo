@@ -4,6 +4,7 @@ import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../
 import { Paths, Directory, File } from 'expo-file-system/next';
 import * as ImagePicker from 'expo-image-picker';
 import VariantInventoryEditor, { InventoryItemData, VariantInventoryEditorProps } from './VariantInventoryEditor';
+import BaseModal from './BaseModal';
 import ShopifySvg from '../assets/shopify.svg';
 import AmazonSvg from '../assets/amazon.svg';
 import FacebookSvg from '../assets/facebook.svg';
@@ -140,6 +141,175 @@ export const PRESET_OPTIONS = [
   }
 ];
 
+// --- MODERN UI COMPONENTS ---
+
+const CollapsibleSection = ({
+  title,
+  icon,
+  children,
+  defaultOpen = true,
+  rightAction,
+  errorCount = 0
+}: {
+  title: string,
+  icon?: any,
+  children: React.ReactNode,
+  defaultOpen?: boolean,
+  rightAction?: React.ReactNode,
+  errorCount?: number
+}) => {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
+  return (
+    <View style={[styles.card, { padding: 0, overflow: 'hidden' }]}>
+      <TouchableOpacity
+        activeOpacity={0.7}
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          padding: 16,
+          backgroundColor: '#fff',
+          justifyContent: 'space-between'
+        }}
+        onPress={() => setIsOpen(v => !v)}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <SectionHeader title={title} icon={icon} />
+          {errorCount > 0 && (
+            <View style={{ backgroundColor: '#FECACA', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+              <Text style={{ color: '#DC2626', fontSize: 10, fontWeight: '700' }}>{errorCount} MISSING</Text>
+            </View>
+          )}
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {rightAction}
+          <Icon name={isOpen ? 'chevron-up' : 'chevron-down'} size={20} color="#9CA3AF" />
+        </View>
+      </TouchableOpacity>
+
+      {isOpen && (
+        <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+          <View style={{ height: 1, backgroundColor: '#F3F4F6', marginBottom: 16 }} />
+          {children}
+        </View>
+      )}
+    </View>
+  );
+};
+
+/* Sticky Bottom Action Bar Component */
+const StickyActionBar = ({ onSave, onPublish }: { onSave?: () => void, onPublish?: () => void }) => {
+  return (
+    <View style={{
+      position: 'absolute',
+      bottom: 20,
+      left: 16,
+      right: 16,
+      backgroundColor: '#fff',
+      borderRadius: 100,
+      padding: 8,
+      paddingHorizontal: 12,
+      flexDirection: 'row',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.15,
+      shadowRadius: 12,
+      elevation: 8,
+      borderWidth: 1,
+      borderColor: '#E5E7EB',
+      justifyContent: 'space-between',
+      alignItems: 'center'
+    }}>
+      <TouchableOpacity onPress={onSave} style={{ padding: 10 }}>
+        <Text style={{ fontWeight: '600', color: '#4B5563' }}>Save Draft</Text>
+      </TouchableOpacity>
+      <View style={{ height: 20, width: 1, backgroundColor: '#E5E7EB' }} />
+      <TouchableOpacity onPress={onPublish} style={{ padding: 10, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <Text style={{ fontWeight: '700', color: '#93C822' }}>Publish Now</Text>
+        <Icon name="arrow-right" size={16} color="#93C822" />
+      </TouchableOpacity>
+    </View>
+  )
+}
+
+const ModernInput = ({
+  label,
+  value,
+  onChangeText,
+  placeholder,
+  multiline,
+  keyboardType,
+  icon,
+  rightRight, // Element to render on right
+  disabled
+}: {
+  label: string;
+  value: string;
+  onChangeText: (t: string) => void;
+  placeholder?: string;
+  multiline?: boolean;
+  keyboardType?: any;
+  icon?: any;
+  rightRight?: React.ReactNode;
+  disabled?: boolean;
+}) => {
+  const [isFocused, setIsFocused] = useState(false);
+  const IconComp = icon;
+
+  return (
+    <View style={{ marginBottom: 16 }}>
+      <Text style={[
+        styles.fieldLabel,
+        isFocused && { color: '#93C822' } // Brand color on focus
+      ]}>
+        {label}
+      </Text>
+      <View style={[
+        styles.modernInputWrapper,
+        isFocused && styles.modernInputFocused,
+        disabled && styles.modernInputDisabled,
+        multiline && { height: 'auto', minHeight: 100 }
+      ]}>
+        {IconComp && (
+          <View style={{ marginRight: 10 }}>
+            <IconComp size={18} color={isFocused ? '#93C822' : '#9CA3AF'} />
+          </View>
+        )}
+        <TextInput
+          style={[styles.modernTextInput, multiline && { height: 100, textAlignVertical: 'top', paddingTop: 8 }]}
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          placeholderTextColor="#9CA3AF"
+          multiline={multiline}
+          keyboardType={keyboardType}
+          onFocus={() => setIsFocused(true)}
+          onBlur={() => setIsFocused(false)}
+          editable={!disabled}
+        />
+        {rightRight}
+      </View>
+    </View>
+  );
+};
+
+const SectionHeader = ({ title, icon, rightAction }: { title: string, icon?: any, rightAction?: React.ReactNode }) => {
+  const IconComp = icon;
+  return (
+    <View style={styles.sectionHeaderContainer}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        {IconComp && (
+          <View style={styles.sectionIconBg}>
+            <IconComp size={16} color="#4B5563" />
+          </View>
+        )}
+        <Text style={styles.sectionHeaderTitle}>{title}</Text>
+      </View>
+      {rightAction}
+    </View>
+  );
+};
+
 function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate }: Props, ref: React.Ref<ListingEditorFormRef>) {
   const platformKeys = useMemo(() => {
     const keys = Object.keys(platforms || {}).filter((k) => typeof k === 'string' && k.trim().length > 0);
@@ -154,6 +324,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   }, [platformKeys]);
 
   // Default to 'all' tab instead of first platform
+  const [variantSearchQuery, setVariantSearchQuery] = useState<string>('');
   const [activeTab, setActiveTab] = useState<string>('all');
   const [showAdditionalFields, setShowAdditionalFields] = useState<boolean>(false);
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
@@ -168,6 +339,32 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [showPlatformPicker, setShowPlatformPicker] = useState<boolean>(false);
   const [generatingPlatforms, setGeneratingPlatforms] = useState<Set<string>>(new Set());
   const [locationPickerVisible, setLocationPickerVisible] = useState<boolean>(false);
+
+  // Delete confirmation modal for option values
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{
+    optionName: string;
+    value: string;
+  } | null>(null);
+
+  // Handle confirmed deletion of option value
+  const handleDeleteOptionValue = (optionName: string, value: string, deleteFromAll: boolean) => {
+    const platformsToUpdate = deleteFromAll ? platformKeys : [activePlatformKey];
+    const updatedPlatforms = { ...platforms };
+
+    for (const pk of platformsToUpdate) {
+      const pData = (updatedPlatforms[pk] || {}) as PlatformState;
+      const options = (pData.options || []).map(o =>
+        o.name === optionName
+          ? { ...o, values: (o.values || []).filter((val: string) => val !== value) }
+          : o
+      );
+      updatedPlatforms[pk] = { ...pData, options } as PlatformState;
+    }
+
+    onChangePlatforms(updatedPlatforms);
+    setDeleteConfirmation(null);
+    setTimeout(recomputeVariants, 0);
+  };
 
   useImperativeHandle(ref, () => ({
     openPlatformPicker: () => setShowPlatformPicker(true),
@@ -383,9 +580,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     const combos = cartesian(vals);
     console.log('[recomputeVariants] Generated', combos.length, 'variant combinations');
 
-    // CRITICAL FIX: When in "all" tab, update variants for ALL platforms
-    const platformsToUpdate = activeTab === 'all' ? platformKeys : [activePlatformKey];
-    console.log('[recomputeVariants] Updating platforms:', platformsToUpdate);
+    // CRITICAL: ALWAYS sync variants to ALL platforms when options change
+    // This ensures consistency - user edits on any tab apply everywhere
+    const platformsToUpdate = platformKeys;
+    console.log('[recomputeVariants] Updating ALL platforms:', platformsToUpdate);
 
     // Build updated platforms object
     const updatedPlatforms = { ...platforms };
@@ -433,10 +631,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       });
 
       // Also copy options to this platform if in "all" mode
+      // FIX: Always sync options to ensure consistency across platforms
+      // Previously this only synced when activeTab === 'all', causing variants to not appear on eBay/Facebook tabs
       updatedPlatforms[platformKey] = {
         ...platformData,
         variants: nextVariants,
-        options: activeTab === 'all' ? opts : platformData.options
+        options: opts
       };
     }
 
@@ -800,7 +1000,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
 
   return (
-    <View style={{ paddingBottom: 120 }}>
+    <View style={{ paddingBottom: isGenerationMode ? 120 : 20 }}>
       {/* Media with Remove & Add Photo Management */}
       <View style={styles.mediaRow}>
         <ScrollView style={{ paddingVertical: 10 }} horizontal={true} showsHorizontalScrollIndicator={false}>
@@ -884,7 +1084,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       <ScrollView horizontal={true} showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 8 }}>
         {pills.map((key) => (
           key === 'all' ? (
-            <TouchableOpacity key={key} onPress={() => setActiveTab(key)} style={[styles.pill, activeTab === key && styles.pillActive]}>
+            <TouchableOpacity
+              key={key}
+              onPress={() => setActiveTab(key)}
+              style={[
+                styles.pill,
+                activeTab === key && { backgroundColor: '#3B82F6', borderColor: '#3B82F6' }
+              ]}
+            >
               <Text style={[styles.pillText, activeTab === key && styles.pillTextActive]}>All</Text>
             </TouchableOpacity>
           ) : (
@@ -1044,6 +1251,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   />
 
                 </View>
+
+                {/*
                 <ElementDropdown
                   style={[styles.input, { height: 50, paddingHorizontal: 12 }]}
                   containerStyle={{
@@ -1071,6 +1280,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   value={(activeData as any).currency || 'USD'}
                   onChange={(item) => patchField('currency', item.value)}
                 />
+                */}
               </View>
             </View>
           );
@@ -1101,11 +1311,11 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               activeColor="#F0F9FF"
               placeholderStyle={{ fontSize: 14, color: '#9CA3AF' }}
               iconStyle={{ width: 20, height: 20, tintColor: '#6B7280' }}
-              data={["Ounces", "Pounds", "Grams", "Kilograms"].map(u => ({ label: u, value: u }))}
+              data={["oz", "lb", "g", "kg"].map(u => ({ label: u, value: u }))}
               labelField="label"
               valueField="value"
-              placeholder="Ounces"
-              value={activeData.weightUnit || 'Ounces'}
+              placeholder="oz"
+              value={activeData.weightUnit || 'oz'}
               onChange={(item) => patchField('weightUnit', item.value)}
             />
           </View>
@@ -1138,17 +1348,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       {/* Variants: only for platforms that support variants */}
       {supportsVariants && (
         <View style={styles.card}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
             <Text style={styles.sectionTitle}>Variants</Text>
-            <TouchableOpacity
-              style={styles.btnSecondary}
-              onPress={() => {
-                setOptionEditorOpen(true);
-                fetchAllPlatformOptions();
-              }}
-            >
-              <Text style={{ color: '#000' }}>Options</Text>
-            </TouchableOpacity>
           </View>
 
           {Array.isArray(variantSuggestions) && variantSuggestions.length > 0 && (
@@ -1191,123 +1392,46 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             </View>
           )}
           {/* Inline options wizard / summary */}
-          {optionEditorOpen ? (
-            <View style={{ marginTop: 10 }}>
-              {/* Platform Options Section */}
-              <View style={{ marginBottom: 20 }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                  <Text style={styles.fieldLabel}>Your Platform Options</Text>
-                  <TouchableOpacity
-                    style={styles.btnSecondary}
-                    onPress={fetchAllPlatformOptions}
-                    disabled={loadingPlatformOptions}
-                  >
-                    <Text style={{ color: '#000' }}>
-                      {loadingPlatformOptions ? 'Loading...' : 'Refresh'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                {allPlatformOptions.length > 0 ? (
-                  <View style={{ maxHeight: 200, backgroundColor: '#f5f5f5', borderRadius: 8, padding: 10 }}>
-                    <ScrollView showsVerticalScrollIndicator={true}>
-                      {allPlatformOptions.map((option, idx) => (
-                        <TouchableOpacity
-                          key={`platform-${option.name}-${idx}`}
-                          style={[styles.optionChip, { marginBottom: 8, backgroundColor: '#fff' }]}
-                          onPress={() => {
-                            setNewOptionName(option.name);
-                            setNewOptionValues(option.values);
-                          }}
-                        >
-                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                            <Text style={{ fontWeight: 'bold' }}>{option.name}</Text>
-                            <View style={{ flexDirection: 'row', gap: 4 }}>
-                              {option.sources.map(source => (
-                                <View key={source} style={{ backgroundColor: '#e0e0e0', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-                                  <Text style={{ fontSize: 10, color: '#666', textTransform: 'capitalize' }}>{source}</Text>
-                                </View>
-                              ))}
-                            </View>
-                          </View>
-                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
-                            {option.values.map(value => (
-                              <Text key={value} style={{ fontSize: 12, color: '#666' }}>
-                                {value}
-                              </Text>
-                            ))}
-                          </View>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  </View>
-                ) : (
-                  <Text style={{ color: '#999', fontStyle: 'italic', textAlign: 'center', padding: 20 }}>
-                    No platform options found. Use presets below or create new ones.
-                  </Text>
-                )}
-              </View>
-
-              <Text style={styles.fieldLabel}>Option Name</Text>
-              <TextInput
-                style={styles.input}
-                value={newOptionName}
-                onChangeText={setNewOptionName}
-                placeholder="eg: Size"
-                placeholderTextColor={"#999999"}
-              />
-
-
-
-              <Text style={[styles.fieldLabel, { marginTop: 10 }]}>Option Values</Text>
-              {newOptionValues.map((v, idx) => (
-                <TextInput
-                  key={`opt-val-${idx}`}
-                  style={[styles.input, { marginTop: 6 }]}
-                  value={v}
-                  onChangeText={(t) => handleChangeOptionValue(idx, t)}
-                  placeholder={idx === 0 ? 'eg: Small' : 'eg: Medium'}
-                  placeholderTextColor={"#999999"}
-                />
-              ))}
-              <TouchableOpacity style={styles.addInline} onPress={handleAddOptionValueRow}>
-                <Icon name="plus" size={16} color="#000" />
-                <Text style={{ color: '#000', marginLeft: 6 }}>Add another option</Text>
-              </TouchableOpacity>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>
-                <TouchableOpacity
-                  style={[styles.btnSecondary, { backgroundColor: '#fee2e2' }]}
-                  onPress={() => {
-                    patchPlatform(prev => ({ ...prev, options: [], variants: [] }));
-                    setOptionEditorOpen(false);
-                  }}
-                >
-                  <Text style={{ color: '#dc2626' }}>Clear All</Text>
-                </TouchableOpacity>
-                <View style={{ flexDirection: 'row', gap: 8 }}>
-                  <TouchableOpacity style={styles.btnSecondary} onPress={handleCancelOption}>
-                    <Text style={{ color: '#000' }}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.btnPrimary} onPress={handleDoneOption}>
-                    <Text style={{ color: '#fff' }}>Done</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-          ) : (
-            <>
-              {((activeData.options || []).filter(o => (o.values || []).length > 0)).length > 0 && (
-                (activeData.options || []).filter(o => (o.values || []).length > 0).map((opt, idx) => (
+          <View style={{ marginTop: 10 }}>
+            {/* 1. Active Options List (Summary Cards) */}
+            {((activeData.options || []).filter(o => (o.values || []).length > 0)).length > 0 && (
+              <View style={{ marginBottom: 16 }}>
+                {(activeData.options || []).filter(o => (o.values || []).length > 0).map((opt, idx) => (
                   <View key={`${opt.name}-${idx}`} style={styles.optionSummaryCard}>
-                    <Text style={styles.subtle}>{opt.name}</Text>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Text style={styles.subtle}>{opt.name}</Text>
+                      <TouchableOpacity
+                        onPress={() => {
+                          // Delete entire option
+                          Alert.alert(
+                            `Remove "${opt.name}"?`,
+                            `This will remove the "${opt.name}" option and all associated variants.`,
+                            [
+                              { text: 'Cancel', style: 'cancel' },
+                              {
+                                text: 'Delete', style: 'destructive', onPress: () => {
+                                  patchPlatform(prev => {
+                                    const options = (prev.options || []).filter(o => o.name !== opt.name);
+                                    return { ...prev, options } as PlatformState;
+                                  });
+                                  setTimeout(recomputeVariants, 0);
+                                }
+                              }
+                            ]
+                          );
+                        }}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      >
+                        <Icon name="close" size={14} color="#9CA3AF" />
+                      </TouchableOpacity>
+                    </View>
+
                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
                       {(opt.values || []).map(v => (
                         <View key={`${opt.name}-${v}`} style={[styles.optionChip, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}>
+                          {/* Option values in summary card are read-only except for delete */}
                           <TouchableOpacity onPress={() => {
-                            patchPlatform(prev => {
-                              const options = (prev.options || []).map(o => o.name === opt.name ? { ...o, values: (o.values || []).filter(val => val !== v) } : o);
-                              return { ...prev, options } as PlatformState;
-                            });
+                            setDeleteConfirmation({ optionName: opt.name, value: v });
                           }}>
                             <Icon name="close" size={10} color="#6B7280" />
                           </TouchableOpacity>
@@ -1316,181 +1440,336 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                       ))}
                     </View>
                   </View>
-                ))
-              )}
-              <TouchableOpacity style={styles.addOption} onPress={() => { setNewOptionName(''); setNewOptionValues(['']); setOptionEditorOpen(true); }}>
-                <Icon name="plus" size={18} color="#71717A" />
-                <Text style={{ color: '#71717A', marginLeft: 8 }}>Add an option</Text>
-              </TouchableOpacity>
-            </>
-          )}
+                ))}
+              </View>
+            )}
 
+            {/* 2. Editor OR Add Button */}
+            {optionEditorOpen ? (
+              <View style={[styles.card, { backgroundColor: '#fff', borderColor: '#e5e7eb', borderWidth: 1, padding: 16, borderRadius: 12 }]}>
+                <Text style={styles.fieldLabel}>Option Name</Text>
 
-
-        </View>
-      )}
-
-
-      {/* Facebook Marketplace Settings - ASSIMILATED UI */}
-      {activePlatformKey === 'facebook' && (
-        <View style={{ marginTop: 8, paddingBottom: 16 }}>
-
-
-          {/* Condition - Dropdown Style */}
-          <View style={{ marginBottom: 20 }}>
-            <Text style={styles.fieldLabel}>Condition</Text>
-            <ElementDropdown
-              style={[styles.input, { height: 50, paddingHorizontal: 12 }]}
-              containerStyle={{
-                backgroundColor: 'white',
-                borderRadius: 12,
-                marginTop: 4,
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.1,
-                shadowRadius: 12,
-                elevation: 5,
-                padding: 4,
-                borderWidth: 0 // Remove default border
-              }}
-              itemContainerStyle={{
-                borderRadius: 8,
-                marginVertical: 2,
-                paddingHorizontal: 8
-              }}
-              itemTextStyle={{ fontSize: 14, color: '#374151' }}
-              selectedTextStyle={{ fontSize: 14, color: '#000', fontWeight: '500' }}
-              activeColor="#F0F9FF" // Light blue/green tint for active
-              placeholderStyle={{ fontSize: 14, color: '#9CA3AF' }}
-              iconStyle={{ width: 20, height: 20, tintColor: '#6B7280' }}
-              data={[
-                { label: 'New', value: 'new' },
-                { label: 'Like New', value: 'like_new' },
-                { label: 'Good', value: 'good' },
-                { label: 'Fair', value: 'fair' },
-                { label: 'Used', value: 'used' },
-                { label: 'Refurbished', value: 'refurbished' },
-              ]}
-              maxHeight={260}
-              labelField="label"
-              valueField="value"
-              placeholder="Select condition..."
-              value={activeData.condition}
-              onChange={item => {
-                patchField('condition', item.value);
-              }}
-            />
-          </View>
-
-          {/* Delivery Method */}
-          <View style={{ marginBottom: 20 }}>
-            <Text style={styles.fieldLabel}>how to handoff</Text>
-            <View style={{ flexDirection: 'row', gap: 12, marginTop: 12 }}>
-              {(['in_person', 'shipping', 'both'] as const).map((method) => {
-                const isActive = activeData.pickupLocation?.deliveryMethod === method;
-                const config = {
-                  in_person: { label: 'Pickup', icon: Car },
-                  shipping: { label: 'Shipping', icon: Package },
-                  both: { label: 'Both', icon: Truck },
-                }[method];
-
-                const IconComp = config.icon;
-
-                return (
-                  <TouchableOpacity
-                    key={method}
-                    activeOpacity={0.8}
-                    style={{
-                      flex: 1,
-                      backgroundColor: isActive ? 'rgba(147,200,34,0.1)' : '#fff',
-                      borderRadius: 12,
-                      padding: 16,
-                      alignItems: 'center',
-                      borderWidth: 2,
-                      borderColor: isActive ? '#93C822' : '#F3F4F6', // Changed to Brand Green
+                {/* Autocomplete Input for Name */}
+                <View style={{ zIndex: 10 }}>
+                  <TextInput
+                    style={[styles.input, { marginBottom: 8 }]}
+                    value={newOptionName}
+                    onChangeText={(text) => {
+                      setNewOptionName(text);
+                      setVariantSearchQuery(text);
                     }}
-                    onPress={() => patchField('pickupLocation', {
-                      ...activeData.pickupLocation,
-                      deliveryMethod: method
-                    })}
-                  >
-                    <IconComp size={24} color={isActive ? '#93C822' : '#6B7280'} strokeWidth={2} />
-                    <Text style={{
-                      marginTop: 8,
-                      color: isActive ? '#93C822' : '#374151',
-                      fontSize: 13,
-                      fontWeight: isActive ? '700' : '600',
-                    }}>
-                      {config.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
+                    placeholder="eg: Size"
+                    placeholderTextColor={"#999999"}
+                  />
 
-          {/* Location - Map Interaction */}
-          {(activeData.pickupLocation?.deliveryMethod === 'in_person' || activeData.pickupLocation?.deliveryMethod === 'both') && (
-            <View>
-              <Text style={styles.fieldLabel}>Item Location</Text>
-
-              <TouchableOpacity
-                activeOpacity={0.8}
-                style={{
-                  marginTop: 12,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 12,
-                  paddingVertical: 16,
-                  paddingHorizontal: 16,
-                  backgroundColor: '#fff',
-                  borderWidth: 1,
-                  borderColor: '#E5E5E5',
-                  borderRadius: 12,
-                }}
-                onPress={() => setLocationPickerVisible(true)}
-              >
-                <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(147,200,34,0.1)', alignItems: 'center', justifyContent: 'center' }}>
-                  <MapPin size={18} color="#93C822" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{
-                    color: activeData.pickupLocation?.locationName ? '#111827' : '#9CA3AF',
-                    fontSize: 15,
-                    fontWeight: activeData.pickupLocation?.locationName ? '600' : '400'
-                  }}>
-                    {activeData.pickupLocation?.locationName || 'Tap to set location on map...'}
-                  </Text>
-                  {activeData.pickupLocation?.locationName && (
-                    <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
-                      {activeData.pickupLocation.latitude?.toFixed(4)}, {activeData.pickupLocation.longitude?.toFixed(4)}
-                    </Text>
+                  {/* Dropdown - only show if typing and matches exist */}
+                  {newOptionName.length > 0 && allPlatformOptions.filter(o => o.name.toLowerCase().includes(newOptionName.toLowerCase()) && o.name.toLowerCase() !== newOptionName.toLowerCase()).length > 0 && (
+                    <View style={{ position: 'absolute', top: 45, left: 0, right: 0, backgroundColor: '#fff', borderWidth: 1, borderColor: '#eee', borderRadius: 8, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 5 }}>
+                      {allPlatformOptions
+                        .filter(o => o.name.toLowerCase().includes(newOptionName.toLowerCase()))
+                        .slice(0, 3)
+                        .map((option, idx) => (
+                          <TouchableOpacity
+                            key={`ac-editor-${option.name}-${idx}`}
+                            style={{ padding: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
+                            onPress={() => {
+                              setNewOptionName(option.name);
+                              // Prefill values but let user edit/add more
+                              setNewOptionValues(option.values.length > 0 ? option.values : ['']);
+                              setVariantSearchQuery(''); // Hide dropdown
+                            }}
+                          >
+                            <Text style={{ fontWeight: '600', color: '#374151' }}>{option.name}</Text>
+                            <Text style={{ fontSize: 10, color: '#6b7280' }}>
+                              Includes: {option.values.slice(0, 2).join(', ')}...
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                    </View>
                   )}
                 </View>
-                <View style={{ backgroundColor: '#F3F4F6', padding: 6, borderRadius: 8 }}>
-                  <Icon name="chevron-right" size={20} color="#9CA3AF" />
+
+                <Text style={[styles.fieldLabel, { marginTop: 10 }]}>Option Values</Text>
+                {newOptionValues.map((v, idx) => (
+                  <View key={`opt-val-row-${idx}`} style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
+                    <TextInput
+                      style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                      value={v}
+                      onChangeText={(t) => handleChangeOptionValue(idx, t)}
+                      placeholder={idx === 0 ? 'eg: Small' : 'eg: Medium'}
+                      placeholderTextColor={"#999999"}
+                    />
+                    {newOptionValues.length > 1 && (
+                      <TouchableOpacity
+                        onPress={() => setNewOptionValues(prev => prev.filter((_, i) => i !== idx))}
+                        style={{ padding: 10, marginLeft: 4 }}
+                      >
+                        <Icon name="close" size={20} color="#9CA3AF" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ))}
+                <TouchableOpacity style={[styles.addInline, { marginTop: 12 }]} onPress={handleAddOptionValueRow}>
+                  <Icon name="plus" size={16} color="#4B5563" />
+                  <Text style={{ color: '#4B5563', marginLeft: 6 }}>Add another value</Text>
+                </TouchableOpacity>
+
+                {/* Editor Footer */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 24, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#f3f4f6' }}>
+                  <TouchableOpacity
+                    style={[styles.btnSecondary, { backgroundColor: '#fff', borderWidth: 1, borderColor: '#e5e7eb', paddingHorizontal: 16 }]}
+                    onPress={() => {
+                      setOptionEditorOpen(false);
+                      setNewOptionName('');
+                      setNewOptionValues(['']);
+                    }}
+                  >
+                    <Text style={{ color: '#374151', fontWeight: '500' }}>Cancel</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.btnPrimary, { backgroundColor: '#84cc16', paddingHorizontal: 24, borderRadius: 8 }]}
+                    onPress={() => {
+                      handleDoneOption();
+                      setOptionEditorOpen(false);
+                    }}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '600' }}>Done</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={{
+                  borderWidth: 1,
+                  borderColor: '#E5E7EB',
+                  borderStyle: 'dashed',
+                  borderRadius: 8,
+                  padding: 16,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: '#F9FAFB'
+                }}
+                onPress={() => {
+                  setNewOptionName('');
+                  setNewOptionValues(['']);
+                  setOptionEditorOpen(true);
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Icon name="plus" size={18} color="#6B7280" />
+                  <Text style={{ color: '#6B7280', fontSize: 16, fontWeight: '500' }}>Add an option</Text>
                 </View>
               </TouchableOpacity>
+            )}
+          </View>
 
-              <InteractiveMapModal
-                visible={locationPickerVisible}
-                onClose={() => setLocationPickerVisible(false)}
-                onSelect={(loc) => {
-                  patchField('pickupLocation', {
-                    ...activeData.pickupLocation,
-                    locationName: loc.name,
-                    latitude: loc.lat,
-                    longitude: loc.lng
-                  });
-                  setLocationPickerVisible(false);
+
+
+        </View>
+      )
+      }
+
+
+      {/* Facebook Marketplace Settings */}
+      {
+        activePlatformKey === 'facebook' && (
+          <View style={styles.card}>
+            <SectionHeader title="Facebook Settings" icon={FacebookSvg} />
+
+            {/* Condition - Dropdown Style */}
+            <View style={{ marginBottom: 20 }}>
+              <Text style={styles.fieldLabel}>Condition</Text>
+              <ElementDropdown
+                style={[styles.modernInputWrapper, { paddingHorizontal: 12, height: 48, borderWidth: 1 }]} // Match ModernInput
+                containerStyle={{
+                  backgroundColor: 'white',
+                  borderRadius: 12,
+                  marginTop: 4,
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 12,
+                  elevation: 5,
+                  padding: 4,
+                  borderWidth: 0
                 }}
-                initialLat={activeData.pickupLocation?.latitude}
-                initialLng={activeData.pickupLocation?.longitude}
+                itemContainerStyle={{
+                  borderRadius: 8,
+                  marginVertical: 2,
+                  paddingHorizontal: 8
+                }}
+                itemTextStyle={{ fontSize: 14, color: '#374151' }}
+                selectedTextStyle={{ fontSize: 14, color: '#000', fontWeight: '500' }}
+                activeColor="#F0F9FF"
+                placeholderStyle={{ fontSize: 14, color: '#9CA3AF' }}
+                iconStyle={{ width: 20, height: 20, tintColor: '#6B7280' }}
+                data={[
+                  { label: 'New', value: 'new' },
+                  { label: 'Like New', value: 'like_new' },
+                  { label: 'Good', value: 'good' },
+                  { label: 'Fair', value: 'fair' },
+                  { label: 'Used', value: 'used' },
+                  { label: 'Refurbished', value: 'refurbished' },
+                ]}
+                maxHeight={260}
+                labelField="label"
+                valueField="value"
+                placeholder="Select condition..."
+                value={activeData.condition}
+                onChange={item => {
+                  patchField('condition', item.value);
+                }}
               />
             </View>
-          )}
-        </View>
-      )}
+
+            {/* Delivery Method */}
+            <View style={{ marginBottom: 20 }}>
+              <Text style={styles.fieldLabel}>Handoff Method</Text>
+              <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
+                {(['in_person', 'shipping', 'both'] as const).map((method) => {
+                  const isActive = activeData.pickupLocation?.deliveryMethod === method;
+                  const config = {
+                    in_person: { label: 'Pickup', icon: Car },
+                    shipping: { label: 'Shipping', icon: Package },
+                    both: { label: 'Both', icon: Truck },
+                  }[method];
+
+                  const IconComp = config.icon;
+
+                  return (
+                    <TouchableOpacity
+                      key={method}
+                      activeOpacity={0.8}
+                      style={{
+                        flex: 1,
+                        backgroundColor: isActive ? 'rgba(147,200,34,0.1)' : '#F9FAFB',
+                        borderRadius: 12,
+                        paddingVertical: 14,
+                        alignItems: 'center',
+                        borderWidth: 1.5,
+                        borderColor: isActive ? '#93C822' : '#E5E7EB',
+                      }}
+                      onPress={() => patchField('pickupLocation', {
+                        ...activeData.pickupLocation,
+                        deliveryMethod: method
+                      })}
+                    >
+                      <IconComp size={24} color={isActive ? '#93C822' : '#6B7280'} strokeWidth={2} />
+                      <Text style={{
+                        marginTop: 8,
+                        color: isActive ? '#93C822' : '#374151',
+                        fontSize: 13,
+                        fontWeight: isActive ? '700' : '600',
+                      }}>
+                        {config.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
+            {/* Location - Map Interaction */}
+            {(activeData.pickupLocation?.deliveryMethod === 'in_person' || activeData.pickupLocation?.deliveryMethod === 'both') && (
+              <View>
+                <Text style={styles.fieldLabel}>Pickup Location</Text>
+
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  style={{
+                    marginTop: 8,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 12,
+                    paddingVertical: 16,
+                    paddingHorizontal: 16,
+                    backgroundColor: '#fff',
+                    borderWidth: 1,
+                    borderColor: '#E5E5E5',
+                    borderRadius: 12,
+                  }}
+                  onPress={() => setLocationPickerVisible(true)}
+                >
+                  <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(147,200,34,0.1)', alignItems: 'center', justifyContent: 'center' }}>
+                    <MapPin size={18} color="#93C822" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{
+                      color: activeData.pickupLocation?.locationName ? '#111827' : '#9CA3AF',
+                      fontSize: 15,
+                      fontWeight: activeData.pickupLocation?.locationName ? '600' : '400'
+                    }}>
+                      {activeData.pickupLocation?.locationName || 'Tap to set location...'}
+                    </Text>
+                    {activeData.pickupLocation?.locationName && (
+                      <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
+                        {activeData.pickupLocation.latitude?.toFixed(4)}, {activeData.pickupLocation.longitude?.toFixed(4)}
+                      </Text>
+                    )}
+                  </View>
+                  <View style={{ backgroundColor: '#F3F4F6', padding: 6, borderRadius: 8 }}>
+                    <Icon name="chevron-right" size={20} color="#9CA3AF" />
+                  </View>
+                </TouchableOpacity>
+
+                <InteractiveMapModal
+                  visible={locationPickerVisible}
+                  onClose={() => setLocationPickerVisible(false)}
+                  onSelect={(loc) => {
+                    patchField('pickupLocation', {
+                      ...activeData.pickupLocation,
+                      locationName: loc.name,
+                      latitude: loc.lat,
+                      longitude: loc.lng
+                    });
+                    setLocationPickerVisible(false);
+                  }}
+                  initialLat={activeData.pickupLocation?.latitude}
+                  initialLng={activeData.pickupLocation?.longitude}
+                />
+
+                {/* Delete Option Value Confirmation Modal */}
+                <BaseModal
+                  visible={!!deleteConfirmation}
+                  onClose={() => setDeleteConfirmation(null)}
+                  showCloseButton={true}
+                  containerStyle={{ width: '85%', maxWidth: 340 }}
+                >
+                  <Text style={{ fontSize: 18, fontWeight: '600', marginBottom: 8, textAlign: 'center' }}>
+                    Remove "{deleteConfirmation?.value}"?
+                  </Text>
+                  <Text style={{ color: '#666', textAlign: 'center', marginBottom: 20 }}>
+                    This will remove the option and associated variants.
+                  </Text>
+                  <View style={{ gap: 12, width: '100%' }}>
+                    <TouchableOpacity
+                      style={{ backgroundColor: '#F3F4F6', borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
+                      onPress={() => {
+                        if (deleteConfirmation) {
+                          handleDeleteOptionValue(deleteConfirmation.optionName, deleteConfirmation.value, false);
+                        }
+                      }}
+                    >
+                      <Text style={{ fontWeight: '500' }}>This Platform Only</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={{ backgroundColor: '#EF4444', borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
+                      onPress={() => {
+                        if (deleteConfirmation) {
+                          handleDeleteOptionValue(deleteConfirmation.optionName, deleteConfirmation.value, true);
+                        }
+                      }}
+                    >
+                      <Text style={{ color: '#fff', fontWeight: '600' }}>All Platforms</Text>
+                    </TouchableOpacity>
+                  </View>
+                </BaseModal>
+              </View>
+            )}
+          </View>
+        )
+      }
 
       {/* Inventory summary (auto-decided per platform) */}
       <View style={styles.darkerCard}>
@@ -1889,121 +2168,76 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
 
       {/* Additional fields basic toggle */}
-      <TouchableOpacity style={styles.toggleRow} onPress={() => setShowAdditionalFields(v => !v)}>
-        <Icon name={showAdditionalFields ? 'chevron-down' : 'chevron-right'} size={18} color="#000" />
-        <Text style={styles.sectionTitle}>Additional Fields</Text>
-
-        {/*
-          <View style={{ flexDirection: 'row', gap: 8, marginLeft: 'auto' }}>
-            {!!onBoostListing && (
-              <TouchableOpacity style={styles.btnSecondary} onPress={() => onBoostListing(activePlatformKey, 'boost')}>
-                <Text style={{ color: '#000' }}>Boost</Text>
-              </TouchableOpacity>
-            )}
-            {!!onBoostListing && (
-              <TouchableOpacity style={styles.btnSecondary} onPress={() => onBoostListing(activePlatformKey, 'advanced')}>
-                <Text style={{ color: '#000' }}>Fill Advanced</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-          */}
-      </TouchableOpacity>
-      {showAdditionalFields && (
+      {/* Additional fields basic toggle - Hidden on All tab */}
+      {activeTab !== 'all' && (
         <>
-          {activeTab !== 'all' && (() => {
-            const standardFields = new Set([
-              'title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode',
-              'images', 'options', 'variants', 'locations', 'locationQuantities', 'inventoryType',
-              '__refilled', '_rawResponse', '_parseError', '_extractedJson' // Exclude internal fields
-            ]);
+          <TouchableOpacity style={styles.toggleRow} onPress={() => setShowAdditionalFields(v => !v)}>
+            <Icon name={showAdditionalFields ? 'chevron-down' : 'chevron-right'} size={18} color="#000" />
+            <Text style={styles.sectionTitle}>Additional Fields</Text>
+          </TouchableOpacity>
+          {
+            showAdditionalFields && (
+              <>
+                {(() => {
+                  const standardFields = new Set([
+                    'title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode',
+                    'images', 'options', 'variants', 'locations', 'locationQuantities', 'inventoryType',
+                    '__refilled', '_rawResponse', '_parseError', '_extractedJson' // Exclude internal fields
+                  ]);
 
-            const additionalFields = Object.entries(activeData || {})
-              .filter(([key, value]) =>
-                !standardFields.has(key) &&
-                value !== undefined &&
-                value !== null &&
-                !key.startsWith('_') // Skip internal fields
-              );
+                  const additionalFields = Object.entries(activeData || {})
+                    .filter(([key, value]) =>
+                      !standardFields.has(key) &&
+                      value !== undefined &&
+                      value !== null &&
+                      !key.startsWith('_') // Skip internal fields
+                    );
 
-            if (additionalFields.length === 0) {
-              return (
-                <View style={styles.card}>
-                  <Text style={styles.sectionTitle}>Additional Fields</Text>
-                  <Text style={styles.subtle}>No additional fields detected from AI response</Text>
-                </View>
-              );
-            }
-
-            return (
-              <View style={styles.card}>
-                <Text style={styles.sectionTitle}>Additional Fields</Text>
-                <Text style={styles.subtle}>Fields automatically detected from AI response</Text>
-                {additionalFields.map(([key, value]) => {
-                  const isArray = Array.isArray(value);
-                  const isObject = typeof value === 'object' && !isArray;
-                  const displayValue = isObject ? JSON.stringify(value, null, 2) :
-                    isArray ? value.join(', ') : String(value);
+                  if (additionalFields.length === 0) {
+                    return (
+                      <View style={{ padding: 16, alignItems: 'center' }}>
+                        <Text style={{ color: '#aaa', fontStyle: 'italic' }}>No additional fields found.</Text>
+                      </View>
+                    );
+                  }
 
                   return (
-                    <View key={key} style={{ marginTop: 12 }}>
-                      {isArray && value.every((item: any) => typeof item === 'string') ? (
-                        <ChipsField
-                          label={key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, ' $1')}
-                          valueArray={value as string[]}
-                          onChangeArray={(arr) => patchField(key, arr)}
-                          onInfo={() => onOpenFieldPanel?.(key)}
-                          onRegenerate={enableAIRefill && onRegenerateField ? () => onRegenerateField(activePlatformKey, key) : undefined}
-                          refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes(key)}
-                        />
-                      ) : (
-                        <Field
-                          label={key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, ' $1')}
-                          value={displayValue}
-                          multiline={isObject || displayValue.length > 50}
-                          onChangeText={(t) => {
-                            // Try to parse back to original type
-                            if (isObject) {
-                              try {
-                                patchField(key, JSON.parse(t));
-                              } catch {
-                                patchField(key, t); // Fallback to string
-                              }
-                            } else if (typeof value === 'number') {
-                              patchField(key, Number(t) || 0);
-                            } else if (typeof value === 'boolean') {
-                              patchField(key, t.toLowerCase() === 'true');
-                            } else {
-                              patchField(key, t);
-                            }
-                          }}
-                          onInfo={() => onOpenFieldPanel?.(key)}
-                          onRegenerate={enableAIRefill && onRegenerateField ? () => onRegenerateField(activePlatformKey, key) : undefined}
-                          refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes(key)}
-                        />
-                      )}
+                    <View style={{ marginTop: 10, gap: 12 }}>
+                      {additionalFields.map(([key, value]) => {
+                        const isArray = Array.isArray(value);
+                        const isObject = typeof value === 'object' && !isArray;
+                        const displayValue = isObject ? JSON.stringify(value, null, 2) :
+                          isArray ? value.join(', ') : String(value);
+
+                        return (
+                          <View key={key}>
+                            <Field
+                              label={key}
+                              value={displayValue}
+                              onChangeText={(t) => {
+                                // Simple string patch for generic fields
+                                patchPlatform(prev => ({ ...prev, [key]: t } as any));
+                              }}
+                              onInfo={() => onOpenFieldPanel?.(key)}
+                              onRegenerate={enableAIRefill && onRegenerateField ? () => onRegenerateField(activePlatformKey, key) : undefined}
+                              refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes(key)}
+                            />
+                          </View>
+                        );
+                      })}
                     </View>
                   );
-                })}
-              </View>
-            );
-          })()}
-
-          {/* Add Missing Field Button for current platform */}
-          {activeTab !== 'all' && onAddMissingField && (
-            <TouchableOpacity
-              style={styles.addMissingFieldButton}
-              onPress={() => onAddMissingField(activePlatformKey)}
-            >
-              <Icon name="plus" size={18} color="#71717A" />
-              <Text style={styles.addMissingFieldText}>Add fields & boost</Text>
-            </TouchableOpacity>
-          )}
+                })()}
+              </>
+            )
+          }
         </>
       )}
 
+      {/* Sticky Action Footer */}
+      {/* <StickyActionBar onSave={() => console.log('Save')} onPublish={() => console.log('Publish')} /> */}
 
-
-    </View>
+    </View >
   );
 }
 
@@ -2258,8 +2492,76 @@ const styles = StyleSheet.create({
   pillDashed: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: '#E5E5E5' },
   card: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 12 },
   darkerCard: { borderWidth: 1, backgroundColor: '#F8F9FB', borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 12 },
-  fieldLabel: { color: '#71717A', fontWeight: '600', fontSize: 12, textTransform: 'uppercase' },
-  input: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, color: '#000' },
+  // --- STYLES REFACTOR ---
+  fieldLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  modernInputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    minHeight: 48,
+  },
+  modernInputFocused: {
+    borderColor: '#93C822',
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#93C822',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  modernInputDisabled: {
+    backgroundColor: '#F3F4F6',
+    borderColor: '#E5E7EB',
+  },
+  modernTextInput: {
+    flex: 1,
+    fontSize: 15,
+    color: '#111827',
+    paddingVertical: 12, // Ensure good touch target
+    height: '100%',
+  },
+  sectionHeaderContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+    marginTop: 8,
+  },
+  sectionIconBg: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: '#E5E7EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sectionHeaderTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  // Keep existing styles but update where needed
+  input: {
+    // Deprecated in favor of modernInputWrapper but keeping for legacy
+    borderWidth: 1,
+    borderColor: '#ddd',
+    padding: 12,
+    borderRadius: 8,
+    fontSize: 14,
+    backgroundColor: '#fff',
+    color: '#000',
+  },
   addTagBtn: { alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center' },
   tagChip: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
   optionChip: { backgroundColor: '#E5E5E5', borderRadius: 6, paddingVertical: 6, paddingHorizontal: 10 },

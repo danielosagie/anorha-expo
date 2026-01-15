@@ -46,7 +46,7 @@ export function useCollaboration() {
       try {
         // Try to get Supabase template token, fallback to default Clerk token
         const token = await getToken()
-        
+
         if (!token) {
           console.error('[Collaboration] No token available');
           return;
@@ -66,29 +66,29 @@ export function useCollaboration() {
           reconnectionAttempts: 5,
         });
 
-    socket.on('connect', () => {
-      console.log('[Collaboration] Connected');
-      setIsConnected(true);
-    });
+        socket.on('connect', () => {
+          console.log('[Collaboration] Connected');
+          setIsConnected(true);
+        });
 
-    socket.on('disconnect', () => {
-      console.log('[Collaboration] Disconnected');
-      setIsConnected(false);
-    });
+        socket.on('disconnect', () => {
+          console.log('[Collaboration] Disconnected');
+          setIsConnected(false);
+        });
 
-    socket.on('connect_error', (error: Error) => {
-      console.error('[Collaboration] Connection error:', error.message);
-    });
+        socket.on('connect_error', (error: Error) => {
+          console.error('[Collaboration] Connection error:', error.message);
+        });
 
-    // Listen for presence updates
-    socket.on('presence:update', ({ users }: { users: PresenceUser[] }) => {
-      setOnlineUsers(users.filter((u) => u.status === 'online'));
-    });
+        // Listen for presence updates
+        socket.on('presence:update', ({ users }: { users: PresenceUser[] }) => {
+          setOnlineUsers(users.filter((u) => u.status === 'online'));
+        });
 
-    socketRef.current = socket;
-    } catch (error) {
-      console.error('[Collaboration] Failed to initialize socket:', error);
-    }
+        socketRef.current = socket;
+      } catch (error) {
+        console.error('[Collaboration] Failed to initialize socket:', error);
+      }
     })();
 
     return () => {
@@ -150,7 +150,7 @@ export function useCollaboration() {
    * Listen for field updates from other users
    */
   const onFieldUpdate = useCallback((callback: (update: any) => void) => {
-    if (!socketRef.current) return () => {};
+    if (!socketRef.current) return () => { };
 
     const handler = (data: any) => {
       console.log('[Collaboration] Field updated by teammate:', data);
@@ -168,7 +168,7 @@ export function useCollaboration() {
    * Listen for product updates from backend
    */
   const onProductUpdate = useCallback((callback: (update: ProductUpdate) => void) => {
-    if (!socketRef.current) return () => {};
+    if (!socketRef.current) return () => { };
 
     const handler = (data: ProductUpdate) => {
       console.log('[Collaboration] Product updated:', data);
@@ -186,7 +186,7 @@ export function useCollaboration() {
    * Listen for edit started events
    */
   const onEditStarted = useCallback((callback: (event: ProductEditEvent) => void) => {
-    if (!socketRef.current) return () => {};
+    if (!socketRef.current) return () => { };
 
     const handler = (data: ProductEditEvent) => {
       console.log('[Collaboration] Edit started:', data);
@@ -204,7 +204,7 @@ export function useCollaboration() {
    * Listen for edit ended events
    */
   const onEditEnded = useCallback((callback: (event: { productId: string; userId: string }) => void) => {
-    if (!socketRef.current) return () => {};
+    if (!socketRef.current) return () => { };
 
     const handler = (data: { productId: string; userId: string }) => {
       console.log('[Collaboration] Edit ended:', data);
@@ -230,6 +230,24 @@ export function useCollaboration() {
     []
   );
 
+  /**
+   * Listen for job progress updates
+   */
+  const onJobProgress = useCallback((callback: (data: any) => void) => {
+    if (!socketRef.current) return () => { };
+
+    const handler = (data: any) => {
+      // console.log('[Collaboration] Job Progress:', data);
+      callback(data);
+    };
+
+    socketRef.current.on('job:progress', handler);
+
+    return () => {
+      socketRef.current?.off('job:progress', handler);
+    };
+  }, []);
+
   return {
     isConnected,
     onlineUsers,
@@ -241,6 +259,7 @@ export function useCollaboration() {
     onEditStarted,
     onEditEnded,
     updatePresence,
+    onJobProgress, // New export
   };
 }
 

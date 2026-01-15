@@ -1444,6 +1444,29 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   }, [isBulkMode, capturedPhotos, bulkItems.length]);
 
+  // NEW: Handle pressing the match indicator/banner
+  const handleMatchIndicatorPress = useCallback(() => {
+    if (activeItemId) {
+      console.log('[MATCH CLICK] Indicator pressed for item:', activeItemId);
+
+      // Check if we have matches
+      const hasMatches = quickScanStore[activeItemId]?.matchData?.totalMatches > 0;
+
+      if (hasMatches) {
+        openQuickMatchesForItem(activeItemId);
+      } else {
+        // Optional: Provide feedback if no matches or still processing
+        if (currentInstruction === 'processing') {
+          showNotificationMessage('Scanning in progress...', 1500);
+        } else {
+          showNotificationMessage('No matches available yet', 1500);
+        }
+      }
+    } else {
+      showNotificationMessage('Select an item first', 1500);
+    }
+  }, [activeItemId, quickScanStore, currentInstruction, openQuickMatchesForItem, showNotificationMessage]);
+
   // Select item as active
   const selectActiveItem = useCallback((itemId: string) => {
     console.log('[SELECT ITEM] Setting active item to:', itemId);
@@ -1819,6 +1842,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           cameraMode={cameraMode}
           scannedBarcode={scannedBarcode}
           onCopyBarcode={copyBarcodeToClipboard}
+          onPress={handleMatchIndicatorPress}
         />
 
 
@@ -1859,6 +1883,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             message={notificationMessage}
             opacity={notificationOpacity}
             translateY={notificationTranslateY}
+            onPress={handleMatchIndicatorPress}
           />
         )}
 
@@ -2251,7 +2276,8 @@ const NotificationBar: React.FC<{
   message: string;
   opacity: any;
   translateY: any;
-}> = ({ message, opacity, translateY }) => {
+  onPress?: () => void;
+}> = ({ message, opacity, translateY, onPress }) => {
   const notificationStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
     transform: [{ translateY: translateY.value }],
@@ -2259,8 +2285,14 @@ const NotificationBar: React.FC<{
 
   return (
     <Animated.View style={[styles.notificationBar, notificationStyle]}>
-      <Icon name="information-outline" size={20} color="white" />
-      <Text style={styles.notificationText}>{message}</Text>
+      <TouchableOpacity
+        onPress={onPress}
+        activeOpacity={0.8}
+        style={{ flexDirection: 'row', alignItems: 'center' }}
+      >
+        <Icon name="information-outline" size={20} color="white" />
+        <Text style={styles.notificationText}>{message}</Text>
+      </TouchableOpacity>
     </Animated.View>
   );
 };
@@ -2272,7 +2304,8 @@ const CenterOverlay: React.FC<{
   cameraMode: CameraMode;
   scannedBarcode: string | null;
   onCopyBarcode: () => void;
-}> = ({ instruction, isProcessing, cameraMode, scannedBarcode, onCopyBarcode }) => {
+  onPress?: () => void;
+}> = ({ instruction, isProcessing, cameraMode, scannedBarcode, onCopyBarcode, onPress }) => {
   // Barcode overlay at top middle
   if (cameraMode === 'barcode' && scannedBarcode) {
     return (
@@ -2291,14 +2324,16 @@ const CenterOverlay: React.FC<{
   // Regular instruction overlay - moved to top-middle like barcode
   return (
     <View style={styles.barcodeOverlayContainer}>
-      <Animated.View style={styles.centerOverlay}>
-        <Text style={styles.centerOverlayText}>{instruction}</Text>
-        {isProcessing && (
-          <View style={styles.processingIndicator}>
-            <MaterialIcons name="sync" size={16} color="white" />
-          </View>
-        )}
-      </Animated.View>
+      <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
+        <Animated.View style={styles.centerOverlay}>
+          <Text style={styles.centerOverlayText}>{instruction}</Text>
+          {isProcessing && (
+            <View style={styles.processingIndicator}>
+              <MaterialIcons name="sync" size={16} color="white" />
+            </View>
+          )}
+        </Animated.View>
+      </TouchableOpacity>
     </View>
   );
 };
@@ -4097,6 +4132,7 @@ const styles = StyleSheet.create({
   },
   itemsScrollContainer: {
     flexGrow: 1,
+    marginBottom: -20,
   },
   scrollContent: {
     paddingBottom: 20,

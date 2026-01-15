@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, ScrollView, Modal, ActivityIndicator, Alert, SafeAreaView } from 'react-native';
-import Animated, { FadeInUp } from 'react-native-reanimated';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, ScrollView, Modal, ActivityIndicator, Alert, SafeAreaView, TextInput } from 'react-native';
+import Animated, { FadeInUp, FadeInDown, SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Button from '../components/Button';
@@ -16,6 +16,7 @@ import SearchBarWithScanner from '../components/SearchBarWithScanner';
 import PlatformFilterChips from '../components/PlatformFilterChips';
 import PoolLocationCombobox from '../components/PoolLocationCombobox';
 import InventoryListCard from '../components/InventoryListCard';
+import BaseModal from '../components/BaseModal';
 import SortByDropdown from '../components/SortByDropdown';
 import { CameraView } from 'expo-camera';
 import { useProductVariantRealtime, useInventoryLevelsRealtime } from '../hooks/useProductVariantRealtime';
@@ -109,6 +110,99 @@ const InventoryOrdersScreen = observer(() => {
   const [displayCount, setDisplayCount] = useState(50);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const ITEMS_PER_LOAD = 20;
+
+  // Bulk Selection State
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+
+  // Bulk Selection Handlers
+  const handleLongPressItem = (id: string) => {
+    if (!isSelectionMode) {
+      setIsSelectionMode(true);
+      const newSet = new Set<string>();
+      newSet.add(id);
+      setSelectedItems(newSet);
+      // Haptic feedback could be added here
+    }
+  };
+
+  const handleToggleSelection = (id: string) => {
+    const newSet = new Set(selectedItems);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+      if (newSet.size === 0) {
+        // Optional: Exit selection mode if last item deselected? 
+        // For now, let's keep it active until user manually cancels.
+      }
+    } else {
+      newSet.add(id);
+    }
+    setSelectedItems(newSet);
+  };
+
+  const handleExitSelectionMode = () => {
+    setIsSelectionMode(false);
+    setSelectedItems(new Set());
+  };
+
+  const [moreMenuVisible, setMoreMenuVisible] = useState(false);
+  const [archiveModalVisible, setArchiveModalVisible] = useState(false);
+  const [liquidationModalVisible, setLiquidationModalVisible] = useState(false);
+  const [tagsModalVisible, setTagsModalVisible] = useState(false);
+  const [tagInput, setTagInput] = useState("");
+  const [liquidationTimeline, setLiquidationTimeline] = useState("");
+  const [liquidationAmount, setLiquidationAmount] = useState("");
+  const [liquidationStrategy, setLiquidationStrategy] = useState<'aggressive' | 'moderate' | 'conservative'>('moderate');
+
+  const handleSelectAll = () => {
+    // Select all currently filtered items
+    const allIds = filteredInventory.map(item => item.Id);
+    setSelectedItems(new Set(allIds));
+  };
+
+  const handleBulkDelete = () => {
+    Alert.alert(
+      "Delete Items",
+      `Are you sure you want to delete ${selectedItems.size} items? This will archive them from your inventory.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            // Perform soft delete
+            const idsToDelete = Array.from(selectedItems);
+            console.log('[BulkDelete] Deleting:', idsToDelete);
+
+            try {
+              const { error } = await supabase
+                .from('ProductVariants')
+                .update({ IsArchived: true })
+                .in('Id', idsToDelete);
+
+              if (error) throw error;
+
+              // Success feedback
+              // Ideally we should remove them from local state optimistically, 
+              // but the focusEffect or realtime subs should handle it.
+              // We can manually filter them out from directFetchVariants just in case.
+
+              // Close selection mode
+              handleExitSelectionMode();
+              // Trigger refresh logic
+              // (The useFocusEffect logic triggers on focus, but we might want to manually trigger a re-fetch or rely on realtime)
+
+            } catch (err) {
+              console.error("Bulk delete failed", err);
+              Alert.alert("Error", "Failed to delete items. Please try again.");
+            }
+          }
+        }
+      ]
+    );
+  };
+
+
 
   const legendObservables: LegendStateObservables | null = useLegendState();
 
@@ -744,7 +838,16 @@ const InventoryOrdersScreen = observer(() => {
         imageUrl={item.imageUrl}
         totalQuantity={item.totalQuantity}
         platformNames={item.platformNames}
-        onPress={navigateToDetail}
+        onPress={() => {
+          if (isSelectionMode) {
+            handleToggleSelection(item.Id);
+          } else {
+            navigateToDetail();
+          }
+        }}
+        onLongPress={() => handleLongPressItem(item.Id)}
+        isSelectionMode={isSelectionMode}
+        isSelected={selectedItems.has(item.Id)}
       />
     );
   };
@@ -792,35 +895,62 @@ const InventoryOrdersScreen = observer(() => {
 
         {activeTab === 'inventory' && (
           <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
-            {/* Search Bar with Scanner */}
-            <View style={{ paddingHorizontal: 16, marginBottom: 8, backgroundColor: "#FFF", }}>
-              <SearchBarWithScanner
-                placeholder="Search for a product"
-                value={searchQuery}
-                onChangeText={handleSearchChange}
-                onScan={handleBarcodeScan}
-                onScannerOpen={() => {
-                  console.log('[InventoryOrdersScreen] Scanner button pressed, opening scanner');
-                  setScannerOpen(true);
-                  scannerResultHandlerRef.current = (code: string) => {
-                    handleBarcodeScan(code);
-                    setScannerOpen(false);
-                    scannerResultHandlerRef.current = null;
-                  };
-                }}
-                onClear={handleSearchClear}
-              />
-
-              {/* Barcode Search Error Message */}
-              {barcodeSearchError && (
-                <View style={[styles.errorMessage, { backgroundColor: theme.colors.error + '15' }]}>
-                  <Icon name="alert-circle-outline" size={16} color={theme.colors.error} style={{ marginRight: 8 }} />
-                  <Text style={[styles.errorText, { color: theme.colors.error }]}>
-                    {barcodeSearchError}
+            {/* Search Bar with Scanner OR Selection Header */}
+            {isSelectionMode ? (
+              <Animated.View entering={FadeInDown} style={styles.selectionHeader}>
+                <View style={styles.selectionHeaderLeft}>
+                  <TouchableOpacity onPress={handleExitSelectionMode} style={styles.closeButton}>
+                    <Icon name="close" size={24} color="#333" />
+                  </TouchableOpacity>
+                  <Text style={styles.selectionCountText}>
+                    {selectedItems.size} Selected
                   </Text>
                 </View>
-              )}
-            </View>
+                <TouchableOpacity
+                  style={styles.selectAllButton}
+                  onPress={() => {
+                    if (selectedItems.size === filteredInventory.length && filteredInventory.length > 0) {
+                      setSelectedItems(new Set());
+                    } else {
+                      handleSelectAll();
+                    }
+                  }}
+                >
+                  <Text style={styles.selectAllButtonText}>
+                    {selectedItems.size === filteredInventory.length && filteredInventory.length > 0 ? "Deselect All" : "Select All"}
+                  </Text>
+                </TouchableOpacity>
+              </Animated.View>
+            ) : (
+              <View style={{ paddingHorizontal: 16, marginBottom: 8, backgroundColor: "#FFF", }}>
+                <SearchBarWithScanner
+                  placeholder="Search for a product"
+                  value={searchQuery}
+                  onChangeText={handleSearchChange}
+                  onScan={handleBarcodeScan}
+                  onScannerOpen={() => {
+                    console.log('[InventoryOrdersScreen] Scanner button pressed, opening scanner');
+                    setScannerOpen(true);
+                    scannerResultHandlerRef.current = (code: string) => {
+                      handleBarcodeScan(code);
+                      setScannerOpen(false);
+                      scannerResultHandlerRef.current = null;
+                    };
+                  }}
+                  onClear={handleSearchClear}
+                />
+
+                {/* Barcode Search Error Message */}
+                {barcodeSearchError && (
+                  <View style={[styles.errorMessage, { backgroundColor: theme.colors.error + '15' }]}>
+                    <Icon name="alert-circle-outline" size={16} color={theme.colors.error} style={{ marginRight: 8 }} />
+                    <Text style={[styles.errorText, { color: theme.colors.error }]}>
+                      {barcodeSearchError}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
 
             {/* Platform Filter Chips */}
             <View style={{ paddingHorizontal: 8 }}>
@@ -948,6 +1078,251 @@ const InventoryOrdersScreen = observer(() => {
           </View>
         </View>
       )}
+
+      {/* Bulk Action Bar - Cleaner Light Mode */}
+      {isSelectionMode && (
+        <Animated.View
+          entering={SlideInDown.duration(300)}
+          exiting={SlideOutDown}
+          style={styles.bulkActionBar}
+        >
+          <View style={styles.bulkActionContent}>
+            {/* Left: Count Badge with Cancel */}
+            <TouchableOpacity
+              onPress={handleExitSelectionMode}
+              style={styles.countBadge}
+            >
+              <Icon name="close-circle" size={18} color="#4B5563" />
+              <Text style={styles.countBadgeText}>{selectedItems.size}</Text>
+            </TouchableOpacity>
+
+            {/* Center: Horizontal Scrollable Actions */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.actionsScrollContent}
+              style={styles.actionsScroll}
+            >
+              <TouchableOpacity style={styles.actionChip} onPress={handleBulkDelete}>
+                <Icon name="trash-can-outline" size={18} color="#374151" />
+                <Text style={styles.actionChipText}>Delete</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.actionChip} onPress={() => setArchiveModalVisible(true)}>
+                <Icon name="archive-outline" size={18} color="#374151" />
+                <Text style={styles.actionChipText}>Archive</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.actionChip} onPress={() => setLiquidationModalVisible(true)}>
+                <Icon name="tag-outline" size={18} color="#374151" />
+                <Text style={styles.actionChipText}>Liquidate</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.actionChip} onPress={() => setTagsModalVisible(true)}>
+                <Icon name="tag-plus-outline" size={18} color="#374151" />
+                <Text style={styles.actionChipText}>Tags</Text>
+              </TouchableOpacity>
+            </ScrollView>
+
+            {/* Right: More Menu */}
+            <TouchableOpacity
+              style={styles.moreButton}
+              onPress={() => setMoreMenuVisible(true)}
+            >
+              <Icon name="dots-horizontal" size={24} color="#374151" />
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      )}
+
+      {/* More Actions Modal - Cleaner "Lowkey" Design */}
+      <BaseModal
+        visible={moreMenuVisible}
+        onClose={() => setMoreMenuVisible(false)}
+        showCloseButton={true}
+        containerStyle={{ width: '85%', borderRadius: 24, padding: 24 }}
+      >
+        <View style={{ width: '100%' }}>
+          {/* Header - Subtler */}
+          <View style={{ marginBottom: 20 }}>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: '#111', marginBottom: 4 }}>
+              Actions
+            </Text>
+            <Text style={{ fontSize: 13, color: '#6B7280', fontWeight: '500' }}>
+              {selectedItems.size} items selected
+            </Text>
+          </View>
+
+          <View style={{ gap: 12 }}>
+            <TouchableOpacity style={styles.modalOption} onPress={() => {
+              console.log('[Analytics] Print low stock');
+              setMoreMenuVisible(false);
+              Alert.alert("Coming Soon", "Low stock report will be generated as PDF");
+            }}>
+              <View style={styles.modalOptionIconBg}>
+                <Icon name="printer-outline" size={20} color="#4B5563" />
+              </View>
+              <Text style={styles.modalOptionText}>Print Low Stock Report</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.modalOption} onPress={() => {
+              console.log('[Analytics] Fastest movers');
+              setMoreMenuVisible(false);
+              Alert.alert("Coming Soon", "Velocity analysis across platforms/locations");
+            }}>
+              <View style={styles.modalOptionIconBg}>
+                <Icon name="trending-up" size={20} color="#4B5563" />
+              </View>
+              <Text style={styles.modalOptionText}>Show Fastest Movers</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.modalOption} onPress={() => {
+              console.log('[BulkDraft] Setting as draft');
+              setMoreMenuVisible(false);
+            }}>
+              <View style={styles.modalOptionIconBg}>
+                <Icon name="file-document-edit-outline" size={20} color="#4B5563" />
+              </View>
+              <Text style={styles.modalOptionText}>Set as Draft</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </BaseModal>
+
+      {/* Archive Modal */}
+      <BaseModal
+        visible={archiveModalVisible}
+        onClose={() => setArchiveModalVisible(false)}
+        showCloseButton={true}
+        containerStyle={{ width: '85%', borderRadius: 24, padding: 24 }}
+      >
+        <Text style={styles.modalTitle}>Archive Items</Text>
+        <Text style={styles.modalSubtitle}>
+          Are you sure you want to archive {selectedItems.size} items? They will be hidden from the main inventory list.
+        </Text>
+        <View style={styles.modalButtonsRow}>
+          <TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={() => setArchiveModalVisible(false)}>
+            <Text style={styles.cancelButtonText}>Cancel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalButton, styles.confirmButton]}
+            onPress={() => {
+              console.log('[BulkArchive] Archiving:', Array.from(selectedItems));
+              // TODO: Actual API Call
+              setArchiveModalVisible(false);
+              handleExitSelectionMode();
+            }}
+          >
+            <Text style={styles.confirmButtonText}>Archive</Text>
+          </TouchableOpacity>
+        </View>
+      </BaseModal>
+
+      {/* Tags Modal */}
+      <BaseModal
+        visible={tagsModalVisible}
+        onClose={() => setTagsModalVisible(false)}
+        showCloseButton={true}
+        containerStyle={{ width: '85%', borderRadius: 24, padding: 24 }}
+      >
+        <Text style={styles.modalTitle}>Add Tags</Text>
+        <Text style={styles.modalSubtitle}>Add a tag to {selectedItems.size} items.</Text>
+
+        <TextInput
+          style={styles.tagsInput}
+          placeholder="Enter tag name..."
+          value={tagInput}
+          onChangeText={setTagInput}
+          autoFocus={true}
+        />
+
+        <View style={styles.modalButtonsRow}>
+          <TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={() => setTagsModalVisible(false)}>
+            <Text style={styles.cancelButtonText}>Cancel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalButton, styles.confirmButton]}
+            onPress={() => {
+              console.log('[BulkTags] Adding tag:', tagInput, 'to', Array.from(selectedItems));
+              setTagInput("");
+              setTagsModalVisible(false);
+              handleExitSelectionMode();
+            }}
+          >
+            <Text style={styles.confirmButtonText}>Add Tag</Text>
+          </TouchableOpacity>
+        </View>
+      </BaseModal>
+
+      {/* Liquidation Modal */}
+      <BaseModal
+        visible={liquidationModalVisible}
+        onClose={() => setLiquidationModalVisible(false)}
+        showCloseButton={true}
+        containerStyle={{ width: '85%', borderRadius: 24, padding: 24 }}
+      >
+        <Text style={styles.modalTitle}>Start Liquidation</Text>
+        <Text style={styles.modalSubtitle}>Configure campaign for {selectedItems.size} items.</Text>
+
+        <View style={{ width: '100%', marginBottom: 16 }}>
+          <Text style={styles.inputLabel}>Timeline (Days)</Text>
+          <TextInput
+            style={styles.modalInput}
+            placeholder="e.g. 30"
+            keyboardType="numeric"
+            value={liquidationTimeline}
+            onChangeText={setLiquidationTimeline}
+          />
+
+          <Text style={styles.inputLabel}>Target Recovery ($)</Text>
+          <TextInput
+            style={styles.modalInput}
+            placeholder="e.g. 1500"
+            keyboardType="numeric"
+            value={liquidationAmount}
+            onChangeText={setLiquidationAmount}
+          />
+        </View>
+
+        <Text style={styles.inputLabel}>Pricing Strategy</Text>
+        <View style={styles.strategyContainer}>
+          {(['aggressive', 'moderate', 'conservative'] as const).map(strategy => (
+            <TouchableOpacity
+              key={strategy}
+              style={[
+                styles.strategyOption,
+                liquidationStrategy === strategy && styles.strategyOptionSelected
+              ]}
+              onPress={() => setLiquidationStrategy(strategy)}
+            >
+              <Text style={[
+                styles.strategyText,
+                liquidationStrategy === strategy && styles.strategyTextSelected
+              ]}>
+                {strategy.charAt(0).toUpperCase() + strategy.slice(1)}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <View style={styles.modalButtonsRow}>
+          <TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={() => setLiquidationModalVisible(false)}>
+            <Text style={styles.cancelButtonText}>Cancel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalButton, styles.confirmButton]}
+            onPress={() => {
+              console.log('[BulkLiquidate] Starting with strategy:', liquidationStrategy);
+              setLiquidationModalVisible(false);
+              handleExitSelectionMode();
+              // Navigate to campaign screen with mock ID (since we didn't actually create one via API yet)
+              navigation.navigate('LiquidationCampaignScreen', { campaignId: 'new_campaign_mock_123' });
+            }}
+          >
+            <Text style={styles.confirmButtonText}>Start Campaign</Text>
+          </TouchableOpacity>
+        </View>
+      </BaseModal>
 
     </View>
   );
@@ -1129,6 +1504,251 @@ const styles = StyleSheet.create({
   optimizeButtonText: {
     color: '#6366f1',
     fontSize: 13,
+    fontWeight: '600',
+  },
+
+  // Selection Styles
+  selectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#FFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+    height: 60,
+    marginBottom: 16, // Added spacing below header
+  },
+  selectionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  closeButton: {
+    padding: 8,
+    marginRight: 12,
+  },
+  selectionCountText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111',
+  },
+  bulkActionBar: {
+    position: 'absolute',
+    bottom: 130, // Increased to clear tab bar
+    left: 12,
+    right: 12,
+    backgroundColor: '#FFFFFF', // Light background
+    borderRadius: 32, // Pill shape
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15, // Softer shadow
+    shadowRadius: 12,
+    elevation: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    zIndex: 1000,
+    borderWidth: 1,
+    borderColor: '#F3F4F6', // Subtle border
+  },
+  bulkActionContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  countBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6', // Light gray standard
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+    gap: 6,
+  },
+  countBadgeText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#374151', // Dark gray text
+  },
+  actionsScroll: {
+    flex: 1,
+    marginHorizontal: 8,
+  },
+  actionsScrollContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  actionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6', // Light gray standard
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    gap: 6,
+  },
+  actionChipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151', // Dark text
+  },
+  moreButton: {
+    padding: 8,
+    backgroundColor: '#F3F4F6', // Light gray standard
+    borderRadius: 20,
+  },
+  // Legacy styles (kept for backwards compatibility)
+  bulkActionText: {
+    fontSize: 15,
+    color: '#374151',
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  bulkActionButtons: {
+    flexDirection: 'row',
+    gap: 16,
+    alignItems: 'center',
+  },
+  bulkActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    gap: 6,
+  },
+  bulkActionLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  selectAllButton: {
+    backgroundColor: '#84CC16', // Lime green
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  selectAllButtonText: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  modalOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: '#F9FAFB', // Very subtle background
+    borderRadius: 12,
+    width: '100%',
+  },
+  modalOptionIconBg: {
+    width: 36,
+    height: 36,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  modalOptionText: {
+    fontSize: 15, // Slightly smaller/cleaner
+    color: '#374151',
+    marginLeft: 12,
+    fontWeight: '600',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111',
+    marginBottom: 8,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#6B7280',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  modalButtonsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 24,
+    width: '100%',
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelButton: {
+    backgroundColor: '#F3F4F6',
+  },
+  confirmButton: {
+    backgroundColor: '#111',
+  },
+  cancelButtonText: {
+    color: '#374151',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  confirmButtonText: {
+    color: '#FFF',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  tagsInput: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 16,
+    color: '#111',
+  },
+  modalInput: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 16,
+    color: '#111',
+    marginBottom: 12,
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 6,
+    marginTop: 4,
+  },
+  strategyContainer: {
+    width: '100%',
+    gap: 8,
+  },
+  strategyOption: {
+    width: '100%',
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  strategyOptionSelected: {
+    borderColor: '#111',
+    backgroundColor: '#F9FAFB',
+  },
+  strategyText: {
+    fontSize: 15,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  strategyTextSelected: {
+    color: '#111',
     fontWeight: '600',
   },
 });

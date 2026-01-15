@@ -54,6 +54,7 @@ import PartnerAcceptScreen from '../screens/PartnerAcceptScreen';
 import { BackfillOptimizerScreen } from '../screens/BackfillOptimizerScreen';
 import { CSVColumnMappingScreen } from '../screens/CSVColumnMappingScreen';
 import PendingOrgInvitesScreen from '../screens/PendingOrgInvitesScreen';
+import LiquidationCampaignScreen from '../screens/LiquidationCampaignScreen';
 import { isFeatureEnabled } from '../config/features';
 import { SessionContext } from '../context/SessionContext';
 
@@ -252,6 +253,7 @@ export type AppStackParamList = {
     csvData: any[];
     sampleRow: Record<string, string>;
   };
+  LiquidationCampaignScreen: { campaignId: string };
 };
 
 type RootStackParamList = {
@@ -400,6 +402,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
   >
     <AppStackNav.Screen name="CreateAccountScreen" component={CreateAccountScreen} />
     <AppStackNav.Screen name="PendingOrgInvitesScreen" component={PendingOrgInvitesScreen} />
+    <AppStackNav.Screen name="LiquidationCampaignScreen" component={LiquidationCampaignScreen} options={{ headerTitle: 'Liquidation Campaign' }} />
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />
     <AppStackNav.Screen name="ProductDetail" component={ProductDetailScreen} />
     <AppStackNav.Screen name="PastScans" component={PastScansScreen} />

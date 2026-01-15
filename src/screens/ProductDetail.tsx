@@ -1,5 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, Switch, FlatList, Animated } from 'react-native';
+import { ChevronLeft, ChevronRight, Copy, Check, Info, Box, AlertTriangle, X } from 'lucide-react-native';
+import BaseModal from '../components/BaseModal';
 import { useTheme } from '../context/ThemeContext';
 import Button from '../components/Button';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -348,6 +350,10 @@ const ProductDetailScreen = observer(
     // Phase 2: Draft state for auto-save and versioning
     const [draftData, setDraftData] = useState<Record<string, any> | null>(null);
     const [isLoadingDraft, setIsLoadingDraft] = useState(false);
+    const [deleteConfirmation, setDeleteConfirmation] = useState<{ visible: boolean; platformKey: string }>({ visible: false, platformKey: '' });
+
+    // Custom Action Menu State
+    const [actionMenuVisible, setActionMenuVisible] = useState(false);
     const [draftVersions, setDraftVersions] = useState<Array<{ id: string; createdAt: string; platforms: any; publishedPlatforms?: string[] }>>([]);
 
     // Current form data (now live)
@@ -2397,8 +2403,11 @@ const ProductDetailScreen = observer(
               )}
             </View>
             <View style={styles.headerActions}>
-              <TouchableOpacity onPress={() => loadPlatformData()} style={styles.refreshButton}>
-                <Icon name="refresh" size={20} color={theme.colors.textSecondary} />
+              <TouchableOpacity
+                onPress={() => setActionMenuVisible(true)}
+                style={styles.refreshButton}
+              >
+                <Icon name="dots-horizontal" size={24} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
           </View>
@@ -2561,125 +2570,115 @@ const ProductDetailScreen = observer(
               )}
             </Card>
 
-            {/* Danger Zone */}
-            <Card style={[
-              styles.dangerZoneSection,
-              {
-                borderColor: "#F12C2D",
-                backgroundColor: '#FAFBFC',
-                borderWidth: 1.5,
-                borderRadius: 10,
-                marginTop: 24,
-                marginBottom: 24,
-                padding: 0,
-                overflow: 'hidden'
-              }
-            ]}>
-              <View style={{
-                padding: 16,
-                borderBottomWidth: 0,
-                backgroundColor: 'transparent'
-              }}>
-                <Text style={[
-                  styles.dangerZoneTitle,
-                  { color: theme.colors.text, fontWeight: '600', fontSize: 20, marginBottom: 0 }
-                ]}>
-                  Danger Zone
-                </Text>
-              </View>
-              <View style={{ paddingHorizontal: 8, paddingBottom: 16 }}>
-                {/* Archive Product */}
-                <TouchableOpacity
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    borderWidth: 1.5,
-                    borderColor: "#FFBC13",
-                    borderRadius: 8,
-                    paddingVertical: 12,
-                    paddingHorizontal: 12,
-                    marginBottom: 12,
-                    backgroundColor: '#fff',
-                    justifyContent: 'center'
-                  }}
-                  onPress={() => {
-                    Alert.alert(
-                      'Archive Product',
-                      'Are you sure you want to archive this product? You can restore it later.',
-                      [
-                        { text: 'Cancel', style: 'cancel' },
-                        { text: 'Archive', style: 'default', onPress: () => console.log('Archive product') }
-                      ]
-                    );
-                  }}
-                >
-                  <Icon name="archive" size={20} color={theme.colors.warning} style={{ marginRight: 8 }} />
-                  <Text style={{ color: "#FFBC13", fontWeight: '400', fontSize: 16 }}>
-                    Archive Product
-                  </Text>
-                </TouchableOpacity>
-                {/* Delete Product */}
-                <TouchableOpacity
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    borderWidth: 1.25,
-                    borderColor: "#F12C2D",
-                    borderRadius: 8,
-                    paddingVertical: 12,
-                    paddingHorizontal: 12,
-                    backgroundColor: '#fff',
-                    justifyContent: 'center'
-                  }}
-                  onPress={handleDelete}
-                >
-                  <Icon name="delete" size={20} color={theme.colors.error} style={{ marginRight: 8 }} />
-                  <Text style={{ color: theme.colors.error, fontWeight: '500', fontSize: 16 }}>
-                    Delete Product
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </Card>
+
+
+
           </Card>
-
-
         </ScrollView>
 
-        {/* Sync Status Indicator */}
-        {hasUnsavedChanges && (
-          <BottomActionBar
-            primaryLabel={isSaving ? 'Saving…' : 'Save changes'}
-            primaryDisabled={isSaving}
-            onPrimary={() => performAutoSave()}
-          />
-        )}
-        {/* Barcode Scanner Modal */}
-        {isBarcodeScannerVisible && (
-          <View style={styles.scannerDockFull} pointerEvents="box-none">
-            <View style={styles.scannerFullBleed}>
-              <CameraView
-                style={{ width: '100%', height: 240 }}
-                facing={'back'}
-                onBarcodeScanned={(result: any) => {
-                  const code = result?.data || result?.rawValue;
-                  if (code && (ProductDetailScreen as any)._scannerResultHandler) {
-                    (ProductDetailScreen as any)._scannerResultHandler(code);
-                    setIsBarcodeScannerVisible(false);
-                    (ProductDetailScreen as any)._scannerResultHandler = null;
-                  }
-                }}
-                barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'] }}
-              />
-              <TouchableOpacity onPress={() => { setIsBarcodeScannerVisible(false); (ProductDetailScreen as any)._scannerResultHandler = null; }} style={styles.scannerCloseFull}>
-                <Text style={{ color: '#fff', fontSize: 28 }}>×</Text>
+        {/* Action Menu Modal */}
+        <BaseModal
+          onClose={() => setActionMenuVisible(false)}
+          showCloseButton={false}
+          containerStyle={{ width: '85%', maxWidth: 340 }}
+        >
+          <View style={{ width: '100%' }}>
+            {/* Header Row: Spacer - Title - Close */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
+              <View style={{ width: 24 }} />
+              <Text style={{ fontSize: 18, fontWeight: '700', flex: 1, textAlign: 'center' }}>
+                Product Actions
+              </Text>
+              <TouchableOpacity onPress={() => setActionMenuVisible(false)}>
+                <Icon name="close" size={24} color="#000" />
               </TouchableOpacity>
             </View>
+
+            <TouchableOpacity
+              style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
+              onPress={() => {
+                setActionMenuVisible(false);
+                loadPlatformData();
+              }}
+            >
+              <Icon name="refresh" size={20} color={theme.colors.text} style={{ marginRight: 10 }} />
+              <Text style={{ fontSize: 16, fontWeight: '500', color: theme.colors.text }}>Refresh Data</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
+              onPress={() => {
+                setActionMenuVisible(false);
+                Alert.alert(
+                  'Archive Product',
+                  'Are you sure you want to archive this product? It will be hidden from your active listings.',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Archive', style: 'default', onPress: () => console.log('Archive (Placeholder)') }
+                  ]
+                );
+              }}
+            >
+              <Icon name="archive-outline" size={20} color={theme.colors.warning} style={{ marginRight: 10 }} />
+              <Text style={{ fontSize: 16, fontWeight: '500', color: theme.colors.warning }}>Archive Product</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={{ paddingVertical: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
+              onPress={() => {
+                setActionMenuVisible(false);
+                setTimeout(() => {
+                  handleDelete();
+                }, 400); // Small delay to allow modal to close smoothly
+              }}
+            >
+              <Icon name="delete-outline" size={20} color={theme.colors.error} style={{ marginRight: 10 }} />
+              <Text style={{ fontSize: 16, fontWeight: '500', color: theme.colors.error }}>Delete Product</Text>
+            </TouchableOpacity>
           </View>
-        )}
-        {isSyncing && (
-          <LoadingOverlay visible={isSyncing} message="Syncing to platforms..." onCancel={() => setIsSyncing(false)} />
-        )}
-      </View>
+        </BaseModal>
+
+        {/* Sync Status Indicator */}
+        {
+          hasUnsavedChanges && (
+            <BottomActionBar
+              primaryLabel={isSaving ? 'Saving…' : 'Save changes'}
+              primaryDisabled={isSaving}
+              onPrimary={() => performAutoSave()}
+            />
+          )
+        }
+        {/* Barcode Scanner Modal */}
+        {
+          isBarcodeScannerVisible && (
+            <View style={styles.scannerDockFull} pointerEvents="box-none">
+              <View style={styles.scannerFullBleed}>
+                <CameraView
+                  style={{ width: '100%', height: 240 }}
+                  facing={'back'}
+                  onBarcodeScanned={(result: any) => {
+                    const code = result?.data || result?.rawValue;
+                    if (code && (ProductDetailScreen as any)._scannerResultHandler) {
+                      (ProductDetailScreen as any)._scannerResultHandler(code);
+                      setIsBarcodeScannerVisible(false);
+                      (ProductDetailScreen as any)._scannerResultHandler = null;
+                    }
+                  }}
+                  barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'] }}
+                />
+                <TouchableOpacity onPress={() => { setIsBarcodeScannerVisible(false); (ProductDetailScreen as any)._scannerResultHandler = null; }} style={styles.scannerCloseFull}>
+                  <Text style={{ color: '#fff', fontSize: 28 }}>×</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )
+        }
+        {
+          isSyncing && (
+            <LoadingOverlay visible={isSyncing} message="Syncing to platforms..." onCancel={() => setIsSyncing(false)} />
+          )
+        }
+      </View >
     );
   }
 );

@@ -16,6 +16,7 @@ import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../
 import { Paths, Directory, File } from 'expo-file-system/next';
 import * as ImagePicker from 'expo-image-picker';
 import { useJobsOptional } from '../context/JobsContext';
+import { useJobProgress } from '../hooks/useJobProgress';
 import PublishConfirmationModal from '../components/PublishConfirmationModal';
 import { PLATFORM_META } from '../utils/platformConstants';
 
@@ -382,6 +383,30 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     return () => { canceled = true };
   }, [jobId, resultsParam, fetched]);
 
+  // Listen for real-time updates
+  const { jobState: socketJobState } = useJobProgress(jobId);
+
+  useEffect(() => {
+    if (socketJobState && socketJobState.jobId === jobId) {
+      console.log('[GEN-DETAILS] Socket update:', socketJobState.status);
+
+      setJobData(prev => {
+        // Only update if we have new meaningful data or status change
+        if (prev?.status === 'completed' && socketJobState.status !== 'completed') return prev;
+
+        return {
+          status: socketJobState.status,
+          // If socket provides results, use them. Otherwise keep existing (unless empty)
+          results: Array.isArray(socketJobState.results) && socketJobState.results.length > 0
+            ? socketJobState.results
+            : (prev?.results || []),
+          summary: prev?.summary, // Socket might not send summary, keep existing
+          completedAt: socketJobState.status === 'completed' ? new Date().toISOString() : prev?.completedAt
+        };
+      });
+    }
+  }, [socketJobState, jobId]);
+
   const status = jobData?.status ?? statusParam;
   const results = jobData?.results ?? resultsParam;
   const summary = jobData?.summary ?? summaryParam;
@@ -434,46 +459,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     console.log('[GEN-DETAILS] results raw:', Array.isArray(results) ? `len=${results.length}` : typeof results);
   }, [jobId, status, results, route.params]);
 
-  const first: GeneratedResult | null = useMemo(() => (Array.isArray(results) && results.length > 0 ? results[0] : null), [results]);
-
-  // Prefer user-captured images: 1) from ProductImages DB, 2) from params, 3) fallback to scraped
-  const userImagesByIndex: Record<number, string[]> = useMemo(() => {
-    const map: Record<number, string[]> = {};
-
-    // Priority 1: ProductImages from database (actual user photos)
-    if (Object.keys(dbImages).length > 0 && Array.isArray(results)) {
-      results.forEach((r, idx) => {
-        if (r.variantId && dbImages[r.variantId]) {
-          map[idx] = dbImages[r.variantId];
-          console.log(`[userImagesByIndex] Using DB images for index ${idx}:`, dbImages[r.variantId]);
-        }
-      });
-    }
-
-    // Priority 2: Images passed via navigation params
-    const fromParams = (route.params as any)?.userImagesByIndex;
-    if (fromParams && typeof fromParams === 'object') {
-      Object.keys(fromParams).forEach(key => {
-        const idx = parseInt(key, 10);
-        if (!isNaN(idx) && !map[idx]) {
-          map[idx] = fromParams[key];
-        }
-      });
-    }
-
-    // Priority 3: Fallback to scraped sourceImageUrl ONLY if no user images found
-    (Array.isArray(results) ? results : []).forEach((r, i) => {
-      if (!map[i]) {
-        const url = (r as any)?.sourceImageUrl;
-        if (url && typeof url === 'string' && !url.includes('firecrawl') && !url.includes('serpapi')) {
-          map[i] = [url];
-        }
-      }
-    });
-
-    return map;
-  }, [results, dbImages, route.params]);
-
   // ========== CRITICAL FIX: useRef for data persistence + auto-save ==========
   const [updateCounter, setUpdateCounter] = useState(0);
   const platformsRef = useRef<GeneratedPlatformDetails>({});
@@ -492,6 +477,71 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   // Get displayedPlatforms from ref (for render)
   // Just use the ref directly - it's stable and mutations won't cause renders
   const displayedPlatforms = platformsRef.current;
+
+
+  const first: GeneratedResult | null = useMemo(() => (Array.isArray(results) && results.length > 0 ? results[0] : null), [results]);
+
+  // Prefer user-captured images: 1) from ProductImages DB, 2) from params, 3) fallback to scraped
+  const userImagesByIndex: Record<number, string[]> = useMemo(() => {
+    const map: Record<number, string[]> = {};
+
+    // Priority 1: ProductImages from database (actual user photos)
+    if (Object.keys(dbImages).length > 0 && Array.isArray(results)) {
+      results.forEach((r, idx) => {
+        if (r.variantId && dbImages[r.variantId]) {
+          map[idx] = dbImages[r.variantId];
+          console.log(`[userImagesByIndex] Using DB images for index ${idx}:`, dbImages[r.variantId]);
+        }
+      });
+    }
+
+    // Priority 2: Images from current form state (Restored Draft)
+    // This ensures that if we loaded a draft JSON that has images, they show up!
+    if (displayedPlatforms) {
+      const keys = Object.keys(displayedPlatforms);
+      const canonicalKey = keys.includes('shopify') ? 'shopify' : keys[0];
+      if (canonicalKey) {
+        const p = displayedPlatforms[canonicalKey];
+        const draftImages = p.images || p.imageUris || [];
+        if (Array.isArray(draftImages) && draftImages.length > 0) {
+          const idx = (first?.productIndex as number) ?? 0;
+          // Merge with existing DB images if any, avoiding duplicates
+          const existing = map[idx] || [];
+          const merged = Array.from(new Set([...existing, ...draftImages]));
+          map[idx] = merged;
+          console.log(`[userImagesByIndex] P2: Merged draft images for index ${idx}:`, draftImages.length, 'Total:', merged.length);
+        } else {
+          // console.log(`[userImagesByIndex] P2: No images in draft for ${canonicalKey}`);
+        }
+      }
+    }
+
+    // Priority 3: Images passed via navigation params
+    const fromParams = (route.params as any)?.userImagesByIndex;
+    if (fromParams && typeof fromParams === 'object') {
+      Object.keys(fromParams).forEach(key => {
+        const idx = parseInt(key, 10);
+        if (!isNaN(idx)) {
+          const existing = map[idx] || [];
+          if (existing.length === 0) {
+            map[idx] = fromParams[key];
+          }
+        }
+      });
+    }
+
+    // Priority 4: Fallback to scraped sourceImageUrl ONLY if no user images found
+    (Array.isArray(results) ? results : []).forEach((r, i) => {
+      if (!map[i] || map[i].length === 0) {
+        const url = (r as any)?.sourceImageUrl;
+        if (url && typeof url === 'string' && !url.includes('firecrawl') && !url.includes('serpapi')) {
+          map[i] = [url];
+        }
+      }
+    });
+
+    return map;
+  }, [results, dbImages, route.params, updateCounter]);
   useEffect(() => {
     if (!first || !first.platforms) return;
 
@@ -588,7 +638,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             'Authorization': `Bearer ${token}`
           },
           body: JSON.stringify({
-            draftData: platformsRef.current
+            draftData: platformsRef.current,
+            // Include media so backend validation passes
+            media: buildPlatformPayload().media
           })
         });
 
@@ -1919,8 +1971,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           return null;
         }
         if (s?.status === 'failed' || s?.status === 'cancelled') return null;
-      } catch { }
-      await new Promise(res => setTimeout(res, 1200));
+      } catch (e) { console.log('Poll check failed, retrying...', e); }
+      // Backoff: start at 3s, increase slightly
+      const delay = 3000 + (i * 500);
+      await new Promise(res => setTimeout(res, delay));
     }
     return null;
   };
@@ -2083,7 +2137,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ImagePicker.MediaTypeOptions.Images, // Reverting to MediaTypeOptions to fix crash
         allowsEditing: false,
         aspect: [4, 3],
         quality: 0.8, // Match AddProductScreen quality
@@ -2223,6 +2277,34 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   }, [(route.params as any)?.variantId, results]);
 
 
+  const handleImagesChange = (newImages: string[]) => {
+    console.log('[GEN-DETAILS] handleImagesChange:', newImages.length, newImages);
+    if (!first?.variantId) return;
+
+    setDbImages(prev => ({
+      ...prev,
+      [first.variantId!]: newImages
+    }));
+
+    // Also update the 'images' field in the canonical platform data so it saves correctly
+    updatePlatforms(prev => {
+      const canonicalKey = platformKeys.includes('shopify') ? 'shopify' : platformKeys[0];
+      console.log('[GEN-DETAILS] handleImagesChange updating canonical:', canonicalKey);
+      if (!canonicalKey) return prev;
+
+      const updated = {
+        ...prev,
+        [canonicalKey]: {
+          ...(prev[canonicalKey] || {}),
+          images: newImages
+        }
+      };
+      // console.log('[GEN-DETAILS] handleImagesChange RESULT:', JSON.stringify(updated[canonicalKey]?.images));
+      return updated;
+    });
+  };
+
+
   return (
     <View style={{ flex: 1 }}>
       {/* Publishing Overlay */}
@@ -2240,6 +2322,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }}>
           <View style={{
             backgroundColor: '#fff',
+            marginHorizontal: 16,
             borderRadius: 16,
             padding: 32,
             alignItems: 'center',
@@ -2284,6 +2367,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           {first ? (
 
             <>
+              {/* Image Change Handler */}
+              {(() => {
+                // We define this inline or use the one defined in scope if possible, 
+                // but since I can't easily insert a function definition in the middle of the render block without wrapping,
+                // I'll rely on the function I defined at the component scope.
+                // Wait, I need to define handleImagesChange inside the component body, NOT here in JSX.
+                // I will use a separate replace call to insert the function definition before the return statement.
+                return null;
+              })()}
+
 
 
               {/* Editor form that matches the product page design */}
@@ -2291,6 +2384,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                 platforms={displayedPlatforms}
                 updateCounter={updateCounter}
                 images={(userImagesByIndex[(first?.productIndex as number) ?? 0] || [first?.sourceImageUrl || '']).filter(Boolean)}
+                onChangeImages={handleImagesChange}
                 platformLocations={platformLocations}
                 onChangePlatforms={(next) => {
                   console.log('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
