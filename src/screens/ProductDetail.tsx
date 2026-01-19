@@ -118,6 +118,11 @@ function getPlatformLogoComponent(platformType?: string) {
  * CRITICAL FIX: Clean displayedPlatforms data before save to prevent cross-platform location contamination.
  * When editing on 'all' tab, inventoryByLocation gets merged across platforms.
  * This function filters each platform's variants to ONLY include locations that belong to that platform.
+ * 
+ * LOCATION VALIDATION STRATEGY:
+ * 1. PRIMARY: Use `locations` array from platform data (most reliable - actual DB data)
+ * 2. SECONDARY: Use `connectionId` from platformData to match against location's connectionId
+ * 3. FALLBACK: Pattern matching for known platform ID formats (least reliable, last resort)
  */
 function cleanPlatformDataForSave(displayedPlatforms: Record<string, any>): Record<string, any> {
   const cleanedData: Record<string, any> = {};
@@ -128,13 +133,16 @@ function cleanPlatformDataForSave(displayedPlatforms: Record<string, any>): Reco
     // Deep clone to avoid mutating original
     const cleanedPlatform = JSON.parse(JSON.stringify(platformData));
 
-    // Get the set of valid location IDs for this platform from its locations array
+    // PRIMARY: Get location IDs from platform's locations array (source of truth)
     const platformLocationIds = new Set<string>();
     if (Array.isArray(cleanedPlatform.locations)) {
       cleanedPlatform.locations.forEach((loc: any) => {
         if (loc?.id) platformLocationIds.add(loc.id);
       });
     }
+
+    // SECONDARY: Get connectionId for this platform if available
+    const platformConnectionId = cleanedPlatform.connectionId || cleanedPlatform.connection?.id;
 
     // Filter variants' inventoryByLocation to only include this platform's locations
     if (Array.isArray(cleanedPlatform.variants)) {
@@ -143,28 +151,48 @@ function cleanPlatformDataForSave(displayedPlatforms: Record<string, any>): Reco
 
         const filteredInventory: Record<string, any> = {};
         for (const [locId, locData] of Object.entries(variant.inventoryByLocation)) {
-          // If we have a locations array, use it as source of truth
+          // PRIMARY: Use locations array if available
           if (platformLocationIds.size > 0) {
             if (platformLocationIds.has(locId)) {
               filteredInventory[locId] = locData;
             } else {
               console.log(`[cleanPlatformDataForSave] Filtered out location ${locId} from ${platformKey} - not in platform's locations`);
             }
-          } else {
-            // Fallback: Use pattern matching for platform detection
-            const isShopifyLoc = locId.includes('gid://shopify/');
-            const isLikelySquareLoc = /^[A-Z0-9]{8,}$/.test(locId) && !locId.includes('gid://');
-
-            if (platformKey === 'shopify' && !isShopifyLoc && isLikelySquareLoc) {
-              console.log(`[cleanPlatformDataForSave] Filtered Square location ${locId} from Shopify platform`);
-              continue;
-            }
-            if (platformKey === 'square' && isShopifyLoc) {
-              console.log(`[cleanPlatformDataForSave] Filtered Shopify location ${locId} from Square platform`);
-              continue;
-            }
-            filteredInventory[locId] = locData;
+            continue;
           }
+
+          // SECONDARY: Check if locData has connectionId that matches this platform
+          const locConnectionId = (locData as any)?.connectionId || (locData as any)?.platformConnectionId;
+          if (locConnectionId && platformConnectionId) {
+            if (locConnectionId === platformConnectionId) {
+              filteredInventory[locId] = locData;
+            } else {
+              console.log(`[cleanPlatformDataForSave] Filtered location ${locId} from ${platformKey} - connectionId mismatch`);
+            }
+            continue;
+          }
+
+          // FALLBACK: Pattern matching for common platform ID formats
+          const isShopifyLoc = locId.includes('gid://shopify/');
+          const isSquareLoc = /^L[A-Z0-9]+$/.test(locId) || (/^[A-Z0-9]{8,}$/.test(locId) && !locId.includes('gid://'));
+          const isCloverLoc = /^[A-Z0-9]{13}$/.test(locId); // Clover IDs are typically 13 chars
+
+          // Cross-contamination check
+          if (platformKey === 'shopify' && (isSquareLoc || isCloverLoc) && !isShopifyLoc) {
+            console.log(`[cleanPlatformDataForSave] Filtered non-Shopify location ${locId} from Shopify platform`);
+            continue;
+          }
+          if (platformKey === 'square' && (isShopifyLoc || isCloverLoc)) {
+            console.log(`[cleanPlatformDataForSave] Filtered non-Square location ${locId} from Square platform`);
+            continue;
+          }
+          if (platformKey === 'clover' && (isShopifyLoc || isSquareLoc)) {
+            console.log(`[cleanPlatformDataForSave] Filtered non-Clover location ${locId} from Clover platform`);
+            continue;
+          }
+
+          // If we can't determine, include it (conservative approach to avoid data loss)
+          filteredInventory[locId] = locData;
         }
 
         return { ...variant, inventoryByLocation: filteredInventory };
@@ -216,6 +244,21 @@ const ProductDetailScreen = observer(
     const [isActivityModalVisible, setIsActivityModalVisible] = useState(false);
     const [isBarcodeScannerVisible, setIsBarcodeScannerVisible] = useState(false);
     const [isImagePickerVisible, setIsImagePickerVisible] = useState(false);
+
+    // Partnership state for share/revoke controls
+    interface PartnershipInfo {
+      inviteId: string;
+      partnerOrgId: string;
+      partnerOrgName: string;
+      poolName: string;
+      canRevoke: boolean;
+      isPaused: boolean;
+      linkId?: string; // Set if this variant is shared with this partner
+      isShared: boolean;
+    }
+    const [partnerships, setPartnerships] = useState<PartnershipInfo[]>([]);
+    const [isLoadingPartnerships, setIsLoadingPartnerships] = useState(false);
+    const [partnershipActionLoading, setPartnershipActionLoading] = useState<string | null>(null);
 
     // Track if initial load has completed to prevent overwrites
     const hasLoadedInitialData = useRef(false);
@@ -551,7 +594,8 @@ const ProductDetailScreen = observer(
 
           // Generic fallback
           if (locationId === 'default') {
-            return 'Default Location';
+            const conn = platformConnections.find(c => c.Id === connectionId);
+            return conn ? `${conn.DisplayName || conn.PlatformType} Default` : 'Default Location';
           }
 
           // Show truncated ID if nothing else works
@@ -691,6 +735,169 @@ const ProductDetailScreen = observer(
         console.error('Error loading platform data:', error);
       }
     }, [detailedItem]);
+
+    // ========== PARTNERSHIP FUNCTIONS ==========
+    // Load partnerships where this org is the SOURCE (we sent the invite)
+    const loadPartnerships = useCallback(async () => {
+      if (!currentOrg?.id || !detailedItem) return;
+
+      setIsLoadingPartnerships(true);
+      try {
+        const token = await ensureSupabaseJwt();
+        if (!token) return;
+
+        // Fetch partnerships where we are the source org
+        const res = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/partnerships?orgId=${currentOrg.id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (!res.ok) {
+          console.error('[ProductDetail] Failed to load partnerships:', res.status);
+          return;
+        }
+
+        const data = await res.json();
+        const sentPartnerships = (data.partnerships || []).filter(
+          (p: any) => p.direction === 'sent' && p.status !== 'terminated'
+        );
+
+        if (sentPartnerships.length === 0) {
+          setPartnerships([]);
+          return;
+        }
+
+        // For each partnership, check if this variant is shared
+        const enrichedPartnerships: PartnershipInfo[] = [];
+
+        for (const p of sentPartnerships) {
+          // Check if there's a CrossOrgProductLink for this variant in this partnership
+          const linkRes = await fetch(
+            `${SSSYNC_API_BASE_URL}/api/cross-org/partnerships/${p.id}/products?variantId=${detailedItem.Id}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+
+          let linkId: string | undefined;
+          let isShared = false;
+
+          if (linkRes.ok) {
+            const links = await linkRes.json();
+            const matchingLink = Array.isArray(links)
+              ? links.find((l: any) => l.sourceVariantId === detailedItem.Id && l.status !== 'revoked')
+              : null;
+            if (matchingLink) {
+              linkId = matchingLink.id || matchingLink.linkId;
+              isShared = true;
+            }
+          }
+
+          enrichedPartnerships.push({
+            inviteId: p.id,
+            partnerOrgId: p.targetOrgId || p.partnerOrgId,
+            partnerOrgName: p.targetOrgName || p.partnerOrgName || p.partnerEmail || 'Partner',
+            poolName: p.poolName || p.sourcePoolName || 'Shared Pool',
+            canRevoke: p.canRevoke !== false && p.shareType !== 'sync',
+            isPaused: p.isPaused || false,
+            linkId,
+            isShared,
+          });
+        }
+
+        setPartnerships(enrichedPartnerships);
+      } catch (error) {
+        console.error('[ProductDetail] Error loading partnerships:', error);
+      } finally {
+        setIsLoadingPartnerships(false);
+      }
+    }, [currentOrg?.id, detailedItem]);
+
+    // Share this variant with a partner
+    const shareWithPartner = async (inviteId: string) => {
+      if (!detailedItem) return;
+
+      setPartnershipActionLoading(inviteId);
+      try {
+        const token = await ensureSupabaseJwt();
+        if (!token) throw new Error('No auth token');
+
+        const res = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/partnerships/${inviteId}/products`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ variantIds: [detailedItem.Id] }),
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(errText || 'Failed to share');
+        }
+
+        const result = await res.json();
+        console.log('[ProductDetail] Shared with partner:', result);
+
+        // Refresh partnerships to update share status
+        await loadPartnerships();
+        Alert.alert('Shared!', 'Product has been shared with the partner.');
+      } catch (error: any) {
+        console.error('[ProductDetail] Error sharing with partner:', error);
+        Alert.alert('Error', error.message || 'Failed to share product');
+      } finally {
+        setPartnershipActionLoading(null);
+      }
+    };
+
+    // Revoke this variant from a partner
+    const revokeFromPartner = async (linkId: string, partnerName: string) => {
+      Alert.alert(
+        'Remove from Partner?',
+        `This will remove the product from ${partnerName}'s inventory.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Remove',
+            style: 'destructive',
+            onPress: async () => {
+              setPartnershipActionLoading(linkId);
+              try {
+                const token = await ensureSupabaseJwt();
+                if (!token) throw new Error('No auth token');
+
+                const res = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/links/${linkId}/revoke`, {
+                  method: 'DELETE',
+                  headers: { Authorization: `Bearer ${token}` },
+                });
+
+                if (!res.ok) {
+                  const errText = await res.text();
+                  throw new Error(errText || 'Failed to revoke');
+                }
+
+                console.log('[ProductDetail] Revoked from partner');
+
+                // Refresh partnerships to update share status
+                await loadPartnerships();
+                Alert.alert('Removed', 'Product has been removed from the partner.');
+              } catch (error: any) {
+                console.error('[ProductDetail] Error revoking from partner:', error);
+                Alert.alert('Error', error.message || 'Failed to remove product');
+              } finally {
+                setPartnershipActionLoading(null);
+              }
+            },
+          },
+        ]
+      );
+    };
+
+    // Load partnerships when component mounts or org/variant changes
+    useEffect(() => {
+      if (currentOrg?.id && detailedItem?.Id) {
+        loadPartnerships();
+      }
+    }, [currentOrg?.id, detailedItem?.Id, loadPartnerships]);
+
+    // ========== END PARTNERSHIP FUNCTIONS ==========
 
     // Load additional product details (images, tags, variants, etc.) - consolidated like PastScansScreen
     const loadProductDetails = useCallback(async () => {
@@ -950,6 +1157,29 @@ const ProductDetailScreen = observer(
         });
       });
 
+      // CRITICAL FIX: Ensure every connected platform has at least one location for inventory
+      // This handles platforms like eBay that may not have explicit locations in the database
+      connections.forEach(conn => {
+        const platform = conn.PlatformType?.toLowerCase();
+        if (!platform || !conn.IsEnabled) return;
+
+        // If this platform has no locations yet, add a virtual default
+        if (!locsByPlatform[platform] || locsByPlatform[platform].length === 0) {
+          const connectionName = conn.DisplayName || `${conn.PlatformType} Account`;
+          const defaultLocationId = `default-${conn.Id}`;
+
+          locsByPlatform[platform] = [{
+            id: defaultLocationId,
+            name: `${connectionName} Inventory`,
+            connectionId: conn.Id,
+            connectionName,
+            platformType: platform
+          }];
+
+          console.log(`[ProductDetail] Added virtual default location for ${platform}: ${defaultLocationId}`);
+        }
+      });
+
       console.log('[ProductDetail] buildPlatformLocations result:',
         Object.entries(locsByPlatform).map(([p, locs]) => `${p}: ${locs.length} locations`).join(', '));
 
@@ -1071,6 +1301,284 @@ const ProductDetailScreen = observer(
         setIsSaving(false);
       }
     }, [detailedItem, formData, hasUnsavedChanges, displayedPlatforms]);
+
+    // Generate platform-specific data when adding a new platform tab
+    const handleGeneratePlatform = useCallback(async (platformKey: string) => {
+      if (!detailedItem?.Id) {
+        console.warn('[ProductDetail] Cannot generate platform - no item ID');
+        return;
+      }
+
+      console.log(`[ProductDetail] Generating AI data for platform: ${platformKey}`);
+
+      try {
+        // 1. Auto-save first to ensure DB matches UI (prevents state loss on refresh)
+        if (hasUnsavedChanges) {
+          console.log('[ProductDetail] Auto-saving before generation...');
+          await performAutoSave();
+        }
+
+        const token = await ensureSupabaseJwt();
+        if (!token) {
+          console.error('[ProductDetail] No auth token for platform generation');
+          return;
+        }
+
+        // Submit generate job for this platform
+        const submitResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/products/regenerate/submit`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            products: [{
+              productId: detailedItem.ProductId,
+              variantId: detailedItem.Id,
+              regenerateType: 'entire_platform',
+              targetPlatform: platformKey,
+              imageUrls: detailedItem.ImageUrls || [],
+            }],
+            options: { useExistingScrapedData: true }
+          }),
+        });
+
+        if (!submitResponse.ok) {
+          throw new Error(`Generate submit failed: ${submitResponse.status}`);
+        }
+
+        const submitJson = await submitResponse.json();
+        const jobId = submitJson?.jobId;
+
+        if (!jobId) {
+          throw new Error('No job ID returned from regenerate submit');
+        }
+
+        console.log(`[ProductDetail] Regenerate job submitted: ${jobId}`);
+
+        // Poll for completion
+        let attempts = 0;
+        const maxAttempts = 30; // 30 * 2s = 60 seconds max
+
+        while (attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          attempts++;
+
+          const statusResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/products/regenerate/status/${jobId}`, {
+            headers: { 'Authorization': `Bearer ${token}` },
+          });
+
+          if (!statusResponse.ok) continue;
+
+          const statusJson = await statusResponse.json();
+          console.log(`[ProductDetail] Regenerate status: ${statusJson.status}`);
+
+          if (statusJson.status === 'completed' || statusJson.status === 'partial') {
+            // Get results
+            const resultsResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/products/regenerate/results/${jobId}`, {
+              headers: { 'Authorization': `Bearer ${token}` },
+            });
+
+            if (resultsResponse.ok) {
+              const resultsJson = await resultsResponse.json();
+              const productResult = resultsJson.results?.[0];
+              const platformData = productResult?.platforms?.[platformKey];
+
+              if (platformData) {
+                console.log(`[ProductDetail] Got generated data for ${platformKey}:`, Object.keys(platformData));
+
+                // Smart Merge: Don't overwrite existing values with empty strings
+                const safePlatformData = { ...platformData };
+
+                // Sanitize: If title/desc are empty strings, remove them from update so we keep existing
+                if (safePlatformData.title === '') delete safePlatformData.title;
+                if (safePlatformData.description === '') delete safePlatformData.description;
+
+                // Update displayedPlatforms with the generated data
+                setDisplayedPlatforms(prev => ({
+                  ...prev,
+                  [platformKey]: {
+                    ...prev[platformKey],
+                    ...safePlatformData,
+                  }
+                }));
+                setHasUnsavedChanges(true);
+                showBanner(`✨ Generated ${platformKey} listing data`);
+              }
+            }
+            break;
+          } else if (statusJson.status === 'failed') {
+            console.error('[ProductDetail] Regenerate job failed:', statusJson.error);
+            break;
+          }
+        }
+      } catch (error) {
+        console.error('[ProductDetail] Platform generation failed:', error);
+        Alert.alert('Generation Failed', 'Could not generate platform data. Please try again.');
+      }
+    }, [detailedItem, showBanner]);
+
+    // Detect platforms that have data in displayedPlatforms but no mapping (unpublished)
+    const unpublishedPlatforms = useMemo(() => {
+      const platformsInEditor = Object.keys(displayedPlatforms).filter(k => k !== 'all');
+      const mappedPlatformTypes = new Set(
+        mappings.map(m => {
+          const conn = connections.find(c => c.Id === m.PlatformConnectionId);
+          return conn?.PlatformType?.toLowerCase();
+        }).filter(Boolean)
+      );
+
+      return platformsInEditor.filter(platform => {
+        // Skip if already mapped
+        if (mappedPlatformTypes.has(platform)) return false;
+
+        // Only include if there's actual data for this platform
+        const platformData = displayedPlatforms[platform];
+        return platformData && Object.keys(platformData).length > 0;
+      });
+    }, [displayedPlatforms, mappings, connections]);
+
+    // Publish product to a new platform
+    const [isPublishing, setIsPublishing] = useState<string | null>(null);
+
+    const handlePublishToPlatform = useCallback(async (platformKey: string) => {
+      if (!detailedItem?.Id || isPublishing) return;
+
+      console.log(`[ProductDetail] Publishing to platform: ${platformKey}`);
+      setIsPublishing(platformKey);
+
+      try {
+        // 1. Auto-save first to ensure DB matches UI
+        // This prevents "state loss" if the page refreshes from DB after publish
+        if (hasUnsavedChanges) {
+          console.log('[ProductDetail] Auto-saving before publish...');
+          await performAutoSave();
+        }
+
+        const token = await ensureSupabaseJwt();
+        if (!token) {
+          Alert.alert('Error', 'Not authenticated');
+          return;
+        }
+
+        // Find the connection for this platform
+        const targetConnection = connections.find(c =>
+          c.PlatformType.toLowerCase() === platformKey.toLowerCase()
+        );
+
+        if (!targetConnection) {
+          Alert.alert('No Connection', `You don't have a ${platformKey} account connected. Connect one first in Settings.`);
+          return;
+        }
+
+        // Build the publish payload using the new DTO format
+        const platformData = displayedPlatforms[platformKey] || {};
+
+        // Build canonical data from the current detailedItem
+        const canonicalData = {
+          title: detailedItem.Title || platformData.title || 'Untitled',
+          sku: detailedItem.Sku || platformData.sku || '',
+          price: detailedItem.Price || platformData.price || 0,
+          description: detailedItem.Description || platformData.description || '',
+          barcode: detailedItem.Barcode || platformData.barcode || '',
+          weight: detailedItem.Weight || platformData.weight || 0,
+          weightUnit: detailedItem.WeightUnit || platformData.weightUnit || 'lb',
+          tags: platformData.tags || [],
+        };
+
+        const publishPayload = {
+          variantId: detailedItem.Id,
+          productId: detailedItem.ProductId,
+          publishIntent: 'PUBLISH_PLATFORM_LIVE',
+          platformDetails: {
+            canonical: canonicalData,
+            [platformKey]: platformData,
+          },
+          media: {
+            imageUris: detailedItem.ImageUrls || [],
+            coverImageIndex: 0, // Default to first image
+          },
+          selectedPlatformsToPublish: [platformKey],
+          connectionIds: {
+            [platformKey]: [targetConnection.Id],
+          },
+        };
+
+        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/publish`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(publishPayload),
+        });
+
+        const responseData = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(responseData.message || `Publish failed: ${response.status}`);
+        }
+
+        // Check if any platforms need reauth
+        if (responseData.reauthRequired && responseData.reauthRequired.length > 0) {
+          const reauthPlatform = responseData.reauthRequired[0];
+          Alert.alert(
+            'Re-authentication Required',
+            `Your ${reauthPlatform.connectionDisplayName || reauthPlatform.platform} connection needs to be re-authenticated to continue publishing.`,
+            [
+              { text: 'Later', style: 'cancel' },
+              {
+                text: 'Re-authenticate',
+                onPress: () => {
+                  // Navigate to profile to trigger reauth
+                  navigation.navigate('Profile' as never, { openReauth: reauthPlatform.connectionId } as never);
+                }
+              },
+            ]
+          );
+          return;
+        }
+
+        showBanner(`🚀 Published to ${platformKey}!`);
+
+        // Refresh mappings to show the new listing
+        await loadPlatformData();
+
+      } catch (error: any) {
+        console.error('[ProductDetail] Publish failed:', error);
+
+        // Check for reauth error in exception message
+        const errorMessage = error.message?.toLowerCase() || '';
+        const isReauthError =
+          errorMessage.includes('re-authentication') ||
+          errorMessage.includes('reauth') ||
+          errorMessage.includes('token expired') ||
+          errorMessage.includes('invalid access token');
+
+        if (isReauthError) {
+          Alert.alert(
+            'Re-authentication Required',
+            `Your ${platformKey} connection needs to be re-authenticated. Would you like to fix this now?`,
+            [
+              { text: 'Later', style: 'cancel' },
+              {
+                text: 'Re-authenticate',
+                onPress: () => navigation.navigate('Profile' as never)
+              },
+            ]
+          );
+        } else {
+          Alert.alert('Publish Failed', error.message || 'Could not publish to platform');
+        }
+      } finally {
+        setIsPublishing(null);
+      }
+    }, [detailedItem, connections, displayedPlatforms, isPublishing, showBanner, loadPlatformData, hasUnsavedChanges, performAutoSave]);
+
+    // Auto-save function with proper API call
+    // Note: Pricing validation is flexible - either flat price OR all variants have prices
+    // This allows: Shopify with variants at different prices, Square with flat price, etc.
+
 
     // Handle form changes with auto-save
     const handleFormChange = useCallback((field: keyof EditFormData, value: any) => {
@@ -1852,7 +2360,29 @@ const ProductDetailScreen = observer(
           // NOTE: The old filter caused ALL variants to disappear when optionValues wasn't populated
           console.log('[ProductDetail] Using', hydratedVariants.length, 'freshVariants for platforms. First variant optionValues:',
             JSON.stringify(hydratedVariants[0]?.optionValues || {}));
-          const freshVariants = hydratedVariants || [];
+
+          // ⚡ ROOT CAUSE FIX: Build a Set of valid location IDs for THIS platform
+          // Then filter each variant's inventoryByLocation to ONLY include this platform's locations
+          const perPlatformLocIds = new Set(perPlatformLocs.map((loc: any) => loc.id));
+
+          // Filter each variant to only include inventory for THIS platform's locations
+          const platformFilteredVariants = (hydratedVariants || []).map((variant: any) => {
+            if (!variant.inventoryByLocation) return variant;
+
+            // If we have platform-specific locations, filter the inventory
+            if (perPlatformLocIds.size > 0) {
+              const filteredInventory: Record<string, any> = {};
+              for (const [locId, locData] of Object.entries(variant.inventoryByLocation)) {
+                if (perPlatformLocIds.has(locId)) {
+                  filteredInventory[locId] = locData;
+                }
+              }
+              return { ...variant, inventoryByLocation: filteredInventory };
+            }
+
+            // No platform-specific locations available, return as-is (legacy behavior)
+            return variant;
+          });
 
           // ⚡ CRITICAL FIX: Extract ONLY non-inventory/price fields from platformData
           // platformData comes from stale ProductVariants.Metadata.platformSpecificData
@@ -1884,7 +2414,7 @@ const ProductDetailScreen = observer(
             options: safePlatformData.options || (detailedItem.Options && typeof detailedItem.Options === 'object'
               ? Object.entries(detailedItem.Options).map(([name, values]) => ({ name, values: Array.isArray(values) ? values : [values] }))
               : []),
-            variants: freshVariants, // ALWAYS use fresh DB variants with live inventory
+            variants: platformFilteredVariants, // Use platform-filtered variants with only this platform's inventory
             locations: perPlatformLocs, // Use per-platform locations
             locationQuantities: perPlatformLocQty,
           };
@@ -2439,16 +2969,45 @@ const ProductDetailScreen = observer(
                       ...platformData
                     };
 
+                    // ⚡ ROOT CAUSE FIX: When merging variants, ONLY include locations that belong to THIS platform
+                    // Build a Set of valid location IDs for this platform from its 'locations' array
+                    const platformLocationIds = new Set<string>();
+                    if (Array.isArray(platformData?.locations)) {
+                      platformData.locations.forEach((loc: any) => {
+                        if (loc?.id) platformLocationIds.add(loc.id);
+                      });
+                    }
+
                     // CRITICAL: Preserve variant inventoryByLocation when merging variants array
+                    // BUT filter to ONLY include locations that belong to THIS platform
                     if (Array.isArray(platformData?.variants) && Array.isArray(prevPlatform.variants)) {
                       merged[platformKey].variants = platformData.variants.map((newVariant: any) => {
                         const prevVariant = prevPlatform.variants?.find((v: any) => v.id === newVariant.id);
                         if (prevVariant?.inventoryByLocation) {
+                          // Filter previous inventory to only THIS platform's locations
+                          const filteredPrevInventory: Record<string, any> = {};
+                          for (const [locId, locData] of Object.entries(prevVariant.inventoryByLocation)) {
+                            // Only include if: no locations array OR location is in this platform's locations
+                            if (platformLocationIds.size === 0 || platformLocationIds.has(locId)) {
+                              filteredPrevInventory[locId] = locData;
+                            }
+                          }
+
+                          // Similarly filter new inventory
+                          const filteredNewInventory: Record<string, any> = {};
+                          if (newVariant.inventoryByLocation) {
+                            for (const [locId, locData] of Object.entries(newVariant.inventoryByLocation)) {
+                              if (platformLocationIds.size === 0 || platformLocationIds.has(locId)) {
+                                filteredNewInventory[locId] = locData;
+                              }
+                            }
+                          }
+
                           return {
                             ...newVariant,
                             inventoryByLocation: {
-                              ...prevVariant.inventoryByLocation,
-                              ...(newVariant.inventoryByLocation || {})
+                              ...filteredPrevInventory,
+                              ...filteredNewInventory
                             }
                           };
                         }
@@ -2509,6 +3068,8 @@ const ProductDetailScreen = observer(
                   return rest;
                 });
               }}
+              // 🆕 AI generation for new platforms
+              onGeneratePlatform={handleGeneratePlatform}
             />
 
             {/* Active Listings */}
@@ -2552,6 +3113,120 @@ const ProductDetailScreen = observer(
                       </View>
                     );
                   })}
+
+                  {/* Unpublished platforms - ready to publish */}
+                  {unpublishedPlatforms.length > 0 && (
+                    <>
+                      <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 12, marginBottom: 8 }}>
+                        Ready to publish:
+                      </Text>
+                      {unpublishedPlatforms.map((platform) => {
+                        const Logo = getPlatformLogoComponent(platform);
+                        const platformLabel = platform.charAt(0).toUpperCase() + platform.slice(1);
+                        const isCurrentlyPublishing = isPublishing === platform;
+
+                        return (
+                          <View key={platform} style={[styles.platformRow, { backgroundColor: '#F0FDF4', borderRadius: 8, marginBottom: 4 }]}>
+                            <View style={styles.platformInfo}>
+                              <View style={[styles.platformLogoContainer, { backgroundColor: '#DCFCE7' }]}>
+                                {Logo ? (
+                                  <Logo width={18} height={18} />
+                                ) : (
+                                  <Icon name="store" size={18} color={'#16A34A'} />
+                                )}
+                              </View>
+                              <View style={styles.platformDetails}>
+                                <Text style={[styles.platformName, { color: theme.colors.text }]}>{platformLabel}</Text>
+                                <Text style={{ fontSize: 12, color: '#16A34A' }}>Ready to publish</Text>
+                              </View>
+                            </View>
+                            <TouchableOpacity
+                              style={[styles.syncButton, { backgroundColor: '#16A34A', paddingHorizontal: 16, paddingVertical: 8 }]}
+                              onPress={() => handlePublishToPlatform(platform)}
+                              disabled={isCurrentlyPublishing}
+                            >
+                              {isCurrentlyPublishing ? (
+                                <ActivityIndicator size="small" color="#fff" />
+                              ) : (
+                                <>
+                                  <Icon name="rocket-launch-outline" size={14} color="#fff" style={{ marginRight: 6 }} />
+                                  <Text style={{ color: '#fff', fontWeight: '600', fontSize: 14 }}>Publish</Text>
+                                </>
+                              )}
+                            </TouchableOpacity>
+                          </View>
+                        );
+                      })}
+                    </>
+                  )}
+
+                  {/* Partner Sharing Section */}
+                  {partnerships.length > 0 && (
+                    <>
+                      <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 16, marginBottom: 8 }}>
+                        Partner Sharing:
+                      </Text>
+                      {partnerships.map((partnership) => {
+                        const isLoading = partnershipActionLoading === partnership.inviteId || partnershipActionLoading === partnership.linkId;
+
+                        return (
+                          <View
+                            key={partnership.inviteId}
+                            style={[
+                              styles.platformRow,
+                              {
+                                backgroundColor: partnership.isShared ? '#EEF2FF' : '#F9FAFB',
+                                borderRadius: 8,
+                                marginBottom: 4,
+                              },
+                            ]}
+                          >
+                            <View style={styles.platformInfo}>
+                              <View style={[styles.platformLogoContainer, { backgroundColor: partnership.isShared ? '#C7D2FE' : '#E5E7EB' }]}>
+                                <Icon name="account-group-outline" size={18} color={partnership.isShared ? '#4F46E5' : '#6B7280'} />
+                              </View>
+                              <View style={styles.platformDetails}>
+                                <Text style={[styles.platformName, { color: theme.colors.text }]} numberOfLines={1}>
+                                  {partnership.partnerOrgName}
+                                </Text>
+                                <Text style={{ fontSize: 12, color: partnership.isShared ? '#4F46E5' : theme.colors.textSecondary }}>
+                                  {partnership.isShared ? 'Shared' : 'Not shared'} • {partnership.poolName}
+                                </Text>
+                              </View>
+                            </View>
+
+                            {isLoading ? (
+                              <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginRight: 12 }} />
+                            ) : partnership.isShared ? (
+                              partnership.canRevoke && partnership.linkId ? (
+                                <TouchableOpacity
+                                  style={[styles.delistButton, { backgroundColor: '#FEE2E2', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }]}
+                                  onPress={() => revokeFromPartner(partnership.linkId!, partnership.partnerOrgName)}
+                                >
+                                  <Icon name="link-off" size={14} color="#DC2626" style={{ marginRight: 4 }} />
+                                  <Text style={{ color: '#DC2626', fontWeight: '500', fontSize: 13 }}>Remove</Text>
+                                </TouchableOpacity>
+                              ) : (
+                                <View style={[styles.delistButton, { backgroundColor: '#E0E7FF', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }]}>
+                                  <Icon name="check" size={14} color="#4F46E5" style={{ marginRight: 4 }} />
+                                  <Text style={{ color: '#4F46E5', fontWeight: '500', fontSize: 13 }}>Shared</Text>
+                                </View>
+                              )
+                            ) : (
+                              <TouchableOpacity
+                                style={[styles.syncButton, { backgroundColor: '#4F46E5', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }]}
+                                onPress={() => shareWithPartner(partnership.inviteId)}
+                              >
+                                <Icon name="share-variant-outline" size={14} color="#fff" style={{ marginRight: 4 }} />
+                                <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }}>Share</Text>
+                              </TouchableOpacity>
+                            )}
+                          </View>
+                        );
+                      })}
+                    </>
+                  )}
+
                   <TouchableOpacity
                     style={styles.addPlatformRow}
                     onPress={() => listingEditorRef.current?.openPlatformPicker?.()}
@@ -2579,6 +3254,7 @@ const ProductDetailScreen = observer(
         {/* Action Menu Modal */}
         <BaseModal
           onClose={() => setActionMenuVisible(false)}
+          visible={actionMenuVisible}
           showCloseButton={false}
           containerStyle={{ width: '85%', maxWidth: 340 }}
         >
@@ -3103,4 +3779,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default ProductDetailScreen; 
+export default ProductDetailScreen;

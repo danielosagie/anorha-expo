@@ -65,6 +65,7 @@ interface LocationsManagerV2Props {
     DisplayName: string;
     Status?: string;
     IsEnabled?: boolean;
+    NeedsReauth?: boolean; // Backend signals when OAuth token is expired/revoked
   }>;
   disableScroll?: boolean;
   onPressConnect?: () => void;

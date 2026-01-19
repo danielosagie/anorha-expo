@@ -530,7 +530,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     }
 
     // Fallback to dummy data if no locations available
-    return [{ id: 'loc-default', name: 'Default Location', platformType: platformKey }];
+    return [{ id: 'loc-default', name: `${platformKey.charAt(0).toUpperCase() + platformKey.slice(1)} Default`, platformType: platformKey }];
   }, [activeData.locations, activePlatformKey, platformLocations]);
   const [selectedLocationId, setSelectedLocationId] = useState<string>(locations[0]?.id || 'loc-1');
 
@@ -604,18 +604,22 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           return existing;
         } else {
           // New variant - initialize with default inventory structure
+          // INHERIT from locationQuantities if transitioning from non-variant product
+          const baseQuantities = platformData.locationQuantities || {};
           const inventoryByLocation: Record<string, { quantity: number; price?: number; image?: string }> = {};
 
           // Initialize for default location (used by VARIANT_WITH_OPTIONS)
+          // Inherit quantity from non-variant data if available
           inventoryByLocation['default'] = {
-            quantity: 0,
+            quantity: baseQuantities['default'] ?? 0,
             price: platformData.price || activeData.price || 0,
           };
 
           // Also initialize for all known locations (used by LOCATION_VARIANT_WITH_OPTIONS)
+          // Inherit quantities from non-variant data if available
           (platformLocs as Array<{ id: string }>).forEach(loc => {
             inventoryByLocation[loc.id] = {
-              quantity: 0,
+              quantity: baseQuantities[loc.id] ?? 0,
               price: platformData.price || activeData.price || 0,
             };
           });
@@ -1087,10 +1091,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             <TouchableOpacity
               key={key}
               onPress={() => setActiveTab(key)}
-              style={[
-                styles.pill,
-                activeTab === key && { backgroundColor: '#3B82F6', borderColor: '#3B82F6' }
-              ]}
+              style={[styles.pill, activeTab === key && styles.pillActive]}
             >
               <Text style={[styles.pillText, activeTab === key && styles.pillTextActive]}>All</Text>
             </TouchableOpacity>
@@ -1926,10 +1927,27 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
               if (activeTab === 'all') {
                 // All tab: show all locations from all platforms
-                // CRITICAL FIX: Deduplicate by location id to prevent duplicate React keys
+                // Match the logic for NON-VARIANT case:
+                // 1. Start with explicit locations from platformLocations
                 const allLocsRaw = Object.entries(platformLocations || {}).flatMap(([pk, locs]) =>
                   (locs || []).map((l: any) => ({ ...l, platformKey: pk }))
                 );
+
+                // 2. ROBUSTNESS FIX: Ensure every active platform has at least one location
+                // This covers cases where platformLocations might be missing an entry for a connected platform (e.g. eBay/Facebook)
+                Object.keys(platforms).forEach(pk => {
+                  const hasLocation = allLocsRaw.some(l => l.platformKey === pk);
+                  if (!hasLocation) {
+                    // Add a virtual default location for this missing platform
+                    allLocsRaw.push({
+                      id: `default-${pk}`,
+                      name: 'Default Location',
+                      platformKey: pk
+                    });
+                    console.log(`[ListingEditorForm] Auto-added virtual location for missing platform: ${pk}`);
+                  }
+                });
+
                 // Filter to unique location IDs - keep first occurrence
                 const seenIds = new Set<string>();
                 allLocs = allLocsRaw.filter(loc => {
@@ -2029,8 +2047,52 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 }
               }
 
+              // CRITICAL FIX: If no variants exist, create a virtual "Base Product" variant
+              // This ensures ALL products (variant or not) show per-platform/location inventory
+              if (preparedVariants.length === 0) {
+                const baseVariant: VariantInventoryEditorProps['variants'][0] = {
+                  id: '_base',
+                  name: 'Base Product',
+                  defaultPrice: Number(activeData.price ?? 0),
+                  inventory: {},
+                };
+
+                // Populate inventory from locationQuantities (non-variant data)
+                allLocs.forEach(loc => {
+                  const qty = (activeData.locationQuantities || {})[loc.id] ?? 0;
+                  baseVariant.inventory[loc.id] = {
+                    quantity: qty,
+                    price: Number(activeData.price ?? 0),
+                  };
+                });
+
+                // Fallback if no locations
+                if (allLocs.length === 0) {
+                  const defaultQty = (activeData.locationQuantities || {})['default'] ?? 0;
+                  baseVariant.inventory['default'] = {
+                    quantity: defaultQty,
+                    price: Number(activeData.price ?? 0),
+                  };
+                }
+
+                preparedVariants = [baseVariant];
+                console.log('[ListingEditorForm] Injected Base Product variant for non-variant product');
+              }
+
               // 3. Callback - per-location pricing for non-Shopify, global for Shopify
               const handleUpdateInventory = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
+                // HANDLE BASE PRODUCT (non-variant product)
+                if (variantId === '_base') {
+                  if (field === 'quantity') {
+                    // Store per-location quantity in locationQuantities
+                    setLocationQuantity(locationId, value);
+                  } else if (field === 'price') {
+                    // Price changes update the base product price for this platform
+                    patchPlatform(prev => ({ ...prev, price: value }));
+                  }
+                  return;
+                }
+
                 const nextPlatforms = { ...platforms };
 
                 let targetPlatform = activeTab;
@@ -2157,10 +2219,90 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             })()}
           </>
         ) : (
-          <SimpleQuantityInput
-            quantity={(activeData.locationQuantities || {})['default'] ?? 0}
-            onChangeQuantity={(qty) => setLocationQuantity('default', qty)}
-          />
+          /* NON-VARIANT PRODUCT: Use VariantInventoryEditor with a virtual "Base Product" variant
+           * This ensures all products (variant or not) have per-platform/location inventory fields
+           */
+          (() => {
+            // Build locations list (same logic as variant case)
+            let allLocs: Array<{ id: string; name: string; platformKey: string }>;
+
+            if (activeTab === 'all') {
+              // All tab: show all locations from all platforms
+              const allLocsRaw = Object.entries(platformLocations || {}).flatMap(([pk, locs]) =>
+                (locs || []).map((l: any) => ({ ...l, platformKey: pk }))
+              );
+
+              // ROBUSTNESS FIX: Ensure every active platform has at least one location
+              Object.keys(platforms).forEach(pk => {
+                const hasLocation = allLocsRaw.some(l => l.platformKey === pk);
+                if (!hasLocation) {
+                  allLocsRaw.push({
+                    id: `default-${pk}`,
+                    name: 'Default Location',
+                    platformKey: pk
+                  });
+                }
+              });
+
+              const seenIds = new Set<string>();
+              allLocs = allLocsRaw.filter(loc => {
+                if (seenIds.has(loc.id)) return false;
+                seenIds.add(loc.id);
+                return true;
+              });
+            } else {
+              // Platform tab: filter to only this platform's locations
+              const platformKey = activeTab.toLowerCase();
+              const platformLocs = platformLocations?.[platformKey] || [];
+              allLocs = platformLocs.map((l: any) => ({ ...l, platformKey }));
+            }
+
+            // Create virtual "Base Product" variant with locationQuantities data
+            const baseVariant = {
+              id: '_base',
+              name: 'Base Product',
+              defaultPrice: Number(activeData.price ?? 0),
+              inventory: {} as Record<string, { quantity: number; price?: number }>,
+            };
+
+            // Populate inventory from locationQuantities (per-location) or use base price
+            allLocs.forEach(loc => {
+              const qty = (activeData.locationQuantities || {})[loc.id] ?? 0;
+              baseVariant.inventory[loc.id] = {
+                quantity: qty,
+                price: Number(activeData.price ?? 0),
+              };
+            });
+
+            // If no locations exist yet, create a default inventory entry
+            if (allLocs.length === 0 && activeTab !== 'all') {
+              const qty = (activeData.locationQuantities || {})['default'] ?? 0;
+              baseVariant.inventory['default'] = {
+                quantity: qty,
+                price: Number(activeData.price ?? 0),
+              };
+            }
+
+            const handleBaseInventoryUpdate = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
+              if (field === 'quantity') {
+                // Store per-location quantity in locationQuantities
+                setLocationQuantity(locationId, value);
+              } else if (field === 'price') {
+                // Price changes update the base product price
+                patchPlatform(prev => ({ ...prev, price: value }));
+              }
+            };
+
+            return (
+              <VariantInventoryEditor
+                variants={[baseVariant]}
+                activeTab={activeTab}
+                locations={allLocs.length > 0 ? allLocs : [{ id: 'default', name: 'Default', platformKey: activeTab }]}
+                isGenerationMode={isGenerationMode}
+                onUpdateInventory={handleBaseInventoryUpdate}
+              />
+            );
+          })()
         )}
 
       </View>

@@ -197,7 +197,10 @@ const VariantInventoryEditor: React.FC<VariantInventoryEditorProps> = ({
         ) : (
           variants.map((variant) => (
             <View key={variant.id} style={styles.variantSection}>
-              <Text style={styles.sectionTitle}>{variant.name}</Text>
+              {/* Hide section title for single base product (non-variant) */}
+              {!(variants.length === 1 && variant.id === '_base') && (
+                <Text style={styles.sectionTitle}>{variant.name}</Text>
+              )}
 
               {locations.length === 0 ? (
                 <Text style={styles.emptyText}>No locations available</Text>

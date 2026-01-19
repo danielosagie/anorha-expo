@@ -2401,7 +2401,18 @@ const ConnectedPlatformItem = React.memo(({
       {/* Right column: action buttons (non-edit mode only) */}
       {!isEditMode && connection && !isProgressActive && (
         <View style={styles.connectionActions}>
-          {connection.Status === CONNECTION_STATUS.PENDING && (
+          {/* REAUTH WARNING - Takes precedence over other actions */}
+          {connection.NeedsReauth && (
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: '#FF3B30' + '20' }]}
+              onPress={() => onReconnect(connection.Id, platformConfig.key, platformConfig.name)}
+            >
+              <Icon name="alert-circle" size={18} color="#FF3B30" />
+              <Text style={[styles.actionButtonText, { color: '#FF3B30' }]}>Re-auth</Text>
+            </TouchableOpacity>
+          )}
+
+          {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.PENDING && (
             <TouchableOpacity
               style={[styles.actionButton, { backgroundColor: theme.colors.primary + '20' }]}
               onPress={() => onStartScan(connection.Id, platformConfig.name)}
@@ -2411,7 +2422,7 @@ const ConnectedPlatformItem = React.memo(({
             </TouchableOpacity>
           )}
 
-          {connection.Status === CONNECTION_STATUS.REVIEW && (
+          {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.REVIEW && (
             <TouchableOpacity
               style={[styles.actionButton, { backgroundColor: '#FF9500' + '20' }]}
               onPress={() => onReview(connection.Id, platformConfig.name)}
@@ -2421,7 +2432,7 @@ const ConnectedPlatformItem = React.memo(({
             </TouchableOpacity>
           )}
 
-          {connection.Status === CONNECTION_STATUS.READY_TO_SYNC && (
+          {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.READY_TO_SYNC && (
             <TouchableOpacity
               style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
               onPress={() => navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name })}
@@ -2431,7 +2442,7 @@ const ConnectedPlatformItem = React.memo(({
             </TouchableOpacity>
           )}
 
-          {(connection.Status === CONNECTION_STATUS.INACTIVE) && (
+          {!connection.NeedsReauth && (connection.Status === CONNECTION_STATUS.INACTIVE) && (
             <TouchableOpacity
               style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
               onPress={() => onStartScan(connection.Id, platformConfig.name)}
@@ -2441,7 +2452,7 @@ const ConnectedPlatformItem = React.memo(({
             </TouchableOpacity>
           )}
 
-          {connection.Status === CONNECTION_STATUS.ERROR && (() => {
+          {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.ERROR && (() => {
             const recommended = getRecommendedAction(connection, platformConfig.key);
             const handleAction = () => {
               switch (recommended.action) {
@@ -2464,7 +2475,7 @@ const ConnectedPlatformItem = React.memo(({
             );
           })()}
 
-          {connection.Status === CONNECTION_STATUS.ACTIVE && (
+          {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.ACTIVE && (
             <TouchableOpacity
               style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
               onPress={() => navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name })}

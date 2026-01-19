@@ -58,6 +58,7 @@ type CreateAccountScreenNavigationProp = StackNavigationProp<AppStackParamList, 
 type Step =
   | 'WELCOME'
   | 'BUSINESS_NAME'
+  | 'STORE_ADDRESS'
   | 'BUSINESS_TYPE'
   | 'ROLE'
   | 'CONTACT'
@@ -69,14 +70,21 @@ interface FormData {
   businessType: string;
   customBusinessType: string;
   role: string;
-  customRole: string; // [NEW]
+  customRole: string;
   phone: string;
   region: string | null;
   currency: string | null;
   invites: string[];
   locationPermission: boolean;
   notificationPermission: boolean;
-  agreedToLegal: boolean; // [NEW]
+  agreedToLegal: boolean;
+  // Business Address fields
+  street1: string;
+  street2: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  country: string;
 }
 
 // --- OPTIONS ---
@@ -100,6 +108,7 @@ const ROLES = [
 const STEPS_ORDER: Step[] = [
   'WELCOME',
   'BUSINESS_NAME',
+  'STORE_ADDRESS',
   'BUSINESS_TYPE',
   'ROLE',
   'CONTACT',
@@ -167,6 +176,108 @@ const BusinessNameStep = memo(({ value, onChange, onNext }: { value: string, onC
     <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
       <Text style={styles.primaryButtonText}>Next</Text>
     </TouchableOpacity>
+  </Animated.View>
+));
+
+const StoreAddressStep = memo(({
+  street1,
+  street2,
+  city,
+  state,
+  postalCode,
+  country,
+  onStreet1Change,
+  onStreet2Change,
+  onCityChange,
+  onStateChange,
+  onPostalCodeChange,
+  onCountryChange,
+  onNext,
+  onSkip,
+}: {
+  street1: string;
+  street2: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  country: string;
+  onStreet1Change: (t: string) => void;
+  onStreet2Change: (t: string) => void;
+  onCityChange: (t: string) => void;
+  onStateChange: (t: string) => void;
+  onPostalCodeChange: (t: string) => void;
+  onCountryChange: (t: string) => void;
+  onNext: () => void;
+  onSkip: () => void;
+}) => (
+  <Animated.View entering={SlideInRight} exiting={SlideOutLeft} style={styles.stepContainer}>
+    <Text style={styles.stepTitle}>Where's your store located?</Text>
+    <Text style={styles.subtitle}>This helps us set up shipping & returns for platforms like eBay.</Text>
+
+    <View style={{ marginTop: 24, gap: 12 }}>
+      <TextInput
+        style={styles.input}
+        placeholder="Street Address"
+        placeholderTextColor={THEME.textDim}
+        value={street1}
+        onChangeText={onStreet1Change}
+        autoFocus
+      />
+      <TextInput
+        style={styles.input}
+        placeholder="Apt, Suite, Unit (optional)"
+        placeholderTextColor={THEME.textDim}
+        value={street2}
+        onChangeText={onStreet2Change}
+      />
+      <View style={{ flexDirection: 'row', gap: 12 }}>
+        <TextInput
+          style={[styles.input, { flex: 2 }]}
+          placeholder="City"
+          placeholderTextColor={THEME.textDim}
+          value={city}
+          onChangeText={onCityChange}
+        />
+        <TextInput
+          style={[styles.input, { flex: 1 }]}
+          placeholder="State"
+          placeholderTextColor={THEME.textDim}
+          value={state}
+          onChangeText={onStateChange}
+          autoCapitalize="characters"
+          maxLength={2}
+        />
+      </View>
+      <View style={{ flexDirection: 'row', gap: 12 }}>
+        <TextInput
+          style={[styles.input, { flex: 1 }]}
+          placeholder="ZIP Code"
+          placeholderTextColor={THEME.textDim}
+          value={postalCode}
+          onChangeText={onPostalCodeChange}
+          keyboardType="numeric"
+        />
+        <TextInput
+          style={[styles.input, { flex: 1 }]}
+          placeholder="Country"
+          placeholderTextColor={THEME.textDim}
+          value={country}
+          onChangeText={onCountryChange}
+          autoCapitalize="characters"
+          maxLength={2}
+        />
+      </View>
+    </View>
+
+    <View style={{ flex: 1 }} />
+    <View style={{ gap: 12 }}>
+      <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
+        <Text style={styles.primaryButtonText}>Next</Text>
+      </TouchableOpacity>
+      <TouchableOpacity onPress={onSkip} style={{ alignItems: 'center', padding: 12 }}>
+        <Text style={{ color: THEME.text, fontSize: 16 }}>Skip for now</Text>
+      </TouchableOpacity>
+    </View>
   </Animated.View>
 ));
 
@@ -474,12 +585,19 @@ export default function CreateAccountScreen() {
     role: '',
     customRole: '',
     phone: '',
-    region: 'US', // Default fallbacks
+    region: 'US',
     currency: 'USD',
     invites: [],
     locationPermission: false,
     notificationPermission: false,
     agreedToLegal: false,
+    // Business Address
+    street1: '',
+    street2: '',
+    city: '',
+    state: '',
+    postalCode: '',
+    country: 'US',
   });
 
   const phoneInputRef = useRef<PhoneInput>(null);
@@ -498,6 +616,9 @@ export default function CreateAccountScreen() {
         Alert.alert('Missing Info', 'Please enter your business name.');
         return;
       }
+      goToStep('STORE_ADDRESS');
+    } else if (currentStep === 'STORE_ADDRESS') {
+      // Address is optional, just proceed
       goToStep('BUSINESS_TYPE');
     } else if (currentStep === 'BUSINESS_TYPE') {
       if (!formData.businessType) {
@@ -693,7 +814,8 @@ export default function CreateAccountScreen() {
         <View style={styles.headerRow}>
           <TouchableOpacity onPress={() => {
             if (currentStep === 'BUSINESS_NAME') goToStep('WELCOME');
-            if (currentStep === 'BUSINESS_TYPE') goToStep('BUSINESS_NAME');
+            if (currentStep === 'STORE_ADDRESS') goToStep('BUSINESS_NAME');
+            if (currentStep === 'BUSINESS_TYPE') goToStep('STORE_ADDRESS');
             if (currentStep === 'ROLE') goToStep('BUSINESS_TYPE');
             if (currentStep === 'CONTACT') goToStep('ROLE');
             if (currentStep === 'TEAM') goToStep('CONTACT');
@@ -717,6 +839,25 @@ export default function CreateAccountScreen() {
               value={formData.businessName}
               onChange={(t) => setFormData(p => ({ ...p, businessName: t }))}
               onNext={handleNext}
+            />
+          )}
+
+          {currentStep === 'STORE_ADDRESS' && (
+            <StoreAddressStep
+              street1={formData.street1}
+              street2={formData.street2}
+              city={formData.city}
+              state={formData.state}
+              postalCode={formData.postalCode}
+              country={formData.country}
+              onStreet1Change={(t) => setFormData(p => ({ ...p, street1: t }))}
+              onStreet2Change={(t) => setFormData(p => ({ ...p, street2: t }))}
+              onCityChange={(t) => setFormData(p => ({ ...p, city: t }))}
+              onStateChange={(t) => setFormData(p => ({ ...p, state: t }))}
+              onPostalCodeChange={(t) => setFormData(p => ({ ...p, postalCode: t }))}
+              onCountryChange={(t) => setFormData(p => ({ ...p, country: t }))}
+              onNext={handleNext}
+              onSkip={() => goToStep('BUSINESS_TYPE')}
             />
           )}
 

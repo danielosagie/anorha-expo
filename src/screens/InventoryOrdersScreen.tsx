@@ -1269,7 +1269,9 @@ const InventoryOrdersScreen = observer(() => {
           <TextInput
             style={styles.modalInput}
             placeholder="e.g. 30"
-            keyboardType="numeric"
+            placeholderTextColor="#9ca3af"
+            keyboardType="number-pad"
+            returnKeyType="done"
             value={liquidationTimeline}
             onChangeText={setLiquidationTimeline}
           />
@@ -1278,7 +1280,9 @@ const InventoryOrdersScreen = observer(() => {
           <TextInput
             style={styles.modalInput}
             placeholder="e.g. 1500"
+            placeholderTextColor="#9ca3af"
             keyboardType="numeric"
+            returnKeyType="done"
             value={liquidationAmount}
             onChangeText={setLiquidationAmount}
           />
@@ -1311,12 +1315,57 @@ const InventoryOrdersScreen = observer(() => {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.modalButton, styles.confirmButton]}
-            onPress={() => {
-              console.log('[BulkLiquidate] Starting with strategy:', liquidationStrategy);
-              setLiquidationModalVisible(false);
-              handleExitSelectionMode();
-              // Navigate to campaign screen with mock ID (since we didn't actually create one via API yet)
-              navigation.navigate('LiquidationCampaignScreen', { campaignId: 'new_campaign_mock_123' });
+            onPress={async () => {
+              try {
+                const token = await ensureSupabaseJwt();
+                if (!token) {
+                  Alert.alert('Error', 'Not authenticated');
+                  return;
+                }
+
+                // Get the selected product IDs
+                const selectedProductIds = Array.from(selectedItems);
+
+                // Build the request body
+                const requestBody = {
+                  targetRevenue: parseFloat(liquidationAmount) || 500,
+                  timeframeDays: parseInt(liquidationTimeline) || 30,
+                  productIds: selectedProductIds,
+                  aggressiveness: liquidationStrategy === 'moderate' ? 'balanced' : liquidationStrategy,
+                };
+
+                console.log('[BulkLiquidate] Starting campaign with:', requestBody);
+
+                // Call the actual API
+                const response = await fetch('https://api.sssync.app/api/agent/quick/liquidation', {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify(requestBody),
+                });
+
+                if (!response.ok) {
+                  const errorData = await response.json().catch(() => ({}));
+                  throw new Error(errorData.message || `Failed to start campaign: ${response.status}`);
+                }
+
+                const result = await response.json();
+                console.log('[BulkLiquidate] Campaign created:', result);
+
+                setLiquidationModalVisible(false);
+                handleExitSelectionMode();
+
+                // Navigate to campaign screen with real session ID
+                navigation.navigate('LiquidationCampaignScreen', {
+                  campaignId: result.sessionId
+                });
+
+              } catch (error: any) {
+                console.error('[BulkLiquidate] Failed:', error);
+                Alert.alert('Error', error.message || 'Failed to start liquidation campaign');
+              }
             }}
           >
             <Text style={styles.confirmButtonText}>Start Campaign</Text>

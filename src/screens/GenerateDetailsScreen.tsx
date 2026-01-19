@@ -1343,6 +1343,30 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           inventoryQuantity: parseNumeric(canonical.inventoryQuantity),
           tracked: canonical.tracked !== undefined ? canonical.tracked : undefined,
           inventoryTracker: canonical.inventoryTracker || undefined,
+          // CRITICAL FIX: For single-variant products, pass inventoryByLocation at root level
+          // The backend expects this for setting per-location inventory
+          inventoryByLocation: (() => {
+            // If product has explicit variants, skip root-level inventory (it's in variants[])
+            if (Array.isArray(canonical.variants) && canonical.variants.length > 0) return undefined;
+
+            // Convert locationQuantities to inventoryByLocation format if present
+            if (canonical.locationQuantities && typeof canonical.locationQuantities === 'object') {
+              const result: Record<string, { quantity: number; price?: number }> = {};
+              for (const [locId, qty] of Object.entries(canonical.locationQuantities)) {
+                if (typeof qty === 'number') {
+                  result[locId] = { quantity: qty, price: canonical.price || 0 };
+                }
+              }
+              return Object.keys(result).length > 0 ? result : undefined;
+            }
+
+            // If there's a first variant with inventory, use that
+            if (canonical.variants?.[0]?.inventoryByLocation) {
+              return canonical.variants[0].inventoryByLocation;
+            }
+
+            return canonical.inventoryByLocation || undefined;
+          })(),
           // Variant options (if single variant with options)
           selectedOptions: Array.isArray(canonical.selectedOptions) ? canonical.selectedOptions : undefined,
           // Variant structure (if variants array exists)
@@ -1406,34 +1430,28 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }, {} as Record<string, any>),
       },
       media: (() => {
-        // CRITICAL: Use userImagesByIndex which prioritizes: 1) DB images, 2) params, 3) scraped fallback
+        // Clean image collection - only user-uploaded or DB images, no scraped URLs
         const imgs = new Set<string>();
 
-        // First, collect from displayed platforms (preserves user edits in the form)
+        // Collect images from the form's image state (already filtered)
         for (const k of Object.keys(displayedPlatforms || {})) {
           const p = (displayedPlatforms as any)[k] || {};
-          const arr = p.images || p.imageUris || [];
+          const arr = p.images || [];
           if (Array.isArray(arr)) {
             arr.forEach((u: string) => {
-              if (typeof u === 'string' && u && !u.includes('firecrawl') && !u.includes('serpapi')) {
+              // Filter out scraped/external sources - only keep Supabase or user-uploaded URLs
+              if (typeof u === 'string' && u &&
+                !u.includes('firecrawl') &&
+                !u.includes('serpapi') &&
+                !u.includes('google.com') &&
+                (u.includes('supabase') || u.startsWith('file://') || u.startsWith('http'))) {
                 imgs.add(u);
               }
             });
           }
         }
 
-        // Add user images from computed userImagesByIndex (includes DB images!)
-        const idx = (first?.productIndex as number) ?? 0;
-        const userImages = userImagesByIndex[idx] || [];
-        userImages.forEach((u: string) => {
-          if (typeof u === 'string' && u) {
-            imgs.add(u);
-          }
-        });
-
-        const imageUris = Array.from(imgs);
-        console.log('[buildPlatformPayload] Using user images (DB + params):', imageUris);
-        return { imageUris, coverImageIndex: 0 };
+        return { imageUris: Array.from(imgs), coverImageIndex: 0 };
       })(),
       selectedPlatformsToPublish: Object.keys(displayedPlatforms || {}),
     };
@@ -2383,7 +2401,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               <ListingEditorForm
                 platforms={displayedPlatforms}
                 updateCounter={updateCounter}
-                images={(userImagesByIndex[(first?.productIndex as number) ?? 0] || [first?.sourceImageUrl || '']).filter(Boolean)}
+                images={(userImagesByIndex[(first?.productIndex as number) ?? 0] || '').filter(Boolean)}
                 onChangeImages={handleImagesChange}
                 platformLocations={platformLocations}
                 onChangePlatforms={(next) => {

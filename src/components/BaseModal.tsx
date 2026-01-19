@@ -1,5 +1,5 @@
 import React, { ReactNode } from 'react';
-import { Modal, View, StyleSheet, TouchableOpacity, ModalProps, ViewStyle } from 'react-native';
+import { Modal, View, StyleSheet, TouchableOpacity, ModalProps, ViewStyle, TouchableWithoutFeedback } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 interface BaseModalProps extends Omit<ModalProps, 'children'> {
@@ -30,20 +30,26 @@ export const BaseModal: React.FC<BaseModalProps> = ({
             onRequestClose={onClose}
             {...modalProps}
         >
-            <View style={styles.overlay}>
-                <View style={[styles.container, containerStyle]}>
-                    {showCloseButton && onClose && (
-                        <TouchableOpacity
-                            style={styles.closeButton}
-                            onPress={onClose}
-                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                        >
-                            <Icon name="close" size={24} color="#666" />
-                        </TouchableOpacity>
-                    )}
-                    {children}
-                </View>
-            </View>
+            <TouchableOpacity
+                style={styles.overlay}
+                activeOpacity={1}
+                onPress={onClose}
+            >
+                <TouchableWithoutFeedback onPress={() => { }}>
+                    <View style={[styles.container, containerStyle]}>
+                        {showCloseButton && onClose && (
+                            <TouchableOpacity
+                                style={styles.closeButton}
+                                onPress={onClose}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                            >
+                                <Icon name="close" size={24} color="#666" />
+                            </TouchableOpacity>
+                        )}
+                        {children}
+                    </View>
+                </TouchableWithoutFeedback>
+            </TouchableOpacity>
         </Modal>
     );
 };

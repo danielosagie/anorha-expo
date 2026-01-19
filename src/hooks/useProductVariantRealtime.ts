@@ -279,4 +279,3 @@ export function useInventoryLevelsRealtime() {
   // Return the updateCounter so consumers can include it in their dependencies
   return { updateCounter };
 }
-
