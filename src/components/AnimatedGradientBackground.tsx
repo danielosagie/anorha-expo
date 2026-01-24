@@ -1,11 +1,11 @@
 import React, { useEffect } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import Animated, { 
-  useSharedValue, 
-  useAnimatedStyle, 
-  withRepeat, 
-  withTiming, 
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withRepeat,
+  withTiming,
   Easing,
   interpolate,
   cancelAnimation
@@ -26,28 +26,28 @@ const StaticGradient = () => (
 );
 
 // Optimize by memoizing the component
-const AnimatedGradientBackground = React.memo(() => {
+const AnimatedGradientBackground = React.memo((props: any) => {
   // Use this flag to disable animation on low-end devices
   const useStaticGradient = false;
-  
+
   // If static mode is enabled, render a simple non-animated gradient
   if (useStaticGradient) {
     return <StaticGradient />;
   }
-  
+
   const animation = useSharedValue(0);
-  
+
   useEffect(() => {
     // Slower animation with longer duration for better performance
     animation.value = withRepeat(
-      withTiming(1, { 
+      withTiming(1, {
         duration: 30000, // Doubled duration for less CPU usage
-        easing: Easing.inOut(Easing.ease) 
+        easing: Easing.inOut(Easing.ease)
       }),
       -1, // Infinite repeat
       true // Reverse
     );
-    
+
     // Cleanup animation when component unmounts
     return () => {
       cancelAnimation(animation);
@@ -61,14 +61,14 @@ const AnimatedGradientBackground = React.memo(() => {
       [0, 1],
       [0, height * 0.03] // Reduced motion even further
     );
-    
+
     return {
       transform: [{ translateY }]
     };
   });
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, props.style]}>
       <AnimatedLinearGradient
         style={[styles.gradient, animatedStyles]}
         colors={['#5c9c00', '#8cc63f', '#5c9c00']}

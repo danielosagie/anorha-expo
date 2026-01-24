@@ -259,7 +259,8 @@ const InventoryOrdersScreen = observer(() => {
           const { data, error } = await supabase
             .from('ProductVariants')
             .select('*')
-            .eq('UserId', legendState.userId);
+            .eq('UserId', legendState.userId)
+            .not('Sku', 'like', 'DRAFT-%');
 
           if (error) {
             console.error('[InventoryScreen - Direct Fetch] Error fetching products:', error);
@@ -332,7 +333,8 @@ const InventoryOrdersScreen = observer(() => {
           const { data, error: fetchError } = await supabase
             .from('ProductVariants')
             .select('*')
-            .eq('UserId', legendState.userId);
+            .eq('UserId', legendState.userId)
+            .not('Sku', 'like', 'DRAFT-%');
 
           if (fetchError) {
             console.error('[InventoryOrdersScreen] Error refreshing products:', fetchError);
@@ -495,6 +497,12 @@ const InventoryOrdersScreen = observer(() => {
       // Filter out archived variants (soft delete)
       if (variantWithType.IsArchived === true) {
         console.log(`[InventoryScreen] Filtering out archived variant: ${variant.Title} (${variantId})`);
+        return false;
+      }
+
+      // Filter out DRAFT variants (safety check)
+      if (variant.Sku && variant.Sku.startsWith('DRAFT-')) {
+        console.log(`[InventoryScreen] Filtering out DRAFT variant: ${variant.Title} (${variant.Sku})`);
         return false;
       }
 
@@ -681,7 +689,8 @@ const InventoryOrdersScreen = observer(() => {
 
   // Apply search and sort filters
   const filteredInventory = useMemo(() => {
-    let filtered = enrichedProductVariants;
+    // CRITICAL FIX: Clone the array to ensure reference changes for useMemo
+    let filtered = [...enrichedProductVariants];
 
     // Search by title
     if (searchQuery) {

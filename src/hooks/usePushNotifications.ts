@@ -26,6 +26,7 @@ export function usePushNotifications() {
     const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
     const [notification, setNotification] = useState<Notifications.Notification | null>(null);
     const [error, setError] = useState<Error | null>(null);
+    const [lastNotificationResponse, setLastNotificationResponse] = useState<Notifications.NotificationResponse | null>(null);
 
     const notificationListener = useRef<Notifications.EventSubscription | null>(null);
     const responseListener = useRef<Notifications.EventSubscription | null>(null);
@@ -60,8 +61,8 @@ export function usePushNotifications() {
 
         // Listen for notification responses (user tapped notification)
         responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
-            const data = response.notification.request.content.data;
-            handleNotificationResponse(data);
+            console.log('[PushNotifications] Tapped:', response);
+            if (isMounted) setLastNotificationResponse(response);
         });
 
         return () => {
@@ -105,27 +106,7 @@ export function usePushNotifications() {
         }
     };
 
-    const handleNotificationResponse = (data: any) => {
-        // Handle navigation based on notification type
-        // You can use a global navigation ref or event emitter here to trigger navigation
-        console.log('Notification tapped:', data);
-
-        switch (data?.type) {
-            case 'job_complete':
-                // Navigate to job results
-                break;
-            case 'inventory_shared':
-                // Navigate to partnerships
-                break;
-            case 'sprout_insight':
-                // Navigate to Sprout
-                break;
-            default:
-                break;
-        }
-    };
-
-    return { expoPushToken, notification, error };
+    return { expoPushToken, notification, lastNotificationResponse, error };
 }
 
 async function registerForPushNotificationsAsync(): Promise<string | null> {

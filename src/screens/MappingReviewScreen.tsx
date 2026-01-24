@@ -11,6 +11,7 @@ import { Sparkles, Link, Unlink, Hammer, DollarSign, Store, Boxes } from 'lucide
 
 import Card from '../components/Card'; // Import Card component
 import { useLegendState } from '../context/LegendStateContext';
+import { useOrg } from '../context/OrgContext'; // Import OrgContext
 import { LegendStateObservables, PlatformConnection } from '../utils/SupaLegend';
 import { useSyncProgress } from '../hooks/useSyncProgress';
 import Animated, { FadeInUp, Layout } from 'react-native-reanimated';
@@ -181,6 +182,7 @@ const MappingReviewScreen = () => {
   const navigation = useNavigation<MappingReviewScreenNavigationProp>();
   const { connectionId, platformName, jobId, importedProducts, isCSVImport, isScanning, scanStartTime } = route.params as any;
   const legendState: LegendStateObservables | null = useLegendState();
+  const { currentOrg } = useOrg(); // Use Org Context
   const [connection, setConnection] = useState<any>()
 
 
@@ -891,13 +893,25 @@ const MappingReviewScreen = () => {
   // Effect to load platform connections
   useEffect(() => {
     const loadConnections = async () => {
-      if (legendState?.userId) {
+      const targetOrgId = currentOrg?.id; // Prioritize Org context
+      const targetUserId = legendState?.userId;
+
+      if (targetOrgId || targetUserId) {
         try {
-          const { data, error } = await supabase
+          let query = supabase
             .from('PlatformConnections')
             .select('*')
-            .eq('UserId', legendState.userId)
             .eq('IsEnabled', true);
+
+          if (targetOrgId) {
+            console.log('[MappingReview] Loading connections for Org:', targetOrgId);
+            query = query.eq('OrgId', targetOrgId);
+          } else {
+            console.log('[MappingReview] Loading connections for User:', targetUserId);
+            query = query.eq('UserId', targetUserId);
+          }
+
+          const { data, error } = await query;
 
           if (error) {
             console.error('[MappingReviewScreen] Error loading connections:', error);
@@ -3973,7 +3987,7 @@ const MappingReviewScreen = () => {
       <View style={styles.container}>
         <TouchableOpacity
           onPress={() => navigation.goBack()}
-          style={[styles.backButton, { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, marginTop: 20 }]}
+          style={[styles.backButton, { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, marginTop: 40 }]}
         >
           <Icon name="arrow-left" size={20} color={theme.colors.text} />
           <Text style={{ marginLeft: 6, fontSize: 16, fontWeight: '500', color: theme.colors.text }}>Back</Text>
@@ -4239,14 +4253,14 @@ const MappingReviewScreen = () => {
                   onPress={() => setShowEffectAllDropdown(!showEffectAllDropdown)}
                 >
                   <Icon name="playlist-edit" size={18} color="#FFF" />
-                  <Text style={{ marginLeft: 6, color: '#FFF', fontWeight: '700' }}>Bulk Edit</Text>
+                  <Text style={{ marginLeft: 6, color: '#FFF', fontWeight: '700' }}>Bulk</Text>
                   <Icon name={showEffectAllDropdown ? 'chevron-up' : 'chevron-down'} size={16} color="#FFF" style={{ marginLeft: 4 }} />
                 </TouchableOpacity>
                 {showEffectAllDropdown && (
                   <View style={{
                     position: 'absolute',
                     top: 40,
-                    right: 0,
+                    right: -60,
                     backgroundColor: '#fff',
                     borderRadius: 12,
                     borderWidth: 1,
@@ -4273,7 +4287,7 @@ const MappingReviewScreen = () => {
                         setShowEffectAllDropdown(false);
                       }}
                     >
-                      <Icon name="check-all" size={18} color="#10B981" />
+                      <Icon name="check-all" size={18} color="#93C822" />
                       <Text style={{ marginLeft: 8, color: '#374151', fontWeight: '600' }}>Match All</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
@@ -5382,7 +5396,99 @@ const MappingReviewScreen = () => {
 
                                 console.log('[MappingReview] Mappings confirmed, updating quick settings...');
 
-                                // Step 2: Update quick settings with wizard selections
+                                // Step 2: Handle Pool Assignments & Quick Settings
+                                console.log('[MappingReview] Processing pool assignments...');
+
+                                // 2a. Determine correct pool IDs (handle creation if needed)
+                                let mapPoolId = selectedPool;
+                                const assignments = { ...locationPoolAssignments };
+
+                                // Check if we need to create a new pool
+                                const needsNewPool =
+                                  selectedPool === 'create-new' ||
+                                  Object.values(assignments).some(id => id === 'create-new');
+
+                                if (needsNewPool && poolNameInput) {
+                                  try {
+                                    console.log(`[MappingReview] Creating new pool: "${poolNameInput}"`);
+                                    const createPoolRes = await fetch(`${SSSYNC_API_BASE_URL}/api/pools`, {
+                                      method: 'POST',
+                                      headers: {
+                                        'Authorization': `Bearer ${token}`,
+                                        'Content-Type': 'application/json',
+                                      },
+                                      body: JSON.stringify({
+                                        orgId: 'current', // Backend resolves this from user context or we can pass currentOrg.id
+                                        name: poolNameInput,
+                                        description: `Created during import from ${platformName}`,
+                                        syncInventory: true,
+                                        syncPricing: true,
+                                        inventoryMode: 'shared'
+                                      }),
+                                    });
+
+                                    if (!createPoolRes.ok) {
+                                      throw new Error(`Failed to create pool: ${createPoolRes.status}`);
+                                    }
+
+                                    const newPool = await createPoolRes.json();
+                                    console.log('[MappingReview] New pool created:', newPool.id);
+
+                                    // Update our references to use the real ID
+                                    if (mapPoolId === 'create-new') {
+                                      mapPoolId = newPool.id;
+                                    }
+
+                                    // Update any 'create-new' assignments to the new ID
+                                    Object.keys(assignments).forEach(locId => {
+                                      if (assignments[locId] === 'create-new') {
+                                        assignments[locId] = newPool.id;
+                                      }
+                                    });
+
+                                  } catch (poolErr) {
+                                    console.error('[MappingReview] Failed to create new pool:', poolErr);
+                                    Alert.alert('Warning', 'Failed to create new pool. Locations may use default pool.');
+                                    // Fallback to undefined or existing logic
+                                  }
+                                }
+
+                                // 2b. Assign locations to their respective pools
+                                // Group locations by pool ID
+                                const poolToLocations = new Map<string, string[]>();
+
+                                Object.entries(assignments).forEach(([locId, poolId]) => {
+                                  if (!poolId || poolId === 'create-new') return; // Skip invalid or unhandled 'create-new'
+                                  const list = poolToLocations.get(poolId) || [];
+                                  list.push(locId);
+                                  poolToLocations.set(poolId, list);
+                                });
+
+                                // If user picked a main pool but didn't explicitly map some locations, 
+                                // maybe we should map unassigned ones to mapPoolId? 
+                                // For now, we only map explicit assignments + selectedPool as global default in quickSettings.
+
+                                // Send assignments to backend
+                                for (const [pId, locIds] of poolToLocations.entries()) {
+                                  try {
+                                    if (locIds.length > 0) {
+                                      console.log(`[MappingReview] Assigning ${locIds.length} locations to pool ${pId}`);
+                                      await fetch(`${SSSYNC_API_BASE_URL}/api/pools/${pId}/locations`, {
+                                        method: 'POST',
+                                        headers: {
+                                          'Authorization': `Bearer ${token}`,
+                                          'Content-Type': 'application/json',
+                                        },
+                                        body: JSON.stringify({ location_ids: locIds }),
+                                      });
+                                    }
+                                  } catch (assignErr) {
+                                    console.error(`[MappingReview] Failed to assign locations to pool ${pId}:`, assignErr);
+                                    // Don't block flow, just log
+                                  }
+                                }
+
+                                // Step 3: Update quick settings with wizard selections
                                 // CRITICAL: Include propagateCreates and propagateChanges to enable cross-platform sync
                                 // productCreationMode controls whether products sync to other platforms:
                                 // - sync_everywhere: Products sync bidirectionally to ALL platforms
@@ -5394,7 +5500,7 @@ const MappingReviewScreen = () => {
                                   productCreationMode === 'push_only';
 
                                 const quickSettings = {
-                                  poolId: selectedPool || undefined,
+                                  poolId: mapPoolId || undefined, // Use resolved ID (real existing or newly created)
                                   autoSyncMode: syncMode === 'auto',
                                   autoDelist: delistMode === 'auto',
                                   priceAdjustment: priceBuffer,

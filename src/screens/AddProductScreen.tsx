@@ -1218,6 +1218,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         } else {
           showNotificationMessage(`✓ Match found!`, 2000);
         }
+        // CRITICAL: Also update component-level matchData so getInstructionText displays correct count
+        setMatchData(nextMatchData);
         // Update instruction to show match count in center box
         setCurrentInstruction('matches_found');
 

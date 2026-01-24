@@ -743,13 +743,18 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         const indicesToUse = selectedIndices.length > 0 ? selectedIndices : [0];
         const selectedMatches = indicesToUse.map(i => serpApiData[i]).filter(Boolean);
 
+        // CRITICAL FIX: Use actual user photos for imageUrls (from camera), NOT match thumbnails
+        // Match thumbnails should ONLY be used for LoadingScreen display (firstPhotos)
+        const actualUserPhotos = userImagesByIndex[currentProductIndex] || [];
+
         const payload: GenerateJobSubmitPayload = {
             products: [
                 {
                     productId: analysisData?.results[currentProductIndex]?.productId,
                     variantId: analysisData?.results[currentProductIndex]?.variantId,
                     productIndex: currentProductIndex,
-                    imageUrls: selectedMatches.length > 0 ? [selectedMatches[0].image || selectedMatches[0].thumbnail || ''] : [],
+                    // Use the user's actual product photos, not match thumbnails
+                    imageUrls: actualUserPhotos.length > 0 ? actualUserPhotos : [],
                     coverImageIndex: 0,
                     selectedMatches,
                 },
@@ -1005,17 +1010,6 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 )}
                 removeClippedSubviews={true} // Re-enable for performance
             />
-
-            {/* Prompt when nothing is selected - HIDDEN: BottomNav handles this now
-            {false && selectedCount === 0 && (
-                <View style={styles.selectPromptContainer} pointerEvents="box-none">
-                    <TouchableOpacity style={styles.selectPromptButton} onPress={handleShowSelection} activeOpacity={0.9}>
-                        <Icon name="cursor-default-click" size={18} color="#000" style={{marginRight: 8}}/>
-                        <Text style={styles.selectPromptText}>Select product matches</Text>
-                    </TouchableOpacity>
-                </View>
-            )}
-            */}
 
             {/* Dark Overlay for platform/platformPicker states */}
             {(bottomNavState === 'platform' || bottomNavState === 'template') && (
@@ -1694,8 +1688,6 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                     }
                 }}
             />
-
-            {/* old bulk modal removed in favor of ItemJobsModal */}
         </View>
     );
 }

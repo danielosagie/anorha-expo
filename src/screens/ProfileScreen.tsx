@@ -45,6 +45,7 @@ import { Zap, ShieldCheck, CheckCircle as LucideCheckCircle, Bell as LucideBell 
 
 import LocationsManagerV2 from '../components/LocationsManagerV2';
 import BaseModal from '../components/BaseModal';
+import ConnectedPlatformItem from '../components/ConnectedPlatformItem';
 
 
 
@@ -232,7 +233,8 @@ const getRecommendedAction = (
   const needsReauth = connection.NeedsReauth === true;
 
   // If connection is disabled, primary action is to re-enable
-  if (!isEnabled) {
+  // UNLESS it is explicitly 'inactive' (disconnected by user)
+  if (!isEnabled && status !== CONNECTION_STATUS.INACTIVE) {
     return {
       action: 'fix_resume',
       label: 'Re-enable',
@@ -397,6 +399,9 @@ const ProfileScreen = () => {
 
   // Fetch optimization summary for streak bar (only when screen is focused)
   useEffect(() => {
+    // Handle any pending auth sessions on mount
+    WebBrowser.maybeCompleteAuthSession();
+
     if (!isFocused) return;
 
     let isCancelled = false;
@@ -435,6 +440,14 @@ const ProfileScreen = () => {
   const [showManagePool, setShowManagePool] = useState(false);
   const [selectedPoolId, setSelectedPoolId] = useState<string | null>(null);
 
+  // New state for error reporting modal
+  const [errorModal, setErrorModal] = useState<{ visible: boolean; title: string; message: string; type: 'error' | 'success' | 'info' | 'warning' }>({
+    visible: false,
+    title: '',
+    message: '',
+    type: 'error'
+  });
+
   const { user } = useUser();
   const [planName, setPlanName] = useState('');
   const [stats, setStats] = useState({ products: 0, locations: 0 });
@@ -464,11 +477,30 @@ const ProfileScreen = () => {
         setEntitlements(e);
 
         // Load Live Stats based on current org's connections
+        // 1. Load Product Count (Independent of Org context, bound to User)
         let prodCount = 0;
         let locCount = 0;
 
+        if (user) {
+          // CRITICAL FIX: Ensure we use the Supabase User ID (likely UUID), not just the Clerk ID (string)
+          // The shim in supabase.ts ensures supabase.auth.getUser() returns the correct DB-mapped user
+          const { data: authData } = await supabase.auth.getUser();
+          const dbUserId = authData?.user?.id || user.id; // Fallback to Clerk ID if shim fails, but shim should work
+
+          console.log('[ProfileScreen] Stats - Clerk ID:', user.id, 'DB User ID:', dbUserId);
+
+          const { count: pCount } = await supabase
+            .from('ProductVariants')
+            .select('*', { count: 'exact', head: true })
+            .eq('UserId', dbUserId)
+            .not('Sku', 'like', 'DRAFT-%');
+          // Removed .neq('VariantType', 'option') to catch NULLs and ensure non-zero count
+          console.log('[ProfileScreen] Stats - Product Count Result:', pCount);
+          prodCount = pCount || 0;
+        }
+
         if (currentOrg?.id) {
-          // Count products via platform connections that belong to this org
+          // 2. Count locations via platform connections
           const { data: connections } = await supabase
             .from('PlatformConnections')
             .select('Id')
@@ -477,13 +509,6 @@ const ProfileScreen = () => {
           if (connections && connections.length > 0) {
             const connectionIds = connections.map(c => c.Id);
 
-            // Count products (via PlatformProducts linked to connections)
-            const { count: pCount } = await supabase
-              .from('PlatformProducts')
-              .select('*', { count: 'exact', head: true })
-              .in('PlatformConnectionId', connectionIds);
-            prodCount = pCount || 0;
-
             // Count locations
             const { count: lCount } = await supabase
               .from('PlatformLocations')
@@ -491,6 +516,9 @@ const ProfileScreen = () => {
               .in('PlatformConnectionId', connectionIds);
             locCount = lCount || 0;
           }
+        } else {
+          // Fallback for locations if no Org logic (usually 0 is fine here as locations depend on connections)
+          console.log('[ProfileScreen] Stats - No currentOrg.id for locations');
         }
 
         setStats({
@@ -880,9 +908,10 @@ const ProfileScreen = () => {
       setPlatformConnections(prev => prev.filter(c => c.Id !== disconnectTarget.id));
       showStatusNotification('Disconnected', `${disconnectTarget.name} connection removed.`, 'success');
 
-      // Close modal
+      // Close modal and exit edit mode
       setDisconnectModalVisible(false);
       setDisconnectTarget(null);
+      setIsEditMode(false);
 
     } catch (err: any) {
       console.error('[ProfileScreen] Disconnect error:', err);
@@ -901,7 +930,7 @@ const ProfileScreen = () => {
   };
 
   // --- END Delete Connection Logic ---
-  // --- END Delete Connection Logic ---
+
 
   // --- NEW: Fix & Resume for error/disabled connections ---
   const fixAndResumeConnection = async (connectionId: string, platformName: string) => {
@@ -943,6 +972,7 @@ const ProfileScreen = () => {
           style: "default",
           onPress: async () => {
             console.log(`[ProfileScreen] Initiating reconnect for ${platformName} (connection ID: ${connectionId})`);
+            setIsEditMode(false); // Exit edit mode
             try {
               const token = await getApiToken();
               if (!token) {
@@ -1166,6 +1196,7 @@ const ProfileScreen = () => {
   // --- NEW: Function to start platform scan ---
   const startPlatformScan = async (connectionId: string, platformName: string, isReconnect: boolean = false) => {
     console.log(`[ProfileScreen] Attempting to start scan for connection ID: ${connectionId} (${platformName})`);
+    setIsEditMode(false); // Exit edit mode
 
     // ✅ NAVIGATE IMMEDIATELY - Don't wait for API response
     // The MappingReviewScreen will show loading state and receive progress updates via WebSocket
@@ -1297,8 +1328,8 @@ const ProfileScreen = () => {
   // --- END Clover Connection Logic ---
 
   // --- NEW: Square Connection Logic ---
-  const handleSquareConnect = async () => {
-    console.log("[ProfileScreen] Initiating Square connection (New OAuth Flow)...");
+  const handleSquareConnect = async (forceNewSession = false) => {
+    console.log(`[ProfileScreen] Initiating Square connection (New OAuth Flow)... Force New Session: ${forceNewSession}`);
     try {
       // 1. Get SSSync User ID
       const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -1318,7 +1349,15 @@ const ProfileScreen = () => {
       console.log("[ProfileScreen] Square Connect: Backend Auth URL:", backendAuthUrl);
 
       // 4. Open WebBrowser for OAuth flow, listening for finalRedirectUri
-      const result = await WebBrowser.openAuthSessionAsync(backendAuthUrl, finalRedirectUri);
+      // Use ephemeral session if requested (forces login prompt)
+      const result = await WebBrowser.openAuthSessionAsync(
+        backendAuthUrl,
+        finalRedirectUri,
+        {
+          preferEphemeralSession: forceNewSession,
+          showInRecents: true
+        }
+      );
       console.log("[ProfileScreen] Square Connect: WebBrowser result:", result);
 
       // 5. Handle Callback from finalRedirectUri
@@ -1328,9 +1367,10 @@ const ProfileScreen = () => {
         const urlParams = new URLSearchParams(urlWithoutHash.split('?')[1]);
         const status = urlParams.get('status');
         const message = urlParams.get('message');
+        const errorCode = urlParams.get('error_code');
         const connectionId = urlParams.get('connectionId'); // Assuming backend might send this
 
-        console.log("[ProfileScreen] Square Connect: Callback params:", { status, message, connectionId });
+        console.log("[ProfileScreen] Square Connect: Callback params:", { status, message, errorCode, connectionId });
 
         if (status === 'success') {
           Alert.alert("Success", message || "Square account connected successfully!");
@@ -1356,8 +1396,26 @@ const ProfileScreen = () => {
           }
           fetchConnections(); // Refresh connections list
         } else {
-          Alert.alert("Connection Failed", message || "Failed to connect Square account.");
-          console.error("[ProfileScreen] Square Connect: Connection failed via backend callback:", { status, message });
+          // Check for ALREADY_CONNECTED error code
+          if (errorCode === 'ALREADY_CONNECTED') {
+            Alert.alert(
+              "Account Already Connected",
+              message || "This account is already connected to another organization.",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Switch Account",
+                  onPress: () => {
+                    // Retry with forceNewSession = true
+                    setTimeout(() => handleSquareConnect(true), 500);
+                  }
+                }
+              ]
+            );
+          } else {
+            Alert.alert("Connection Failed", message || "Failed to connect Square account.");
+            console.error("[ProfileScreen] Square Connect: Connection failed via backend callback:", { status, message });
+          }
         }
       } else if (result.type === 'cancel' || result.type === 'dismiss') {
         Alert.alert("Cancelled", "Square connection process was cancelled.");
@@ -1519,6 +1577,11 @@ const ProfileScreen = () => {
       title: 'Subscription & Billing',
 
       onPress: () => handleOpenBilling()
+    },
+    {
+      icon: 'handshake-outline',
+      title: 'Partners',
+      onPress: () => navigation.navigate('Partners' as any)
     },
     {
       icon: 'account-group',
@@ -1831,8 +1894,16 @@ const ProfileScreen = () => {
                   return null;
                 } else {
                   return filteredConnections.map((connection) => {
-                    const platformConfig = AVAILABLE_PLATFORMS.find(p => p.key === connection.PlatformType);
-                    if (!platformConfig) return null;
+                    let platformConfig = AVAILABLE_PLATFORMS.find(p => p.key === connection.PlatformType);
+                    // Fallback for unknown platforms (e.g. 'pool')
+                    if (!platformConfig) {
+                      platformConfig = {
+                        key: connection.PlatformType,
+                        name: connection.PlatformType.charAt(0).toUpperCase() + connection.PlatformType.slice(1),
+                        icon: 'cube-outline' as any
+                      };
+                    }
+
 
                     return (
                       <ConnectedPlatformItem
@@ -2270,6 +2341,43 @@ const ProfileScreen = () => {
         </View>
       </BaseModal>
 
+      {/* Generic Error Modal handled by state */}
+      <BaseModal
+        visible={errorModal.visible}
+        onClose={() => setErrorModal(prev => ({ ...prev, visible: false }))}
+        showCloseButton={true}
+      >
+        <View style={{ alignItems: 'center', width: '100%' }}>
+          <Icon
+            name={
+              errorModal.type === 'success' ? 'check-circle-outline' :
+                errorModal.type === 'error' ? 'alert-circle-outline' :
+                  'information-outline'
+            }
+            size={48}
+            color={
+              errorModal.type === 'success' ? '#10B981' :
+                errorModal.type === 'error' ? '#EF4444' :
+                  '#3B82F6'
+            }
+            style={{ marginBottom: 16 }}
+          />
+          <Text style={{ fontSize: 18, fontWeight: '600', marginBottom: 8, textAlign: 'center', color: '#111827' }}>
+            {errorModal.title}
+          </Text>
+          <Text style={{ fontSize: 14, color: '#6B7280', textAlign: 'center', marginBottom: 24, lineHeight: 20 }}>
+            {errorModal.message}
+          </Text>
+
+          <Button
+            title="Close"
+            onPress={() => setErrorModal(prev => ({ ...prev, visible: false }))}
+            style={{ width: '100%', backgroundColor: '#F3F4F6' }}
+            textStyle={{ color: '#374151' }}
+          />
+        </View>
+      </BaseModal>
+
     </ScrollView>
   );
 };
@@ -2299,230 +2407,7 @@ const formatSyncDate = (dateString: string): string => {
   }
 };
 
-// --- NEW: Extracted Connection Item with Progress support ---
-const ConnectedPlatformItem = React.memo(({
-  connection,
-  platformConfig,
-  isEditMode,
-  onStartScan,
-  onReview,
-  onReconnect,
-  onDisconnect,
-  onFix,
-  navigation
-}: any) => {
-  const theme = useTheme();
-  const { progress } = useSyncProgress(connection.Id);
-
-  let displayShopName = connection.DisplayName || platformConfig.name;
-  if (connection.PlatformType === 'shopify' && connection.DisplayName.includes('.myshopify.com')) {
-    displayShopName = connection.DisplayName.replace('.myshopify.com', '');
-  }
-
-  const PlatformIconComponent = getPlatformIcon(platformConfig.key);
-
-  // Status Info
-  const statusInfo = getStatusDisplay(connection.Status);
-
-  // Determine if progress bar should be shown
-  // Show if:
-  // 1. progress object exists AND status is 'scanning'/'syncing'/'reconciling' (fallback if hook is slow)
-  const status = (progress?.status as any);
-  const isProgressActive = status === 'scanning' ||
-    status === 'syncing' ||
-    status === 'reconciling' ||
-    status === 'queued'; // Added queued
-
-  const progressValue = (progress?.progress || 0) / 100;
-
-  return (
-    <View style={styles.integrationItem}>
-      {/* Left column: icon + name + status/timestamp */}
-      <View style={styles.integrationLeft}>
-        <View style={styles.platformIconContainer}>
-          {PlatformIconComponent ? (
-            <PlatformIconComponent width={32} height={32} />
-          ) : (
-            <Icon name="store" size={32} color="#555" />
-          )}
-        </View>
-
-        <View style={styles.integrationMain}>
-          <Text style={styles.integrationName} numberOfLines={1} ellipsizeMode="tail">
-            {displayShopName}
-          </Text>
-
-          {!isEditMode && (
-            <View style={styles.statusContainer}>
-              {/* Progress Bar Override */}
-              {isProgressActive ? (
-                <View style={{ width: '100%', marginTop: 4 }}>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 }}>
-                    <Text style={{ fontSize: 10, color: theme.colors.primary }}>
-                      {progress?.description || statusInfo.label || 'Processing...'}
-                    </Text>
-                    <Text style={{ fontSize: 10, color: theme.colors.textSecondary }}>
-                      {Math.round((progress?.progress || 0))}%
-                    </Text>
-                  </View>
-                  <Progress.Bar
-                    progress={progressValue}
-                    width={null}
-                    height={4}
-                    color={theme.colors.primary}
-                    unfilledColor={theme.colors.border}
-                    borderWidth={0}
-                  />
-                </View>
-              ) : (
-                <>
-                  <View style={styles.statusRow}>
-                    {statusInfo.icon === 'loading' ? (
-                      <ActivityIndicator size="small" color={statusInfo.color} style={styles.statusIcon} />
-                    ) : (
-                      <Icon name={statusInfo.icon} size={16} color={statusInfo.color} style={styles.statusIcon} />
-                    )}
-                    <Text style={[styles.statusText, { color: statusInfo.color }]}>
-                      {statusInfo.label}
-                    </Text>
-                  </View>
-                  {connection.LastSyncSuccessAt && (
-                    <Text style={styles.lastSyncText}>
-                      Last synced: {formatSyncDate(connection.LastSyncSuccessAt)}
-                    </Text>
-                  )}
-                </>
-              )}
-            </View>
-          )}
-        </View>
-      </View>
-
-      {/* Right column: action buttons (non-edit mode only) */}
-      {!isEditMode && connection && !isProgressActive && (
-        <View style={styles.connectionActions}>
-          {/* REAUTH WARNING - Takes precedence over other actions */}
-          {connection.NeedsReauth && (
-            <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: '#FF3B30' + '20' }]}
-              onPress={() => onReconnect(connection.Id, platformConfig.key, platformConfig.name)}
-            >
-              <Icon name="alert-circle" size={18} color="#FF3B30" />
-              <Text style={[styles.actionButtonText, { color: '#FF3B30' }]}>Re-auth</Text>
-            </TouchableOpacity>
-          )}
-
-          {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.PENDING && (
-            <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: theme.colors.primary + '20' }]}
-              onPress={() => onStartScan(connection.Id, platformConfig.name)}
-            >
-              <Icon name="play-circle" size={18} color={theme.colors.primary} />
-              <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Start Scan</Text>
-            </TouchableOpacity>
-          )}
-
-          {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.REVIEW && (
-            <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: '#FF9500' + '20' }]}
-              onPress={() => onReview(connection.Id, platformConfig.name)}
-            >
-              <Icon name="eye" size={18} color="#FF9500" />
-              <Text style={[styles.actionButtonText, { color: '#FF9500' }]}>Review</Text>
-            </TouchableOpacity>
-          )}
-
-          {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.READY_TO_SYNC && (
-            <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
-              onPress={() => navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name })}
-            >
-              <Icon name="check-circle" size={18} color={theme.colors.success} />
-              <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Ready</Text>
-            </TouchableOpacity>
-          )}
-
-          {!connection.NeedsReauth && (connection.Status === CONNECTION_STATUS.INACTIVE) && (
-            <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
-              onPress={() => onStartScan(connection.Id, platformConfig.name)}
-            >
-              <Icon name="play-circle" size={18} color={theme.colors.success} />
-              <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Activate</Text>
-            </TouchableOpacity>
-          )}
-
-          {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.ERROR && (() => {
-            const recommended = getRecommendedAction(connection, platformConfig.key);
-            const handleAction = () => {
-              switch (recommended.action) {
-                case 'reconnect': onReconnect(connection.Id, platformConfig.key, platformConfig.name); break;
-                case 'rescan': onStartScan(connection.Id, platformConfig.name, true); break;
-                case 'fix_resume': onFix(connection.Id, platformConfig.name); break;
-                case 'manage':
-                  navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name });
-                  break;
-              }
-            };
-            return (
-              <TouchableOpacity
-                style={[styles.actionButton, { backgroundColor: recommended.color + '15' }]}
-                onPress={handleAction}
-              >
-                <Icon name={recommended.icon} size={18} color={recommended.color} />
-                <Text style={[styles.actionButtonText, { color: recommended.color }]}>{recommended.label}</Text>
-              </TouchableOpacity>
-            );
-          })()}
-
-          {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.ACTIVE && (
-            <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
-              onPress={() => navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name })}
-            >
-              <Icon name="cog" size={18} color={theme.colors.primary} />
-              <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Manage</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
-
-      {/* Edit Mode Actions */}
-
-      {/*
-        <TouchableOpacity
-          style={[styles.actionButton, { backgroundColor: theme.colors.primary + '10' }]}
-          onPress={() => onReconnect(connection.Id, platformConfig.key, platformConfig.name)}
-        >
-          <Icon name="link-variant" size={18} color={theme.colors.primary} />
-          <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Reconnect</Text>
-        </TouchableOpacity>
-      */}
-
-
-      {isEditMode && (
-        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-          {['square', 'shopify', 'facebook', 'clover', 'ebay'].includes(platformConfig.key) && (
-            <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: '#FF9500' + '15' }]}
-              onPress={() => onStartScan(connection.Id, platformConfig.name, true)}
-            >
-              <Icon name="refresh" size={18} color="#FF9500" />
-              <Text style={[styles.actionButtonText, { color: '#FF9500' }]}>Rescan</Text>
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity
-            style={styles.deleteButton}
-            onPress={() => onDisconnect(connection.Id, platformConfig.name)}
-          >
-            <Icon name="minus-circle-outline" size={24} color={theme.colors.error} />
-            <Text style={{ color: "red", fontSize: 14 }}>Disconnect</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-    </View>
-  );
-});
+// ConnectedPlatformItem has been moved to src/components/ConnectedPlatformItem.tsx
 
 // Move styles definition here to fix "used before declaration" errors
 const styles = StyleSheet.create({

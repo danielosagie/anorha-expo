@@ -10,7 +10,6 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import Button from '../components/Button';
-import AnimatedGradientBackground from '../components/AnimatedGradientBackground';
 import { ensureSupabaseJwt } from '../lib/supabase';
 
 const API_BASE_URL = 'https://api.sssync.app';
@@ -18,6 +17,12 @@ const API_BASE_URL = 'https://api.sssync.app';
 interface RouteParams {
   inviteCode?: string;
   inviteId?: string;
+  initialDetails?: {
+    orgName?: string;
+    productCount?: number;
+    shareType?: string;
+    locationName?: string;
+  };
 }
 
 type AcceptStatus = 'loading' | 'ready' | 'accepting' | 'success' | 'error';
@@ -26,20 +31,28 @@ const PartnerAcceptScreen: React.FC = () => {
   const theme = useTheme();
   const route = useRoute();
   const navigation = useNavigation<any>();
-  
-  const { inviteCode, inviteId } = (route.params as RouteParams) || {};
-  
+
+  const { inviteCode, inviteId, initialDetails } = (route.params as RouteParams) || {};
+
   const [status, setStatus] = useState<AcceptStatus>('loading');
   const [inviteDetails, setInviteDetails] = useState<{
     orgName?: string;
     locationName?: string;
     inviterName?: string;
     expiresAt?: string;
-  } | null>(null);
+    productCount?: number;
+    shareType?: string;
+  } | null>(initialDetails || null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    loadInviteDetails();
+    // If we have initial details, use them and set ready immediately
+    if (initialDetails && (inviteId || inviteCode)) {
+      setInviteDetails(prev => ({ ...prev, ...initialDetails }));
+      setStatus('ready');
+    } else {
+      loadInviteDetails();
+    }
   }, [inviteCode, inviteId]);
 
   const loadInviteDetails = async () => {
@@ -52,7 +65,7 @@ const PartnerAcceptScreen: React.FC = () => {
     try {
       setStatus('loading');
       const token = await ensureSupabaseJwt();
-      
+
       const response = await fetch(
         `${API_BASE_URL}/api/partner-invites/preview?${inviteCode ? `code=${inviteCode}` : `id=${inviteId}`}`,
         {
@@ -81,7 +94,7 @@ const PartnerAcceptScreen: React.FC = () => {
     try {
       setStatus('accepting');
       const token = await ensureSupabaseJwt();
-      
+
       const response = await fetch(
         `${API_BASE_URL}/api/partner-invites/accept`,
         {
@@ -103,13 +116,10 @@ const PartnerAcceptScreen: React.FC = () => {
       }
 
       setStatus('success');
-      
-      // Navigate to dashboard after a short delay
+
+      // Navigate to Partners screen after success
       setTimeout(() => {
-        navigation.reset({
-          index: 0,
-          routes: [{ name: 'TabNavigator', params: { screen: 'Inventory' } }],
-        });
+        navigation.navigate('Partners');
       }, 2000);
     } catch (err: any) {
       console.error('[PartnerAcceptScreen] Error accepting invite:', err);
@@ -139,7 +149,7 @@ const PartnerAcceptScreen: React.FC = () => {
     if (status === 'loading') {
       return (
         <View style={styles.centerContent}>
-          <ActivityIndicator size="large" color="#fff" />
+          <ActivityIndicator size="large" color={theme.colors.primary} />
           <Text style={styles.loadingText}>Loading invite details...</Text>
         </View>
       );
@@ -149,12 +159,11 @@ const PartnerAcceptScreen: React.FC = () => {
       return (
         <View style={styles.centerContent}>
           <View style={styles.successIcon}>
-            <Icon name="check-circle" size={64} color="#8BC34A" />
+            <Icon name="check-circle" size={48} color="#166534" />
           </View>
-          <Text style={styles.title}>Welcome, Partner!</Text>
+          <Text style={styles.title}>Partner Connected!</Text>
           <Text style={styles.description}>
-            You now have access to {inviteDetails?.locationName || 'the shared inventory'}.
-            {'\n'}Redirecting to your dashboard...
+            You are now sharing inventory with {inviteDetails?.orgName || 'your new partner'}.
           </Text>
         </View>
       );
@@ -164,7 +173,7 @@ const PartnerAcceptScreen: React.FC = () => {
       return (
         <View style={styles.centerContent}>
           <View style={styles.errorIcon}>
-            <Icon name="alert-circle" size={64} color="#FF5252" />
+            <Icon name="alert-circle" size={48} color="#991B1B" />
           </View>
           <Text style={styles.title}>Oops!</Text>
           <Text style={styles.description}>{error || 'Something went wrong'}</Text>
@@ -183,49 +192,56 @@ const PartnerAcceptScreen: React.FC = () => {
       );
     }
 
-    // Ready state - show invite details
+    // Ready state
     return (
       <View style={styles.content}>
         <View style={styles.iconContainer}>
-          <Icon name="account-group" size={48} color="#fff" />
+          <Icon name="storefront-check" size={40} color="#3F6212" />
         </View>
-        
-        <Text style={styles.title}>Partner Invitation</Text>
-        
+
+        <Text style={styles.title}>Connect Partner</Text>
+
         <View style={styles.inviteCard}>
-          {inviteDetails?.inviterName && (
-            <View style={styles.detailRow}>
-              <Icon name="account" size={20} color={theme.colors.primary} />
-              <Text style={styles.detailLabel}>From:</Text>
-              <Text style={styles.detailValue}>{inviteDetails.inviterName}</Text>
-            </View>
-          )}
-          
           {inviteDetails?.orgName && (
             <View style={styles.detailRow}>
               <Icon name="domain" size={20} color={theme.colors.primary} />
-              <Text style={styles.detailLabel}>Organization:</Text>
+              <Text style={styles.detailLabel}>Organization</Text>
               <Text style={styles.detailValue}>{inviteDetails.orgName}</Text>
             </View>
           )}
-          
-          {inviteDetails?.locationName && (
+
+          {inviteDetails?.productCount !== undefined && inviteDetails.productCount > 0 && (
             <View style={styles.detailRow}>
-              <Icon name="map-marker" size={20} color={theme.colors.primary} />
-              <Text style={styles.detailLabel}>Location:</Text>
-              <Text style={styles.detailValue}>{inviteDetails.locationName}</Text>
+              <Icon name="tshirt-crew" size={20} color={theme.colors.primary} />
+              <Text style={styles.detailLabel}>Products to Sync</Text>
+              <Text style={styles.detailValue}>{inviteDetails.productCount}</Text>
+            </View>
+          )}
+
+          {inviteDetails?.shareType && (
+            <View style={styles.detailRow}>
+              <Icon name="handshake" size={20} color={theme.colors.primary} />
+              <Text style={styles.detailLabel}>Type</Text>
+              <Text style={[styles.detailValue, { textTransform: 'capitalize' }]}>{inviteDetails.shareType}</Text>
+            </View>
+          )}
+
+          {inviteDetails?.inviterName && (
+            <View style={styles.detailRow}>
+              <Icon name="account" size={20} color={theme.colors.primary} />
+              <Text style={styles.detailLabel}>Invited By</Text>
+              <Text style={styles.detailValue}>{inviteDetails.inviterName}</Text>
             </View>
           )}
         </View>
 
         <Text style={styles.description}>
-          You've been invited to become a partner. As a partner, you'll be able to view and manage 
-          inventory for the shared location.
+          Accepting this invite will link your organizations and enable cross-org inventory syncing.
         </Text>
 
         <View style={styles.buttonGroup}>
           <Button
-            title="Accept Invitation"
+            title="Accept & Link"
             onPress={handleAccept}
             loading={status === 'accepting'}
             style={styles.acceptButton}
@@ -243,7 +259,6 @@ const PartnerAcceptScreen: React.FC = () => {
 
   return (
     <View style={styles.container}>
-      <AnimatedGradientBackground style={StyleSheet.absoluteFill} />
       {renderContent()}
     </View>
   );
@@ -254,86 +269,91 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#F8F9FB',
   },
   content: {
     width: '90%',
     maxWidth: 400,
     alignItems: 'center',
-    padding: 20,
+    padding: 24,
   },
   centerContent: {
     alignItems: 'center',
     padding: 24,
   },
   iconContainer: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#ECFCCB', // Lime-100
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 24,
+    borderWidth: 1,
+    borderColor: '#D9F99D',
   },
   successIcon: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: 'rgba(139, 195, 74, 0.2)',
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#DCFCE7', // Green-100
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 24,
   },
   errorIcon: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: 'rgba(255, 82, 82, 0.2)',
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#FEE2E2', // Red-100
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 24,
   },
   title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#111827',
     textAlign: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   inviteCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    backgroundColor: '#FFF',
     borderRadius: 16,
     padding: 20,
     width: '100%',
     marginBottom: 24,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
   detailRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    borderBottomColor: '#F3F4F6',
     gap: 12,
   },
   detailLabel: {
     fontSize: 14,
-    color: '#666',
+    color: '#6B7280',
     fontWeight: '500',
   },
   detailValue: {
     fontSize: 14,
-    color: '#333',
+    color: '#111827',
     fontWeight: '600',
     flex: 1,
     textAlign: 'right',
   },
   description: {
     fontSize: 15,
-    color: 'rgba(255, 255, 255, 0.9)',
+    color: '#4B5563',
     textAlign: 'center',
     lineHeight: 22,
     marginBottom: 32,
@@ -341,7 +361,7 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: 16,
-    color: 'rgba(255, 255, 255, 0.9)',
+    color: '#4B5563',
     marginTop: 16,
   },
   buttonGroup: {
@@ -349,31 +369,21 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   acceptButton: {
-    backgroundColor: '#8BC34A',
+    backgroundColor: '#93C822',
   },
   declineButton: {
-    borderColor: 'rgba(255, 255, 255, 0.5)',
+    borderColor: '#D1D5DB',
   },
   retryButton: {
-    backgroundColor: '#8BC34A',
+    backgroundColor: '#93C822',
     marginTop: 24,
     paddingHorizontal: 32,
   },
   backButton: {
-    borderColor: 'rgba(255, 255, 255, 0.5)',
+    borderColor: '#D1D5DB',
     marginTop: 12,
     paddingHorizontal: 32,
   },
 });
 
 export default PartnerAcceptScreen;
-
-
-
-
-
-
-
-
-
-

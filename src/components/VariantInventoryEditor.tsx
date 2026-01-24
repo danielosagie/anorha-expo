@@ -402,8 +402,8 @@ const styles = StyleSheet.create({
     height: 36,
   },
   priceInputShopify: {
-    borderColor: '#93C822', // Brand Green
-    backgroundColor: '#F0Fdf4', // Light green
+    borderColor: '#1976D2', // Global Blue 
+    backgroundColor: '#E3F2FD', // Light green
     borderWidth: 1.5,
   },
   currencySymbol: {
@@ -423,7 +423,7 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   priceInputTextShopify: {
-    color: '#166534', // Dark green text
+    color: '#1976D2', // Global Blue text
   },
 });
 

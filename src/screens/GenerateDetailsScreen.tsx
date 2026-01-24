@@ -17,6 +17,7 @@ import { Paths, Directory, File } from 'expo-file-system/next';
 import * as ImagePicker from 'expo-image-picker';
 import { useJobsOptional } from '../context/JobsContext';
 import { useJobProgress } from '../hooks/useJobProgress';
+import { useCollaboration } from '../hooks/useCollaboration';
 import PublishConfirmationModal from '../components/PublishConfirmationModal';
 import { PLATFORM_META } from '../utils/platformConstants';
 
@@ -39,273 +40,9 @@ type GeneratedResult = {
 };
 
 // Platform field schema for hierarchical structure
-const PLATFORM_FIELD_SCHEMA: Record<string, any> = {
-  shopify: {
-    // Core product fields
-    title: { type: 'string', label: 'Title', required: true },
-    description: { type: 'string', label: 'Description', multiline: true },
-    vendor: { type: 'string', label: 'Vendor' },
-    productCategory: { type: 'string', label: 'Product Category' },
-    productType: { type: 'string', label: 'Product Type' },
-    tags: { type: 'array', label: 'Tags' },
-    status: { type: 'select', label: 'Status', options: ['active', 'draft', 'archived'] },
-    // Variant structure
-    variants: {
-      type: 'array',
-      label: 'Variants',
-      schema: {
-        option1_name: { type: 'string', label: 'Option 1 Name' },
-        option1_value: { type: 'string', label: 'Option 1 Value' },
-        option2_name: { type: 'string', label: 'Option 2 Name' },
-        option2_value: { type: 'string', label: 'Option 2 Value' },
-        option3_name: { type: 'string', label: 'Option 3 Name' },
-        option3_value: { type: 'string', label: 'Option 3 Value' },
-        sku: { type: 'string', label: 'SKU' },
-        barcode: { type: 'string', label: 'Barcode' },
-        price: { type: 'number', label: 'Price' },
-        compareAtPrice: { type: 'number', label: 'Compare At Price' },
-        costPerItem: { type: 'number', label: 'Cost Per Item' },
-        chargeTax: { type: 'boolean', label: 'Charge Tax' },
-        taxCode: { type: 'string', label: 'Tax Code' },
-        inventoryTracker: { type: 'string', label: 'Inventory Tracker' },
-        inventoryQuantity: { type: 'number', label: 'Inventory Quantity' },
-        continueSellingWhenOutOfStock: { type: 'boolean', label: 'Continue Selling When Out Of Stock' },
-        weightValueGrams: { type: 'number', label: 'Weight Value (Grams)' },
-        requiresShipping: { type: 'boolean', label: 'Requires Shipping' },
-        fulfillmentService: { type: 'string', label: 'Fulfillment Service' },
-        variantImageURL: { type: 'string', label: 'Variant Image URL' }
-      }
-    },
-    // Images structure
-    images: {
-      type: 'array',
-      label: 'Images',
-      schema: {
-        productImageURL: { type: 'string', label: 'Product Image URL' },
-        imagePosition: { type: 'number', label: 'Image Position' },
-        imageAltText: { type: 'string', label: 'Image Alt Text' }
-      }
-    },
-    publishedOnOnlineStore: { type: 'boolean', label: 'Published On Online Store' },
-    giftCard: { type: 'boolean', label: 'Gift Card' },
-    // SEO structure
-    seo: {
-      type: 'object',
-      label: 'SEO',
-      schema: {
-        seoTitle: { type: 'string', label: 'SEO Title' },
-        seoDescription: { type: 'string', label: 'SEO Description', multiline: true }
-      }
-    },
-    // Google Shopping structure
-    googleShopping: {
-      type: 'object',
-      label: 'Google Shopping',
-      schema: {
-        googleProductCategory: { type: 'string', label: 'Google Product Category' },
-        gender: { type: 'select', label: 'Gender', options: ['Unisex', 'Male', 'Female'] },
-        ageGroup: { type: 'select', label: 'Age Group', options: ['Adult', 'Kids', 'Toddler', 'Infant', 'Newborn'] },
-        mpn: { type: 'string', label: 'MPN' },
-        adWordsGrouping: { type: 'string', label: 'AdWords Grouping' },
-        adWordsLabels: { type: 'string', label: 'AdWords Labels' },
-        condition: { type: 'select', label: 'Condition', options: ['new', 'refurbished', 'used'] },
-        customProduct: { type: 'boolean', label: 'Custom Product' },
-        customLabel0: { type: 'string', label: 'Custom Label 0' },
-        customLabel1: { type: 'string', label: 'Custom Label 1' },
-        customLabel2: { type: 'string', label: 'Custom Label 2' },
-        customLabel3: { type: 'string', label: 'Custom Label 3' },
-        customLabel4: { type: 'string', label: 'Custom Label 4' }
-      }
-    }
-  },
-  amazon: {
-    sku: { type: 'string', label: 'SKU', required: true },
-    productId: { type: 'string', label: 'Product ID' },
-    productIdType: { type: 'select', label: 'Product ID Type', options: ['UPC', 'EAN', 'ASIN'] },
-    title: { type: 'string', label: 'Title', required: true },
-    brand: { type: 'string', label: 'Brand' },
-    manufacturer: { type: 'string', label: 'Manufacturer' },
-    description: { type: 'string', label: 'Description', multiline: true },
-    bullet_points: { type: 'array', label: 'Bullet Points' },
-    search_terms: { type: 'array', label: 'Search Terms' },
-    price: { type: 'number', label: 'Price', required: true },
-    quantity: { type: 'number', label: 'Quantity' },
-    mainImageURL: { type: 'string', label: 'Main Image URL' },
-    otherImageURLs: { type: 'array', label: 'Other Image URLs' },
-    categorySuggestion: { type: 'string', label: 'Category Suggestion' },
-    amazonProductType: { type: 'select', label: 'Amazon Product Type', options: ['BEAUTY', 'KITCHEN', 'TOOLS_AND_HOME_IMPROVEMENT', 'CLOTHING_SHOES_AND_JEWELRY', 'COLLECTIBLES', 'BOOKS', 'HEALTH_PERSONAL_CARE', 'ELECTRONICS', 'SPORTS_OUTDOORS', 'TOYS_AND_GAMES'] },
-    condition: { type: 'select', label: 'Condition', options: ['New', 'Refurbished', 'Used'] }
-  },
-  ebay: {
-    action: { type: 'string', label: 'Action' },
-    customLabel: { type: 'string', label: 'Custom Label' },
-    category: { type: 'string', label: 'Category' },
-    storeCategory: { type: 'string', label: 'Store Category' },
-    title: { type: 'string', label: 'Title', required: true },
-    subtitle: { type: 'string', label: 'Subtitle' },
-    relationship: { type: 'string', label: 'Relationship' },
-    relationshipDetails: { type: 'string', label: 'Relationship Details' },
-    scheduleTime: { type: 'string', label: 'Schedule Time' },
-    conditionID: { type: 'number', label: 'Condition ID' },
-    conditionDetails: {
-      type: 'object',
-      label: 'Condition Details',
-      schema: {
-        professionalGrader: { type: 'string', label: 'Professional Grader' },
-        grade: { type: 'string', label: 'Grade' },
-        certificationNumber: { type: 'string', label: 'Certification Number' },
-        cardCondition: { type: 'string', label: 'Card Condition' }
-      }
-    },
-    itemSpecifics: { type: 'object', label: 'Item Specifics' },
-    media: {
-      type: 'object',
-      label: 'Media',
-      schema: {
-        picURL: { type: 'string', label: 'Picture URL' },
-        galleryType: { type: 'string', label: 'Gallery Type' },
-        videoID: { type: 'string', label: 'Video ID' }
-      }
-    },
-    description: { type: 'string', label: 'Description', multiline: true },
-    listingDetails: {
-      type: 'object',
-      label: 'Listing Details',
-      schema: {
-        format: { type: 'select', label: 'Format', options: ['FixedPrice', 'Auction'] },
-        duration: { type: 'string', label: 'Duration' },
-        startPrice: { type: 'number', label: 'Start Price' },
-        buyItNowPrice: { type: 'number', label: 'Buy It Now Price' },
-        bestOfferEnabled: { type: 'boolean', label: 'Best Offer Enabled' },
-        bestOfferAutoAcceptPrice: { type: 'number', label: 'Best Offer Auto Accept Price' },
-        minimumBestOfferPrice: { type: 'number', label: 'Minimum Best Offer Price' },
-        quantity: { type: 'number', label: 'Quantity' },
-        immediatePayRequired: { type: 'boolean', label: 'Immediate Pay Required' },
-        location: { type: 'string', label: 'Location' }
-      }
-    },
-    shippingDetails: {
-      type: 'object',
-      label: 'Shipping Details',
-      schema: {
-        shippingType: { type: 'string', label: 'Shipping Type' },
-        dispatchTimeMax: { type: 'number', label: 'Dispatch Time Max' },
-        promotionalShippingDiscount: { type: 'boolean', label: 'Promotional Shipping Discount' },
-        shippingDiscountProfileID: { type: 'string', label: 'Shipping Discount Profile ID' },
-        services: {
-          type: 'array',
-          label: 'Services',
-          schema: {
-            option: { type: 'string', label: 'Option' },
-            cost: { type: 'number', label: 'Cost' }
-          }
-        }
-      }
-    },
-    returnPolicy: {
-      type: 'object',
-      label: 'Return Policy',
-      schema: {
-        returnsAcceptedOption: { type: 'string', label: 'Returns Accepted Option' },
-        returnsWithinOption: { type: 'string', label: 'Returns Within Option' },
-        refundOption: { type: 'string', label: 'Refund Option' },
-        shippingCostPaidByOption: { type: 'string', label: 'Shipping Cost Paid By Option' },
-        additionalDetails: { type: 'string', label: 'Additional Details', multiline: true }
-      }
-    }
-  },
-  facebook: {
-    id: { type: 'string', label: 'ID' },
-    title: { type: 'string', label: 'Title', required: true },
-    description: { type: 'string', label: 'Description', multiline: true },
-    availability: { type: 'select', label: 'Availability', options: ['in stock', 'out of stock', 'preorder'] },
-    condition: { type: 'select', label: 'Condition', options: ['new', 'refurbished', 'used'] },
-    price: { type: 'string', label: 'Price' },
-    link: { type: 'string', label: 'Link' },
-    image_link: { type: 'string', label: 'Image Link' },
-    brand: { type: 'string', label: 'Brand' },
-    google_product_category: { type: 'string', label: 'Google Product Category' },
-    categorySuggestion: { type: 'string', label: 'Category Suggestion' }
-  },
-  square: {
-    object: {
-      type: 'object',
-      label: 'Object',
-      schema: {
-        type: { type: 'string', label: 'Type' },
-        id: { type: 'string', label: 'ID' },
-        itemData: {
-          type: 'object',
-          label: 'Item Data',
-          schema: {
-            name: { type: 'string', label: 'Name', required: true },
-            description: { type: 'string', label: 'Description', multiline: true },
-            categorySuggestion: { type: 'string', label: 'Category Suggestion' },
-            gtin: { type: 'string', label: 'GTIN' },
-            variations: {
-              type: 'array',
-              label: 'Variations',
-              schema: {
-                type: { type: 'string', label: 'Type' },
-                id: { type: 'string', label: 'ID' },
-                itemVariationData: {
-                  type: 'object',
-                  label: 'Item Variation Data',
-                  schema: {
-                    sku: { type: 'string', label: 'SKU' },
-                    name: { type: 'string', label: 'Name' },
-                    pricingType: { type: 'string', label: 'Pricing Type' },
-                    priceMoney: {
-                      type: 'object',
-                      label: 'Price Money',
-                      schema: {
-                        amount: { type: 'number', label: 'Amount' },
-                        currency: { type: 'string', label: 'Currency' }
-                      }
-                    }
-                  }
-                }
-              }
-            },
-            locations: { type: 'string', label: 'Locations' }
-          }
-        }
-      }
-    }
-  },
-  clover: {
-    name: { type: 'string', label: 'Name', required: true },
-    price: { type: 'number', label: 'Price', required: true },
-    priceType: { type: 'string', label: 'Price Type' },
-    sku: { type: 'string', label: 'SKU' },
-    category: {
-      type: 'object',
-      label: 'Category',
-      schema: {
-        name: { type: 'string', label: 'Name' }
-      }
-    },
-    modifierGroups: { type: 'array', label: 'Modifier Groups' },
-    availability: { type: 'select', label: 'Availability', options: ['in stock', 'out of stock'] },
-    brand: { type: 'string', label: 'Brand' }
-  },
-  whatnot: {
-    category: { type: 'string', label: 'Category' },
-    subCategory: { type: 'string', label: 'Sub Category' },
-    title: { type: 'string', label: 'Title', required: true },
-    description: { type: 'string', label: 'Description', multiline: true },
-    quantity: { type: 'number', label: 'Quantity' },
-    type: { type: 'string', label: 'Type' },
-    price: { type: 'number', label: 'Price', required: true },
-    shippingProfile: { type: 'string', label: 'Shipping Profile' },
-    offerable: { type: 'boolean', label: 'Offerable' },
-    hazmat: { type: 'string', label: 'Hazmat' },
-    condition: { type: 'string', label: 'Condition' },
-    costPerItem: { type: 'number', label: 'Cost Per Item' },
-    sku: { type: 'string', label: 'SKU' },
-    imageUrls: { type: 'array', label: 'Image URLs' }
-  }
-};
+// Platform field schema extracted to separate file for maintainability
+// import { PLATFORM_FIELD_SCHEMA } from '../utils/platformSchemas';
+// NOTE: Schema currently not used in this file - UI uses ListingEditorForm which has its own logic
 
 // Helper function to group versions by match job ID, showing latest as primary
 const groupVersionsByMatchId = (versions: Array<{ id: string; jobId: string; createdAt: string; platforms: any; sources?: Array<{ url: string; usedForFields?: string[] }>; matchJobId?: string; source?: string }>): Array<{ id: string; jobId: string; createdAt: string; platforms: any; sources?: Array<{ url: string; usedForFields?: string[] }>; matchJobId?: string; source?: string; versionCount?: number; allVersions?: Array<any> }> => {
@@ -409,7 +146,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const status = jobData?.status ?? statusParam;
   const results = jobData?.results ?? resultsParam;
+  const first: GeneratedResult | null = useMemo(() => (Array.isArray(results) && results.length > 0 ? results[0] : null), [results]);
   const summary = jobData?.summary ?? summaryParam;
+
   const completedAt = jobData?.completedAt ?? completedAtParam;
 
   // Fetch user-uploaded images from ProductImages table (like PastScansScreen does)
@@ -467,6 +206,79 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const lastHydratedJobRef = useRef<string | null>(null);
   const lastSavedRef = useRef<string>('');
 
+  // Track active regeneration jobs: jobId -> platformKey
+  const activeRegenJobsRef = useRef<Record<string, string>>({});
+  const [generatingPlatformKeys, setGeneratingPlatformKeys] = useState<Set<string>>(new Set());
+
+  // Listen for socket updates for ANY regeneration job we started
+  const { onJobProgress } = useCollaboration();
+
+  useEffect(() => {
+    if (!onJobProgress) return;
+
+    const unsubscribe = onJobProgress(async (data: any) => {
+      const platformKey = activeRegenJobsRef.current[data.jobId];
+      if (!platformKey) return; // Not a job we care about
+
+      console.log(`[GEN-DETAILS] Socket update for platform ${platformKey} (job ${data.jobId}): ${data.status}`);
+
+      if (data.status === 'completed') {
+        try {
+          // If socket has results, use them. Otherwise fetch.
+          let resultArray = Array.isArray(data.results) ? data.results : [];
+
+          if (resultArray.length === 0) {
+            // Fallback: fetch results if socket didn't include them
+            const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+            const token = await ensureSupabaseJwt();
+            if (baseUrl && token) {
+              const rr = await fetch(`${baseUrl}/api/products/regenerate/results/${data.jobId}`, {
+                headers: { Authorization: `Bearer ${token}` }
+              });
+              if (rr.ok) {
+                const json = await rr.json();
+                resultArray = Array.isArray(json?.results) ? json.results : [];
+              }
+            }
+          }
+
+          const matched = resultArray.find((r: any) => (typeof r.productIndex === 'number' ? r.productIndex : 0) === ((first?.productIndex as number) ?? 0)) || resultArray[0];
+          const generatedPlatforms = (matched?.platforms || {}) as Record<string, any>;
+
+          if (generatedPlatforms && generatedPlatforms[platformKey]) {
+            // Update displayed platforms with the new generated data
+            const normalized = normalizeForListingEditor(generatedPlatforms[platformKey]);
+            console.log(`[GEN-DETAILS] Hydrating generated data for ${platformKey}`);
+            updatePlatforms(prev =>
+              hydratePlatformsFromBackend({ [platformKey]: normalized }, prev)
+            );
+          }
+        } catch (err) {
+          console.error(`[GEN-DETAILS] Error processing completion for ${platformKey}:`, err);
+        } finally {
+          // Cleanup
+          delete activeRegenJobsRef.current[data.jobId];
+          setGeneratingPlatformKeys(prev => {
+            const next = new Set(prev);
+            next.delete(platformKey);
+            return next;
+          });
+        }
+      } else if (data.status === 'failed' || data.status === 'cancelled') {
+        console.warn(`[GEN-DETAILS] Generation failed for ${platformKey}`);
+        delete activeRegenJobsRef.current[data.jobId];
+        setGeneratingPlatformKeys(prev => {
+          const next = new Set(prev);
+          next.delete(platformKey);
+          return next;
+        });
+        Alert.alert('Generation Failed', `Failed to generate details for ${platformKey}. Please try again.`);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [onJobProgress, first?.productIndex]);
+
   const updatePlatforms = (updater: (prev: GeneratedPlatformDetails) => GeneratedPlatformDetails) => {
     platformsRef.current = updater(platformsRef.current);
     forceUpdate({}); // Trigger re-render
@@ -476,21 +288,37 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   // Get displayedPlatforms from ref (for render)
   // Just use the ref directly - it's stable and mutations won't cause renders
+
+
+
   const displayedPlatforms = platformsRef.current;
 
-
-  const first: GeneratedResult | null = useMemo(() => (Array.isArray(results) && results.length > 0 ? results[0] : null), [results]);
-
-  // Prefer user-captured images: 1) from ProductImages DB, 2) from params, 3) fallback to scraped
+  // Prefer user-captured images: 0) from route params, 1) from ProductImages DB, 2) from draft
   const userImagesByIndex: Record<number, string[]> = useMemo(() => {
     const map: Record<number, string[]> = {};
+
+    // Priority 0: Images passed via navigation params (from MatchSelectionScreen bulk scan)
+    const paramsImages = (route.params as any)?.userImagesByIndex;
+    if (paramsImages && typeof paramsImages === 'object') {
+      Object.entries(paramsImages).forEach(([idxStr, imgs]) => {
+        const idx = parseInt(idxStr, 10);
+        if (!isNaN(idx) && Array.isArray(imgs) && imgs.length > 0) {
+          map[idx] = imgs as string[];
+          console.log(`[userImagesByIndex] P0: Using params images for index ${idx}:`, (imgs as string[]).length);
+        }
+      });
+    }
 
     // Priority 1: ProductImages from database (actual user photos)
     if (Object.keys(dbImages).length > 0 && Array.isArray(results)) {
       results.forEach((r, idx) => {
         if (r.variantId && dbImages[r.variantId]) {
-          map[idx] = dbImages[r.variantId];
-          console.log(`[userImagesByIndex] Using DB images for index ${idx}:`, dbImages[r.variantId]);
+          // Merge with params images, avoiding duplicates
+          const existing = map[idx] || [];
+          const dbImgs = dbImages[r.variantId];
+          const merged = Array.from(new Set([...existing, ...dbImgs]));
+          map[idx] = merged;
+          console.log(`[userImagesByIndex] P1: Merged DB images for index ${idx}:`, dbImgs.length, 'Total:', merged.length);
         }
       });
     }
@@ -505,40 +333,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         const draftImages = p.images || p.imageUris || [];
         if (Array.isArray(draftImages) && draftImages.length > 0) {
           const idx = (first?.productIndex as number) ?? 0;
-          // Merge with existing DB images if any, avoiding duplicates
+          // Merge with existing images if any, avoiding duplicates
           const existing = map[idx] || [];
           const merged = Array.from(new Set([...existing, ...draftImages]));
           map[idx] = merged;
           console.log(`[userImagesByIndex] P2: Merged draft images for index ${idx}:`, draftImages.length, 'Total:', merged.length);
-        } else {
-          // console.log(`[userImagesByIndex] P2: No images in draft for ${canonicalKey}`);
         }
       }
     }
-
-    // Priority 3: Images passed via navigation params
-    const fromParams = (route.params as any)?.userImagesByIndex;
-    if (fromParams && typeof fromParams === 'object') {
-      Object.keys(fromParams).forEach(key => {
-        const idx = parseInt(key, 10);
-        if (!isNaN(idx)) {
-          const existing = map[idx] || [];
-          if (existing.length === 0) {
-            map[idx] = fromParams[key];
-          }
-        }
-      });
-    }
-
-    // Priority 4: Fallback to scraped sourceImageUrl ONLY if no user images found
-    (Array.isArray(results) ? results : []).forEach((r, i) => {
-      if (!map[i] || map[i].length === 0) {
-        const url = (r as any)?.sourceImageUrl;
-        if (url && typeof url === 'string' && !url.includes('firecrawl') && !url.includes('serpapi')) {
-          map[i] = [url];
-        }
-      }
-    });
 
     return map;
   }, [results, dbImages, route.params, updateCounter]);
@@ -789,25 +591,26 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
         console.log('[GenerateDetails] Enabled platforms from connections:', enabledPlatformTypes);
 
-        // Add empty entries for platforms that don't exist in displayedPlatforms
+        // ONLY add platform entries for platforms that don't already exist in displayedPlatforms
+        // (via hydration from generate job results). This prevents empty columns for unselected platforms.
+        // We DON'T want to auto-add ALL enabled platforms - only those actually generated for.
         const currentPlatforms = platformsRef.current;
         const updatedPlatforms = { ...currentPlatforms };
         let added = false;
 
-        for (const pt of enabledPlatformTypes) {
-          if (pt && typeof pt === 'string' && !updatedPlatforms[pt]) {
-            // Create empty platform entry with basic structure
+        // Only add platforms that ALREADY exist in displayedPlatforms (from generate results)
+        // but need locations hydrated
+        for (const pt of Object.keys(currentPlatforms)) {
+          if (pt && typeof pt === 'string' && locsByPlatform[pt]) {
             const platformLocs = locsByPlatform[pt] || [];
-            updatedPlatforms[pt] = {
-              title: '',
-              description: '',
-              sku: '',
-              price: 0,
-              variants: [],
-              locations: platformLocs,
-            };
-            console.log(`[GenerateDetails] Added empty platform entry for: ${pt}`);
-            added = true;
+            if (platformLocs.length > 0 && (!updatedPlatforms[pt].locations || updatedPlatforms[pt].locations.length === 0)) {
+              updatedPlatforms[pt] = {
+                ...updatedPlatforms[pt],
+                locations: platformLocs,
+              };
+              console.log(`[GenerateDetails] Hydrated locations for existing platform: ${pt}`);
+              added = true;
+            }
           }
         }
 
@@ -1343,30 +1146,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           inventoryQuantity: parseNumeric(canonical.inventoryQuantity),
           tracked: canonical.tracked !== undefined ? canonical.tracked : undefined,
           inventoryTracker: canonical.inventoryTracker || undefined,
-          // CRITICAL FIX: For single-variant products, pass inventoryByLocation at root level
-          // The backend expects this for setting per-location inventory
-          inventoryByLocation: (() => {
-            // If product has explicit variants, skip root-level inventory (it's in variants[])
-            if (Array.isArray(canonical.variants) && canonical.variants.length > 0) return undefined;
-
-            // Convert locationQuantities to inventoryByLocation format if present
-            if (canonical.locationQuantities && typeof canonical.locationQuantities === 'object') {
-              const result: Record<string, { quantity: number; price?: number }> = {};
-              for (const [locId, qty] of Object.entries(canonical.locationQuantities)) {
-                if (typeof qty === 'number') {
-                  result[locId] = { quantity: qty, price: canonical.price || 0 };
-                }
-              }
-              return Object.keys(result).length > 0 ? result : undefined;
-            }
-
-            // If there's a first variant with inventory, use that
-            if (canonical.variants?.[0]?.inventoryByLocation) {
-              return canonical.variants[0].inventoryByLocation;
-            }
-
-            return canonical.inventoryByLocation || undefined;
-          })(),
+          // CRITICAL FIX: Add inventoryByLocation at root level for single-variant products
+          // Backend expects this at root when variants array is empty
+          inventoryByLocation: canonical.inventoryByLocation || undefined,
           // Variant options (if single variant with options)
           selectedOptions: Array.isArray(canonical.selectedOptions) ? canonical.selectedOptions : undefined,
           // Variant structure (if variants array exists)
@@ -1430,28 +1212,34 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }, {} as Record<string, any>),
       },
       media: (() => {
-        // Clean image collection - only user-uploaded or DB images, no scraped URLs
+        // CRITICAL: Use userImagesByIndex which prioritizes: 1) DB images, 2) params, 3) scraped fallback
         const imgs = new Set<string>();
 
-        // Collect images from the form's image state (already filtered)
+        // First, collect from displayed platforms (preserves user edits in the form)
         for (const k of Object.keys(displayedPlatforms || {})) {
           const p = (displayedPlatforms as any)[k] || {};
-          const arr = p.images || [];
+          const arr = p.images || p.imageUris || [];
           if (Array.isArray(arr)) {
             arr.forEach((u: string) => {
-              // Filter out scraped/external sources - only keep Supabase or user-uploaded URLs
-              if (typeof u === 'string' && u &&
-                !u.includes('firecrawl') &&
-                !u.includes('serpapi') &&
-                !u.includes('google.com') &&
-                (u.includes('supabase') || u.startsWith('file://') || u.startsWith('http'))) {
+              if (typeof u === 'string' && u && !u.includes('firecrawl') && !u.includes('serpapi')) {
                 imgs.add(u);
               }
             });
           }
         }
 
-        return { imageUris: Array.from(imgs), coverImageIndex: 0 };
+        // Add user images from computed userImagesByIndex (includes DB images!)
+        const idx = (first?.productIndex as number) ?? 0;
+        const userImages = userImagesByIndex[idx] || [];
+        userImages.forEach((u: string) => {
+          if (typeof u === 'string' && u) {
+            imgs.add(u);
+          }
+        });
+
+        const imageUris = Array.from(imgs);
+        console.log('[buildPlatformPayload] Using user images (DB + params):', imageUris);
+        return { imageUris, coverImageIndex: 0 };
       })(),
       selectedPlatformsToPublish: Object.keys(displayedPlatforms || {}),
     };
@@ -2005,7 +1793,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const variantId = (route.params as any)?.variantId || first?.variantId;
       if (!baseUrl || !productId || !variantId || !token) return;
 
-
+      // Optimistic UI update - start loading
+      setGeneratingPlatformKeys(prev => new Set(prev).add(platformKey));
 
       const payload = buildPlatformPayload();
       const submit = await fetch(`${baseUrl}/api/products/regenerate/submit`, {
@@ -2024,23 +1813,38 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           options: { useExistingScrapedData: true }
         })
       });
-      if (!submit.ok) throw new Error(`Platform generation failed: ${submit.status}`);
+
+      if (!submit.ok) {
+        setGeneratingPlatformKeys(prev => {
+          const next = new Set(prev);
+          next.delete(platformKey);
+          return next;
+        });
+        throw new Error(`Platform generation failed: ${submit.status}`);
+      }
+
       const submitJson = await submit.json();
       const regenJobId = submitJson?.jobId;
-      const resultPayload = await pollRegenerateUntilDone(regenJobId, token || undefined);
-      const resultArray = Array.isArray(resultPayload?.results) ? resultPayload.results : [];
-      const matched = resultArray.find((r: any) => (typeof r.productIndex === 'number' ? r.productIndex : 0) === ((first?.productIndex as number) ?? 0)) || resultArray[0];
-      const generatedPlatforms = (matched?.platforms || {}) as Record<string, any>;
 
-      if (generatedPlatforms && generatedPlatforms[platformKey]) {
-        // Update displayed platforms with the new generated data
-        const normalized = normalizeForListingEditor(generatedPlatforms[platformKey]);
-        updatePlatforms(prev =>
-          hydratePlatformsFromBackend({ [platformKey]: normalized }, prev)
-        );
+      if (regenJobId) {
+        console.log(`[GEN-DETAILS] Started regeneration for ${platformKey}, jobId: ${regenJobId}`);
+        activeRegenJobsRef.current[regenJobId] = platformKey;
+        // We return here and let the socket listener handle the rest!
+      } else {
+        setGeneratingPlatformKeys(prev => {
+          const next = new Set(prev);
+          next.delete(platformKey);
+          return next;
+        });
       }
+
     } catch (error) {
       console.error('Platform generation failed:', error);
+      setGeneratingPlatformKeys(prev => {
+        const next = new Set(prev);
+        next.delete(platformKey);
+        return next;
+      });
       throw error;
     }
   };
@@ -2401,7 +2205,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               <ListingEditorForm
                 platforms={displayedPlatforms}
                 updateCounter={updateCounter}
-                images={(userImagesByIndex[(first?.productIndex as number) ?? 0] || '').filter(Boolean)}
+                images={(userImagesByIndex[(first?.productIndex as number) ?? 0] || []).filter(Boolean)}
                 onChangeImages={handleImagesChange}
                 platformLocations={platformLocations}
                 onChangePlatforms={(next) => {
@@ -2480,6 +2284,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                 }}
                 getMissingFieldsCount={(platformKey: string) => getMissingFields(platformKey).length}
                 onGeneratePlatform={generatePlatform}
+                generatingPlatformKeys={generatingPlatformKeys}
                 enableAIRefill={ENABLE_AI_REFILL_FEATURES}
                 onSuggestVariants={suggestVariants}
                 onBoostListing={boostListing}

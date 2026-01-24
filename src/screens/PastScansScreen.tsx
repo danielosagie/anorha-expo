@@ -112,64 +112,9 @@ const PastScansScreen = () => {
         .order('created_at', { ascending: false });
 
 
-      const { data: products, error: productsError } = await supabase
-        .from('Products')
-        .select(`
-        Id,
-        CreatedAt,
-        IsArchived,
-        ProductVariants (
-          Id,
-          Title,
-          Description,
-          Price,
-          Sku,
-          Barcode,
-          Options,
-          ProductImages!ProductImages_ProductVariantId_fkey ( ImageUrl, Position )
-        )
-      `)
-        .eq('UserId', user.id)
-        .order('CreatedAt', { ascending: false });
-
-      if (productsError) {
-        console.error('Database error:', productsError);
-        throw new Error('Failed to fetch products');
-      }
-
-      if (!products) {
-        return;
-      }
-
-      const transformedScans = products.reduce((acc: PastScan[], product) => {
-        const variant = product.ProductVariants?.[0];
-        if (!variant) return acc;
-
-        const sortedImages = variant.ProductImages
-          ?.sort((a, b) => (a.Position || 0) - (b.Position || 0))
-          ?.map(img => img.ImageUrl) || [];
-
-        let status: 'draft' | 'active' | 'archived' = product.IsArchived ? 'archived' : (variant.Title ? 'active' : 'draft');
-
-        acc.push({
-          id: product.Id,
-          variantId: variant.Id,
-          created_at: product.CreatedAt,
-          title: variant.Title || 'Untitled Product',
-          description: variant.Description || '',
-          price: variant.Price || 0,
-          sku: variant.Sku || '',
-          barcode: variant.Barcode || '',
-          images: sortedImages,
-          platform_details: variant.Options || {},
-          status
-        });
-        return acc;
-      }, []);
-
       if (error) {
         console.error('Database error:', error);
-        throw new Error('Failed to fetch products');
+        throw new Error('Failed to fetch past scans');
       }
 
       if (!data) {
@@ -187,7 +132,6 @@ const PastScansScreen = () => {
         const summary = { ...(job.summary || {}), firstTitle: title, firstThumb: thumb };
         return { ...job, id: job.job_id, summary, results } as GenerationJob;
       });
-      console.log(formattedJobs);
 
       setGenerationJobs(formattedJobs);
     } catch (err: any) {
@@ -219,7 +163,7 @@ const PastScansScreen = () => {
         jobId: job.id
       } as any);
     } else {
-      console.log(`Job status is '${job.status}', cannot view results yet.`)
+      console.log(`Job status is '${job.status}', cannot view results yet.`);
     }
   };
 
@@ -232,8 +176,17 @@ const PastScansScreen = () => {
         <View style={styles.thumbRow}>
           {(() => {
             const results = (item as any)?.results || [];
+            // Robust image finding logic
             const images = results
-              .map((r: any) => r?.serpApiData?.[0]?.image || r?.sourceImageUrl || '')
+              .map((r: any) => {
+                // Try multiple paths for the image
+                return r?.serpApiData?.[0]?.image ||
+                  r?.serpApiData?.[0]?.thumbnail ||
+                  r?.images?.[0]?.url ||
+                  r?.sourceImageUrl ||
+                  r?.coverImage ||
+                  '';
+              })
               .filter((uri: string) => !!uri);
 
             const firstImage = images[0];
@@ -313,8 +266,15 @@ const PastScansScreen = () => {
         <View style={styles.scanDetails}>
           {(() => {
             const results = item.results || [];
+            // Robust image finding logic
             const images = results
-              .map((r: any) => r?.sourceImageUrl || '')
+              .map((r: any) => {
+                return r?.sourceImageUrl ||
+                  r?.images?.[0] || // If array of strings
+                  r?.images?.[0]?.url || // If array of objects
+                  r?.platforms?.shopify?.images?.[0] || // Try platform specific
+                  '';
+              })
               .filter((uri: string) => !!uri);
 
             const firstImage = images[0] || (item as any)?.summary?.firstThumb;

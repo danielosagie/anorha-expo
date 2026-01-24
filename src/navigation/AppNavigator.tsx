@@ -51,6 +51,8 @@ import MarketplaceChatScreen from '../screens/MarketplaceChatScreen';
 import ActivityFeedScreen from '../screens/ActivityFeedScreen';
 import PublishConfirmationScreen from '../screens/PublishConfirmationScreen';
 import PartnerAcceptScreen from '../screens/PartnerAcceptScreen';
+import PartnersScreen from '../screens/PartnersScreen';
+import PartnershipDetailScreen from '../screens/PartnershipDetailScreen';
 import { BackfillOptimizerScreen } from '../screens/BackfillOptimizerScreen';
 import { CSVColumnMappingScreen } from '../screens/CSVColumnMappingScreen';
 import PendingOrgInvitesScreen from '../screens/PendingOrgInvitesScreen';
@@ -246,6 +248,10 @@ export type AppStackParamList = {
   PartnerAccept: {
     inviteCode?: string;
     inviteId?: string;
+    initialDetails?: any;
+  };
+  PartnershipDetail: {
+    partnership: any;
   };
   BackfillOptimizer: undefined;
   CSVColumnMapping: {
@@ -254,6 +260,7 @@ export type AppStackParamList = {
     sampleRow: Record<string, string>;
   };
   LiquidationCampaignScreen: { campaignId: string };
+  Partners: undefined;
 };
 
 type RootStackParamList = {
@@ -271,7 +278,22 @@ const Tab = createBottomTabNavigator();
 
 // Define TabNavigator separately - this fixes the "MainTabs doesn't exist" error
 const TabNavigator = () => {
-  usePushNotifications();
+  const { lastNotificationResponse } = usePushNotifications();
+  const navigation = useNavigation<any>();
+
+  useEffect(() => {
+    if (lastNotificationResponse) {
+      const data = lastNotificationResponse.notification.request.content.data;
+      if (data?.type === 'inventory_shared') {
+        // Navigate to Partners screen
+        // We use a small timeout to ensure navigation is ready if coming from cold start
+        setTimeout(() => {
+          navigation.navigate('Partners');
+        }, 500);
+      }
+    }
+  }, [lastNotificationResponse]);
+
   // Create a custom tab bar style with rounded corners and horizontal padding
   const customTabBarStyle = {
     ...styles.tabBar,
@@ -402,6 +424,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
   >
     <AppStackNav.Screen name="CreateAccountScreen" component={CreateAccountScreen} />
     <AppStackNav.Screen name="PendingOrgInvitesScreen" component={PendingOrgInvitesScreen} />
+    <AppStackNav.Screen name="Partners" component={PartnersScreen} />
     <AppStackNav.Screen name="LiquidationCampaignScreen" component={LiquidationCampaignScreen} options={{ headerTitle: 'Liquidation Campaign' }} />
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />
     <AppStackNav.Screen name="ProductDetail" component={ProductDetailScreen} />
@@ -418,6 +441,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="PublishConfirmation" component={PublishConfirmationScreen} />
     <AppStackNav.Screen name="OnboardConnectionScreen" component={OnboardConnectionScreen} />
     <AppStackNav.Screen name="PartnerAccept" component={PartnerAcceptScreen} />
+    <AppStackNav.Screen name="PartnershipDetail" component={PartnershipDetailScreen} />
     <AppStackNav.Screen name="BackfillOptimizer" component={BackfillOptimizerScreen} />
     <AppStackNav.Screen name="CSVColumnMapping" component={CSVColumnMappingScreen} />
   </AppStackNav.Navigator>

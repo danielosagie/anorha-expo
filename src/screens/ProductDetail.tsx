@@ -1428,9 +1428,21 @@ const ProductDetailScreen = observer(
         }).filter(Boolean)
       );
 
+      // Check if we have any "real" platforms connected (excluding pool/csv)
+      const hasRealConnections = connections.some(c =>
+        c.PlatformType !== 'pool' &&
+        c.PlatformType !== 'csv' &&
+        // Consider valid if enabled or active, even if needing reauth
+        c.IsEnabled
+      );
+
       return platformsInEditor.filter(platform => {
         // Skip if already mapped
         if (mappedPlatformTypes.has(platform)) return false;
+
+        // NEW: Hide 'pool' if we have any real platform connections
+        // The pool is a virtual fallback for when no platforms are connected
+        if (platform === 'pool' && hasRealConnections) return false;
 
         // Only include if there's actual data for this platform
         const platformData = displayedPlatforms[platform];
@@ -1574,13 +1586,38 @@ const ProductDetailScreen = observer(
         setIsPublishing(null);
       }
     }, [detailedItem, connections, displayedPlatforms, isPublishing, showBanner, loadPlatformData, hasUnsavedChanges, performAutoSave]);
+    // Handle Delist / Remove Mapping
+    const handleDelist = useCallback(async (mappingId: string, platformName: string) => {
+      Alert.alert('Delist', `Remove listing from ${platformName}?`, [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delist',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const token = await ensureSupabaseJwt();
+              const res = await fetch(`${SSSYNC_API_BASE_URL}/api/products/mappings/${mappingId}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+              });
+
+              if (!res.ok) {
+                throw new Error('Failed to delist');
+              }
+
+              showBanner(`Deleted listing from ${platformName}`);
+              // Refresh data to remove it from the list
+              await loadPlatformData();
+            } catch (e: any) {
+              console.error('Delist failed:', e);
+              Alert.alert('Error', 'Could not delete listing. Please try again.');
+            }
+          }
+        }
+      ]);
+    }, [loadPlatformData, showBanner]);
 
     // Auto-save function with proper API call
-    // Note: Pricing validation is flexible - either flat price OR all variants have prices
-    // This allows: Shopify with variants at different prices, Square with flat price, etc.
-
-
-    // Handle form changes with auto-save
     const handleFormChange = useCallback((field: keyof EditFormData, value: any) => {
       setDetailedItem(prev => {
         if (!prev) return prev;
@@ -2310,10 +2347,22 @@ const ProductDetailScreen = observer(
         }
 
         // Always include if we have active connections for this platform type
-        if (actualPlatformTypes.has(keyLower)) return true;
+        // BUT skip 'pool' here - handle it specifically below so we can hide it if other connections exist
+        if (actualPlatformTypes.has(keyLower) && keyLower !== 'pool') return true;
 
         // Include pool-based inventory (forked/shared products)
         if (keyLower === 'pool' && platformLocationState['pool']?.locations?.length > 0) {
+          // NEW: Hide 'pool' tab if we have ANY real platform connections active
+          const hasRealConnections = connections.some(c =>
+            c.PlatformType !== 'pool' && c.PlatformType !== 'csv' && c.IsEnabled
+          );
+
+          // Hide pool tab if we have actual mapped platforms OR any real platform connection
+          if (mappedPlatformTypes.size > 0 || hasRealConnections) {
+            console.log(`[ProductDetail] Hiding platform 'pool' because real connections/mappings exist`);
+            return false;
+          }
+
           console.log(`[ProductDetail] Including platform 'pool' - has shared inventory`);
           return true;
         }
@@ -3080,8 +3129,12 @@ const ProductDetailScreen = observer(
                 <>
                   {mappings.map((mapping) => {
                     const connection = connections.find(c => c.Id === mapping.PlatformConnectionId);
-                    const platformName = connection?.DisplayName || `${connection?.PlatformType || 'Unknown'} Account`;
-                    const platformType = connection?.PlatformType || 'unknown';
+                    const rawType = connection?.PlatformType || 'unknown';
+                    // capitalize first letter
+                    const typeLabel = rawType.charAt(0).toUpperCase() + rawType.slice(1);
+
+                    const platformName = connection?.DisplayName || `${typeLabel} Account`;
+                    const platformType = rawType;
                     const Logo = getPlatformLogoComponent(platformType);
                     return (
                       <View key={mapping.Id} style={styles.platformRow}>
@@ -3100,12 +3153,7 @@ const ProductDetailScreen = observer(
                         </View>
                         <TouchableOpacity
                           style={styles.delistButton}
-                          onPress={() => {
-                            Alert.alert('Delist', `Remove listing from ${platformName}?`, [
-                              { text: 'Cancel', style: 'cancel' },
-                              { text: 'Delist', style: 'destructive', onPress: () => console.log('Delist from', platformName) }
-                            ]);
-                          }}
+                          onPress={() => handleDelist(mapping.Id, platformName)}
                         >
                           <Icon name="archive-outline" size={16} color={theme.colors.text} style={{ marginRight: 6 }} />
                           <Text style={[styles.delistButtonText, { color: theme.colors.text }]}>Delist</Text>
@@ -3128,20 +3176,20 @@ const ProductDetailScreen = observer(
                         return (
                           <View key={platform} style={[styles.platformRow, { backgroundColor: '#F0FDF4', borderRadius: 8, marginBottom: 4 }]}>
                             <View style={styles.platformInfo}>
-                              <View style={[styles.platformLogoContainer, { backgroundColor: '#DCFCE7' }]}>
+                              <View style={[styles.platformLogoContainer, { backgroundColor: '#ffffffff' }]}>
                                 {Logo ? (
                                   <Logo width={18} height={18} />
                                 ) : (
-                                  <Icon name="store" size={18} color={'#16A34A'} />
+                                  <Icon name="store" size={18} color={'#93C822'} />
                                 )}
                               </View>
                               <View style={styles.platformDetails}>
                                 <Text style={[styles.platformName, { color: theme.colors.text }]}>{platformLabel}</Text>
-                                <Text style={{ fontSize: 12, color: '#16A34A' }}>Ready to publish</Text>
+                                <Text style={{ fontSize: 12, color: '#93C822' }}>Ready to publish</Text>
                               </View>
                             </View>
                             <TouchableOpacity
-                              style={[styles.syncButton, { backgroundColor: '#16A34A', paddingHorizontal: 16, paddingVertical: 8 }]}
+                              style={[styles.syncButton, { backgroundColor: '#93C822', paddingHorizontal: 16, paddingVertical: 8 }]}
                               onPress={() => handlePublishToPlatform(platform)}
                               disabled={isCurrentlyPublishing}
                             >
@@ -3175,7 +3223,7 @@ const ProductDetailScreen = observer(
                             style={[
                               styles.platformRow,
                               {
-                                backgroundColor: partnership.isShared ? '#EEF2FF' : '#F9FAFB',
+                                backgroundColor: partnership.isShared ? '#ffffffff' : '#F9FAFB',
                                 borderRadius: 8,
                                 marginBottom: 4,
                               },
@@ -3183,13 +3231,13 @@ const ProductDetailScreen = observer(
                           >
                             <View style={styles.platformInfo}>
                               <View style={[styles.platformLogoContainer, { backgroundColor: partnership.isShared ? '#C7D2FE' : '#E5E7EB' }]}>
-                                <Icon name="account-group-outline" size={18} color={partnership.isShared ? '#4F46E5' : '#6B7280'} />
+                                <Icon name="account-group-outline" size={18} color={partnership.isShared ? '#93C822' : '#6B7280'} />
                               </View>
                               <View style={styles.platformDetails}>
                                 <Text style={[styles.platformName, { color: theme.colors.text }]} numberOfLines={1}>
                                   {partnership.partnerOrgName}
                                 </Text>
-                                <Text style={{ fontSize: 12, color: partnership.isShared ? '#4F46E5' : theme.colors.textSecondary }}>
+                                <Text style={{ fontSize: 12, color: partnership.isShared ? '#93C822' : theme.colors.textSecondary }}>
                                   {partnership.isShared ? 'Shared' : 'Not shared'} • {partnership.poolName}
                                 </Text>
                               </View>
@@ -3200,21 +3248,21 @@ const ProductDetailScreen = observer(
                             ) : partnership.isShared ? (
                               partnership.canRevoke && partnership.linkId ? (
                                 <TouchableOpacity
-                                  style={[styles.delistButton, { backgroundColor: '#FEE2E2', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }]}
+                                  style={[styles.delistButton, { backgroundColor: '#DC2626', paddingHorizontal: 16, paddingVertical: 6, borderRadius: 6 }]}
                                   onPress={() => revokeFromPartner(partnership.linkId!, partnership.partnerOrgName)}
                                 >
-                                  <Icon name="link-off" size={14} color="#DC2626" style={{ marginRight: 4 }} />
-                                  <Text style={{ color: '#DC2626', fontWeight: '500', fontSize: 13 }}>Remove</Text>
+                                  <Icon name="link-off" size={14} color="#ffffffff" style={{ marginRight: 4 }} />
+                                  <Text style={{ color: '#ffffffff', fontWeight: '500', fontSize: 13 }}>Remove</Text>
                                 </TouchableOpacity>
                               ) : (
-                                <View style={[styles.delistButton, { backgroundColor: '#E0E7FF', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }]}>
-                                  <Icon name="check" size={14} color="#4F46E5" style={{ marginRight: 4 }} />
-                                  <Text style={{ color: '#4F46E5', fontWeight: '500', fontSize: 13 }}>Shared</Text>
+                                <View style={[styles.delistButton, { backgroundColor: '#E0E7FF', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6 }]}>
+                                  <Icon name="check" size={14} color="#93C822" style={{ marginRight: 4 }} />
+                                  <Text style={{ color: '#ffffffff', fontWeight: '500', fontSize: 13 }}>Shared</Text>
                                 </View>
                               )
                             ) : (
                               <TouchableOpacity
-                                style={[styles.syncButton, { backgroundColor: '#4F46E5', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }]}
+                                style={[styles.syncButton, { backgroundColor: '#93C822', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6 }]}
                                 onPress={() => shareWithPartner(partnership.inviteId)}
                               >
                                 <Icon name="share-variant-outline" size={14} color="#fff" style={{ marginRight: 4 }} />
@@ -3670,6 +3718,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   syncButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
     padding: 8,
     borderRadius: 6,
     marginLeft: 8,

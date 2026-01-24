@@ -14,6 +14,7 @@ import SquareSvg from '../assets/square.svg';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes, X, Sparkles, Car, Package, MapPin, Truck } from 'lucide-react-native';
 import { Dropdown as ElementDropdown } from 'react-native-element-dropdown';
+import { AppDropdown } from './ui/AppDropdown';
 import InteractiveMapModal from './InteractiveMapModal';
 import { black, grey400 } from 'react-native-paper/lib/typescript/styles/themes/v2/colors';
 import { overlay } from 'react-native-paper';
@@ -46,6 +47,7 @@ type Props = {
   externalUpdates?: Record<string, { value?: any; quantity?: number; price?: number; updatedAt: number }>;
   onAdoptExternalUpdate?: (key: string, value: any) => void;
   pendingImages?: string[];
+  generatingPlatformKeys?: Set<string>;
 };
 
 export type ListingEditorFormRef = { openPlatformPicker: () => void };
@@ -310,7 +312,7 @@ const SectionHeader = ({ title, icon, rightAction }: { title: string, icon?: any
   );
 };
 
-function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate }: Props, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys }: Props, ref: React.Ref<ListingEditorFormRef>) {
   const platformKeys = useMemo(() => {
     const keys = Object.keys(platforms || {}).filter((k) => typeof k === 'string' && k.trim().length > 0);
     console.log('[ListingEditorForm] platformKeys:', keys);
@@ -337,7 +339,16 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [openImagePickerFor, setOpenImagePickerFor] = useState<string | null>(null);
   const [variantImagePicker, setVariantImagePicker] = useState<{ variantId: string; open: boolean } | null>(null);
   const [showPlatformPicker, setShowPlatformPicker] = useState<boolean>(false);
-  const [generatingPlatforms, setGeneratingPlatforms] = useState<Set<string>>(new Set());
+  const [localGeneratingPlatforms, setGeneratingPlatforms] = useState<Set<string>>(new Set());
+
+  const generatingPlatforms = useMemo(() => {
+    const combined = new Set(localGeneratingPlatforms);
+    if (generatingPlatformKeys) {
+      generatingPlatformKeys.forEach(k => combined.add(k));
+    }
+    return combined;
+  }, [localGeneratingPlatforms, generatingPlatformKeys]);
+
   const [locationPickerVisible, setLocationPickerVisible] = useState<boolean>(false);
 
   // Delete confirmation modal for option values
@@ -1209,20 +1220,21 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('tags')}
         />
 
-        {/* AI Recommended Price Tag */}
-        {(activeData as any).aiRecommendedPrice && (
-          <View style={{ backgroundColor: '#F0F9FF', borderRadius: 8, padding: 10, marginBottom: 8, borderLeftWidth: 3, borderLeftColor: '#3B82F6' }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Sparkles size={16} color="#3B82F6" />
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 12, fontWeight: '600', color: '#1E40AF' }}>AI Suggested Price</Text>
-                <Text style={{ fontSize: 13, fontWeight: '700', color: '#059669', marginTop: 2 }}>
-                  ${Number((activeData as any).aiRecommendedPrice).toFixed(2)}
-                </Text>
+        {/* AI Recommended Price Tag - Only show if different from current price */}
+        {(activeData as any).aiRecommendedPrice &&
+          Number((activeData as any).aiRecommendedPrice) !== Number((activeData as any).price) && (
+            <View style={{ backgroundColor: '#F0F9FF', borderRadius: 8, padding: 10, marginBottom: 8, borderLeftWidth: 3, borderLeftColor: '#3B82F6' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Sparkles size={16} color="#3B82F6" />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#1E40AF' }}>AI Suggested Price</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#059669', marginTop: 2 }}>
+                    ${Number((activeData as any).aiRecommendedPrice).toFixed(2)}
+                  </Text>
+                </View>
               </View>
             </View>
-          </View>
-        )}
+          )}
 
         {/* Price field - if variants with options exist and have prices, don't require main price */}
         {(() => {
@@ -1292,29 +1304,9 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             <Field label="Shipping Weight" value={String(activeData.weight ?? '')} onChangeText={(t) => patchField('weight', t)} onInfo={() => onOpenFieldPanel?.('weight')} />
           </View>
           <View style={{ width: 140, marginBottom: 12 }}>
-            <ElementDropdown
+            <AppDropdown
               style={[styles.input, { height: 50, paddingHorizontal: 12 }]}
-              containerStyle={{
-                backgroundColor: 'white',
-                borderRadius: 12,
-                marginTop: 4,
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.1,
-                shadowRadius: 12,
-                elevation: 5,
-                padding: 4,
-                borderWidth: 0
-              }}
-              itemContainerStyle={{ borderRadius: 8, marginVertical: 2, paddingHorizontal: 8 }}
-              itemTextStyle={{ fontSize: 14, color: '#374151' }}
-              selectedTextStyle={{ fontSize: 14, color: '#000', fontWeight: '500' }}
-              activeColor="#F0F9FF"
-              placeholderStyle={{ fontSize: 14, color: '#9CA3AF' }}
-              iconStyle={{ width: 20, height: 20, tintColor: '#6B7280' }}
               data={["oz", "lb", "g", "kg"].map(u => ({ label: u, value: u }))}
-              labelField="label"
-              valueField="value"
               placeholder="oz"
               value={activeData.weightUnit || 'oz'}
               onChange={(item) => patchField('weightUnit', item.value)}
@@ -1575,36 +1567,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       {/* Facebook Marketplace Settings */}
       {
         activePlatformKey === 'facebook' && (
-          <View style={styles.card}>
-            <SectionHeader title="Facebook Settings" icon={FacebookSvg} />
+          <View>
+
 
             {/* Condition - Dropdown Style */}
             <View style={{ marginBottom: 20 }}>
               <Text style={styles.fieldLabel}>Condition</Text>
-              <ElementDropdown
-                style={[styles.modernInputWrapper, { paddingHorizontal: 12, height: 48, borderWidth: 1 }]} // Match ModernInput
-                containerStyle={{
-                  backgroundColor: 'white',
-                  borderRadius: 12,
-                  marginTop: 4,
-                  shadowColor: '#000',
-                  shadowOffset: { width: 0, height: 4 },
-                  shadowOpacity: 0.1,
-                  shadowRadius: 12,
-                  elevation: 5,
-                  padding: 4,
-                  borderWidth: 0
-                }}
-                itemContainerStyle={{
-                  borderRadius: 8,
-                  marginVertical: 2,
-                  paddingHorizontal: 8
-                }}
-                itemTextStyle={{ fontSize: 14, color: '#374151' }}
-                selectedTextStyle={{ fontSize: 14, color: '#000', fontWeight: '500' }}
-                activeColor="#F0F9FF"
-                placeholderStyle={{ fontSize: 14, color: '#9CA3AF' }}
-                iconStyle={{ width: 20, height: 20, tintColor: '#6B7280' }}
+              <AppDropdown
+                style={[styles.modernInputWrapper, { paddingHorizontal: 12, height: 48, borderWidth: 1 }]}
                 data={[
                   { label: 'New', value: 'new' },
                   { label: 'Like New', value: 'like_new' },
@@ -1613,14 +1583,9 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   { label: 'Used', value: 'used' },
                   { label: 'Refurbished', value: 'refurbished' },
                 ]}
-                maxHeight={260}
-                labelField="label"
-                valueField="value"
                 placeholder="Select condition..."
                 value={activeData.condition}
-                onChange={item => {
-                  patchField('condition', item.value);
-                }}
+                onChange={item => patchField('condition', item.value)}
               />
             </View>
 
@@ -2646,7 +2611,7 @@ const styles = StyleSheet.create({
   modernInputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F9FAFB',
+    backgroundColor: '#ffffffff',
     borderWidth: 1,
     borderColor: '#E5E7EB',
     borderRadius: 12,
@@ -2729,7 +2694,6 @@ const styles = StyleSheet.create({
   platformPickerCard: { backgroundColor: '#fff', borderRadius: 12, padding: 16, width: '90%' },
   platformGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center' },
   pillClose: { width: 16, height: 16, borderRadius: 8, backgroundColor: '#EFEFEF', alignItems: 'center', justifyContent: 'center' },
-  // Docked platform picker similar to scanner capsule
   platformPickerDock: { position: 'absolute', top: 6, left: 24, right: 24, zIndex: 5000 },
   platformPickerCapsule: { backgroundColor: 'rgba(248, 249, 251, 1)', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(153, 153, 153, 0.3)', padding: 12 },
   platformPill: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 8, paddingHorizontal: 12, margin: 6, flexDirection: 'row', alignItems: 'center' },

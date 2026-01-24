@@ -1695,7 +1695,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
             <View style={styles.footerRow}>
               <Button title="Cancel" outlined onPress={() => setViewMode('default')} style={{ flex: 1 }} />
               <Button
-                title="Confirm Updates"
+                title="Save Changes"
                 onPress={confirmManageChanges}
                 loading={saving}
                 style={{ flex: 1 }}
