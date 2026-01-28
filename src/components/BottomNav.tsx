@@ -171,7 +171,7 @@ const BottomNav: React.FC<Props> = ({
               <View style={{ width: 24 }} />
             </View>
             <View style={styles.platformGrid}>
-              {['shopify', 'square', 'ebay'].map((p) => (
+              {['shopify', 'square', 'clover', 'ebay', 'facebook'].map((p) => (
                 <PlatformButton
                   key={p}
                   platform={p}
@@ -193,7 +193,7 @@ const BottomNav: React.FC<Props> = ({
               style={styles.csvImportButton}
               onPress={() => onStartConnect && onStartConnect('csv')}
             >
-              <Icon name="table" size={20} color="#6b7280"/>
+              <Icon name="table" size={20} color="#6b7280" />
               <Text style={styles.csvImportText}>Import from CSV</Text>
             </TouchableOpacity>
           </View>
