@@ -259,6 +259,7 @@ const ProductDetailScreen = observer(
     const [partnerships, setPartnerships] = useState<PartnershipInfo[]>([]);
     const [isLoadingPartnerships, setIsLoadingPartnerships] = useState(false);
     const [partnershipActionLoading, setPartnershipActionLoading] = useState<string | null>(null);
+    const isSharedProductRef = useRef(false);
 
     // Track if initial load has completed to prevent overwrites
     const hasLoadedInitialData = useRef(false);
@@ -287,20 +288,23 @@ const ProductDetailScreen = observer(
     const [lastSaveTime, setLastSaveTime] = useState<number>(0);
     const [isUploadingImages, setIsUploadingImages] = useState(false);
     const listingEditorRef = useRef<ListingEditorFormRef | null>(null);
+    const scrollViewRef = useRef<ScrollView | null>(null);
 
     // Non-blocking notification banner
     const [bannerMessage, setBannerMessage] = useState<string | null>(null);
     const bannerOpacity = useRef(new Animated.Value(0)).current;
     const bannerTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const [bannerClickable, setBannerClickable] = useState(false);
 
-    // Show banner notification (auto-hides after 3 seconds)
-    const showBanner = useCallback((message: string) => {
+    // Show banner notification (auto-hides after 3 seconds, or 5 seconds if clickable)
+    const showBanner = useCallback((message: string, clickable: boolean = false) => {
       // Clear any existing timeout
       if (bannerTimeout.current) {
         clearTimeout(bannerTimeout.current);
       }
 
       setBannerMessage(message);
+      setBannerClickable(clickable);
 
       // Fade in
       Animated.timing(bannerOpacity, {
@@ -309,7 +313,7 @@ const ProductDetailScreen = observer(
         useNativeDriver: true,
       }).start();
 
-      // Auto-hide after 3 seconds
+      // Auto-hide after 3 seconds (or 5 seconds for clickable banners)
       bannerTimeout.current = setTimeout(() => {
         Animated.timing(bannerOpacity, {
           toValue: 0,
@@ -317,9 +321,11 @@ const ProductDetailScreen = observer(
           useNativeDriver: true,
         }).start(() => {
           setBannerMessage(null);
+          setBannerClickable(false);
         });
-      }, 3000);
+      }, clickable ? 5000 : 3000);
     }, [bannerOpacity]);
+
 
     // Add state after existing states (around line 160, after const [isUploadingImages, setIsUploadingImages] = useState(false);)
     const [variantPricing, setVariantPricing] = useState<any[]>([]);
@@ -341,6 +347,37 @@ const ProductDetailScreen = observer(
 
     // 🟢 EXTERNAL UPDATES: Track which fields changed from external sources for green border highlighting
     const [externalUpdates, setExternalUpdates] = useState<Record<string, { value?: any; updatedAt: number }>>({});
+
+    // Scroll to first changed field when banner is clicked
+    const scrollToFirstChangedField = useCallback(() => {
+      const changedFields = Object.keys(externalUpdates || {});
+      if (changedFields.length === 0) return;
+
+      // Field key mapping to approximate scroll positions
+      // These are rough estimates - we'll use a more reliable method
+      const fieldOrder = ['title', 'description', 'price', 'sku', 'barcode', 'weight'];
+      const firstField = changedFields.sort((a, b) => {
+        const aIndex = fieldOrder.indexOf(a);
+        const bIndex = fieldOrder.indexOf(b);
+        return (aIndex === -1 ? 999 : aIndex) - (bIndex === -1 ? 999 : bIndex);
+      })[0];
+
+      // Try to find the field in the form and scroll to it
+      // The form starts around y: 200, and each field is roughly 80px tall
+      const fieldPositions: Record<string, number> = {
+        title: 200,
+        description: 280,
+        price: 400,
+        sku: 600,
+        barcode: 700,
+        weight: 500,
+      };
+
+      const targetY = fieldPositions[firstField] || 200;
+      scrollViewRef.current?.scrollTo({ y: targetY, animated: true });
+
+      console.log(`[ProductDetail] 📍 Scrolled to field: ${firstField} at y: ${targetY}`);
+    }, [externalUpdates]);
 
     // Auto-clear external update highlights after 5 seconds
     useEffect(() => {
@@ -511,11 +548,55 @@ const ProductDetailScreen = observer(
 
         if (inventoryError) {
           console.error('Error loading inventory levels:', inventoryError);
-        } else {
-          console.log('[ProductDetail] Loaded inventory levels:', inventoryData?.length || 0, 'for', allVariantIds.length, 'variants');
-          // ⚡ CRITICAL: Store raw inventory levels for displayedPlatforms hydration
-          setRawInventoryLevels((inventoryData as InventoryLevel[]) || []);
         }
+
+        // Load shared inventory quantities for partner items
+        let mergedInventory = (inventoryData as InventoryLevel[]) || [];
+        try {
+          const { data: sharedLinks, error: sharedError } = await supabase
+            .from('CrossOrgProductLinks')
+            .select('TargetVariantId, AvailableQuantity, TargetPoolId, Status')
+            .in('TargetVariantId', allVariantIds)
+            .eq('Status', 'active');
+
+          if (sharedError) {
+            console.warn('[ProductDetail] Error loading CrossOrgProductLinks:', sharedError);
+          } else if (sharedLinks && sharedLinks.length > 0) {
+            isSharedProductRef.current = true;
+            const poolQtyByVariant = new Map<string, number>();
+            mergedInventory.forEach((level: InventoryLevel) => {
+              if (!level.PlatformConnectionId && (level as any).PoolId) {
+                const current = poolQtyByVariant.get(level.ProductVariantId) || 0;
+                poolQtyByVariant.set(level.ProductVariantId, current + (level.Quantity || 0));
+              }
+            });
+
+            sharedLinks.forEach((link: any) => {
+              const linkQty = link.AvailableQuantity || 0;
+              const existingPoolQty = poolQtyByVariant.get(link.TargetVariantId) || 0;
+
+              if (linkQty > 0 && existingPoolQty <= 0) {
+                mergedInventory.push({
+                  Id: `shared-${link.TargetVariantId}-${link.TargetPoolId || 'pool'}`,
+                  ProductVariantId: link.TargetVariantId,
+                  Quantity: linkQty,
+                  PlatformConnectionId: null,
+                  PlatformLocationId: link.TargetPoolId || 'shared',
+                  PoolId: link.TargetPoolId || null,
+                  UpdatedAt: new Date().toISOString(),
+                } as unknown as InventoryLevel);
+              }
+            });
+          } else {
+            isSharedProductRef.current = false;
+          }
+        } catch (sharedErr) {
+          console.warn('[ProductDetail] Failed to merge shared inventory:', sharedErr);
+        }
+
+        console.log('[ProductDetail] Loaded inventory levels:', mergedInventory?.length || 0, 'for', allVariantIds.length, 'variants');
+        // ⚡ CRITICAL: Store raw inventory levels for displayedPlatforms hydration
+        setRawInventoryLevels(mergedInventory || []);
 
         // ⚡ Store all variants for hydration
         if (allProductVariantsData) {
@@ -607,21 +688,20 @@ const ProductDetailScreen = observer(
         };
 
         // If we have inventory data, group it
-        if (inventoryData && inventoryData.length > 0) {
-          inventoryData.forEach((level: InventoryLevel) => {
+        if (mergedInventory && mergedInventory.length > 0) {
+          const hasRealPlatformLocations = mergedInventory.some((lvl: InventoryLevel) => {
+            const conn = platformConnections.find(c => c.Id === lvl.PlatformConnectionId);
+            return conn !== undefined && (lvl.Quantity || 0) > 0;
+          });
+
+          mergedInventory.forEach((level: InventoryLevel) => {
             const connection = platformConnections.find(conn => conn.Id === level.PlatformConnectionId);
 
             // Handle pool-based inventory (partner shares) - no platform connection but has PoolId
             // SKIP the virtual "Shared Stock" if there are real platform locations to show
             // This check runs per-level, so we'll filter later after all levels are processed
             if (!connection && (level as any).PoolId) {
-              // Count how many real platform locations exist in the inventory data
-              const hasRealPlatformLocations = inventoryData.some((lvl: InventoryLevel) => {
-                const conn = platformConnections.find(c => c.Id === lvl.PlatformConnectionId);
-                return conn !== undefined;
-              });
-
-              // Only add Shared Stock if there are NO real platform locations
+              // Only add Shared Stock if there are NO real platform locations with quantity
               if (hasRealPlatformLocations) {
                 console.log('[ProductDetail] Skipping Shared Stock - real platform locations exist');
                 return; // Skip adding the virtual location
@@ -1302,6 +1382,92 @@ const ProductDetailScreen = observer(
       }
     }, [detailedItem, formData, hasUnsavedChanges, displayedPlatforms]);
 
+    // Track active regeneration jobs: jobId -> platformKey
+    const activeRegenJobsRef = useRef<Record<string, string>>({});
+    const [generatingPlatformKeys, setGeneratingPlatformKeys] = useState<Set<string>>(new Set());
+
+    // Listen for socket updates for ANY regeneration job we started
+    const { onJobProgress } = useCollaboration();
+
+    useEffect(() => {
+      if (!onJobProgress) return;
+
+      const unsubscribe = onJobProgress(async (data: any) => {
+        const platformKey = activeRegenJobsRef.current[data.jobId];
+        if (!platformKey) return; // Not a job we care about
+
+        console.log(`[ProductDetail] Socket update for platform ${platformKey} (job ${data.jobId}): ${data.status}`);
+
+        if (data.status === 'completed') {
+          try {
+            // If socket has results, use them. Otherwise fetch.
+            let resultArray = Array.isArray(data.results) ? data.results : [];
+
+            if (resultArray.length === 0) {
+              // Fallback: fetch results if socket didn't include them
+              const token = await ensureSupabaseJwt();
+              if (SSSYNC_API_BASE_URL && token) {
+                const rr = await fetch(`${SSSYNC_API_BASE_URL}/api/products/regenerate/results/${data.jobId}`, {
+                  headers: { Authorization: `Bearer ${token}` }
+                });
+                if (rr.ok) {
+                  const json = await rr.json();
+                  resultArray = Array.isArray(json?.results) ? json.results : [];
+                }
+              }
+            }
+
+            const productResult = resultArray[0]; // Assuming single product regen
+            const platformData = productResult?.platforms?.[platformKey];
+
+            if (platformData) {
+              console.log(`[ProductDetail] Got generated data for ${platformKey}:`, Object.keys(platformData));
+
+              // Smart Merge: Don't overwrite existing values with empty strings
+              const safePlatformData = { ...platformData };
+
+              // Sanitize: If title/desc are empty strings, remove them from update so we keep existing
+              if (safePlatformData.title === '') delete safePlatformData.title;
+              if (safePlatformData.description === '') delete safePlatformData.description;
+
+              // Update displayedPlatforms with the generated data
+              setDisplayedPlatforms(prev => ({
+                ...prev,
+                [platformKey]: {
+                  ...prev[platformKey],
+                  ...safePlatformData,
+                }
+              }));
+              setHasUnsavedChanges(true);
+              showBanner(`✨ Generated ${platformKey} listing data`);
+            }
+          } catch (err) {
+            console.error(`[ProductDetail] Error processing completion for ${platformKey}:`, err);
+            Alert.alert('Generation Error', 'Failed to process generated results.');
+          } finally {
+            // Cleanup
+            delete activeRegenJobsRef.current[data.jobId];
+            setGeneratingPlatformKeys(prev => {
+              const next = new Set(prev);
+              next.delete(platformKey);
+              return next;
+            });
+          }
+        } else if (data.status === 'failed' || data.status === 'cancelled') {
+          console.warn(`[ProductDetail] Generation failed for ${platformKey}`);
+          delete activeRegenJobsRef.current[data.jobId];
+          setGeneratingPlatformKeys(prev => {
+            const next = new Set(prev);
+            next.delete(platformKey);
+            return next;
+          });
+          Alert.alert('Generation Failed', `Failed to generate details for ${platformKey}. Please try again.`);
+        }
+      });
+
+      return () => unsubscribe();
+    }, [onJobProgress, showBanner]);
+
     // Generate platform-specific data when adding a new platform tab
     const handleGeneratePlatform = useCallback(async (platformKey: string) => {
       if (!detailedItem?.Id) {
@@ -1323,6 +1489,9 @@ const ProductDetailScreen = observer(
           console.error('[ProductDetail] No auth token for platform generation');
           return;
         }
+
+        // Mark as generating immediately
+        setGeneratingPlatformKeys(prev => new Set(prev).add(platformKey));
 
         // Submit generate job for this platform
         const submitResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/products/regenerate/submit`, {
@@ -1356,67 +1525,23 @@ const ProductDetailScreen = observer(
 
         console.log(`[ProductDetail] Regenerate job submitted: ${jobId}`);
 
-        // Poll for completion
-        let attempts = 0;
-        const maxAttempts = 30; // 30 * 2s = 60 seconds max
+        // Track the job
+        activeRegenJobsRef.current[jobId] = platformKey;
 
-        while (attempts < maxAttempts) {
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          attempts++;
+        // NOTE: We don't poll here anymore. The useEffect socket listener handles completion.
 
-          const statusResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/products/regenerate/status/${jobId}`, {
-            headers: { 'Authorization': `Bearer ${token}` },
-          });
-
-          if (!statusResponse.ok) continue;
-
-          const statusJson = await statusResponse.json();
-          console.log(`[ProductDetail] Regenerate status: ${statusJson.status}`);
-
-          if (statusJson.status === 'completed' || statusJson.status === 'partial') {
-            // Get results
-            const resultsResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/products/regenerate/results/${jobId}`, {
-              headers: { 'Authorization': `Bearer ${token}` },
-            });
-
-            if (resultsResponse.ok) {
-              const resultsJson = await resultsResponse.json();
-              const productResult = resultsJson.results?.[0];
-              const platformData = productResult?.platforms?.[platformKey];
-
-              if (platformData) {
-                console.log(`[ProductDetail] Got generated data for ${platformKey}:`, Object.keys(platformData));
-
-                // Smart Merge: Don't overwrite existing values with empty strings
-                const safePlatformData = { ...platformData };
-
-                // Sanitize: If title/desc are empty strings, remove them from update so we keep existing
-                if (safePlatformData.title === '') delete safePlatformData.title;
-                if (safePlatformData.description === '') delete safePlatformData.description;
-
-                // Update displayedPlatforms with the generated data
-                setDisplayedPlatforms(prev => ({
-                  ...prev,
-                  [platformKey]: {
-                    ...prev[platformKey],
-                    ...safePlatformData,
-                  }
-                }));
-                setHasUnsavedChanges(true);
-                showBanner(`✨ Generated ${platformKey} listing data`);
-              }
-            }
-            break;
-          } else if (statusJson.status === 'failed') {
-            console.error('[ProductDetail] Regenerate job failed:', statusJson.error);
-            break;
-          }
-        }
       } catch (error) {
         console.error('[ProductDetail] Platform generation failed:', error);
         Alert.alert('Generation Failed', 'Could not generate platform data. Please try again.');
+
+        // Cleanup on immediate error
+        setGeneratingPlatformKeys(prev => {
+          const next = new Set(prev);
+          next.delete(platformKey);
+          return next;
+        });
       }
-    }, [detailedItem, showBanner]);
+    }, [detailedItem, performAutoSave, hasUnsavedChanges]);
 
     // Detect platforms that have data in displayedPlatforms but no mapping (unpublished)
     const unpublishedPlatforms = useMemo(() => {
@@ -1484,7 +1609,8 @@ const ProductDetailScreen = observer(
         }
 
         // Build the publish payload using the new DTO format
-        const platformData = displayedPlatforms[platformKey] || {};
+        // Create a copy to modify if needed
+        const platformData = { ...(displayedPlatforms[platformKey] || {}) };
 
         // Build canonical data from the current detailedItem
         const canonicalData = {
@@ -1497,6 +1623,76 @@ const ProductDetailScreen = observer(
           weightUnit: detailedItem.WeightUnit || platformData.weightUnit || 'lb',
           tags: platformData.tags || [],
         };
+
+        // 🆕 Auto-Detect Category if missing (for Shopify/eBay)
+        const isShopify = platformKey.toLowerCase() === 'shopify';
+        const isEbay = platformKey.toLowerCase() === 'ebay';
+        const hasCategory = isShopify
+          ? (platformData.productCategoryId || platformData.productCategory)
+          : (platformData.categoryId || platformData.category);
+
+        if ((isShopify || isEbay) && !hasCategory) {
+          console.log('[ProductDetail] Missing category for publish, attempting auto-detect...');
+          showBanner(`Detecting ${platformKey} category...`);
+
+          try {
+            const query = canonicalData.title;
+            const normalizedPlatform = platformKey.toLowerCase();
+            const url = `${SSSYNC_API_BASE_URL}/api/taxonomy/${normalizedPlatform}/suggest`;
+            const payload = {
+              query,
+              title: canonicalData.title,
+              description: canonicalData.description,
+              brand: (platformData as any).brand,
+              tags: canonicalData.tags,
+              preferLeaf: true,
+              limit: 15,
+              useLlm: true,
+            };
+            const taxRes = await fetch(url, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            const taxData = await taxRes.json();
+
+            if (taxData?.suggested) {
+              const best = taxData.suggested;
+              console.log(`[ProductDetail] Auto-detected category: ${best.path || best.name}`);
+
+              // Apply to platformData
+              const bestScore = typeof taxData?.confidence === 'number' ? taxData.confidence : (typeof best.score === 'number' ? best.score : 0);
+              const minAutoScore = 0.7;
+              if (bestScore < minAutoScore) {
+                console.log(`[ProductDetail] Auto-detect score too low (${bestScore}). Skipping auto-apply.`);
+                return;
+              }
+
+              if (isShopify) {
+                platformData.productCategoryId = best.platformCategoryId || best.value;
+                platformData.productCategory = best.path || best.name;
+                platformData.categoryPath = best.path;
+              } else {
+                platformData.categoryId = best.platformCategoryId || best.value;
+                platformData.category = best.path || best.name;
+                platformData.categoryPath = best.path;
+              }
+              platformData.taxonomyConfidence = bestScore;
+              platformData.taxonomySource = taxData?.method || 'llm';
+
+              // Update state so it persists visually if publish fails or succeeds
+              setDisplayedPlatforms(prev => ({
+                ...prev,
+                [platformKey]: { ...prev[platformKey], ...platformData }
+              }));
+              setHasUnsavedChanges(true);
+
+              showBanner(`Auto-assigned category: ${best.path || best.name}`);
+            }
+          } catch (e) {
+            console.error('[ProductDetail] Auto-detect taxonomy failed:', e);
+          }
+        }
 
         const publishPayload = {
           variantId: detailedItem.Id,
@@ -2106,7 +2302,8 @@ const ProductDetailScreen = observer(
       const metadata = ((detailedItem as any).Metadata as Record<string, any>) || {};
       const tags = ((detailedItem as any).Tags as string[]) || [];
 
-      const canonicalBase = {
+      const isSharedProduct = isSharedProductRef.current;
+      let canonicalBase = {
         title: detailedItem.Title || '',
         sku: detailedItem.Sku || '',
         barcode: detailedItem.Barcode || '',
@@ -2128,9 +2325,15 @@ const ProductDetailScreen = observer(
         // SEO fields
         seoTitle: metadata.seoTitle || '',
         seoDescription: metadata.seoDescription || '',
-        // Platform-specific data for detailed editing
-        ...(metadata.platformSpecificData?.shopify || {}),
       };
+
+      // Only merge host platform-specific data for non-shared products
+      if (!isSharedProduct) {
+        canonicalBase = {
+          ...canonicalBase,
+          ...(metadata.platformSpecificData?.shopify || {}),
+        };
+      }
 
       console.log('[ProductDetail] Setting displayedPlatforms with tags:', canonicalBase.tags,
         'allProductVariants:', allProductVariants?.length,
@@ -2350,20 +2553,18 @@ const ProductDetailScreen = observer(
         // BUT skip 'pool' here - handle it specifically below so we can hide it if other connections exist
         if (actualPlatformTypes.has(keyLower) && keyLower !== 'pool') return true;
 
-        // Include pool-based inventory (forked/shared products)
+        // Include pool-based inventory ONLY when there are no real connections/mappings
         if (keyLower === 'pool' && platformLocationState['pool']?.locations?.length > 0) {
-          // NEW: Hide 'pool' tab if we have ANY real platform connections active
           const hasRealConnections = connections.some(c =>
             c.PlatformType !== 'pool' && c.PlatformType !== 'csv' && c.IsEnabled
           );
 
-          // Hide pool tab if we have actual mapped platforms OR any real platform connection
           if (mappedPlatformTypes.size > 0 || hasRealConnections) {
-            console.log(`[ProductDetail] Hiding platform 'pool' because real connections/mappings exist`);
+            console.log(`[ProductDetail] Force-excluding platform 'pool' because real connections/mappings exist`);
             return false;
           }
 
-          console.log(`[ProductDetail] Including platform 'pool' - has shared inventory`);
+          console.log(`[ProductDetail] Including platform 'pool' - no real connections/mappings`);
           return true;
         }
 
@@ -2375,9 +2576,14 @@ const ProductDetailScreen = observer(
           platformData.description ||
           platformData.variants?.length > 0
         );
-        if (hasMeaningfulData) {
+        if (!isSharedProduct && hasMeaningfulData) {
           console.log(`[ProductDetail] Including platform '${keyLower}' - has data but no active connection (for future publishing)`);
           return true;
+        }
+
+        if (isSharedProduct) {
+          console.log(`[ProductDetail] Filtering out platform '${keyLower}' - shared product with no mapping/connection`);
+          return false;
         }
 
         // Skip truly empty platforms
@@ -2386,7 +2592,17 @@ const ProductDetailScreen = observer(
       });
 
       if (platformKeys.length > 0) {
-        platformKeys.forEach(platformKey => {
+        const sortedPlatformKeys = [...platformKeys].sort((a, b) => {
+          const priority = (key: string) => {
+            if (actualPlatformTypes.has(key)) return 0;
+            if (mappedPlatformTypes.has(key)) return 1;
+            if (key === 'pool') return 2;
+            return 3;
+          };
+          return priority(a) - priority(b);
+        });
+
+        sortedPlatformKeys.forEach(platformKey => {
           // platformKey is already lowercase from our normalization
           // Look up the original casing in platformSpecificData
           const originalKey = Object.keys(platformSpecificData).find(k => k.toLowerCase() === platformKey) || platformKey;
@@ -2610,7 +2826,7 @@ const ProductDetailScreen = observer(
             // CRITICAL: Never update if user has unsaved changes
             if (hasUnsavedChangesRef.current) {
               console.log('[ProductDetail] ⚠️ BLOCKING REALTIME - user has unsaved changes');
-              showBanner('External update available. Save your changes first.');
+              showBanner('External update available. Save your changes first.', false);
               return;
             }
 
@@ -2660,8 +2876,39 @@ const ProductDetailScreen = observer(
                 if (Object.keys(fieldChanges).length > 0) {
                   console.log('[ProductDetail] 🟢 External field changes detected:', Object.keys(fieldChanges));
                   setExternalUpdates(prevUpdates => ({ ...prevUpdates, ...fieldChanges }));
+
+                  // 🔄 UPDATE displayedPlatforms to reflect external changes in fields
+                  setDisplayedPlatforms(prev => {
+                    if (!prev || Object.keys(prev).length === 0) return prev;
+                    const updated = { ...prev };
+                    const canonicalKey = Object.keys(prev).includes('shopify') ? 'shopify' : Object.keys(prev)[0];
+                    const canonical = updated[canonicalKey] || {};
+
+                    // Apply external updates to canonical platform data
+                    if (fieldChanges.title && updatedProduct.Title) {
+                      updated[canonicalKey] = { ...canonical, title: updatedProduct.Title };
+                    }
+                    if (fieldChanges.description && updatedProduct.Description) {
+                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), description: updatedProduct.Description };
+                    }
+                    if (fieldChanges.price && updatedProduct.Price !== undefined) {
+                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), price: updatedProduct.Price };
+                    }
+                    if (fieldChanges.sku && updatedProduct.Sku) {
+                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), sku: updatedProduct.Sku };
+                    }
+                    if (fieldChanges.barcode && updatedProduct.Barcode) {
+                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), barcode: updatedProduct.Barcode };
+                    }
+                    if (fieldChanges.weight && updatedProduct.Weight !== undefined) {
+                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), weight: updatedProduct.Weight };
+                    }
+
+                    return updated;
+                  });
+
                   // Show banner only when we have actual field changes from external source
-                  showBanner('Product updated from external source');
+                  showBanner('Product updated from external source', true);
                 }
 
                 console.log('[ProductDetail] ✅ Applying realtime update (merging to preserve nested data)');
@@ -2944,20 +3191,34 @@ const ProductDetailScreen = observer(
       <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
         {/* Non-blocking notification banner */}
         {bannerMessage && (
-          <Animated.View
-            style={[
-              styles.notificationBanner,
-              {
-                opacity: bannerOpacity,
-                backgroundColor: theme.colors.primary + 'E6', // 90% opacity
-              }
-            ]}
+          <TouchableOpacity
+            activeOpacity={bannerClickable ? 0.7 : 1}
+            onPress={bannerClickable ? scrollToFirstChangedField : undefined}
+            disabled={!bannerClickable}
           >
-            <Text style={styles.notificationBannerText}>{bannerMessage}</Text>
-          </Animated.View>
+            <Animated.View
+              style={[
+                styles.notificationBanner,
+                {
+                  opacity: bannerOpacity,
+                  backgroundColor: bannerClickable ? '#93C822' + 'E6' : theme.colors.primary + 'E6', // Green for clickable
+                }
+              ]}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                <Text style={styles.notificationBannerText}>{bannerMessage}</Text>
+                {bannerClickable && (
+                  <Icon name="arrow-down" size={16} color="#fff" />
+                )}
+              </View>
+            </Animated.View>
+          </TouchableOpacity>
         )}
 
-        <ScrollView contentContainerStyle={styles.scrollContent}>
+        <ScrollView
+          ref={scrollViewRef}
+          contentContainerStyle={styles.scrollContent}
+        >
           {/* Header with auto-save indicator */}
           <View style={[styles.header, { backgroundColor: theme.colors.surface }]}>
             <TouchableOpacity onPress={navigation.goBack} style={styles.backButton}>
@@ -3119,6 +3380,7 @@ const ProductDetailScreen = observer(
               }}
               // 🆕 AI generation for new platforms
               onGeneratePlatform={handleGeneratePlatform}
+              generatingPlatformKeys={generatingPlatformKeys}
             />
 
             {/* Active Listings */}
@@ -3174,7 +3436,7 @@ const ProductDetailScreen = observer(
                         const isCurrentlyPublishing = isPublishing === platform;
 
                         return (
-                          <View key={platform} style={[styles.platformRow, { backgroundColor: '#F0FDF4', borderRadius: 8, marginBottom: 4 }]}>
+                          <View key={platform} style={[styles.platformRow, { backgroundColor: '#FFFDF4', borderRadius: 8, marginBottom: 4 }]}>
                             <View style={styles.platformInfo}>
                               <View style={[styles.platformLogoContainer, { backgroundColor: '#ffffffff' }]}>
                                 {Logo ? (
@@ -3230,8 +3492,8 @@ const ProductDetailScreen = observer(
                             ]}
                           >
                             <View style={styles.platformInfo}>
-                              <View style={[styles.platformLogoContainer, { backgroundColor: partnership.isShared ? '#C7D2FE' : '#E5E7EB' }]}>
-                                <Icon name="account-group-outline" size={18} color={partnership.isShared ? '#93C822' : '#6B7280'} />
+                              <View style={styles.platformLogoContainer}>
+                                <Icon name="account-group-outline" size={18} color={partnership.isShared ? '#93C822' : '#FFF'} />
                               </View>
                               <View style={styles.platformDetails}>
                                 <Text style={[styles.platformName, { color: theme.colors.text }]} numberOfLines={1}>

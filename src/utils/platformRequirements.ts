@@ -1,9 +1,9 @@
 export type RequirementMap = Record<string, string[]>;
 
 const DEFAULT_REQUIREMENTS: RequirementMap = {
-  shopify: ['title', 'price', 'description', 'images'],
+  shopify: ['title', 'price', 'description', 'images', 'category'],
   amazon: ['title', 'price', 'description', 'images'],
-  ebay: ['title', 'price', 'description', 'images'],
+  ebay: ['title', 'price', 'description', 'images', 'category'],
   clover: ['title', 'price'],
   square: ['title', 'price'],
   facebook: ['title', 'price', 'description', 'images'],
@@ -53,8 +53,10 @@ export function isPlatformReady(platformData: any, platformKey: string, ignoredP
   const hasTitle = platformData.title?.toString().trim().length > 0;
   const hasSku = platformData.sku?.toString().trim().length > 0;
   const hasPrice = hasPlatformPrice(platformData);
+  const needsCategory = ['shopify', 'ebay'].includes(platformKey?.toLowerCase?.() || '');
+  const hasCategory = !!(platformData.productCategoryId || platformData.categoryId);
   
-  return hasTitle && hasSku && hasPrice;
+  return hasTitle && hasSku && hasPrice && (!needsCategory || hasCategory);
 }
 
 /**
@@ -73,6 +75,10 @@ export function getMissingPlatformFields(platformData: any, platformKey: string)
   
   if (!hasPlatformPrice(platformData)) {
     missing.push('price (either flat or all variants)');
+  }
+
+  if (['shopify', 'ebay'].includes(platformKey?.toLowerCase?.() || '') && !platformData.productCategoryId && !platformData.categoryId) {
+    missing.push('category');
   }
   
   return missing;

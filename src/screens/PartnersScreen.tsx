@@ -22,6 +22,7 @@ import { ensureSupabaseJwt } from '../lib/supabase';
 import { showMessage } from 'react-native-flash-message';
 import * as Clipboard from 'expo-clipboard';
 import { useOrg } from '../context/OrgContext';
+import { PartnerAcceptModal } from '../components/PartnerAcceptModal';
 
 const SSSYNC_API_BASE_URL = "https://api.sssync.app";
 
@@ -79,31 +80,91 @@ export default function PartnersScreen() {
 
     // Accept State
     const [acceptingInviteId, setAcceptingInviteId] = useState<string | null>(null);
+    const [acceptModalVisible, setAcceptModalVisible] = useState(false);
+    const [selectedInvite, setSelectedInvite] = useState<ReceivedInvite | null>(null);
 
     // Load Data
     const loadData = useCallback(async () => {
         if (!currentOrg) return;
+        // Keep loading true only on initial load or manual refresh
+        // Don't set loading on background updates to avoid UI flickering
+    }, [currentOrg]);
+    // ^ Refactored loadData usage below to be more flexible, but for now keeping existing loadData struct
+    // Re-implementing loadData to be safer if needed, but primarily modifying actions.
 
+    useEffect(() => {
+        const fetchInitial = async () => {
+            if (!currentOrg) return;
+            try {
+                setLoading(true);
+                const token = await ensureSupabaseJwt();
+                const orgId = currentOrg.id;
+
+                const [partnersRes, invitesRes, poolsRes] = await Promise.all([
+                    fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/partnerships?orgId=${orgId}`, { headers: { 'Authorization': `Bearer ${token}` } }),
+                    fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/pending?orgId=${orgId}`, { headers: { 'Authorization': `Bearer ${token}` } }),
+                    fetch(`${SSSYNC_API_BASE_URL}/api/pools/org/${orgId}`, { headers: { 'Authorization': `Bearer ${token}` } })
+                ]);
+
+                if (partnersRes.ok) {
+                    const pData = await partnersRes.json();
+                    setPartnerships(pData.partnerships || []);
+                }
+
+                if (invitesRes.ok) {
+                    const iData = await invitesRes.json();
+                    setPendingInvites(iData.sent || []);
+                    setReceivedInvites((iData.received || []).map((inv: any) => ({
+                        id: inv.id,
+                        sourceOrgName: inv.sourceOrgName || 'Unknown Organization',
+                        sourcePoolName: inv.sourcePoolName || 'Unknown Pool',
+                        shareType: inv.shareType || 'consignment',
+                        productCount: inv.productCount || inv.variantCount || 0,
+                        variantCount: inv.variantCount || 0,
+                        expiresAt: inv.expiresAt,
+                        token: inv.token || inv.id,
+                    })));
+                }
+
+                if (poolsRes.ok) {
+                    const poolsData = await poolsRes.json();
+                    setPools(poolsData);
+                    if (poolsData.length > 0 && !invitePoolId) {
+                        setInvitePoolId(poolsData[0].id);
+                    }
+                }
+            } catch (error: any) {
+                console.error('[PartnersScreen] Error loading data:', error);
+                showMessage({ message: 'Error', description: 'Failed to load partners data', type: 'danger' });
+            } finally {
+                setLoading(false);
+                setRefreshing(false);
+            }
+        };
+
+        fetchInitial();
+    }, [currentOrg]);
+
+    // Simplified refresh that re-uses the logic but we need to keep access to it
+    const refreshData = async () => {
+        if (!currentOrg) return;
         try {
-            setLoading(true);
             const token = await ensureSupabaseJwt();
             const orgId = currentOrg.id;
-
-            const [partnersRes, invitesRes, poolsRes] = await Promise.all([
+            // Background refresh without full screen loading
+            const [partnersRes, invitesRes] = await Promise.all([
                 fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/partnerships?orgId=${orgId}`, { headers: { 'Authorization': `Bearer ${token}` } }),
                 fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/pending?orgId=${orgId}`, { headers: { 'Authorization': `Bearer ${token}` } }),
-                fetch(`${SSSYNC_API_BASE_URL}/api/pools/org/${orgId}`, { headers: { 'Authorization': `Bearer ${token}` } })
             ]);
 
             if (partnersRes.ok) {
                 const pData = await partnersRes.json();
                 setPartnerships(pData.partnerships || []);
             }
-
             if (invitesRes.ok) {
                 const iData = await invitesRes.json();
                 setPendingInvites(iData.sent || []);
-                setReceivedInvites((iData.received || []).map((inv: any) => ({
+                setReceivedInvites((iData.received || []).map((inv: any) => ({ // Map again
                     id: inv.id,
                     sourceOrgName: inv.sourceOrgName || 'Unknown Organization',
                     sourcePoolName: inv.sourcePoolName || 'Unknown Pool',
@@ -114,31 +175,13 @@ export default function PartnersScreen() {
                     token: inv.token || inv.id,
                 })));
             }
+        } catch (e) { console.error("Background refresh failed", e); }
+    };
 
-            if (poolsRes.ok) {
-                const poolsData = await poolsRes.json();
-                setPools(poolsData);
-                if (poolsData.length > 0 && !invitePoolId) {
-                    setInvitePoolId(poolsData[0].id);
-                }
-            }
-
-        } catch (error: any) {
-            console.error('[PartnersScreen] Error loading data:', error);
-            showMessage({ message: 'Error', description: 'Failed to load partners data', type: 'danger' });
-        } finally {
-            setLoading(false);
-            setRefreshing(false);
-        }
-    }, [currentOrg]);
-
-    useEffect(() => {
-        loadData();
-    }, [loadData]);
 
     const onRefresh = () => {
         setRefreshing(true);
-        loadData();
+        refreshData().finally(() => setRefreshing(false));
     };
 
     // --- Actions ---
@@ -178,11 +221,11 @@ export default function PartnersScreen() {
                     'Invite Sent!',
                     `Invite link created. Share this with your partner:\n\n${data.inviteLink}`,
                     [
-                        { text: 'Copy Link', onPress: () => { Clipboard.setStringAsync(data.inviteLink); showMessage({ message: 'Link Copied!', type: 'success' }); } },
+                        { text: 'Copy Link', onPress: () => { Clipboard.setStringAsync(data.inviteLink); showMessage({ message: 'Link Copied!', type: 'success', backgroundColor: theme.colors.primary }); } },
                         { text: 'OK', style: 'cancel' }
                     ]
                 );
-                loadData();
+                refreshData();
             } else {
                 const err = await res.text();
                 Alert.alert('Failed', `Could not send invite: ${err}`);
@@ -206,7 +249,7 @@ export default function PartnersScreen() {
                             method: 'DELETE',
                             headers: { Authorization: `Bearer ${token}` }
                         });
-                        loadData();
+                        refreshData();
                         showMessage({ message: 'Invite revoked', type: 'info' });
                     } catch (e) { console.error(e); }
                 }
@@ -227,7 +270,7 @@ export default function PartnersScreen() {
             });
         } catch (e) {
             console.log(e);
-            loadData();
+            refreshData();
         }
     };
 
@@ -242,7 +285,7 @@ export default function PartnersScreen() {
                             method: 'DELETE',
                             headers: { Authorization: `Bearer ${token}` }
                         });
-                        loadData();
+                        refreshData();
                         showMessage({ message: 'Partnership ended', type: 'info' });
                     } catch (e) { console.error(e); }
                 }
@@ -250,9 +293,31 @@ export default function PartnersScreen() {
         ]);
     };
 
-    // Accept invite inline (no navigation needed)
-    const handleAcceptInvite = async (invite: ReceivedInvite) => {
-        setAcceptingInviteId(invite.id);
+    // New Flow: 1. Click Accept -> Open Modal
+    const handleAcceptPress = (invite: ReceivedInvite) => {
+        setSelectedInvite(invite);
+        setAcceptModalVisible(true);
+    };
+
+    // New Flow: 2. Confirm in Modal -> Close Modal, Show Banner, Background Job
+    const confirmAcceptInvite = async () => {
+        if (!selectedInvite || !currentOrg) return;
+
+        const invite = selectedInvite;
+        setAcceptModalVisible(false); // Close immediately for non-blocking UI
+
+        // Show immediate feedback
+        showMessage({
+            message: 'Accepting Invitation...',
+            description: 'Setting up partnership and syncing products.',
+            type: 'info',
+            backgroundColor: theme.colors.primary, // Green
+            duration: 3000,
+        });
+
+        // Optimistic Remove from list
+        setReceivedInvites(prev => prev.filter(i => i.id !== invite.id));
+
         try {
             const token = await ensureSupabaseJwt();
             const res = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/${invite.token}/accept`, {
@@ -266,16 +331,38 @@ export default function PartnersScreen() {
 
             if (res.ok) {
                 const result = await res.json();
-                showMessage({
-                    message: 'Partnership Established!',
-                    description: `Connected with ${invite.sourceOrgName}. ${result.linkedCount || 0} products syncing.`,
-                    type: 'success',
-                    duration: 4000,
-                });
-                setReceivedInvites(prev => prev.filter(i => i.id !== invite.id));
-                loadData();
+
+                // Check for onboarding next steps (e.g. no platform connected yet)
+                if (result.onboarding?.nextStep === 'connect_platform') {
+                    Alert.alert(
+                        'Partnership Connected!',
+                        'To start syncing products, you need to connect a selling platform (Shopify, Square, etc).',
+                        [
+                            { text: 'Later', style: 'cancel', onPress: () => refreshData() },
+                            {
+                                text: 'Connect Now',
+                                onPress: () => {
+                                    refreshData();
+                                    navigation.navigate('Profile');
+                                }
+                            }
+                        ]
+                    );
+                } else {
+                    showMessage({
+                        message: 'Partnership Established!',
+                        description: `Connected with ${invite.sourceOrgName}. ${result.linkedCount || 0} products syncing.`,
+                        type: 'success',
+                        backgroundColor: theme.colors.primary,
+                        duration: 4000,
+                    });
+                    refreshData();
+                }
             } else {
                 const errorData = await res.json().catch(() => ({ message: 'Failed to accept invite' }));
+                // Revert optimistic update if needed or just show error
+                refreshData(); // Sync back to truth
+
                 if (errorData.code === 'EMAIL_MISMATCH') {
                     Alert.alert('Wrong Account', `This invite was sent to ${errorData.inviteeEmail}. You are logged in as ${errorData.currentEmail}.`);
                 } else {
@@ -284,8 +371,9 @@ export default function PartnersScreen() {
             }
         } catch (e: any) {
             Alert.alert('Error', e.message || 'Failed to accept invite');
+            refreshData();
         } finally {
-            setAcceptingInviteId(null);
+            setSelectedInvite(null);
         }
     };
 
@@ -317,13 +405,15 @@ export default function PartnersScreen() {
     const renderPartnership = (p: Partnership) => (
         <Card key={p.id} style={styles.card} onPress={() => handlePressPartnership(p)}>
             <View style={styles.cardHeader}>
-                <View style={[styles.iconCircle, { backgroundColor: '#ECFCCB' }]}>
-                    <Icon name="storefront-outline" size={24} color="#65A30D" />
+                {/* Changed background to match requests style */}
+                <View style={[styles.iconCircle, { backgroundColor: theme.colors.primary + '20' }]}>
+                    <Icon name="storefront-outline" size={24} color={theme.colors.primary} />
                 </View>
                 <View style={{ flex: 1, marginLeft: 12 }}>
                     <Text style={styles.partnerName}>{p.partnerOrgName || p.partnerEmail}</Text>
+                    {/* Simplified subtitle */}
                     <Text style={styles.poolName}>
-                        {p.direction === 'sent' ? 'Sharing' : 'Received from'} • {p.poolName}
+                        {p.direction === 'sent' ? 'Sent to Partner' : 'Received From Partner'}
                     </Text>
                 </View>
                 {p.isPaused ? (
@@ -335,14 +425,19 @@ export default function PartnersScreen() {
                 )}
             </View>
 
-            <View style={styles.statsRow}>
-                <View style={styles.stat}>
-                    <Text style={styles.statValue}>{p.productCount}</Text>
-                    <Text style={styles.statLabel}>Products</Text>
+            {/* Changed from old statsRow to chipContainer for consistency */}
+            <View style={styles.chipContainer}>
+                <View style={styles.chip}>
+                    <Icon name="cube-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                    <Text style={styles.chipText}>{p.productCount} Products</Text>
                 </View>
-                <View style={styles.stat}>
-                    <Text style={[styles.statValue, { textTransform: 'capitalize' }]}>{p.shareType || 'Sync'}</Text>
-                    <Text style={styles.statLabel}>Type</Text>
+                <View style={styles.chip}>
+                    <Icon name="tag-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                    <Text style={[styles.chipText, { textTransform: 'capitalize' }]}>{p.shareType || 'Consignment'}</Text>
+                </View>
+                <View style={styles.chip}>
+                    <Icon name="folder-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                    <Text style={styles.chipText}>{p.poolName}</Text>
                 </View>
             </View>
 
@@ -367,25 +462,32 @@ export default function PartnersScreen() {
     );
 
     const renderReceivedInvite = (inv: ReceivedInvite) => (
-        <Card key={inv.id} style={[styles.card, { borderColor: '#BBF7D0', borderWidth: 1.5 }]}>
+        <Card key={inv.id} style={[styles.card, { borderColor: theme.colors.primary + '40', borderWidth: 1 }]}>
             <View style={styles.cardHeader}>
-                <View style={[styles.iconCircle, { backgroundColor: '#DCFCE7' }]}>
-                    <Icon name="handshake-outline" size={24} color="#16A34A" />
+                <View style={[styles.iconCircle, { backgroundColor: theme.colors.primary + '20' }]}>
+                    <Icon name="handshake-outline" size={24} color={theme.colors.primary} />
                 </View>
                 <View style={{ flex: 1, marginLeft: 12 }}>
                     <Text style={styles.partnerName}>{inv.sourceOrgName}</Text>
-                    <Text style={styles.poolName}>Wants to share {inv.productCount} products</Text>
+                    <Text style={styles.poolName}>Received Request</Text>
+                </View>
+                <View style={styles.dateBadge}>
+                    <Text style={styles.dateText}>{new Date(inv.expiresAt).toLocaleDateString()}</Text>
                 </View>
             </View>
 
-            <View style={styles.inviteDetails}>
-                <View style={styles.inviteDetailRow}>
-                    <Text style={styles.inviteDetailLabel}>Pool</Text>
-                    <Text style={styles.inviteDetailValue}>{inv.sourcePoolName}</Text>
+            <View style={styles.chipContainer}>
+                <View style={styles.chip}>
+                    <Icon name="tag-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                    <Text style={styles.chipText}>{inv.shareType}</Text>
                 </View>
-                <View style={styles.inviteDetailRow}>
-                    <Text style={styles.inviteDetailLabel}>Type</Text>
-                    <Text style={[styles.inviteDetailValue, { textTransform: 'capitalize' }]}>{inv.shareType}</Text>
+                <View style={styles.chip}>
+                    <Icon name="cube-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                    <Text style={styles.chipText}>{inv.productCount} Products</Text>
+                </View>
+                <View style={styles.chip}>
+                    <Icon name="folder-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                    <Text style={styles.chipText}>{inv.sourcePoolName}</Text>
                 </View>
             </View>
 
@@ -398,18 +500,11 @@ export default function PartnersScreen() {
                     <Text style={styles.declineBtnText}>Decline</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                    style={[styles.inviteBtn, styles.acceptBtn]}
-                    onPress={() => handleAcceptInvite(inv)}
-                    disabled={acceptingInviteId === inv.id}
+                    style={[styles.inviteBtn, styles.acceptBtn, { backgroundColor: theme.colors.primary }]}
+                    onPress={() => handleAcceptPress(inv)}
                 >
-                    {acceptingInviteId === inv.id ? (
-                        <ActivityIndicator size="small" color="#FFF" />
-                    ) : (
-                        <>
-                            <Icon name="check" size={18} color="#FFF" />
-                            <Text style={styles.acceptBtnText}>Accept</Text>
-                        </>
-                    )}
+                    <Icon name="check" size={18} color="#FFF" />
+                    <Text style={styles.acceptBtnText}>Accept</Text>
                 </TouchableOpacity>
             </View>
         </Card>
@@ -431,7 +526,7 @@ export default function PartnersScreen() {
             </View>
             <View style={styles.sentInviteFooter}>
                 <Text style={styles.expiresText}>Expires: {new Date(inv.expiresAt).toLocaleDateString()}</Text>
-                <TouchableOpacity onPress={() => { Clipboard.setStringAsync(inv.inviteLink); showMessage({ message: 'Link copied!', type: 'success' }); }}>
+                <TouchableOpacity onPress={() => { Clipboard.setStringAsync(inv.inviteLink); showMessage({ message: 'Link copied!', type: 'success', backgroundColor: theme.colors.primary }); }}>
                     <Text style={styles.copyLinkText}>Copy Link</Text>
                 </TouchableOpacity>
             </View>
@@ -446,7 +541,7 @@ export default function PartnersScreen() {
                     <Icon name="arrow-left" size={24} color="#111827" />
                 </TouchableOpacity>
                 <Text style={styles.headerTitle}>Partners</Text>
-                <TouchableOpacity onPress={() => setInviteModalVisible(true)} style={styles.addBtn}>
+                <TouchableOpacity onPress={() => setInviteModalVisible(true)} style={[styles.addBtn, { backgroundColor: theme.colors.primary }]}>
                     <Icon name="plus" size={24} color="#FFF" />
                 </TouchableOpacity>
             </View>
@@ -454,16 +549,16 @@ export default function PartnersScreen() {
             {/* Tabs */}
             <View style={styles.tabsContainer}>
                 <TouchableOpacity
-                    style={[styles.tab, activeTab === 'active' && styles.activeTab]}
+                    style={[styles.tab, activeTab === 'active' && { borderBottomColor: theme.colors.primary }]}
                     onPress={() => setActiveTab('active')}
                 >
-                    <Text style={[styles.tabText, activeTab === 'active' && styles.activeTabText]}>Active ({partnerships.length})</Text>
+                    <Text style={[styles.tabText, activeTab === 'active' && { color: theme.colors.primary, fontWeight: '600' }]}>Active ({partnerships.length})</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                    style={[styles.tab, activeTab === 'requests' && styles.activeTab]}
+                    style={[styles.tab, activeTab === 'requests' && { borderBottomColor: theme.colors.primary }]}
                     onPress={() => setActiveTab('requests')}
                 >
-                    <Text style={[styles.tabText, activeTab === 'requests' && styles.activeTabText]}>
+                    <Text style={[styles.tabText, activeTab === 'requests' && { color: theme.colors.primary, fontWeight: '600' }]}>
                         Requests ({receivedInvites.length + pendingInvites.length})
                     </Text>
                     {receivedInvites.length > 0 && (
@@ -576,6 +671,13 @@ export default function PartnersScreen() {
                     </View>
                 </KeyboardAvoidingView>
             </Modal>
+
+            <PartnerAcceptModal
+                visible={acceptModalVisible}
+                invite={selectedInvite}
+                onClose={() => setAcceptModalVisible(false)}
+                onConfirm={confirmAcceptInvite}
+            />
 
         </View>
     );
@@ -796,9 +898,8 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: 12,
-        borderRadius: 10,
-        gap: 6,
+        paddingVertical: 10,
+        borderRadius: 8,
     },
     declineBtn: {
         backgroundColor: '#F3F4F6',
@@ -921,5 +1022,42 @@ const styles = StyleSheet.create({
     },
     activePoolChipText: {
         color: '#365E09',
+    },
+    // New Styles (Consolidated)
+    dateBadge: {
+        backgroundColor: '#F3F4F6',
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 6,
+    },
+    dateText: {
+        fontSize: 11,
+        color: '#6B7280',
+        fontWeight: '500',
+    },
+    chipContainer: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+        marginTop: 12,
+        paddingTop: 12,
+        borderTopWidth: 1,
+        borderTopColor: '#F3F4F6',
+        marginBottom: 4,
+    },
+    chip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F9FAFB',
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    chipText: {
+        fontSize: 12,
+        color: '#4B5563',
+        fontWeight: '500',
     },
 });

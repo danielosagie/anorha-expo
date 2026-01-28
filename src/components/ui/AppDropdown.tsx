@@ -15,6 +15,10 @@ interface AppDropdownProps {
     selectedTextStyle?: TextStyle;
     iconStyle?: ImageStyle;
     showIcon?: boolean;
+    search?: boolean;
+    searchPlaceholder?: string;
+    onChangeText?: (text: string) => void;
+    renderItem?: (item: any) => React.ReactNode;
 }
 
 export const AppDropdown: React.FC<AppDropdownProps> = ({

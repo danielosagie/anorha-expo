@@ -216,66 +216,86 @@ export function useProductVariantRealtimeForProduct(productId?: string) {
 export function useInventoryLevelsRealtime() {
   // Counter that increments on each real-time update to trigger re-renders
   const [updateCounter, setUpdateCounter] = useState(0);
+  const retryCountRef = useRef(0);
+  const maxRetries = 3;
 
   useEffect(() => {
     console.log('[Real-time] Setting up InventoryLevels subscription...');
+    let subscription: ReturnType<typeof supabase.channel> | null = null;
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
 
-    const subscription = supabase
-      .channel('inventory-levels-all')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'InventoryLevels',
-        },
-        (payload) => {
-          const levelId = payload.new?.Id || payload.old?.Id;
-          const variantId = payload.new?.ProductVariantId || payload.old?.ProductVariantId;
-          const quantity = payload.new?.Quantity;
+    const setupSubscription = () => {
+      subscription = supabase
+        .channel('inventory-levels-all')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'InventoryLevels',
+          },
+          (payload) => {
+            const levelId = payload.new?.Id || payload.old?.Id;
+            const variantId = payload.new?.ProductVariantId || payload.old?.ProductVariantId;
+            const quantity = payload.new?.Quantity;
 
-          console.log('[Real-time] InventoryLevel change:', {
-            eventType: payload.eventType,
-            levelId,
-            variantId,
-            quantity,
-          });
+            console.log('[Real-time] InventoryLevel change:', {
+              eventType: payload.eventType,
+              levelId,
+              variantId,
+              quantity,
+            });
 
-          const observables = getLegendStateObservables();
-          if (!observables?.inventoryLevels$) {
-            console.warn('[Real-time] Legend-state inventoryLevels$ not available');
-            return;
+            const observables = getLegendStateObservables();
+            if (!observables?.inventoryLevels$) {
+              console.warn('[Real-time] Legend-state inventoryLevels$ not available');
+              return;
+            }
+
+            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+              const level = payload.new;
+              console.log('[Real-time] ✅ Updating inventory level', levelId, 'qty:', quantity);
+              observables.inventoryLevels$[levelId].set(level);
+            } else if (payload.eventType === 'DELETE') {
+              console.log('[Real-time] ✅ Removing inventory level', levelId);
+              observables.inventoryLevels$[levelId].delete();
+            }
+
+            // Increment counter to trigger re-renders
+            setUpdateCounter(c => c + 1);
           }
-
-          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-            const level = payload.new;
-            console.log('[Real-time] ✅ Updating inventory level', levelId, 'qty:', quantity);
-            observables.inventoryLevels$[levelId].set(level);
-          } else if (payload.eventType === 'DELETE') {
-            console.log('[Real-time] ✅ Removing inventory level', levelId);
-            observables.inventoryLevels$[levelId].delete();
+        )
+        .subscribe(
+          (status) => {
+            if (status === 'SUBSCRIBED') {
+              console.log('[Real-time] ✅ InventoryLevels subscription active');
+              retryCountRef.current = 0; // Reset retry count on success
+            } else if (status === 'CHANNEL_ERROR') {
+              console.error('[Real-time] InventoryLevels subscription error');
+              // Auto-retry with exponential backoff
+              if (retryCountRef.current < maxRetries) {
+                const delay = Math.min(1000 * Math.pow(2, retryCountRef.current), 10000);
+                console.log(`[Real-time] Retrying in ${delay}ms (attempt ${retryCountRef.current + 1}/${maxRetries})`);
+                retryTimeout = setTimeout(() => {
+                  retryCountRef.current++;
+                  subscription?.unsubscribe();
+                  setupSubscription();
+                }, delay);
+              } else {
+                console.error('[Real-time] Max retries reached for InventoryLevels subscription');
+              }
+            }
           }
+        );
+    };
 
-          // Increment counter to trigger re-renders
-          setUpdateCounter(c => c + 1);
-        }
-      )
-      .subscribe(
-        (status) => {
-          if (status === 'SUBSCRIBED') {
-            console.log('[Real-time] ✅ InventoryLevels subscription active');
-          } else if (status === 'CHANNEL_ERROR') {
-            console.error('[Real-time] InventoryLevels subscription error');
-          }
-        }
-      );
+    setupSubscription();
 
     return () => {
       console.log('[Real-time] Cleaning up InventoryLevels subscription');
-      subscription.unsubscribe();
+      if (retryTimeout) clearTimeout(retryTimeout);
+      subscription?.unsubscribe();
     };
-  }, []);
-
-  // Return the updateCounter so consumers can include it in their dependencies
+  }, []);  // Return the updateCounter so consumers can include it in their dependencies
   return { updateCounter };
 }

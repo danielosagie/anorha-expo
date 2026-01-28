@@ -22,6 +22,8 @@ import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 
 export type PlatformsData = Record<string, any>;
 
+const API_BASE_URL = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/$/, '');
+
 type Props = {
   platforms: PlatformsData;
   updateCounter?: number; // Signal when platforms ref content changes
@@ -70,6 +72,15 @@ type PlatformState = {
   weightUnit?: string;
   sku?: string;
   barcode?: string;
+  brand?: string;
+  vendor?: string;
+  productCategoryId?: string;
+  productCategory?: string;
+  categoryId?: string;
+  category?: string;
+  categoryPath?: string;
+  taxonomyConfidence?: number;
+  taxonomySource?: string;
   images?: string[];
   // Advanced listing structures
   locations?: Array<{ id: string; name: string }>;
@@ -90,6 +101,14 @@ type PlatformState = {
     deliveryMethod?: 'in_person' | 'shipping' | 'both';
   };
   condition?: 'new' | 'used' | 'refurbished' | 'like_new' | 'good' | 'fair';
+};
+
+type TaxonomyOption = {
+  label: string;
+  value: string;
+  path?: string;
+  isLeaf?: boolean;
+  score?: number;
 };
 
 const PLATFORM_META: Record<string, { label: string; icon: string }> = {
@@ -337,6 +356,11 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [optionPresets, setOptionPresets] = useState<Array<{ name: string; values: string[] }>>([]);
   const [loadingPlatformOptions, setLoadingPlatformOptions] = useState<boolean>(false);
   const [openImagePickerFor, setOpenImagePickerFor] = useState<string | null>(null);
+  const [taxonomyQueries, setTaxonomyQueries] = useState<Record<string, string>>({});
+  const [taxonomyResults, setTaxonomyResults] = useState<Record<string, TaxonomyOption[]>>({});
+  const [taxonomyLoading, setTaxonomyLoading] = useState<Record<string, boolean>>({});
+  const taxonomySearchTimeoutRef = useRef<Record<string, any>>({});
+  const preventTaxonomyAutoFetchRef = useRef<Set<string>>(new Set());
   const [variantImagePicker, setVariantImagePicker] = useState<{ variantId: string; open: boolean } | null>(null);
   const [showPlatformPicker, setShowPlatformPicker] = useState<boolean>(false);
   const [localGeneratingPlatforms, setGeneratingPlatforms] = useState<Set<string>>(new Set());
@@ -405,7 +429,207 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     }
   }, [canonicalKey, platformKeys, activeTab]);
   const activePlatformKey = activeTab === 'all' ? canonicalKey : activeTab;
+  const activePlatformKeyLower = activePlatformKey.toLowerCase();
   const activeData = useMemo<PlatformState>(() => (platforms[activePlatformKey] || {}) as PlatformState, [activePlatformKey, platforms, updateCounter]);
+  const supportsTaxonomy = activeTab !== 'all' && ['shopify', 'ebay'].includes(activePlatformKeyLower);
+  const activeTaxonomyQuery = taxonomyQueries[activePlatformKeyLower] ?? '';
+
+  const fetchTaxonomyOptions = useCallback(async (platformKey: string, query: string) => {
+    const normalizedPlatform = platformKey.toLowerCase();
+    const normalizedQuery = (query || '').trim();
+
+    if (normalizedQuery.length < 2) {
+      // Don't clear results if we just have a short query, keep previous suggestions
+      // setTaxonomyResults(prev => ({ ...prev, [normalizedPlatform]: [] }));
+      setTaxonomyLoading(prev => ({ ...prev, [normalizedPlatform]: false }));
+      return;
+    }
+
+    setTaxonomyLoading(prev => ({ ...prev, [normalizedPlatform]: true }));
+
+    try {
+      const token = await ensureSupabaseJwt();
+      const url = `${API_BASE_URL}/api/taxonomy/${normalizedPlatform}/search?q=${encodeURIComponent(normalizedQuery)}&limit=25&preferLeaf=true`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+
+      if (!res.ok) {
+        console.error('[ListingEditorForm] Taxonomy search failed:', res.status);
+        setTaxonomyResults(prev => ({ ...prev, [normalizedPlatform]: [] }));
+        return;
+      }
+
+      const data = await res.json();
+      const options: TaxonomyOption[] = Array.isArray(data)
+        ? data.map((item: any) => ({
+          label: item.path || item.name || item.platformCategoryId,
+          value: item.platformCategoryId,
+          path: item.path,
+          isLeaf: item.isLeaf,
+          score: item.score,
+        }))
+        : [];
+
+      setTaxonomyResults(prev => ({ ...prev, [normalizedPlatform]: options }));
+    } catch (error) {
+      console.error('[ListingEditorForm] Taxonomy search error:', error);
+      setTaxonomyResults(prev => ({ ...prev, [normalizedPlatform]: [] }));
+    } finally {
+      setTaxonomyLoading(prev => ({ ...prev, [normalizedPlatform]: false }));
+    }
+  }, []);
+
+  // NEW: Suggest taxonomy based on product data (Title + Description)
+  const suggestTaxonomy = useCallback(async (autoApply: boolean = false) => {
+    if (!supportsTaxonomy || !activePlatformKeyLower) return;
+    if (activeTab === 'all') return; // Only work on specific platform tabs
+
+    // Prevent redundant auto-fetches
+    if (autoApply && preventTaxonomyAutoFetchRef.current.has(activePlatformKeyLower)) {
+      return;
+    }
+
+    const query = activeData.title || '';
+    if (!query || query.length < 3) return;
+
+    console.log(`[Taxonomy] Auto-suggesting for ${activePlatformKeyLower} using title: "${query}"`);
+
+    setTaxonomyLoading(prev => ({ ...prev, [activePlatformKeyLower]: true }));
+
+    try {
+      const token = await ensureSupabaseJwt();
+      // TRUNCATION FIX: Long titles cause empty results (strict keyword matching).
+      // eBay/Amazon taxonomy search prefers BROAD keywords (e.g. "MacBook Pro") over specific specs.
+      // We take the first 6 words max, which usually contains the Brand + Model + Core type.
+      let safeQuery = query;
+
+      // 1. Normalization
+      safeQuery = safeQuery
+        .replace(/(\d+)(inch)/gi, '$1 $2') // "14inch" -> "14 inch"
+        .replace(/[^\w\s-]/g, '');         // Remove special chars
+
+      // 2. Aggressive Truncation
+      const words = safeQuery.split(/\s+/);
+      if (words.length > 6) {
+        safeQuery = words.slice(0, 6).join(' ');
+      } else if (safeQuery.length > 60) {
+        safeQuery = safeQuery.slice(0, 60);
+      }
+
+      console.log(`[Taxonomy] Auto-suggesting for ${activePlatformKeyLower} using truncated query: "${safeQuery}" (orig: "${query}")`);
+
+      const url = `${API_BASE_URL}/api/taxonomy/${activePlatformKeyLower}/suggest`;
+      const payload = {
+        query: safeQuery,
+        title: activeData.title,
+        description: activeData.description,
+        brand: (activeData as any).brand,
+        tags: activeData.tags,
+        preferLeaf: true,
+        limit: 15,
+        useLlm: true,
+      };
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error('Failed to fetch suggestions');
+
+      const data = await res.json();
+      const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
+      const options: TaxonomyOption[] = candidates.map((item: any) => ({
+        label: item.path || item.name || item.platformCategoryId,
+        value: item.platformCategoryId,
+        path: item.path,
+        isLeaf: item.isLeaf,
+        score: item.score,
+      }));
+
+      setTaxonomyResults(prev => ({ ...prev, [activePlatformKeyLower]: options }));
+
+      // Mark as fetched so we don't loop
+      if (autoApply) preventTaxonomyAutoFetchRef.current.add(activePlatformKeyLower);
+
+      // Auto-Save the best match if confidence is high (e.g. first result from search usually best)
+      if (autoApply && data?.suggested) {
+        const best = data.suggested;
+        console.log(`[Taxonomy] Auto-applying best match: ${best.path || best.name}`);
+
+        // Only apply if we don't have one yet
+        const currentId = activePlatformKeyLower === 'shopify' ? activeData.productCategoryId : activeData.categoryId;
+        const bestScore = typeof data?.confidence === 'number' ? data.confidence : (typeof best.score === 'number' ? best.score : 0);
+        const minAutoScore = 0.7;
+        if (!currentId && bestScore >= minAutoScore) {
+          const updates: any = {};
+          if (activePlatformKeyLower === 'shopify') {
+            updates.productCategoryId = best.platformCategoryId || best.value;
+            updates.productCategory = best.path || best.name;
+            updates.categoryPath = best.path || best.name;
+          } else {
+            updates.categoryId = best.platformCategoryId || best.value;
+            updates.category = best.path || best.name;
+            updates.categoryPath = best.path || best.name;
+          }
+          updates.taxonomyConfidence = bestScore;
+          updates.taxonomySource = data?.method || 'llm'; // Mark as AI/Auto source
+
+          patchPlatform(prev => ({ ...prev, ...updates }));
+        } else if (!currentId) {
+          console.log(`[Taxonomy] Auto-apply skipped (score ${bestScore} < ${minAutoScore}).`);
+        }
+      }
+
+    } catch (e) {
+      console.error('[Taxonomy] Suggestion error:', e);
+    } finally {
+      setTaxonomyLoading(prev => ({ ...prev, [activePlatformKeyLower]: false }));
+    }
+  }, [activePlatformKeyLower, activeData.title, supportsTaxonomy, activeTab, platforms]); // Depend on platforms to get fresh data in patchPlatform callback context? No, patchPlatform uses ref or closure. But activeData updates.
+
+  // Effect: Auto-suggest on mount or platform switch if missing
+  useEffect(() => {
+    if (!supportsTaxonomy) return;
+
+    const platformKey = activePlatformKeyLower;
+    // Debounce checks slightly
+    const timer = setTimeout(() => {
+      const currentId = platformKey === 'shopify' ? activeData.productCategoryId : activeData.categoryId;
+
+      if (!currentId && !preventTaxonomyAutoFetchRef.current.has(platformKey) && activeData.title) {
+        suggestTaxonomy(true);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [supportsTaxonomy, activePlatformKeyLower, activeData.title, activeData.categoryId, activeData.productCategoryId]); // Re-run when these change
+
+  useEffect(() => {
+    if (!supportsTaxonomy) return;
+    if (!activePlatformKeyLower) return;
+    const platformKey = activePlatformKeyLower;
+
+    // Only run SEARCH if user deliberately typed something (query is not empty/cleared)
+    // If query is empty, we don't want to clear the "Suggested" results we might have got from auto-suggest.
+    if (!activeTaxonomyQuery) return;
+
+    if (taxonomySearchTimeoutRef.current[platformKey]) {
+      clearTimeout(taxonomySearchTimeoutRef.current[platformKey]);
+    }
+
+    taxonomySearchTimeoutRef.current[platformKey] = setTimeout(() => {
+      fetchTaxonomyOptions(platformKey, activeTaxonomyQuery);
+    }, 350);
+
+    return () => {
+      if (taxonomySearchTimeoutRef.current[platformKey]) {
+        clearTimeout(taxonomySearchTimeoutRef.current[platformKey]);
+      }
+    };
+  }, [supportsTaxonomy, activePlatformKeyLower, activeTaxonomyQuery, fetchTaxonomyOptions]);
 
   // When in 'all' tab, aggregate locations and quantities from all platforms
   const aggregatedLocations = useMemo(() => {
@@ -463,15 +687,29 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
   // Compute minimal required fields per platform for highlighting
   const requiredByPlatform: Record<string, string[]> = useMemo(() => ({
-    shopify: ['title', 'sku', 'price'],
+    shopify: ['title', 'sku', 'price', 'category'],
     square: ['title', 'sku', 'price'],
     amazon: ['title', 'sku', 'price'],
-    ebay: ['title', 'price'],
+    ebay: ['title', 'price', 'category'],
     facebook: ['title', 'price'],
     clover: ['name', 'price'],
   }), []);
   const requiredFields = requiredByPlatform[activePlatformKey] || ['title', 'sku', 'price'];
   const ignoredForPublish = isPlatformIgnored?.(activePlatformKey) ?? false;
+  const taxonomyOptions = taxonomyResults[activePlatformKeyLower] || [];
+  const selectedCategoryId = activePlatformKeyLower === 'shopify'
+    ? (activeData.productCategoryId || activeData.categoryId)
+    : activeData.categoryId;
+  const selectedCategoryPath = activeData.categoryPath || activeData.productCategory || activeData.category;
+  const selectedCategoryLabel = selectedCategoryPath || selectedCategoryId;
+  const selectedCategoryOption = selectedCategoryId
+    ? { label: selectedCategoryLabel, value: selectedCategoryId, path: selectedCategoryPath }
+    : null;
+  const taxonomyDropdownData = selectedCategoryOption
+    ? [selectedCategoryOption, ...taxonomyOptions.filter(opt => opt.value !== selectedCategoryOption.value)]
+    : taxonomyOptions;
+  const categoryRequired = requiredFields?.includes?.('category');
+  const categoryMissing = categoryRequired && !selectedCategoryId;
 
   const patchField = (key: string, value: any) => {
     if (activeTab === 'all') {
@@ -888,7 +1126,32 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   };
 
   const setLocationQuantity = (locId: string, qty: number) => {
-    patchPlatform(prev => ({ ...prev, locationQuantities: { ...(prev.locationQuantities || {}), [locId]: qty } }));
+    patchPlatform(prev => {
+      const next: PlatformState = {
+        ...prev,
+        locationQuantities: { ...(prev.locationQuantities || {}), [locId]: qty }
+      };
+
+      // 🔧 Flat product fix: keep variant inventoryByLocation in sync
+      if (Array.isArray(prev.variants) && prev.variants.length > 0) {
+        next.variants = prev.variants.map((v: any) => {
+          const hasOptions = v.optionValues && Object.keys(v.optionValues).length > 0;
+          if (hasOptions) return v;
+
+          const inv = { ...(v.inventoryByLocation || {}) };
+          const existing = inv[locId] || {};
+          inv[locId] = {
+            ...existing,
+            quantity: qty,
+            price: existing.price ?? v.price ?? prev.price
+          };
+
+          return { ...v, inventoryByLocation: inv };
+        });
+      }
+
+      return next;
+    });
   };
 
   // Hydrate platform with generated data if missing
@@ -1220,6 +1483,125 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('tags')}
         />
 
+        {supportsTaxonomy && (
+          <View style={{ marginBottom: 12 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Text style={styles.fieldLabel}>Category{categoryRequired ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
+                {typeof activeData.taxonomyConfidence === 'number' && (
+                  <View style={{ backgroundColor: activeData.taxonomyConfidence > 0.8 ? 'rgba(22, 163, 74, 0.12)' : 'rgba(234, 179, 8, 0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
+                    <Text style={{ color: activeData.taxonomyConfidence > 0.8 ? '#16a34a' : '#ca8a04', fontSize: 10, fontWeight: '600' }}>
+                      {['llm', 'groq'].includes(activeData.taxonomySource || '') ? '✨ AI Match' : 'Suggested'} {Math.round(activeData.taxonomyConfidence * 100)}%
+                    </Text>
+                  </View>
+                )}
+              </View>
+
+              {!activeData.category && (
+                <TouchableOpacity
+                  onPress={() => suggestTaxonomy(true)}
+                  disabled={taxonomyLoading[activePlatformKeyLower]}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                >
+                  {taxonomyLoading[activePlatformKeyLower] ? (
+                    <ActivityIndicator size="small" color="#93C822" />
+                  ) : (
+                    <Sparkles size={14} color="#93C822" />
+                  )}
+                  <Text style={{ color: '#93C822', fontSize: 13, fontWeight: '600' }}>
+                    {taxonomyLoading[activePlatformKeyLower] ? 'Finding...' : 'Auto-Find'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <AppDropdown
+              style={[styles.input, { height: 50, paddingHorizontal: 12, borderColor: categoryMissing ? '#ef4444' : '#E5E7EB', borderWidth: 1 }]}
+              data={taxonomyDropdownData}
+              value={selectedCategoryId}
+              placeholder={`Search ${activePlatformKeyLower === 'shopify' ? 'Shopify' : 'eBay'} categories`}
+              search
+              searchPlaceholder="Type to search..."
+              onChangeText={(text: string) => {
+                setTaxonomyQueries(prev => ({ ...prev, [activePlatformKeyLower]: text }));
+              }}
+              renderItem={(item: TaxonomyOption) => (
+                <View style={{ paddingVertical: 10, paddingHorizontal: 0, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#1F2937' }}>{item.label}</Text>
+                    {item.score && item.score > 0.8 && (
+                      <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                        <Text style={{ color: '#166534', fontSize: 10, fontWeight: '700' }}>BEST MATCH</Text>
+                      </View>
+                    )}
+                  </View>
+                  {item.path && item.path !== item.label && (
+                    <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{item.path.replace(/ > /g, ' › ')}</Text>
+                  )}
+                </View>
+              )}
+              onChange={(item: any) => {
+                const path = item.path || item.label || item.value;
+                if (activePlatformKeyLower === 'shopify') {
+                  patchPlatform(prev => ({
+                    ...prev,
+                    productCategoryId: item.value,
+                    productCategory: path,
+                    categoryPath: path,
+                    taxonomyConfidence: item.score || 1.0, // Manual selection = 100% or source score
+                    taxonomySource: 'manual'
+                  }));
+                } else {
+                  patchPlatform(prev => ({
+                    ...prev,
+                    categoryId: item.value,
+                    category: path,
+                    categoryPath: path,
+                    taxonomyConfidence: item.score || 1.0,
+                    taxonomySource: 'manual'
+                  }));
+                }
+              }}
+            />
+
+            {taxonomyLoading[activePlatformKeyLower] && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}>
+                <ActivityIndicator size="small" color="#9CA3AF" />
+                <Text style={{ fontSize: 12, color: '#6B7280' }}>Analyzing product to find best category...</Text>
+              </View>
+            )}
+
+            {!taxonomyLoading[activePlatformKeyLower] && !selectedCategoryId && taxonomyDropdownData.length > 0 && (
+              <View style={{ marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Icon name="information-outline" size={14} color="#6B7280" />
+                <Text style={{ fontSize: 12, color: '#6B7280' }}>
+                  Use the search or tap "Auto-Find" to detect category.
+                </Text>
+              </View>
+            )}
+
+            {!!selectedCategoryLabel && (
+              <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, backgroundColor: '#F9FAFB', padding: 8, borderRadius: 8 }}>
+                <Icon name="check-circle-outline" size={16} color="#16a34a" />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 12, color: '#374151', fontWeight: '500' }}>Selected Category:</Text>
+                  <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>{selectedCategoryLabel.replace(/ > /g, ' › ')}</Text>
+                </View>
+                <TouchableOpacity onPress={() => {
+                  // Clear category
+                  if (activePlatformKeyLower === 'shopify') {
+                    patchPlatform(prev => ({ ...prev, productCategoryId: undefined, productCategory: undefined, categoryPath: undefined }));
+                  } else {
+                    patchPlatform(prev => ({ ...prev, categoryId: undefined, category: undefined, categoryPath: undefined }));
+                  }
+                }}>
+                  <Text style={{ fontSize: 12, color: '#EF4444', fontWeight: '600' }}>Change</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
+
         {/* AI Recommended Price Tag - Only show if different from current price */}
         {(activeData as any).aiRecommendedPrice &&
           Number((activeData as any).aiRecommendedPrice) !== Number((activeData as any).price) && (
@@ -1265,35 +1647,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
                 </View>
 
-                {/*
-                <ElementDropdown
-                  style={[styles.input, { height: 50, paddingHorizontal: 12 }]}
-                  containerStyle={{
-                    backgroundColor: 'white',
-                    borderRadius: 12,
-                    marginTop: 4,
-                    shadowColor: '#000',
-                    shadowOffset: { width: 0, height: 4 },
-                    shadowOpacity: 0.1,
-                    shadowRadius: 12,
-                    elevation: 5,
-                    padding: 4,
-                    borderWidth: 0
-                  }}
-                  itemContainerStyle={{ borderRadius: 8, marginVertical: 2, paddingHorizontal: 8 }}
-                  itemTextStyle={{ fontSize: 14, color: '#374151' }}
-                  selectedTextStyle={{ fontSize: 14, color: '#000', fontWeight: '500' }}
-                  activeColor="#F0F9FF"
-                  placeholderStyle={{ fontSize: 14, color: '#9CA3AF' }}
-                  iconStyle={{ width: 20, height: 20, tintColor: '#6B7280' }}
-                  data={["USD", "CAD", "EUR", "GBP"].map(c => ({ label: c, value: c }))}
-                  labelField="label"
-                  valueField="value"
-                  placeholder="USD"
-                  value={(activeData as any).currency || 'USD'}
-                  onChange={(item) => patchField('currency', item.value)}
-                />
-                */}
+
               </View>
             </View>
           );
@@ -1871,14 +2225,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               return suggestedPrice ? (
                 <TouchableOpacity
                   onPress={applySuggestedPriceToAll}
-                  style={{ backgroundColor: '#F0F9FF', borderRadius: 8, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#3B82F6', flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                  style={{ backgroundColor: '#FFF', borderRadius: 8, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#rgb(201, 204, 210)', flexDirection: 'row', alignItems: 'center', gap: 8 }}
                 >
-                  <Sparkles size={18} color="#3B82F6" />
+                  <Sparkles size={18} color="#000" />
                   <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 12, fontWeight: '600', color: '#1E40AF' }}>AI Suggested Price</Text>
-                    <Text style={{ fontSize: 15, fontWeight: '700', color: '#059669' }}>${suggestedPrice.toFixed(2)}</Text>
+                    <Text style={{ fontSize: 12, fontWeight: '600', color: '#000' }}>Our Suggested Price</Text>
+                    <Text style={{ fontSize: 15, fontWeight: '700', color: '#6B7280' }}>${suggestedPrice.toFixed(2)}</Text>
                   </View>
-                  <View style={{ backgroundColor: '#3B82F6', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 }}>
+                  <View style={{ backgroundColor: '#93C822', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 }}>
                     <Text style={{ color: '#FFF', fontWeight: '600', fontSize: 12 }}>Apply to All</Text>
                   </View>
                 </TouchableOpacity>
@@ -2405,9 +2759,9 @@ function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, re
   const [localValue, setLocalValue] = useState(value ?? '');
   const timeoutRef = React.useRef<any>(null);
 
-  // 🟢 Green border style for external updates
+
   const externalUpdateStyle = externalUpdate ? {
-    borderColor: '#34C759', // iOS green
+    borderColor: '#93C822', // iOS green
     borderWidth: 2,
   } : null;
 

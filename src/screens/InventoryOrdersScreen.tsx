@@ -250,6 +250,7 @@ const InventoryOrdersScreen = observer(() => {
   // Fallback state for when Legend observable is empty
   const [directFetchVariants, setDirectFetchVariants] = useState<Record<string, ProductVariantData>>({});
   const [directFetchLevels, setDirectFetchLevels] = useState<Record<string, InventoryLevel>>({});
+  const [sharedLinkQuantities, setSharedLinkQuantities] = useState<Record<string, { quantity: number; poolId?: string }>>({});
 
   useEffect(() => {
     const directFetchProducts = async () => {
@@ -275,6 +276,30 @@ const InventoryOrdersScreen = observer(() => {
                 variantIds.push(v.Id);
               });
               setDirectFetchVariants(variantMap);
+
+              // Fetch CrossOrgProductLinks for shared inventory quantities
+              if (variantIds.length > 0) {
+                const { data: linksData, error: linksError } = await supabase
+                  .from('CrossOrgProductLinks')
+                  .select('TargetVariantId, AvailableQuantity, TargetPoolId, Status')
+                  .in('TargetVariantId', variantIds)
+                  .eq('Status', 'active');
+
+                if (linksError) {
+                  console.warn('[InventoryScreen - Direct Fetch] Error fetching shared links:', linksError);
+                } else {
+                  const linkMap: Record<string, { quantity: number; poolId?: string }> = {};
+                  (linksData || []).forEach((link: any) => {
+                    if (link.TargetVariantId) {
+                      linkMap[link.TargetVariantId] = {
+                        quantity: link.AvailableQuantity || 0,
+                        poolId: link.TargetPoolId || undefined,
+                      };
+                    }
+                  });
+                  setSharedLinkQuantities(linkMap);
+                }
+              }
 
               // Also fetch InventoryLevels for these variants
               if (variantIds.length > 0) {
@@ -350,6 +375,30 @@ const InventoryOrdersScreen = observer(() => {
             });
             setDirectFetchVariants(variantMap);
 
+            // Refresh CrossOrgProductLinks for shared inventory quantities
+            if (variantIds.length > 0) {
+              const { data: linksData, error: linksError } = await supabase
+                .from('CrossOrgProductLinks')
+                .select('TargetVariantId, AvailableQuantity, TargetPoolId, Status')
+                .in('TargetVariantId', variantIds)
+                .eq('Status', 'active');
+
+              if (linksError) {
+                console.warn('[InventoryOrdersScreen] Error refreshing shared links:', linksError);
+              } else {
+                const linkMap: Record<string, { quantity: number; poolId?: string }> = {};
+                (linksData || []).forEach((link: any) => {
+                  if (link.TargetVariantId) {
+                    linkMap[link.TargetVariantId] = {
+                      quantity: link.AvailableQuantity || 0,
+                      poolId: link.TargetPoolId || undefined,
+                    };
+                  }
+                });
+                setSharedLinkQuantities(linkMap);
+              }
+            }
+
             // Also refresh inventory levels
             if (variantIds.length > 0) {
               const { data: levelsData } = await supabase
@@ -407,17 +456,43 @@ const InventoryOrdersScreen = observer(() => {
       fallbackLevelCount: Object.keys(directFetchLevels).length,
       imageCount: Object.keys(activeProductImages).length,
       mappingCount: Object.keys(activePlatformMappings).length,
+      sharedLinkCount: Object.keys(sharedLinkQuantities).length,
     });
-  }, [activeProductVariants, legendProductVariants, directFetchVariants, activeInventoryLevels, legendInventoryLevels, directFetchLevels, activeProductImages, activePlatformMappings]);
+  }, [activeProductVariants, legendProductVariants, directFetchVariants, activeInventoryLevels, legendInventoryLevels, directFetchLevels, activeProductImages, activePlatformMappings, sharedLinkQuantities]);
 
   const enrichedProductVariants = useMemo((): EnrichedProductVariant[] => {
     const variants = activeProductVariants;
     const images = activeProductImages;
-    const levels = activeInventoryLevels;
+    const baseLevels = activeInventoryLevels;
     const mappings = activePlatformMappings;
     // CRITICAL: Don't require platformConnections - partners may have products shared with them
     // without having connected any platforms yet
     if (Object.keys(variants).length === 0) return [];
+
+    // Merge shared link quantities into inventory levels when pool levels are missing/zero
+    const levels: Record<string, InventoryLevel> = { ...baseLevels };
+    const poolQtyByVariant = new Map<string, number>();
+    Object.values(baseLevels).forEach((level: InventoryLevel) => {
+      if (!level.PlatformConnectionId && (level as any).PoolId) {
+        const current = poolQtyByVariant.get(level.ProductVariantId) || 0;
+        poolQtyByVariant.set(level.ProductVariantId, current + (level.Quantity || 0));
+      }
+    });
+    Object.entries(sharedLinkQuantities).forEach(([variantId, info]) => {
+      const existingPoolQty = poolQtyByVariant.get(variantId) || 0;
+      if (info.quantity > 0 && existingPoolQty <= 0) {
+        const syntheticId = `shared-${variantId}-${info.poolId || 'pool'}`;
+        levels[syntheticId] = {
+          Id: syntheticId,
+          ProductVariantId: variantId,
+          Quantity: info.quantity,
+          PoolId: info.poolId,
+          PlatformConnectionId: null,
+          PlatformLocationId: info.poolId || 'shared',
+          UpdatedAt: new Date().toISOString(),
+        } as unknown as InventoryLevel;
+      }
+    });
 
     // CRITICAL FIX: Group variants by ProductId to properly handle base/option architecture
     // Build a map of ProductId -> option variants for inventory aggregation
@@ -475,6 +550,13 @@ const InventoryOrdersScreen = observer(() => {
 
       // Pick PRIMARY platform only (priority order) - include 'pool' at end for partners
       const platformPriority = ['shopify', 'square', 'clover', 'amazon', 'ebay', 'facebook', 'pool'];
+      for (const plat of platformPriority) {
+        if (byPlatform[plat] !== undefined && byPlatform[plat] > 0) {
+          return byPlatform[plat];
+        }
+      }
+
+      // If all are zero, fall back to the first available platform entry
       for (const plat of platformPriority) {
         if (byPlatform[plat] !== undefined) {
           return byPlatform[plat];
@@ -685,7 +767,7 @@ const InventoryOrdersScreen = observer(() => {
     });
 
     return Array.from(uniqueVariants.values());
-  }, [activeProductVariants, activeProductImages, activeInventoryLevels, activePlatformMappings, platformConnections, selectedPlatformType, selectedLocationIds, legendObservables, variantUpdateCounter, inventoryUpdateCounter]);
+  }, [activeProductVariants, activeProductImages, activeInventoryLevels, activePlatformMappings, platformConnections, selectedPlatformType, selectedLocationIds, legendObservables, variantUpdateCounter, inventoryUpdateCounter, sharedLinkQuantities]);
 
   // Apply search and sort filters
   const filteredInventory = useMemo(() => {

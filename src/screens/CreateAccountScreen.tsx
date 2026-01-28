@@ -18,7 +18,7 @@ import {
 import PhoneInput from 'react-native-phone-number-input';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
-import { supabase } from '../lib/supabase';
+import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useOrganizationList, useUser } from '@clerk/clerk-expo';
@@ -33,6 +33,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 const { width } = Dimensions.get('window');
+const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/$/, '');
 
 // --- THEME CONSTANTS ---
 const THEME = {
@@ -772,15 +773,57 @@ export default function CreateAccountScreen() {
       }
 
       // 5. Create Org & Invites
+      let createdOrgId: string | null = null;
       if (createOrganization) {
         try {
           const org = await createOrganization({ name: formData.businessName });
+          createdOrgId = org?.id || null;
           if (formData.invites.length > 0) {
             for (const email of formData.invites) {
               try { await org.inviteMember({ emailAddress: email, role: 'org:member' }); } catch (inviteErr) { console.warn(`Failed to invite ${email}`, inviteErr); }
             }
           }
         } catch (e) { console.log('Org creation skipped', e); }
+      }
+
+      // 5.5 Update org business address (includes phone)
+      if (createdOrgId) {
+        const hasAddressOrPhone = !!(
+          formData.street1 ||
+          formData.city ||
+          formData.postalCode ||
+          formData.state ||
+          formData.country ||
+          formData.phone
+        );
+        if (hasAddressOrPhone) {
+          try {
+            const token = await ensureSupabaseJwt();
+            if (token) {
+              await fetch(`${API_BASE}/api/organizations/${createdOrgId}/address`, {
+                method: 'PATCH',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  name: formData.businessName,
+                  street1: formData.street1,
+                  street2: formData.street2,
+                  city: formData.city,
+                  state: formData.state,
+                  postalCode: formData.postalCode,
+                  country: formData.country,
+                  phone: formData.phone,
+                }),
+              });
+            } else {
+              console.warn('[CreateAccount] Missing Supabase JWT; skipped org business address update');
+            }
+          } catch (addrErr) {
+            console.warn('[CreateAccount] Failed to update org business address', addrErr);
+          }
+        }
       }
 
       // 6. Push Token
