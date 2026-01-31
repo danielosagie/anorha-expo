@@ -217,9 +217,7 @@ export function useInventoryLevelsRealtime() {
   // Counter that increments on each real-time update to trigger re-renders
   const [updateCounter, setUpdateCounter] = useState(0);
   const retryCountRef = useRef(0);
-  const maxRetries = 3;
-
-  useEffect(() => {
+  const maxRetries = 3;  useEffect(() => {
     console.log('[Real-time] Setting up InventoryLevels subscription...');
     let subscription: ReturnType<typeof supabase.channel> | null = null;
     let retryTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -259,9 +257,7 @@ export function useInventoryLevelsRealtime() {
             } else if (payload.eventType === 'DELETE') {
               console.log('[Real-time] ✅ Removing inventory level', levelId);
               observables.inventoryLevels$[levelId].delete();
-            }
-
-            // Increment counter to trigger re-renders
+            }            // Increment counter to trigger re-renders
             setUpdateCounter(c => c + 1);
           }
         )

@@ -46,6 +46,7 @@ import { Zap, ShieldCheck, CheckCircle as LucideCheckCircle, Bell as LucideBell 
 import LocationsManagerV2 from '../components/LocationsManagerV2';
 import BaseModal from '../components/BaseModal';
 import ConnectedPlatformItem from '../components/ConnectedPlatformItem';
+import { AppDropdown } from '../components/ui/AppDropdown';
 
 
 
@@ -381,9 +382,18 @@ const ProfileScreen = () => {
 
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [darkModeEnabled, setDarkModeEnabled] = useState(false);
-
-  // --- NEW State for Connections ---
   const [showConnections, setShowConnections] = useState(true);
+  // --- NEW: Delete Connection Logic & State ---
+  const [disconnectModalVisible, setDisconnectModalVisible] = useState(false);
+  const [disconnectTarget, setDisconnectTarget] = useState<{ id: string; name: string; type: string } | null>(null);
+  const [archiveProductsMobile, setArchiveProductsMobile] = useState(false);
+  const [isDisconnectingMobile, setIsDisconnectingMobile] = useState(false);
+
+  const requestDisconnect = (connectionId: string, platformName: string, platformType: string) => {
+    setDisconnectTarget({ id: connectionId, name: platformName, type: platformType });
+    setArchiveProductsMobile(false);
+    setDisconnectModalVisible(true);
+  };
   const [platformConnections, setPlatformConnections] = useState<PlatformConnection[]>([]);
   const [isLoadingConnections, setIsLoadingConnections] = useState(true);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -396,6 +406,24 @@ const ProfileScreen = () => {
   const [pastedShopifyUrl, setPastedShopifyUrl] = useState('');
   const [manualShopName, setManualShopName] = useState('');
   const [optimizationSummary, setOptimizationSummary] = useState<{ total: number; fullyReady: number } | null>(null);
+
+  // Delete Account Modal State
+  const [deleteAccountModalVisible, setDeleteAccountModalVisible] = useState(false);
+  const [deleteConfirmName, setDeleteConfirmName] = useState('');
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleteOtherReason, setDeleteOtherReason] = useState('');
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+
+  const DELETE_REASONS = [
+    { label: 'Select a reason...', value: '' },
+    { label: 'Too expensive', value: 'too_expensive' },
+    { label: 'Not using it enough', value: 'not_using' },
+    { label: 'Switching to a different service', value: 'switching' },
+    { label: 'Missing features I need', value: 'missing_features' },
+    { label: 'Technical issues', value: 'technical_issues' },
+    { label: 'Closing my business', value: 'closing_business' },
+    { label: 'Other', value: 'other' },
+  ];
 
   // Fetch optimization summary for streak bar (only when screen is focused)
   useEffect(() => {
@@ -439,6 +467,8 @@ const ProfileScreen = () => {
   const [showCreatePool, setShowCreatePool] = useState(false);
   const [showManagePool, setShowManagePool] = useState(false);
   const [selectedPoolId, setSelectedPoolId] = useState<string | null>(null);
+
+
 
   // New state for error reporting modal
   const [errorModal, setErrorModal] = useState<{ visible: boolean; title: string; message: string; type: 'error' | 'success' | 'info' | 'warning' }>({
@@ -860,18 +890,6 @@ const ProfileScreen = () => {
     const token = await ensureSupabaseJwt();
     return token;
   }, []);
-
-  // --- NEW: Delete Connection Logic & State ---
-  const [disconnectModalVisible, setDisconnectModalVisible] = useState(false);
-  const [disconnectTarget, setDisconnectTarget] = useState<{ id: string; name: string; type: string } | null>(null);
-  const [archiveProductsMobile, setArchiveProductsMobile] = useState(false);
-  const [isDisconnectingMobile, setIsDisconnectingMobile] = useState(false);
-
-  const requestDisconnect = (connectionId: string, platformName: string, platformType: string) => {
-    setDisconnectTarget({ id: connectionId, name: platformName, type: platformType });
-    setArchiveProductsMobile(false);
-    setDisconnectModalVisible(true);
-  };
 
   const performDisconnect = async () => {
     if (!disconnectTarget) return;
@@ -1526,6 +1544,66 @@ const ProfileScreen = () => {
     }
   };
 
+  const handleDeleteAccount = () => {
+    // Reset state and show modal
+    setDeleteConfirmName('');
+    setDeleteReason('');
+    setDeleteOtherReason('');
+    setDeleteAccountModalVisible(true);
+  };
+
+  const confirmDeleteAccount = async () => {
+    const businessName = currentOrg?.name || '';
+    if (deleteConfirmName.toLowerCase() !== businessName.toLowerCase()) {
+      Alert.alert('Name Mismatch', 'Please type your business name exactly as shown.');
+      return;
+    }
+    if (!deleteReason) {
+      Alert.alert('Reason Required', 'Please select a reason for deleting your account.');
+      return;
+    }
+    if (deleteReason === 'other' && !deleteOtherReason.trim()) {
+      Alert.alert('Reason Required', 'Please specify your reason for leaving.');
+      return;
+    }
+
+    setIsDeletingAccount(true);
+    try {
+      const token = await getToken();
+      if (!token) {
+        Alert.alert('Error', 'Please log in again to delete your account.');
+        setIsDeletingAccount(false);
+        return;
+      }
+
+      const response = await fetch(`${SSSYNC_API_BASE_URL}/api/users/me`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          reason: deleteReason === 'other' ? deleteOtherReason : deleteReason,
+        }),
+      });
+
+      if (response.ok) {
+        setDeleteAccountModalVisible(false);
+        Alert.alert('Account Deleted', 'Your account has been permanently deleted.', [
+          { text: 'OK', onPress: () => authContext?.signOut() }
+        ]);
+      } else {
+        const data = await response.json().catch(() => ({}));
+        Alert.alert('Error', data.message || 'Failed to delete account. Please contact support.');
+      }
+    } catch (error) {
+      console.error('Delete account error:', error);
+      Alert.alert('Error', 'An error occurred while deleting your account. Please try again.');
+    } finally {
+      setIsDeletingAccount(false);
+    }
+  };
+
   const logCurrentUserToken = async () => {
     try {
       const token = await getApiToken();
@@ -1606,7 +1684,8 @@ const ProfileScreen = () => {
 
     // "Show Auth Token" button is now always present
 
-    { icon: 'logout', title: 'Logout', isDestructive: true, onPress: handleLogout },
+    { icon: 'logout', title: 'Log Out', isDestructive: false, onPress: handleLogout },
+    { icon: 'delete-forever', title: 'Delete Account', isDestructive: true, onPress: handleDeleteAccount },
   ];
 
   // Modify the menu item rendering to handle custom components
@@ -1994,76 +2073,6 @@ const ProfileScreen = () => {
         />
       </Animated.View>
 
-      {/* System Notifications Test Card
-      <Animated.View entering={FadeInUp.delay(350).duration(500)}>
-        <Card style={styles.card}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>System Notifications</Text>
-          </View>
-          <View style={{ gap: 12, marginTop: 8 }}>
-            <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: '#007AFF15', height: 48 }]}
-              onPress={() => showAlert({
-                title: 'Confirm Action',
-                message: 'Are you sure you want to perform this system action? This follows the Apple default style.',
-                actions: [
-                  { text: 'Cancel', style: 'cancel' },
-                  { text: 'Confirm', onPress: () => showToast({ title: 'Confirmed!', type: 'success' }) }
-                ]
-              })}
-            >
-              <Icon name="alert-circle-outline" size={20} color="#007AFF" />
-              <Text style={{ color: '#007AFF', fontWeight: '600', marginLeft: 8 }}>Test iOS Alert</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: '#34C75915', height: 48 }]}
-              onPress={() => showToast({
-                title: 'Sync Successful',
-                message: 'All inventory items have been updated.',
-                type: 'success'
-              })}
-            >
-              <Icon name="check-circle-outline" size={20} color="#34C759" />
-              <Text style={{ color: '#34C759', fontWeight: '600', marginLeft: 8 }}>Test iOS Toast</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: '#5856D615', height: 48 }]}
-              onPress={() => showWelcome({
-                title: 'Welcome, Partner!',
-                subtitle: 'We are excited to have you on board. Here is what you can do next:',
-                buttonText: 'Get Started',
-                features: [
-                  {
-                    icon: <Zap size={24} color="#5856D6" />,
-                    title: 'Live Sync',
-                    description: 'Your inventory stays in sync across all platforms in real-time.',
-                    iconBgColor: '#5856D615'
-                  },
-                  {
-                    icon: <ShieldCheck size={24} color="#34C759" />,
-                    title: 'Secure Access',
-                    description: 'Only authorized team members can manage your shared locations.',
-                    iconBgColor: '#34C75915'
-                  },
-                  {
-                    icon: <LucideCheckCircle size={24} color="#FF9500" />,
-                    title: 'Smart Matching',
-                    description: 'Auto-detect products across different stores and link them together.',
-                    iconBgColor: '#FF950015'
-                  }
-                ]
-              })}
-            >
-              <Icon name="star-outline" size={20} color="#5856D6" />
-              <Text style={{ color: '#5856D6', fontWeight: '600', marginLeft: 8 }}>Test Welcome Modal</Text>
-            </TouchableOpacity>
-          </View>
-        </Card>
-      </Animated.View>
-      */}
-
       {/* Menu Card */}
       <Animated.View entering={FadeInUp.delay(400).duration(500)}>
         <Card style={styles.card}>
@@ -2336,6 +2345,118 @@ const ProfileScreen = () => {
               style={{ flex: 1, backgroundColor: '#DC2626' }}
               textStyle={{ color: 'white' }}
               disabled={isDisconnectingMobile}
+            />
+          </View>
+        </View>
+      </BaseModal>
+
+      {/* Delete Account Confirmation Modal */}
+      <BaseModal
+        visible={deleteAccountModalVisible}
+        onClose={() => !isDeletingAccount && setDeleteAccountModalVisible(false)}
+        showCloseButton={!isDeletingAccount}
+      >
+        <View style={{ alignItems: 'center', width: '100%' }}>
+          <View style={{
+            width: 48, height: 48, borderRadius: 24, backgroundColor: '#FEE2E2',
+            justifyContent: 'center', alignItems: 'center', marginBottom: 16
+          }}>
+            <Icon name="account-remove" size={24} color="#DC2626" />
+          </View>
+
+          <Text style={{ fontSize: 18, fontWeight: '600', marginBottom: 8, textAlign: 'center', color: '#111827' }}>
+            Delete Account
+          </Text>
+
+          <Text style={{ fontSize: 14, color: '#666', textAlign: 'center', marginBottom: 20 }}>
+            This action is permanent and cannot be undone. All your data will be lost.
+          </Text>
+
+          {/* Reason Dropdown */}
+          <View style={{ minWidth: '100%', marginBottom: 16 }}>
+            <Text style={{ fontSize: 14, fontWeight: '500', color: '#374151', marginBottom: 8 }}>
+              Why are you leaving?
+            </Text>
+            <AppDropdown
+              data={DELETE_REASONS.slice(1)} // Remove "Select a reason..." placeholder from options
+              value={deleteReason}
+              onChange={(item) => setDeleteReason(item.value)}
+              placeholder="Select a reason..."
+              containerStyle={{ borderWidth: 1, maxWidth: "100%", borderColor: '#D1D5DB' }}
+            />
+          </View>
+
+          {/* Other Reason Input */}
+          {deleteReason === 'other' && (
+            <View style={{ minWidth: '100%', marginBottom: 16 }}>
+              <TextInput
+                style={{
+                  borderWidth: 1,
+                  borderColor: '#D1D5DB',
+                  borderRadius: 8,
+                  padding: 12,
+                  fontSize: 14,
+                  backgroundColor: '#F9FAFB',
+                  minHeight: 60,
+                  textAlignVertical: 'top',
+                  minWidth: '100%'
+                }}
+                placeholder="Please tell us why you're leaving..."
+                placeholderTextColor="#9CA3AF"
+                value={deleteOtherReason}
+                onChangeText={setDeleteOtherReason}
+                multiline
+              />
+            </View>
+          )}
+
+          {/* Business Name Confirmation */}
+          <View style={{ minWidth: '100%', marginBottom: 20 }}>
+            <Text style={{ fontSize: 14, fontWeight: '500', color: '#374151', marginBottom: 4 }}>
+              To confirm, type your business name:
+            </Text>
+            <Text style={{ fontSize: 14, fontWeight: '700', color: '#DC2626', marginBottom: 8 }}>
+              {currentOrg?.name || 'Your Business'}
+            </Text>
+            <TextInput
+              style={{
+                borderWidth: 1,
+                borderColor: deleteConfirmName.toLowerCase() === (currentOrg?.name || '').toLowerCase() && deleteConfirmName !== ''
+                  ? '#9CA3AF'
+                  : '#D1D5DB',
+                borderRadius: 8,
+                padding: 12,
+                fontSize: 14,
+                backgroundColor: '#F9FAFB',
+                minWidth: '100%',
+                paddingVertical: 18,
+              }}
+              placeholder="Type business name here..."
+              placeholderTextColor="#9CA3AF"
+              value={deleteConfirmName}
+              onChangeText={setDeleteConfirmName}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </View>
+
+          <View style={{ flexDirection: 'row', gap: 12, width: '100%', marginTop: 24 }}>
+            <Button
+              title="Cancel"
+              onPress={() => setDeleteAccountModalVisible(false)}
+              style={{ flex: 1, backgroundColor: '#F3F4F6' }}
+              textStyle={{ color: '#374151' }}
+              disabled={isDeletingAccount}
+            />
+            <Button
+              title={isDeletingAccount ? "Deleting..." : "Delete Account"}
+              onPress={confirmDeleteAccount}
+              style={{
+                flex: 1,
+                backgroundColor: '#DC2626', // Always red, let the component handle disabled opacity
+              }}
+              textStyle={{ color: 'white' }}
+              disabled={isDeletingAccount || deleteConfirmName.toLowerCase() !== (currentOrg?.name || '').toLowerCase() || !deleteReason}
             />
           </View>
         </View>

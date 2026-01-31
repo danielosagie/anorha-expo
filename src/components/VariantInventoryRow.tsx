@@ -15,6 +15,8 @@ interface VariantInventoryRowProps {
     isGlobalPrice?: boolean; // e.g. Shopify (Inverted Style)
     isOverride?: boolean; // If true, shows yellow override style (only if isGenerationMode is true)
     isGenerationMode?: boolean; // Controls visibility of override UI
+    externalUpdateQuantity?: boolean; // Green border when value came from external/realtime update
+    externalUpdatePrice?: boolean;
 
     // Callbacks
     onChangeQuantity: (qty: number) => void;
@@ -31,6 +33,8 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
     isGlobalPrice = false,
     isOverride = false,
     isGenerationMode = false,
+    externalUpdateQuantity = false,
+    externalUpdatePrice = false,
     onChangeQuantity,
     onChangePrice,
     onSelectImage,
@@ -133,7 +137,7 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
                                 <View style={styles.priceContainer}>
                                     <Text style={[styles.currencySymbol, { color: '#ffffffff' }]}>$</Text>
                                     <TextInput
-                                        style={styles.qtyInputSimple}
+                                        style={[styles.qtyInputSimple, externalUpdateQuantity && { borderColor: '#93C822', borderWidth: 2 }]}
                                         value={localQty}
                                         onChangeText={handleQtyChange}
                                         keyboardType="number-pad"
@@ -152,7 +156,7 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
                                 <View style={styles.priceContainer}>
                                     <Text style={[styles.currencySymbol, isGlobalPrice && { color: '#1976D2' }]}>$</Text>
                                     <TextInput
-                                        style={[styles.priceInput, priceInputStyle]}
+                                        style={[styles.priceInput, priceInputStyle, externalUpdatePrice && { borderColor: '#93C822', borderWidth: 2 }]}
                                         value={localPrice}
                                         onChangeText={handlePriceChange}
                                         keyboardType="decimal-pad"

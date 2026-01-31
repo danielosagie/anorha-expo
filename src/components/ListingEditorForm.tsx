@@ -19,6 +19,7 @@ import InteractiveMapModal from './InteractiveMapModal';
 import { black, grey400 } from 'react-native-paper/lib/typescript/styles/themes/v2/colors';
 import { overlay } from 'react-native-paper';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 
 export type PlatformsData = Record<string, any>;
 
@@ -59,7 +60,7 @@ type Variant = {
   optionValues: Record<string, string>; // e.g., { Size: 'Small', Color: 'Red' }
   price?: number;
   image?: string;
-  inventoryByLocation?: Record<string, { quantity: number; price?: number; image?: string }>;
+  inventoryByLocation?: Record<string, { quantity: number; price?: number; image?: string; connectionId?: string }>;
 };
 
 type PlatformState = {
@@ -133,6 +134,8 @@ const DEFAULT_INVENTORY_TYPE_BY_PLATFORM: Record<string, InventoryType> = {
   whatnot: 'BASIC',
   depop: 'BASIC',
 };
+
+const SINGLE_LOCATION_PLATFORMS = new Set(['ebay']);
 
 // ✅ PRESET OPTIONS - baked into client, no API needed
 export const PRESET_OPTIONS = [
@@ -339,10 +342,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   }, [platforms]);
 
   const canonicalKey = useMemo(() => {
-    const key = platformKeys.includes('shopify') ? 'shopify' : (platformKeys[0] || 'shopify');
+    // Prefer first platform that has locations (connected); avoid always preferring Shopify
+    const keyWithLocs = platformKeys.find((pk) => (platformLocations || {})[pk]?.length > 0);
+    const key = keyWithLocs || platformKeys[0] || 'shopify';
     console.log('[ListingEditorForm] canonicalKey:', key, 'from platformKeys:', platformKeys);
     return key;
-  }, [platformKeys]);
+  }, [platformKeys, platformLocations]);
 
   // Default to 'all' tab instead of first platform
   const [variantSearchQuery, setVariantSearchQuery] = useState<string>('');
@@ -362,8 +367,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const taxonomySearchTimeoutRef = useRef<Record<string, any>>({});
   const preventTaxonomyAutoFetchRef = useRef<Set<string>>(new Set());
   const [variantImagePicker, setVariantImagePicker] = useState<{ variantId: string; open: boolean } | null>(null);
-  const [showPlatformPicker, setShowPlatformPicker] = useState<boolean>(false);
   const [localGeneratingPlatforms, setGeneratingPlatforms] = useState<Set<string>>(new Set());
+  const platformPickerOverlay = usePlatformPickerOverlay();
 
   const generatingPlatforms = useMemo(() => {
     const combined = new Set(localGeneratingPlatforms);
@@ -374,6 +379,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   }, [localGeneratingPlatforms, generatingPlatformKeys]);
 
   const [locationPickerVisible, setLocationPickerVisible] = useState<boolean>(false);
+
+  const isShopifyGlobalLocation = (loc?: { id?: string; name?: string; platformKey?: string }) => {
+    if (!loc) return false;
+    const platform = (loc.platformKey || '').toLowerCase();
+    if (platform !== 'shopify') return false;
+    return true;
+  };
 
   // Delete confirmation modal for option values
   const [deleteConfirmation, setDeleteConfirmation] = useState<{
@@ -402,8 +414,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   };
 
   useImperativeHandle(ref, () => ({
-    openPlatformPicker: () => setShowPlatformPicker(true),
-  }), []);
+    openPlatformPicker: () => platformPickerOverlay.show(),
+  }), [platformPickerOverlay]);
 
   const lastPlatformRef = useRef<string>('');
   const lastOptionsRef = useRef<string>('');
@@ -415,6 +427,16 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     // Highlight if updated within last 5 seconds
     return (Date.now() - update.updatedAt) < 5000;
   }, [externalUpdates]);
+
+  // 🟢 EXTERNAL UPDATES: Inventory row – only the field that changed gets green border
+  const hasExternalInventoryUpdateQuantity = useCallback((variantId: string, locationId: string): boolean => {
+    const key = `inventory_${variantId}_${locationId}_quantity`;
+    return hasExternalUpdate(key);
+  }, [hasExternalUpdate]);
+  const hasExternalInventoryUpdatePrice = useCallback((variantId: string, locationId: string): boolean => {
+    const key = `inventory_${variantId}_${locationId}_price`;
+    return hasExternalUpdate(key);
+  }, [hasExternalUpdate]);
 
   // Update activeTab only if current tab becomes invalid. Avoid redundant resets.
   useEffect(() => {
@@ -737,20 +759,68 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     onChangePlatforms({ ...platforms, [activePlatformKey]: nextPlatform });
   };
 
+  const collapseSingleLocationLocs = useCallback(
+    <T extends { id: string; locationId?: string }>(platformKey: string, locs: T[]): T[] => {
+      const key = platformKey.toLowerCase();
+      if (!SINGLE_LOCATION_PLATFORMS.has(key) || locs.length <= 1) return locs;
+
+      const platformData = platforms[key] as PlatformState | undefined;
+      const usedLocIds = new Set<string>();
+
+      if (platformData?.variants?.length) {
+        platformData.variants.forEach(v => {
+          Object.keys(v.inventoryByLocation || {}).forEach(id => usedLocIds.add(id));
+        });
+      }
+
+      if (platformData?.locationQuantities) {
+        Object.keys(platformData.locationQuantities).forEach(id => usedLocIds.add(id));
+      }
+
+      const pickPreferred = (list: T[]) => {
+        const nonDefault = list.find(l => {
+          const rawId = l.locationId || l.id;
+          return rawId !== 'default' && !rawId.startsWith('default-');
+        });
+        return nonDefault || list[0];
+      };
+
+      if (usedLocIds.size > 0) {
+        const matching = locs.filter(l => usedLocIds.has(l.locationId || l.id));
+        if (matching.length > 0) {
+          return [pickPreferred(matching)];
+        }
+      }
+
+      return [pickPreferred(locs)];
+    },
+    [platforms]
+  );
+
+  const buildAllTabLocationId = useCallback(
+    (loc: { platformKey: string; connectionId?: string; locationId: string }) =>
+      `${loc.platformKey}::${loc.connectionId || 'unknown'}::${loc.locationId}`,
+    []
+  );
+
   // Get locations for the active platform - ALWAYS use platformLocations first (properly separated per-platform)
   const locations = useMemo(() => {
     const platformKey = activePlatformKey.toLowerCase();
 
     // FIRST: Try platformLocations prop which is correctly structured per-platform
-    const platformLocs = platformLocations?.[platformKey] || [];
+    const platformLocsRaw = platformLocations?.[platformKey] || [];
+    const platformLocs = collapseSingleLocationLocs(platformKey, platformLocsRaw);
 
     console.log(`[ListingEditorForm LOCS] platform=${platformKey}, platformLocsKeys=${Object.keys(platformLocations || {}).join(',')}, count=${platformLocs.length}`);
 
     if (platformLocs.length > 0) {
       return platformLocs.map((loc: any) => ({
         id: loc.id,
+        locationId: loc.locationId || loc.id,
         name: loc.name || 'Unknown Location',
-        platformType: loc.platformType || platformKey
+        platformType: loc.platformType || platformKey,
+        connectionId: loc.connectionId,
+        connectionName: loc.connectionName
       }));
     }
 
@@ -769,18 +839,27 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         return true;
       });
 
-      if (filtered.length > 0) {
-        console.log(`[ListingEditorForm LOCS] Filtered ${activeData.locations.length} → ${filtered.length} for ${platformKey}`);
-        return filtered.map((loc: any) => ({
+      const collapsed = collapseSingleLocationLocs(platformKey, filtered);
+      if (collapsed.length > 0) {
+        console.log(`[ListingEditorForm LOCS] Filtered ${activeData.locations.length} → ${collapsed.length} for ${platformKey}`);
+        return collapsed.map((loc: any) => ({
           ...loc,
-          platformType: loc.platformType || platformKey
+          locationId: loc.locationId || loc.id,
+          platformType: loc.platformType || platformKey,
+          connectionId: loc.connectionId,
+          connectionName: loc.connectionName
         }));
       }
     }
 
     // Fallback to dummy data if no locations available
-    return [{ id: 'loc-default', name: `${platformKey.charAt(0).toUpperCase() + platformKey.slice(1)} Default`, platformType: platformKey }];
-  }, [activeData.locations, activePlatformKey, platformLocations]);
+    return [{
+      id: 'loc-default',
+      locationId: 'loc-default',
+      name: `${platformKey.charAt(0).toUpperCase() + platformKey.slice(1)} Default`,
+      platformType: platformKey
+    }];
+  }, [activeData.locations, activePlatformKey, platformLocations, collapseSingleLocationLocs]);
   const [selectedLocationId, setSelectedLocationId] = useState<string>(locations[0]?.id || 'loc-1');
 
   // CRITICAL: When locations change, reset selectedLocationId to first valid location
@@ -839,7 +918,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
     for (const platformKey of platformsToUpdate) {
       const platformData = (platforms[platformKey] || {}) as PlatformState;
-      const platformLocs = platformData.locations || platformLocations?.[platformKey.toLowerCase()] || [];
+      const rawPlatformLocs = platformData.locations || platformLocations?.[platformKey.toLowerCase()] || [];
+      const platformLocs = collapseSingleLocationLocs(platformKey, rawPlatformLocs);
 
       const nextVariants: Variant[] = combos.map((combo, i) => {
         const optionValues: Record<string, string> = {};
@@ -855,7 +935,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           // New variant - initialize with default inventory structure
           // INHERIT from locationQuantities if transitioning from non-variant product
           const baseQuantities = platformData.locationQuantities || {};
-          const inventoryByLocation: Record<string, { quantity: number; price?: number; image?: string }> = {};
+          const inventoryByLocation: Record<string, { quantity: number; price?: number; image?: string; connectionId?: string }> = {};
 
           // Initialize for default location (used by VARIANT_WITH_OPTIONS)
           // Inherit quantity from non-variant data if available
@@ -870,6 +950,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             inventoryByLocation[loc.id] = {
               quantity: baseQuantities[loc.id] ?? 0,
               price: platformData.price || activeData.price || 0,
+              connectionId: (loc as any).connectionId,
             };
           });
 
@@ -980,10 +1061,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     const id = `${activePlatformKey}-var-${Date.now()}`;
 
     // Initialize inventoryByLocation for the new variant
-    const inventoryByLocation: Record<string, { quantity: number; price?: number; image?: string }> = {};
+    const inventoryByLocation: Record<string, { quantity: number; price?: number; image?: string; connectionId?: string }> = {};
     inventoryByLocation['default'] = { quantity: 0, price: activeData.price || 0 };
     locations.forEach(loc => {
-      inventoryByLocation[loc.id] = { quantity: 0, price: activeData.price || 0 };
+      inventoryByLocation[loc.id] = { quantity: 0, price: activeData.price || 0, connectionId: (loc as any).connectionId };
     });
 
     patchPlatform(prev => ({
@@ -1219,8 +1300,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   };
 
   const pills = ['all', ...platformKeys];
-  // Add a couple of extra platforms for quick swap-in
-  const allKnownPlatforms = Array.from(new Set([...Object.keys(PLATFORM_META), 'whatnot', 'depop']));
   const addPlatform = async (platformKey: string, shouldGenerate: boolean = false) => {
     if (!platformKey) return;
     platformKey = platformKey.toLowerCase().trim();
@@ -1229,7 +1308,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     if (shouldGenerate && onGeneratePlatform) {
       // Start generation process
       setGeneratingPlatforms(prev => new Set([...prev, platformKey]));
-      setShowPlatformPicker(false);
 
       // Add empty platform data first to show loading state
       const base = (platforms[canonicalKey] || {}) as PlatformState;
@@ -1263,11 +1341,27 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       }
       const next = { ...platforms, [platformKey]: newData } as PlatformsData;
       onChangePlatforms(next);
-      setShowPlatformPicker(false);
       setActiveTab(platformKey);
       setTimeout(recomputeVariants, 0);
     }
   };
+
+  const handleStartConnectPlatform = useCallback((platform: string) => {
+    if (platform === 'csv') return;
+    addPlatform(platform, true);
+  }, [addPlatform]);
+
+  const handleStartConnectRef = useRef(handleStartConnectPlatform);
+  handleStartConnectRef.current = handleStartConnectPlatform;
+
+  useEffect(() => {
+    const stableHandler = (platform: string) => handleStartConnectRef.current(platform);
+    platformPickerOverlay.enableForScreen(stableHandler);
+    return () => {
+      platformPickerOverlay.disableForScreen();
+    };
+  }, []);
+
   const removePlatform = (platformKey: string) => {
     if (!platformKey) return;
     const next = { ...platforms } as PlatformsData;
@@ -1408,7 +1502,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             </TouchableOpacity>
           )
         ))}
-        <TouchableOpacity style={styles.pillDashed} onPress={() => setShowPlatformPicker(v => !v)}>
+        <TouchableOpacity style={styles.pillDashed} onPress={() => platformPickerOverlay.show()}>
           <Text style={styles.pillText}>+ Add Platform</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -1422,32 +1516,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           </TouchableOpacity>
         </View>
       )}
-      {showPlatformPicker && (
-        <View style={styles.platformPickerDock}>
-          <View style={styles.platformPickerCapsule}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 8 }}>
-              <TouchableOpacity style={[{ alignSelf: 'center', marginTop: 10, paddingHorizontal: 34, paddingVertical: 10, }]}>
-
-              </TouchableOpacity>
-              <Text style={{ color: '#000', fontWeight: '700', marginBottom: 10, textAlign: 'center' }}>Add Platform</Text>
-              <TouchableOpacity style={[styles.btnSecondary, { alignSelf: 'center', marginTop: 10, backgroundColor: "#FFF" }]} onPress={() => setShowPlatformPicker(false)}>
-                <Text style={{ color: '#000' }}>Close</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.platformGrid}>
-              {allKnownPlatforms.filter(k => !platformKeys.includes(k)).map(k => (
-                <TouchableOpacity key={k} onPress={() => addPlatform(k, true)} style={styles.platformSquare}>
-                  {(() => { const map: Record<string, any> = { shopify: ShopifySvg, amazon: AmazonSvg, facebook: FacebookSvg, ebay: EbaySvg, clover: CloverSvg, square: SquareSvg }; const SVG = map[k]; return SVG ? <SVG width={40} height={40} /> : null; })()}
-                  <Text style={{ color: '#000', fontWeight: '500' }}>{PLATFORM_META[k]?.label || k}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-          </View>
-        </View>
-      )}
-
       {/* Core fields (optimized for conversion) */}
       <View style={{ paddingTop: 18, gap: 9 }}>
         <Field
@@ -2104,7 +2172,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             {/* Locations only for LOCATION_VARIANT_WITH_OPTIONS; NEVER show for VARIANT_WITH_OPTIONS or BASIC */}
             {selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all' && (() => {
               // Filter locations to only show the active platform's locations
-              const platformLocs = (platformLocations?.[activePlatformKey.toLowerCase()] || []).map((loc: any) => ({
+              const rawPlatformLocs = platformLocations?.[activePlatformKey.toLowerCase()] || [];
+              const platformLocs = collapseSingleLocationLocs(activePlatformKey, rawPlatformLocs).map((loc: any) => ({
                 id: loc.id,
                 name: loc.name || 'Unknown Location',
                 platformType: activePlatformKey.toLowerCase()
@@ -2242,34 +2311,55 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             {/* Use VariantInventoryEditor for both "All" and Specific Platform tabs */}
             {(() => {
               // 1. Build locations list based on active tab
-              let allLocs: Array<{ id: string; name: string; platformKey: string }>;
+              let allLocs: Array<{ id: string; locationId?: string; name: string; platformKey: string; connectionId?: string; connectionName?: string; isGlobal?: boolean }>;
 
               if (activeTab === 'all') {
                 // All tab: show all locations from all platforms
                 // Match the logic for NON-VARIANT case:
                 // 1. Start with explicit locations from platformLocations
                 const allLocsRaw = Object.entries(platformLocations || {}).flatMap(([pk, locs]) =>
-                  (locs || []).map((l: any) => ({ ...l, platformKey: pk }))
+                  (locs || []).map((l: any) => {
+                    const locationId = l.locationId || l.id;
+                    return {
+                      ...l,
+                      id: buildAllTabLocationId({ platformKey: pk, connectionId: l.connectionId, locationId }),
+                      locationId,
+                      platformKey: pk,
+                      isGlobal: isShopifyGlobalLocation({ id: locationId, name: l.name, platformKey: pk })
+                    };
+                  })
                 );
 
-                // 2. ROBUSTNESS FIX: Ensure every active platform has at least one location
-                // This covers cases where platformLocations might be missing an entry for a connected platform (e.g. eBay/Facebook)
-                Object.keys(platforms).forEach(pk => {
+                // 2. ROBUSTNESS FIX: Only add virtual default for platforms that have at least one location in platformLocations (i.e. actually connected). Do not add a row for unconnected platforms (e.g. Shopify from platformSpecificData only).
+                const platformsWithLocs = Object.keys(platforms).filter((pk) => (platformLocations || {})[pk]?.length > 0);
+                platformsWithLocs.forEach(pk => {
                   const hasLocation = allLocsRaw.some(l => l.platformKey === pk);
                   if (!hasLocation) {
-                    // Add a virtual default location for this missing platform
+                    const locationId = `default-${pk}`;
                     allLocsRaw.push({
-                      id: `default-${pk}`,
+                      id: buildAllTabLocationId({ platformKey: pk, connectionId: undefined, locationId }),
+                      locationId,
                       name: 'Default Location',
-                      platformKey: pk
+                      platformKey: pk,
+                      isGlobal: isShopifyGlobalLocation({ id: locationId, name: 'Default Location', platformKey: pk })
                     });
                     console.log(`[ListingEditorForm] Auto-added virtual location for missing platform: ${pk}`);
                   }
                 });
 
+                const locsByPlatform = allLocsRaw.reduce<Record<string, Array<{ id: string; name: string; platformKey: string; isGlobal?: boolean }>>>((acc, loc) => {
+                  if (!acc[loc.platformKey]) acc[loc.platformKey] = [];
+                  acc[loc.platformKey].push(loc);
+                  return acc;
+                }, {});
+
+                const collapsedAllLocsRaw = Object.entries(locsByPlatform).flatMap(([pk, locs]) =>
+                  collapseSingleLocationLocs(pk, locs)
+                );
+
                 // Filter to unique location IDs - keep first occurrence
                 const seenIds = new Set<string>();
-                allLocs = allLocsRaw.filter(loc => {
+                allLocs = collapsedAllLocsRaw.filter(loc => {
                   if (seenIds.has(loc.id)) {
                     console.warn(`[ListingEditorForm] Filtered duplicate location: ${loc.id} (${loc.name})`);
                     return false;
@@ -2280,17 +2370,36 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               } else {
                 // Platform tab: filter to only this platform's locations
                 const platformKey = activeTab.toLowerCase();
-                const platformLocs = platformLocations?.[platformKey] || [];
+                const rawPlatformLocs = platformLocations?.[platformKey] || [];
+                const platformLocs = collapseSingleLocationLocs(platformKey, rawPlatformLocs).map((l: any) => ({
+                  ...l,
+                  locationId: l.locationId || l.id
+                }));
 
                 // If dropdown is active (LOCATION_VARIANT_WITH_OPTIONS) and a location is selected,
                 // filter to just that location
                 if (selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && selectedLocationId) {
                   const selectedLoc = platformLocs.find((l: any) => l.id === selectedLocationId);
                   allLocs = selectedLoc
-                    ? [{ id: selectedLoc.id, name: selectedLoc.name || 'Unknown', platformKey }]
-                    : platformLocs.map((l: any) => ({ ...l, platformKey }));
+                    ? [{
+                      id: selectedLoc.id,
+                      locationId: selectedLoc.locationId || selectedLoc.id,
+                      name: selectedLoc.name || 'Unknown',
+                      platformKey,
+                      connectionId: selectedLoc.connectionId,
+                      isGlobal: isShopifyGlobalLocation({ id: selectedLoc.id, name: selectedLoc.name, platformKey })
+                    }]
+                    : platformLocs.map((l: any) => ({
+                      ...l,
+                      platformKey,
+                      isGlobal: isShopifyGlobalLocation({ id: l.id, name: l.name, platformKey })
+                    }));
                 } else {
-                  allLocs = platformLocs.map((l: any) => ({ ...l, platformKey }));
+                  allLocs = platformLocs.map((l: any) => ({
+                    ...l,
+                    platformKey,
+                    isGlobal: isShopifyGlobalLocation({ id: l.id, name: l.name, platformKey })
+                  }));
                 }
               }
 
@@ -2300,6 +2409,24 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               let preparedVariants: VariantInventoryEditorProps['variants'] = [];
 
               if (activeTab === 'all') {
+                const locsByPlatform = allLocs.reduce<Record<string, Array<{ id: string; locationId?: string; connectionId?: string }>>>((acc, loc) => {
+                  if (!acc[loc.platformKey]) acc[loc.platformKey] = [];
+                  acc[loc.platformKey].push(loc);
+                  return acc;
+                }, {});
+
+                const locKeyMaps = Object.entries(locsByPlatform).reduce<Record<string, Map<string, string>>>((acc, [pk, locs]) => {
+                  const map = new Map<string, string>();
+                  locs.forEach(loc => {
+                    const rawId = loc.locationId || loc.id;
+                    const connId = loc.connectionId || '';
+                    map.set(`${rawId}::${connId}`, loc.id);
+                    if (!map.has(`${rawId}::`)) map.set(`${rawId}::`, loc.id);
+                  });
+                  acc[pk] = map;
+                  return acc;
+                }, {});
+
                 // Aggregate variants from all platforms
                 const variantMap = new Map<string, any>();
 
@@ -2316,16 +2443,40 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
                     console.log(`[ListingEditorForm] Aggregating variant: platform=${pk}, optionKey=${optionKey}, existingEntry=${!!existing}`);
 
-                    const inv: Record<string, { quantity: number; price?: number; image?: string }> = existing ? { ...existing.inventory } : {};
+                    const inv: Record<string, { quantity: number; price?: number; image?: string; connectionId?: string }> = existing ? { ...existing.inventory } : {};
+                    const platformPrice = typeof v.price === 'number' ? v.price : undefined;
 
                     // Add this platform's inventory data
                     const vInv = v.inventoryByLocation || {};
+                    const locKeyMap = locKeyMaps[pk] || new Map<string, string>();
+                    const priceByConnection = new Map<string, number>();
+
                     Object.entries(vInv).forEach(([locId, data]: [string, any]) => {
-                      inv[locId] = {
+                      const connId = data?.connectionId;
+                      if (connId && typeof data?.price === 'number' && !priceByConnection.has(connId)) {
+                        priceByConnection.set(connId, data.price);
+                      }
+                      const compositeId = locKeyMap.get(`${locId}::${connId || ''}`) || locKeyMap.get(`${locId}::`) || locId;
+                      inv[compositeId] = {
                         quantity: data.quantity,
-                        price: data.price,
-                        image: data.image
+                        price: data.price ?? platformPrice,
+                        image: data.image,
+                        connectionId: connId
                       };
+                    });
+
+                    // Ensure every location for this platform has a price fallback from this platform
+                    const platformLocs = locsByPlatform[pk] || [];
+                    platformLocs.forEach((loc) => {
+                      const fallbackPrice = loc.connectionId && priceByConnection.has(loc.connectionId)
+                        ? priceByConnection.get(loc.connectionId)
+                        : platformPrice;
+
+                      if (!inv[loc.id]) {
+                        inv[loc.id] = { quantity: 0, price: fallbackPrice, connectionId: loc.connectionId };
+                      } else if (inv[loc.id].price === undefined && fallbackPrice !== undefined) {
+                        inv[loc.id] = { ...inv[loc.id], price: fallbackPrice };
+                      }
                     });
 
                     variantMap.set(vId, {
@@ -2378,7 +2529,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
                 // Populate inventory from locationQuantities (non-variant data)
                 allLocs.forEach(loc => {
-                  const qty = (activeData.locationQuantities || {})[loc.id] ?? 0;
+                  const rawLocationId = loc.locationId || loc.id;
+                  const qty = (activeData.locationQuantities || {})[rawLocationId] ?? 0;
                   baseVariant.inventory[loc.id] = {
                     quantity: qty,
                     price: Number(activeData.price ?? 0),
@@ -2400,11 +2552,15 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
               // 3. Callback - per-location pricing for non-Shopify, global for Shopify
               const handleUpdateInventory = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
+                const resolvedLoc = allLocs.find(l => l.id === locationId);
+                const rawLocationId = resolvedLoc?.locationId || locationId;
+                const resolvedConnectionId = resolvedLoc?.connectionId;
+
                 // HANDLE BASE PRODUCT (non-variant product)
                 if (variantId === '_base') {
                   if (field === 'quantity') {
                     // Store per-location quantity in locationQuantities
-                    setLocationQuantity(locationId, value);
+                    setLocationQuantity(rawLocationId, value);
                   } else if (field === 'price') {
                     // Price changes update the base product price for this platform
                     patchPlatform(prev => ({ ...prev, price: value }));
@@ -2416,14 +2572,15 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
                 let targetPlatform = activeTab;
                 if (activeTab === 'all') {
-                  const loc = allLocs.find(l => l.id === locationId);
-                  if (loc) targetPlatform = loc.platformKey;
+                  if (resolvedLoc) targetPlatform = resolvedLoc.platformKey;
                 }
 
                 const pData = nextPlatforms[targetPlatform];
                 if (!pData) return;
 
                 const isShopify = targetPlatform === 'shopify';
+                const targetLoc = resolvedLoc && resolvedLoc.platformKey === targetPlatform ? resolvedLoc : allLocs.find(l => l.id === locationId && l.platformKey === targetPlatform);
+                const isShopifyGlobal = isShopify && (targetLoc?.isGlobal || isShopifyGlobalLocation({ id: rawLocationId, name: targetLoc?.name, platformKey: targetPlatform }));
 
                 // Helper to compute optionKey for a variant (used for matching in 'all' tab)
                 const getOptionKey = (v: any) => Object.entries(v.optionValues || {})
@@ -2442,21 +2599,25 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                     console.log(`[handleUpdateInventory] ✅ Matched variant: id=${v.id.slice(0, 8)}, optionKey=${getOptionKey(v)}, variantId=${variantId}, field=${field}, value=${value}, isShopify=${isShopify}`);
 
                     if (field === 'price') {
-                      if (isShopify) {
+                      if (isShopify && isShopifyGlobal) {
                         // Shopify: GLOBAL price - update ALL SHOPIFY locations for this connection
                         const updatedInv = { ...(v.inventoryByLocation || {}) };
-                        // Get ALL Shopify location IDs from allLocs (the known locations for this platform)
-                        const shopifyLocIds = allLocs.filter(l => l.platformKey === 'shopify').map(l => l.id);
+                        // Get ALL Shopify location IDs for the SAME connection (avoid cross-account bleed)
+                        const shopifyLocs = allLocs.filter(l =>
+                          l.platformKey === 'shopify' && (!resolvedConnectionId || l.connectionId === resolvedConnectionId)
+                        );
 
                         // Apply price to ALL Shopify locations, creating entries if they don't exist
-                        shopifyLocIds.forEach(locId => {
+                        shopifyLocs.forEach(loc => {
+                          const locId = loc.locationId || loc.id;
                           updatedInv[locId] = {
                             ...(updatedInv[locId] || {}),
+                            connectionId: loc.connectionId ?? (updatedInv[locId] as any)?.connectionId,
                             price: value
                           };
                         });
 
-                        console.log(`[ListingEditorForm] Shopify global price update: ${value}, synced to ${shopifyLocIds.length} locations: ${shopifyLocIds.join(', ')}`);
+                        console.log(`[ListingEditorForm] Shopify global price update: ${value}, synced to ${shopifyLocs.length} locations`);
                         console.log(`[ListingEditorForm] Updated inventoryByLocation prices:`, Object.entries(updatedInv).map(([k, v]: [string, any]) => `${k}=$${v.price}`).join(', '));
                         return {
                           ...v,
@@ -2464,15 +2625,16 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                           inventoryByLocation: updatedInv
                         };
                       } else {
-                        // Non-Shopify (Square, Clover): PER-LOCATION price - only update THIS location
+                        // Per-location price - only update THIS location
                         const oldInv = v.inventoryByLocation || {};
-                        const oldLocData = oldInv[locationId] || {};
+                        const oldLocData = oldInv[rawLocationId] || {};
                         return {
                           ...v,
                           inventoryByLocation: {
                             ...oldInv,
-                            [locationId]: {
+                            [rawLocationId]: {
                               ...oldLocData,
+                              connectionId: oldLocData.connectionId ?? resolvedConnectionId,
                               price: value
                             }
                           }
@@ -2482,14 +2644,15 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
                     // For quantity, only update the specific location (same for all platforms)
                     const oldInv = v.inventoryByLocation || {};
-                    const oldLocData = oldInv[locationId] || {};
+                    const oldLocData = oldInv[rawLocationId] || {};
 
                     return {
                       ...v,
                       inventoryByLocation: {
                         ...oldInv,
-                        [locationId]: {
+                        [rawLocationId]: {
                           ...oldLocData,
+                          connectionId: oldLocData.connectionId ?? resolvedConnectionId,
                           [field]: value
                         }
                       }
@@ -2533,6 +2696,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   isGenerationMode={true} // This is the GenerateDetailsScreen context
                   onUpdateInventory={handleUpdateInventory}
                   onSelectImage={handleSelectImage}
+                  hasExternalUpdateQuantity={hasExternalInventoryUpdateQuantity}
+                  hasExternalUpdatePrice={hasExternalInventoryUpdatePrice}
                 />
               );
             })()}
@@ -2543,28 +2708,50 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
            */
           (() => {
             // Build locations list (same logic as variant case)
-            let allLocs: Array<{ id: string; name: string; platformKey: string }>;
+            let allLocs: Array<{ id: string; locationId?: string; name: string; platformKey: string; connectionId?: string; connectionName?: string; isGlobal?: boolean }>;
 
             if (activeTab === 'all') {
               // All tab: show all locations from all platforms
               const allLocsRaw = Object.entries(platformLocations || {}).flatMap(([pk, locs]) =>
-                (locs || []).map((l: any) => ({ ...l, platformKey: pk }))
+                (locs || []).map((l: any) => {
+                  const locationId = l.locationId || l.id;
+                  return {
+                    ...l,
+                    id: buildAllTabLocationId({ platformKey: pk, connectionId: l.connectionId, locationId }),
+                    locationId,
+                    platformKey: pk,
+                    isGlobal: isShopifyGlobalLocation({ id: locationId, name: l.name, platformKey: pk })
+                  };
+                })
               );
 
               // ROBUSTNESS FIX: Ensure every active platform has at least one location
               Object.keys(platforms).forEach(pk => {
                 const hasLocation = allLocsRaw.some(l => l.platformKey === pk);
                 if (!hasLocation) {
+                  const locationId = `default-${pk}`;
                   allLocsRaw.push({
-                    id: `default-${pk}`,
+                    id: buildAllTabLocationId({ platformKey: pk, connectionId: undefined, locationId }),
+                    locationId,
                     name: 'Default Location',
-                    platformKey: pk
+                    platformKey: pk,
+                    isGlobal: isShopifyGlobalLocation({ id: locationId, name: 'Default Location', platformKey: pk })
                   });
                 }
               });
 
+              const locsByPlatform = allLocsRaw.reduce<Record<string, Array<{ id: string; name: string; platformKey: string; isGlobal?: boolean; locationId?: string }>>>((acc, loc) => {
+                if (!acc[loc.platformKey]) acc[loc.platformKey] = [];
+                acc[loc.platformKey].push(loc);
+                return acc;
+              }, {});
+
+              const collapsedAllLocsRaw = Object.entries(locsByPlatform).flatMap(([pk, locs]) =>
+                collapseSingleLocationLocs(pk, locs)
+              );
+
               const seenIds = new Set<string>();
-              allLocs = allLocsRaw.filter(loc => {
+              allLocs = collapsedAllLocsRaw.filter(loc => {
                 if (seenIds.has(loc.id)) return false;
                 seenIds.add(loc.id);
                 return true;
@@ -2572,8 +2759,16 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             } else {
               // Platform tab: filter to only this platform's locations
               const platformKey = activeTab.toLowerCase();
-              const platformLocs = platformLocations?.[platformKey] || [];
-              allLocs = platformLocs.map((l: any) => ({ ...l, platformKey }));
+              const rawPlatformLocs = platformLocations?.[platformKey] || [];
+              const platformLocs = collapseSingleLocationLocs(platformKey, rawPlatformLocs).map((l: any) => ({
+                ...l,
+                locationId: l.locationId || l.id
+              }));
+              allLocs = platformLocs.map((l: any) => ({
+                ...l,
+                platformKey,
+                isGlobal: isShopifyGlobalLocation({ id: l.id, name: l.name, platformKey })
+              }));
             }
 
             // Create virtual "Base Product" variant with locationQuantities data
@@ -2586,7 +2781,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
             // Populate inventory from locationQuantities (per-location) or use base price
             allLocs.forEach(loc => {
-              const qty = (activeData.locationQuantities || {})[loc.id] ?? 0;
+              const rawLocationId = (loc as any).locationId || loc.id;
+              const qty = (activeData.locationQuantities || {})[rawLocationId] ?? 0;
               baseVariant.inventory[loc.id] = {
                 quantity: qty,
                 price: Number(activeData.price ?? 0),
@@ -2603,9 +2799,11 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             }
 
             const handleBaseInventoryUpdate = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
+              const resolvedLoc = allLocs.find(l => l.id === locationId);
+              const rawLocationId = resolvedLoc?.locationId || locationId;
               if (field === 'quantity') {
                 // Store per-location quantity in locationQuantities
-                setLocationQuantity(locationId, value);
+                setLocationQuantity(rawLocationId, value);
               } else if (field === 'price') {
                 // Price changes update the base product price
                 patchPlatform(prev => ({ ...prev, price: value }));
@@ -2619,6 +2817,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 locations={allLocs.length > 0 ? allLocs : [{ id: 'default', name: 'Default', platformKey: activeTab }]}
                 isGenerationMode={isGenerationMode}
                 onUpdateInventory={handleBaseInventoryUpdate}
+                hasExternalUpdateQuantity={hasExternalInventoryUpdateQuantity}
+                hasExternalUpdatePrice={hasExternalInventoryUpdatePrice}
               />
             );
           })()
@@ -3044,12 +3244,6 @@ const styles = StyleSheet.create({
   btnPrimary: { backgroundColor: '#93C822', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
   optionCard: { marginTop: 10, backgroundColor: '#fff' },
   optionSummaryCard: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, padding: 12, marginTop: 10, backgroundColor: '#fff' },
-  platformPickerModal: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center' },
-  platformPickerCard: { backgroundColor: '#fff', borderRadius: 12, padding: 16, width: '90%' },
-  platformGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center' },
-  pillClose: { width: 16, height: 16, borderRadius: 8, backgroundColor: '#EFEFEF', alignItems: 'center', justifyContent: 'center' },
-  platformPickerDock: { position: 'absolute', top: 6, left: 24, right: 24, zIndex: 5000 },
-  platformPickerCapsule: { backgroundColor: 'rgba(248, 249, 251, 1)', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(153, 153, 153, 0.3)', padding: 12 },
   platformPill: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 8, paddingHorizontal: 12, margin: 6, flexDirection: 'row', alignItems: 'center' },
   platformSquare: {
     justifyContent: 'center',

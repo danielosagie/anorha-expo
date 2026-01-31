@@ -24,6 +24,7 @@ export interface InventoryItemData {
   quantity: number;
   price?: number;
   image?: string;
+  connectionId?: string;
 }
 
 export interface VariantInventoryEditorProps {
@@ -41,9 +42,12 @@ export interface VariantInventoryEditorProps {
   activeTab: string; // 'all' or platformKey
   locations: Array<{
     id: string;
+    locationId?: string;
     name: string;
     platformKey: string;
+    connectionId?: string;
     connectionName?: string;
+    isGlobal?: boolean;
   }>;
 
   // Configuration
@@ -52,6 +56,10 @@ export interface VariantInventoryEditorProps {
   // Callbacks
   onUpdateInventory: (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => void;
   onSelectImage?: (variantId: string) => void;
+
+  // External update highlight (green border) – from realtime inventory subscription
+  hasExternalUpdateQuantity?: (variantId: string, locationId: string) => boolean;
+  hasExternalUpdatePrice?: (variantId: string, locationId: string) => boolean;
 }
 
 // Inline editable price/qty row for "All" tab
@@ -60,12 +68,15 @@ const AllTabRow: React.FC<{
   locId: string;
   locName: string;
   platformKey: string;
+  isGlobal?: boolean;
   quantity: number;
   price: number;
   onUpdateInventory: (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => void;
-}> = ({ variantId, locId, locName, platformKey, quantity, price, onUpdateInventory }) => {
+  externalUpdateQuantity?: boolean;
+  externalUpdatePrice?: boolean;
+}> = ({ variantId, locId, locName, platformKey, isGlobal, quantity, price, onUpdateInventory, externalUpdateQuantity, externalUpdatePrice }) => {
   const Logo = platformLogoMap[platformKey] || null;
-  const isShopify = platformKey === 'shopify';
+  const isShopifyGlobal = platformKey === 'shopify' && !!isGlobal;
   const displayName = locName?.length > 18 ? locName.slice(0, 18) + '…' : locName;
 
   // Local state for smooth typing
@@ -108,7 +119,7 @@ const AllTabRow: React.FC<{
       <View style={styles.allRowHeader}>
         {Logo && <Logo width={18} height={18} />}
         <Text style={styles.locationName} numberOfLines={1}>{displayName}</Text>
-        {isShopify && (
+        {isShopifyGlobal && (
           <View style={styles.globalBadge}>
             <Text style={styles.globalBadgeText}>GLOBAL</Text>
           </View>
@@ -146,10 +157,10 @@ const AllTabRow: React.FC<{
       {/* Price Input - Blue for Shopify global */}
       <View style={styles.inputGroup}>
         <Text style={styles.inputLabel}>Price</Text>
-        <View style={[styles.priceInputContainer, isShopify && styles.priceInputShopify]}>
-          <Text style={[styles.currencySymbol, isShopify && { color: '#1976D2' }]}>$</Text>
+        <View style={[styles.priceInputContainer, isShopifyGlobal && styles.priceInputShopify]}>
+          <Text style={[styles.currencySymbol, isShopifyGlobal && { color: '#1976D2' }]}>$</Text>
           <TextInput
-            style={[styles.priceInput, isShopify && styles.priceInputTextShopify]}
+            style={[styles.priceInput, isShopifyGlobal && styles.priceInputTextShopify, externalUpdatePrice && { borderColor: '#93C822', borderWidth: 2 }]}
             value={localPrice}
             onChangeText={handlePriceChange}
             keyboardType="decimal-pad"
@@ -168,6 +179,8 @@ const VariantInventoryEditor: React.FC<VariantInventoryEditorProps> = ({
   isGenerationMode = false,
   onUpdateInventory,
   onSelectImage,
+  hasExternalUpdateQuantity,
+  hasExternalUpdatePrice,
 }) => {
   const theme = useTheme();
 
@@ -209,8 +222,8 @@ const VariantInventoryEditor: React.FC<VariantInventoryEditorProps> = ({
                   const invKey = loc.id;
                   const data = variant.inventory[invKey] || { quantity: 0, price: undefined };
 
-                  // Use per-location price, fallback to default only if not set
-                  const currentPrice = data.price ?? variant.defaultPrice ?? 0;
+                  // Use per-location price only in "all" tab to avoid cross-platform bleed
+                  const currentPrice = data.price ?? 0;
 
                   return (
                     <AllTabRow
@@ -219,9 +232,12 @@ const VariantInventoryEditor: React.FC<VariantInventoryEditorProps> = ({
                       locId={loc.id}
                       locName={loc.name}
                       platformKey={loc.platformKey}
+                      isGlobal={loc.isGlobal}
                       quantity={data.quantity}
                       price={currentPrice}
                       onUpdateInventory={handleInventoryUpdate}
+                      externalUpdateQuantity={hasExternalUpdateQuantity?.(variant.id, loc.id)}
+                      externalUpdatePrice={hasExternalUpdatePrice?.(variant.id, loc.id)}
                     />
                   );
                 })
@@ -270,9 +286,13 @@ const VariantInventoryEditor: React.FC<VariantInventoryEditorProps> = ({
                       image={data.image || variant.image}
 
                       // Flags - Blue styling for Shopify
-                      isGlobalPrice={isShopify}
+                      isGlobalPrice={isShopify && !!loc.isGlobal}
                       isOverride={isOverride}
                       isGenerationMode={isGenerationMode}
+
+                      // External update highlight (green border)
+                      externalUpdateQuantity={hasExternalUpdateQuantity?.(variant.id, invKey)}
+                      externalUpdatePrice={hasExternalUpdatePrice?.(variant.id, invKey)}
 
                       // Handlers - Use internal wrapper for global Shopify pricing
                       onChangeQuantity={(q) => handleInventoryUpdate(variant.id, invKey, 'quantity', q)}

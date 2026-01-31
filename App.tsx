@@ -250,7 +250,7 @@ const App: React.FC = () => {
               overlay.hide();
             }}
           />
-          <View style={{ backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 12, paddingBottom: 24, height: '40%' }}>
+          <View style={{ flexDirection: "column", alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 12, paddingBottom: 24, minHeight: '50%', height: "50%", maxHeight: '55%' }}>
             <BottomNav
               state={'platformPicker'}
               selectedCount={0}

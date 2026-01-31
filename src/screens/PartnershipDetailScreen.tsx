@@ -134,7 +134,7 @@ export default function PartnershipDetailScreen() {
                 text: 'Remove', style: 'destructive', onPress: async () => {
                     try {
                         const token = await ensureSupabaseJwt();
-                        await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/links/${link.id}/revoke`, {
+                        await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/links/${link.id}`, {
                             method: 'DELETE',
                             headers: { Authorization: `Bearer ${token}` }
                         });

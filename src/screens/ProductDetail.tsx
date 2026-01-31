@@ -153,11 +153,18 @@ function cleanPlatformDataForSave(displayedPlatforms: Record<string, any>): Reco
         for (const [locId, locData] of Object.entries(variant.inventoryByLocation)) {
           // PRIMARY: Use locations array if available
           if (platformLocationIds.size > 0) {
-            if (platformLocationIds.has(locId)) {
+            // CRITICAL FIX: Always include 'default' key for platforms like eBay
+            if (locId === 'default' || platformLocationIds.has(locId)) {
               filteredInventory[locId] = locData;
             } else {
               console.log(`[cleanPlatformDataForSave] Filtered out location ${locId} from ${platformKey} - not in platform's locations`);
             }
+            continue;
+          }
+
+          // For platforms WITHOUT locations (like eBay), always include 'default' key
+          if (locId === 'default') {
+            filteredInventory[locId] = locData;
             continue;
           }
 
@@ -335,6 +342,7 @@ const ProductDetailScreen = observer(
     const [allProductVariants, setAllProductVariants] = useState<any[]>([]);
     // Ref to access allProductVariants in realtime callbacks (avoids stale closure)
     const allProductVariantsRef = useRef<any[]>([]);
+    const connectionsRef = useRef<PlatformConnection[]>([]);
     // ⚡ Store platform location names map for consistent location name resolution
     const [platformLocationNames, setPlatformLocationNames] = useState<Map<string, string>>(new Map());
     // ⚡ CRITICAL FIX: Store ALL platform locations (not just those with inventory)
@@ -400,10 +408,13 @@ const ProductDetailScreen = observer(
       return () => clearTimeout(timer);
     }, [externalUpdates]);
 
-    // Keep ref in sync with state
+    // Keep refs in sync with state
     useEffect(() => {
       allProductVariantsRef.current = allProductVariants;
     }, [allProductVariants]);
+    useEffect(() => {
+      connectionsRef.current = connections;
+    }, [connections]);
 
     // ========== CRITICAL FIX: useRef for data persistence + auto-save ==========
     const [updateCounter, setUpdateCounter] = useState(0);
@@ -689,21 +700,21 @@ const ProductDetailScreen = observer(
 
         // If we have inventory data, group it
         if (mergedInventory && mergedInventory.length > 0) {
+          // CRITICAL FIX: Hide "Shared Stock" if there is ANY real platform connection for this item
+          // regardless of quantity. Examples: Square connected with 0 stock -> Hide Shared Stock.
           const hasRealPlatformLocations = mergedInventory.some((lvl: InventoryLevel) => {
             const conn = platformConnections.find(c => c.Id === lvl.PlatformConnectionId);
-            return conn !== undefined && (lvl.Quantity || 0) > 0;
+            return conn !== undefined; // Simply check if a valid connection exists
           });
 
           mergedInventory.forEach((level: InventoryLevel) => {
             const connection = platformConnections.find(conn => conn.Id === level.PlatformConnectionId);
 
             // Handle pool-based inventory (partner shares) - no platform connection but has PoolId
-            // SKIP the virtual "Shared Stock" if there are real platform locations to show
-            // This check runs per-level, so we'll filter later after all levels are processed
             if (!connection && (level as any).PoolId) {
-              // Only add Shared Stock if there are NO real platform locations with quantity
+              // Only add Shared Stock if there are NO real platform locations available
               if (hasRealPlatformLocations) {
-                console.log('[ProductDetail] Skipping Shared Stock - real platform locations exist');
+                console.log('[ProductDetail] Skipping Shared Stock - valid platform connection exists');
                 return; // Skip adding the virtual location
               }
 
@@ -738,8 +749,10 @@ const ProductDetailScreen = observer(
               return;
             }
 
+            // CRITICAL FIX: Filter out "Ghost" locations where connection is missing and no PoolId
+            // This happens if a connection was deleted but inventory level remains stapled
             if (!connection) {
-              console.warn('[ProductDetail] No connection found for inventory level:', level.PlatformConnectionId);
+              console.warn('[ProductDetail] 👻 Ghost inventory detected (No Connection, No PoolId):', level.PlatformConnectionId);
               return;
             }
 
@@ -943,7 +956,7 @@ const ProductDetailScreen = observer(
                 const token = await ensureSupabaseJwt();
                 if (!token) throw new Error('No auth token');
 
-                const res = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/links/${linkId}/revoke`, {
+                const res = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/links/${linkId}`, {
                   method: 'DELETE',
                   headers: { Authorization: `Bearer ${token}` },
                 });
@@ -1197,12 +1210,21 @@ const ProductDetailScreen = observer(
         }
       });
 
+      // Skip pool / "Shared Stock" when user has any real connection (hide ghost shared stock)
+      const hasRealConnection = connections.some(
+        (c) =>
+          c.IsEnabled &&
+          c.PlatformType?.toLowerCase() !== 'pool' &&
+          c.PlatformType?.toLowerCase() !== 'csv'
+      );
+
       // Also add any locations from groupedInventory that might not be in allPlatformLocations
       // (edge case: inventory exists but location sync hasn't happened yet)
       // CRITICAL: Apply STRICT platform ID filtering here too!
       Object.values(groupedInventory).forEach(platformGroup => {
         const platform = platformGroup.platformType?.toLowerCase();
         if (!platform) return;
+        if (platform === 'pool' && hasRealConnection) return;
 
         if (!locsByPlatform[platform]) locsByPlatform[platform] = [];
 
@@ -1604,7 +1626,18 @@ const ProductDetailScreen = observer(
         );
 
         if (!targetConnection) {
-          Alert.alert('No Connection', `You don't have a ${platformKey} account connected. Connect one first in Settings.`);
+          Alert.alert(
+            'No Connection',
+            `You don't have a ${platformKey} account connected.`,
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Add Platform',
+                style: 'default',
+                onPress: () => navigation.navigate('Profile')
+              }
+            ]
+          );
           return;
         }
 
@@ -2210,6 +2243,7 @@ const ProductDetailScreen = observer(
             quantity: level.Quantity || 0,
             price: level.Price || undefined,
             compareAtPrice: level.CompareAtPrice || undefined,
+            connectionId: level.PlatformConnectionId || undefined,
           };
         });
 
@@ -2260,7 +2294,16 @@ const ProductDetailScreen = observer(
       const inventoryChanged = currentInventoryCount !== lastHydratedInventoryCountRef.current;
       const locationNamesChanged = currentLocationNamesCount > 0 && lastLocationNamesCountRef.current !== currentLocationNamesCount;
 
-      if (alreadyHydrated && !inventoryChanged && !locationNamesChanged) {
+      // Re-hydrate when mappings add new platforms (e.g. Square published after initial load)
+      const mappedPlatformTypesFromMappings = new Set<string>();
+      mappings.forEach((m: any) => {
+        const conn = connections.find((c: any) => c.Id === m.PlatformConnectionId);
+        if (conn) mappedPlatformTypesFromMappings.add(conn.PlatformType?.toLowerCase());
+      });
+      const currentDisplayedKeys = Object.keys(displayedPlatforms);
+      const mappingsAddNewPlatform = [...mappedPlatformTypesFromMappings].some((k) => !currentDisplayedKeys.includes(k));
+
+      if (alreadyHydrated && !inventoryChanged && !locationNamesChanged && !mappingsAddNewPlatform) {
         console.log('[ProductDetail] ⚠️ Already hydrated for product', detailedItem.Id, '- skipping to preserve data');
         return; // Exit early - don't even update formData again
       }
@@ -3035,6 +3078,47 @@ const ProductDetailScreen = observer(
                 });
                 return updated;
               });
+
+              // Merge into displayedPlatforms so VariantInventoryEditor updates live (hydration skips when count unchanged)
+              const conn = connectionsRef.current.find(c => c.Id === updatedLevel.PlatformConnectionId);
+              const platformKey = conn?.PlatformType?.toLowerCase();
+              if (platformKey) {
+                setDisplayedPlatforms(prev => {
+                  const next = { ...prev };
+                  if (!next[platformKey]) return prev;
+                  const plat = next[platformKey];
+                  const locIdRaw = updatedLevel.PlatformLocationId ?? 'default';
+                  const locs = plat.locations || [];
+                  const matchingLoc = locs.find((l: any) => (l.locationId || l.id) === locIdRaw);
+                  const keysToUpdate = matchingLoc ? [matchingLoc.id, locIdRaw] : [locIdRaw];
+                  const nextLocQty = { ...(plat.locationQuantities || {}) };
+                  keysToUpdate.forEach(k => { nextLocQty[k] = updatedLevel.Quantity; });
+                  const nextVariants = (plat.variants || []).map((v: any) => {
+                    if (v.id !== affectedVariantId) return v;
+                    const inv = { ...(v.inventoryByLocation || {}) };
+                    const existing = inv[locIdRaw] || inv[keysToUpdate[0]];
+                    keysToUpdate.forEach(k => {
+                      inv[k] = { quantity: updatedLevel.Quantity, price: updatedLevel.Price ?? existing?.price };
+                    });
+                    return { ...v, inventoryByLocation: inv };
+                  });
+                  next[platformKey] = { ...plat, locationQuantities: nextLocQty, variants: nextVariants };
+                  return next;
+                });
+              }
+
+              // Green border: per-field keys so only quantity or price input highlights.
+              // Set both raw location id (platform tab) and composite id (All tab: platformKey::connectionId::locationId)
+              const locIdRaw = updatedLevel.PlatformLocationId ?? 'default';
+              const compositeId = `${platformKey}::${conn?.Id || 'unknown'}::${locIdRaw}`;
+              setExternalUpdates(prev => ({
+                ...prev,
+                [`inventory_${affectedVariantId}_${locIdRaw}_quantity`]: { quantity: updatedLevel.Quantity, updatedAt: Date.now() },
+                [`inventory_${affectedVariantId}_${locIdRaw}_price`]: { price: updatedLevel.Price, updatedAt: Date.now() },
+                [`inventory_${affectedVariantId}_${compositeId}_quantity`]: { quantity: updatedLevel.Quantity, updatedAt: Date.now() },
+                [`inventory_${affectedVariantId}_${compositeId}_price`]: { price: updatedLevel.Price, updatedAt: Date.now() },
+              }));
+
               console.log('[ProductDetail] ✅ Inventory updated in place for variant', affectedVariantId);
               showBanner('Inventory updated from external source');
             } else {

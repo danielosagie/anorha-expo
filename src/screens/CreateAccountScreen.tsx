@@ -145,19 +145,21 @@ const Stepper = memo(({ currentStep }: { currentStep: Step }) => {
 
 const WelcomeStep = memo(({ onNext }: { onNext: () => void }) => (
   <Animated.View entering={FadeIn} exiting={FadeOut} style={styles.stepContainer}>
-    <View style={styles.logoContainer}>
-      <View style={styles.logoBox}>
-        <Image source={require('../assets/anorha_logo.png')} style={styles.logoImage} resizeMode="contain" />
+    <View style={{ flex: 1, justifyContent: 'center' }}>
+      <View style={styles.logoContainer}>
+        <View style={styles.logoBox}>
+          <Image source={require('../assets/anorha_logo.png')} style={styles.logoImage} resizeMode="contain" />
+        </View>
+        <Text style={styles.logoTitle}>anorha</Text>
       </View>
-      <Text style={styles.logoTitle}>anorha</Text>
+      <Text style={styles.bigTitle}>Finish your setup</Text>
+      <Text style={styles.subtitle}>Let's get your business inventory synced.</Text>
+      <View style={{ flex: 1 }} />
+      <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
+        <Text style={styles.primaryButtonText}>Let's Go</Text>
+        <Icon name="arrow-right" size={24} color={THEME.bg} />
+      </TouchableOpacity>
     </View>
-    <Text style={styles.bigTitle}>Finish your setup</Text>
-    <Text style={styles.subtitle}>Let's get your business inventory synced.</Text>
-    <View style={{ flex: 1 }} />
-    <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
-      <Text style={styles.primaryButtonText}>Let's Go</Text>
-      <Icon name="arrow-right" size={24} color={THEME.bg} />
-    </TouchableOpacity>
   </Animated.View>
 ));
 
@@ -195,6 +197,8 @@ const StoreAddressStep = memo(({
   onCountryChange,
   onNext,
   onSkip,
+  onUseLocation,
+  isLoadingLocation,
 }: {
   street1: string;
   street2: string;
@@ -210,12 +214,31 @@ const StoreAddressStep = memo(({
   onCountryChange: (t: string) => void;
   onNext: () => void;
   onSkip: () => void;
+  onUseLocation: () => void;
+  isLoadingLocation?: boolean;
 }) => (
   <Animated.View entering={SlideInRight} exiting={SlideOutLeft} style={styles.stepContainer}>
-    <Text style={styles.stepTitle}>Where's your store located?</Text>
-    <Text style={styles.subtitle}>This helps us set up shipping & returns for platforms like eBay.</Text>
+    <Text style={styles.stepTitle}>Business Address</Text>
+    <Text style={styles.subtitle}>This helps us setup shipping & returns for your platforms.</Text>
+    <View style={styles.divider} />
 
-    <View style={{ marginTop: 24, gap: 12 }}>
+    {/* Use My Location Button */}
+    <TouchableOpacity
+      style={styles.useLocationButton}
+      onPress={onUseLocation}
+      disabled={isLoadingLocation}
+    >
+      {isLoadingLocation ? (
+        <ActivityIndicator size="small" color={"rgba(56, 56, 56, 1)"} />
+      ) : (
+        <Icon name="crosshairs-gps" size={20} color={"rgba(56, 56, 56, 1)"} />
+      )}
+      <Text style={styles.useLocationText}>
+        {isLoadingLocation ? 'Finding your location...' : 'Use My Location'}
+      </Text>
+    </TouchableOpacity>
+
+    <View style={{ marginTop: 16, gap: 12 }}>
       <TextInput
         style={styles.input}
         placeholder="Street Address"
@@ -223,6 +246,8 @@ const StoreAddressStep = memo(({
         value={street1}
         onChangeText={onStreet1Change}
         autoFocus
+        textContentType="streetAddressLine1"
+        autoComplete="street-address"
       />
       <TextInput
         style={styles.input}
@@ -230,6 +255,8 @@ const StoreAddressStep = memo(({
         placeholderTextColor={THEME.textDim}
         value={street2}
         onChangeText={onStreet2Change}
+        textContentType="streetAddressLine2"
+        autoComplete="address-line2"
       />
       <View style={{ flexDirection: 'row', gap: 12 }}>
         <TextInput
@@ -238,6 +265,8 @@ const StoreAddressStep = memo(({
           placeholderTextColor={THEME.textDim}
           value={city}
           onChangeText={onCityChange}
+          textContentType="addressCity"
+          autoComplete="postal-address-locality"
         />
         <TextInput
           style={[styles.input, { flex: 1 }]}
@@ -247,6 +276,8 @@ const StoreAddressStep = memo(({
           onChangeText={onStateChange}
           autoCapitalize="characters"
           maxLength={2}
+          textContentType="addressState"
+          autoComplete="postal-address-region"
         />
       </View>
       <View style={{ flexDirection: 'row', gap: 12 }}>
@@ -257,15 +288,19 @@ const StoreAddressStep = memo(({
           value={postalCode}
           onChangeText={onPostalCodeChange}
           keyboardType="numeric"
+          textContentType="postalCode"
+          autoComplete="postal-code"
         />
         <TextInput
           style={[styles.input, { flex: 1 }]}
-          placeholder="Country"
+          placeholder="US"
           placeholderTextColor={THEME.textDim}
           value={country}
           onChangeText={onCountryChange}
           autoCapitalize="characters"
           maxLength={2}
+          textContentType="countryName"
+          autoComplete="postal-address-country"
         />
       </View>
     </View>
@@ -275,8 +310,8 @@ const StoreAddressStep = memo(({
       <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
         <Text style={styles.primaryButtonText}>Next</Text>
       </TouchableOpacity>
-      <TouchableOpacity onPress={onSkip} style={{ alignItems: 'center', padding: 12 }}>
-        <Text style={{ color: THEME.text, fontSize: 16 }}>Skip for now</Text>
+      <TouchableOpacity onPress={onSkip} style={{ backgroundColor: "rgba(0, 0, 0, 0.11)", alignItems: 'center', paddingVertical: 24, borderRadius: 12 }}>
+        <Text style={{ color: THEME.text, fontWeight: 500, fontSize: 16 }}>Skip for now</Text>
       </TouchableOpacity>
     </View>
   </Animated.View>
@@ -578,6 +613,7 @@ export default function CreateAccountScreen() {
   // State
   const [currentStep, setCurrentStep] = useState<Step>('WELCOME');
   const [loading, setLoading] = useState(false);
+  const [isLoadingAddress, setIsLoadingAddress] = useState(false);
 
   const [formData, setFormData] = useState<FormData>({
     businessName: '',
@@ -609,6 +645,51 @@ export default function CreateAccountScreen() {
 
   const goToStep = useCallback((step: Step) => {
     setCurrentStep(step);
+  }, []);
+
+  // Use My Location for address autofill
+  const handleUseLocation = useCallback(async () => {
+    try {
+      setIsLoadingAddress(true);
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Please allow location access to use this feature.');
+        return;
+      }
+
+      let location = await Location.getLastKnownPositionAsync({});
+      if (!location) {
+        location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      }
+
+      if (location) {
+        const geocode = await Location.reverseGeocodeAsync({
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude
+        });
+
+        if (geocode && geocode.length > 0) {
+          const addr = geocode[0];
+          setFormData(prev => ({
+            ...prev,
+            street1: addr.streetNumber && addr.street
+              ? `${addr.streetNumber} ${addr.street}`
+              : addr.street || addr.name || '',
+            city: addr.city || addr.subregion || '',
+            state: addr.region || '',
+            postalCode: addr.postalCode || '',
+            country: addr.isoCountryCode || 'US',
+          }));
+        } else {
+          Alert.alert('Location Error', 'Could not determine your address. Please enter it manually.');
+        }
+      }
+    } catch (err) {
+      console.log('Location error', err);
+      Alert.alert('Location Error', 'Could not get your location. Please enter your address manually.');
+    } finally {
+      setIsLoadingAddress(false);
+    }
   }, []);
 
   const handleNext = useCallback(async () => {
@@ -901,6 +982,8 @@ export default function CreateAccountScreen() {
               onCountryChange={(t) => setFormData(p => ({ ...p, country: t }))}
               onNext={handleNext}
               onSkip={() => goToStep('BUSINESS_TYPE')}
+              onUseLocation={handleUseLocation}
+              isLoadingLocation={isLoadingAddress}
             />
           )}
 
@@ -993,6 +1076,7 @@ const styles = StyleSheet.create({
   stepContainer: {
     flex: 1,
     padding: 24,
+    justifyContent: 'center',
   },
   progressContainer: {
     flexDirection: 'row',
@@ -1032,11 +1116,19 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 16,
   },
+  divider: {
+    height: 2,
+    backgroundColor: "rgba(0, 0, 0, 0.14)",
+    marginVertical: 15,
+    minWidth: '100%',
+    alignSelf: 'center',
+  },
   stepTitle: {
     fontSize: 32,
     fontFamily: 'PlusJakartaSans_700Bold',
     color: THEME.text,
     marginBottom: 16,
+    textAlign: 'center',
   },
   subtitle: {
     fontSize: 18,
@@ -1044,6 +1136,22 @@ const styles = StyleSheet.create({
     color: THEME.textDim,
     textAlign: 'center',
     lineHeight: 26,
+  },
+  useLocationButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.11)',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    marginTop: 20,
+    gap: 10,
+  },
+  useLocationText: {
+    fontSize: 16,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: "rgba(56, 56, 56, 1)",
   },
   label: {
     fontSize: 14,
@@ -1240,12 +1348,6 @@ const styles = StyleSheet.create({
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: THEME.textDim,
     textDecorationLine: 'underline',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: THEME.border,
-    width: '50%',
-    alignSelf: 'center',
   },
   // INvite List
   inviteRow: {

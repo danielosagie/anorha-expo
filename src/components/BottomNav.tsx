@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, StyleProp, ViewStyle } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PlatformButton from './PlatformButton';
@@ -26,6 +26,7 @@ type Props = {
   onBack?: () => void;
   onGeneratePress: () => void;
   onStartConnect?: (platform: string) => void;
+  style?: StyleProp<ViewStyle>;
 };
 
 const BottomNav: React.FC<Props> = ({
@@ -45,14 +46,18 @@ const BottomNav: React.FC<Props> = ({
   onBack,
   onGeneratePress,
   onStartConnect,
+  style,
 }) => {
   return (
     <LinearGradient
       colors={["rgba(255, 255, 255, 0)", "rgb(255, 255, 255)", "rgb(255, 255, 255)"]}
-      style={{
-        marginBottom: 3,
-        ...(state === 'platformPicker' ? { flex: 1, height: '100%', width: '100%' } : {}),
-      }}
+      style={[
+        {
+          marginBottom: 3,
+          ...(state === 'platformPicker' ? { flex: 1, width: '100%' } : {}),
+        },
+        style
+      ]}
     >
       {state === 'empty' && (
         <View style={styles.emptyButtonSolo}>
@@ -165,38 +170,36 @@ const BottomNav: React.FC<Props> = ({
 
       {state === 'platformPicker' && (
         <View style={styles.platformPickerContainer}>
-          <View style={{ flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 12, paddingVertical: 12 }}>
-            <View style={styles.platformHeader}>
-              <Text style={styles.platformHeaderText}>Which Platform To Add?</Text>
-              <View style={{ width: 24 }} />
-            </View>
-            <View style={styles.platformGrid}>
-              {['shopify', 'square', 'clover', 'ebay', 'facebook'].map((p) => (
-                <PlatformButton
-                  key={p}
-                  platform={p}
-                  isSelected={false}
-                  onPress={() => onStartConnect && onStartConnect(p)}
-                  isConnected={isConnected(p)}
-                  activeCount={platformActiveCounts[p] || 0}
-                />
-              ))}
-            </View>
-            {/* Divider */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', width: '100%', marginVertical: 8 }}>
-              <View style={{ flex: 1, height: 1, backgroundColor: '#e5e7eb' }} />
-              <Text style={{ marginHorizontal: 12, color: '#9ca3af', fontSize: 13 }}>OR</Text>
-              <View style={{ flex: 1, height: 1, backgroundColor: '#e5e7eb' }} />
-            </View>
-            {/* CSV Import Button */}
-            <TouchableOpacity
-              style={styles.csvImportButton}
-              onPress={() => onStartConnect && onStartConnect('csv')}
-            >
-              <Icon name="table" size={20} color="#6b7280" />
-              <Text style={styles.csvImportText}>Import from CSV</Text>
-            </TouchableOpacity>
+          <View style={styles.platformHeader}>
+            <Text style={styles.platformHeaderText}>Which Platform To Add?</Text>
+            <View style={{ width: 24 }} />
           </View>
+          <View style={styles.platformGrid}>
+            {['shopify', 'square', 'clover', 'ebay', 'facebook'].map((p) => (
+              <PlatformButton
+                key={p}
+                platform={p}
+                isSelected={false}
+                onPress={() => onStartConnect && onStartConnect(p)}
+                isConnected={isConnected(p)}
+                activeCount={platformActiveCounts[p] || 0}
+              />
+            ))}
+          </View>
+          {/* Divider */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', width: '100%', marginVertical: 8 }}>
+            <View style={{ flex: 1, height: 1, backgroundColor: '#e5e7eb' }} />
+            <Text style={{ marginHorizontal: 12, color: '#9ca3af', fontSize: 13 }}>OR</Text>
+            <View style={{ flex: 1, height: 1, backgroundColor: '#e5e7eb' }} />
+          </View>
+          {/* CSV Import Button */}
+          <TouchableOpacity
+            style={styles.csvImportButton}
+            onPress={() => onStartConnect && onStartConnect('csv')}
+          >
+            <Icon name="table" size={20} color="#6b7280" />
+            <Text style={styles.csvImportText}>Import from CSV</Text>
+          </TouchableOpacity>
         </View>
       )}
     </LinearGradient>
@@ -213,18 +216,19 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginTop: 10,
     minHeight: 550,
-    maxHeight: 650,
+    maxHeight: 950,
     backgroundColor: 'rgb(255, 255, 255)',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingTop: 20,
   },
   platformPickerContainer: {
+    flexDirection: 'column',
     alignItems: 'center',
     gap: 12,
     paddingLeft: 20,
     paddingRight: 20,
-    justifyContent: 'flex-start',
+    justifyContent: 'center',
     marginTop: 10,
     flex: 1,
     backgroundColor: 'rgb(255, 255, 255)'
@@ -324,6 +328,7 @@ const styles = StyleSheet.create({
   },
   platformHeader: {
     flexDirection: 'row',
+    justifyContent: 'center',
     width: '100%',
     marginBottom: 12
   },
@@ -340,7 +345,6 @@ const styles = StyleSheet.create({
     gap: 8
   },
   csvImportButton: {
-    flex: 1,
     minWidth: '100%',
     flexDirection: 'row',
     alignItems: 'center',
@@ -350,7 +354,7 @@ const styles = StyleSheet.create({
     borderColor: '#e5e7eb',
     borderRadius: 12,
     paddingVertical: 14,
-    paddingHorizontal: 20,
+    paddingHorizontal: 40,
     gap: 8,
   },
   csvImportText: {

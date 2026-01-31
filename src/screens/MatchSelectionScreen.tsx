@@ -679,19 +679,37 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
     };
 
     // --- Optimized Event Handlers ---
+    const MAX_MATCH_SELECTIONS = 4; // Limit to 4 matches for optimal scraping performance
+
     const handleSelectProduct = useCallback((index: number) => {
         setSelectedIndices(prev => {
-            const newSelection = prev.includes(index)
-                ? prev.filter(i => i !== index)
-                : [...prev, index];
+            // If already selected, allow deselection
+            if (prev.includes(index)) {
+                const newSelection = prev.filter(i => i !== index);
+                // Reset flow when all items are deselected
+                if (newSelection.length === 0) {
+                    setBottomNavState('empty');
+                    setSelectedPlatforms([]);
+                    setSelectedTemplate(null);
+                }
+                return newSelection;
+            }
 
-            // Reset flow when items are deselected
-            if (newSelection.length === 0) {
-                setBottomNavState('empty');
-                setSelectedPlatforms([]);
-                setSelectedTemplate(null);
-            } else if (newSelection.length > 0 && bottomNavState === 'empty') {
-                // Auto-advance to template stage when first item is selected
+            // If trying to add but already at limit, don't add (show feedback via UI)
+            if (prev.length >= MAX_MATCH_SELECTIONS) {
+                Alert.alert(
+                    'Match Limit Reached',
+                    `You can select up to ${MAX_MATCH_SELECTIONS} matches for optimal performance.`,
+                    [{ text: 'OK' }]
+                );
+                return prev;
+            }
+
+            // Add the new selection
+            const newSelection = [...prev, index];
+
+            // Auto-advance to template stage when first item is selected
+            if (newSelection.length > 0 && bottomNavState === 'empty') {
                 setBottomNavState('selection');
             }
             return newSelection;

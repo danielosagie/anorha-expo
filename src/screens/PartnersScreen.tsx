@@ -7,7 +7,6 @@ import {
     RefreshControl,
     ActivityIndicator,
     TouchableOpacity,
-    Alert,
     Modal,
     TextInput,
     KeyboardAvoidingView,
@@ -23,6 +22,7 @@ import { showMessage } from 'react-native-flash-message';
 import * as Clipboard from 'expo-clipboard';
 import { useOrg } from '../context/OrgContext';
 import { PartnerAcceptModal } from '../components/PartnerAcceptModal';
+import BaseModal from '../components/BaseModal';
 
 const SSSYNC_API_BASE_URL = "https://api.sssync.app";
 
@@ -82,6 +82,39 @@ export default function PartnersScreen() {
     const [acceptingInviteId, setAcceptingInviteId] = useState<string | null>(null);
     const [acceptModalVisible, setAcceptModalVisible] = useState(false);
     const [selectedInvite, setSelectedInvite] = useState<ReceivedInvite | null>(null);
+
+    // BaseModal State - for replacing Alert.alert
+    const [alertModal, setAlertModal] = useState<{
+        visible: boolean;
+        title: string;
+        message: string;
+        type: 'info' | 'error' | 'success';
+        onDismiss?: () => void;
+    }>({ visible: false, title: '', message: '', type: 'info' });
+
+    const [confirmModal, setConfirmModal] = useState<{
+        visible: boolean;
+        title: string;
+        message: string;
+        confirmText: string;
+        confirmStyle: 'default' | 'destructive';
+        onConfirm: () => void;
+    }>({ visible: false, title: '', message: '', confirmText: 'Confirm', confirmStyle: 'default', onConfirm: () => { } });
+
+    const [inviteSentModal, setInviteSentModal] = useState<{
+        visible: boolean;
+        inviteLink: string;
+    }>({ visible: false, inviteLink: '' });
+
+    const [onboardingModal, setOnboardingModal] = useState<{
+        visible: boolean;
+        message: string;
+    }>({ visible: false, message: '' });
+
+    // Helper to show simple alert modal
+    const showAlertModal = (title: string, message: string, type: 'info' | 'error' | 'success' = 'info', onDismiss?: () => void) => {
+        setAlertModal({ visible: true, title, message, type, onDismiss });
+    };
 
     // Load Data
     const loadData = useCallback(async () => {
@@ -188,7 +221,7 @@ export default function PartnersScreen() {
 
     const handleSendInvite = async () => {
         if (!inviteEmail || !invitePoolId) {
-            Alert.alert('Missing Fields', 'Please select a pool and enter an email address.');
+            showAlertModal('Missing Fields', 'Please select a pool and enter an email address.', 'error');
             return;
         }
         if (!currentOrg) return;
@@ -216,22 +249,14 @@ export default function PartnersScreen() {
                 const data = await res.json();
                 setInviteModalVisible(false);
                 setInviteEmail('');
-
-                Alert.alert(
-                    'Invite Sent!',
-                    `Invite link created. Share this with your partner:\n\n${data.inviteLink}`,
-                    [
-                        { text: 'Copy Link', onPress: () => { Clipboard.setStringAsync(data.inviteLink); showMessage({ message: 'Link Copied!', type: 'success', backgroundColor: theme.colors.primary }); } },
-                        { text: 'OK', style: 'cancel' }
-                    ]
-                );
+                setInviteSentModal({ visible: true, inviteLink: data.inviteLink });
                 refreshData();
             } else {
                 const err = await res.text();
-                Alert.alert('Failed', `Could not send invite: ${err}`);
+                showAlertModal('Failed', `Could not send invite: ${err}`, 'error');
             }
         } catch (e: any) {
-            Alert.alert('Error', e.message);
+            showAlertModal('Error', e.message, 'error');
         } finally {
             setSendingInvite(false);
         }
@@ -239,22 +264,25 @@ export default function PartnersScreen() {
 
     const handleRevokeInvite = (inviteId: string) => {
         if (!currentOrg) return;
-        Alert.alert('Revoke Invite', 'Are you sure?', [
-            { text: 'Cancel', style: 'cancel' },
-            {
-                text: 'Revoke', style: 'destructive', onPress: async () => {
-                    try {
-                        const token = await ensureSupabaseJwt();
-                        await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/${inviteId}?orgId=${currentOrg.id}`, {
-                            method: 'DELETE',
-                            headers: { Authorization: `Bearer ${token}` }
-                        });
-                        refreshData();
-                        showMessage({ message: 'Invite revoked', type: 'info' });
-                    } catch (e) { console.error(e); }
-                }
+        setConfirmModal({
+            visible: true,
+            title: 'Revoke Invite',
+            message: 'Are you sure you want to revoke this invite?',
+            confirmText: 'Revoke',
+            confirmStyle: 'destructive',
+            onConfirm: async () => {
+                setConfirmModal(prev => ({ ...prev, visible: false }));
+                try {
+                    const token = await ensureSupabaseJwt();
+                    await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/${inviteId}?orgId=${currentOrg.id}`, {
+                        method: 'DELETE',
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    refreshData();
+                    showMessage({ message: 'Invite revoked', type: 'info' });
+                } catch (e) { console.error(e); }
             }
-        ]);
+        });
     };
 
     const handlePauseResume = async (p: Partnership) => {
@@ -275,22 +303,25 @@ export default function PartnersScreen() {
     };
 
     const handleTerminate = (p: Partnership) => {
-        Alert.alert('End Partnership', 'This will remove all shared products. Continue?', [
-            { text: 'Cancel', style: 'cancel' },
-            {
-                text: 'End', style: 'destructive', onPress: async () => {
-                    try {
-                        const token = await ensureSupabaseJwt();
-                        await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/partnerships/${p.id}?cleanup=true`, {
-                            method: 'DELETE',
-                            headers: { Authorization: `Bearer ${token}` }
-                        });
-                        refreshData();
-                        showMessage({ message: 'Partnership ended', type: 'info' });
-                    } catch (e) { console.error(e); }
-                }
+        setConfirmModal({
+            visible: true,
+            title: 'End Partnership',
+            message: 'This will remove all shared products. Are you sure you want to continue?',
+            confirmText: 'End',
+            confirmStyle: 'destructive',
+            onConfirm: async () => {
+                setConfirmModal(prev => ({ ...prev, visible: false }));
+                try {
+                    const token = await ensureSupabaseJwt();
+                    await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/partnerships/${p.id}?cleanup=true`, {
+                        method: 'DELETE',
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    refreshData();
+                    showMessage({ message: 'Partnership ended', type: 'info' });
+                } catch (e) { console.error(e); }
             }
-        ]);
+        });
     };
 
     // New Flow: 1. Click Accept -> Open Modal
@@ -334,20 +365,10 @@ export default function PartnersScreen() {
 
                 // Check for onboarding next steps (e.g. no platform connected yet)
                 if (result.onboarding?.nextStep === 'connect_platform') {
-                    Alert.alert(
-                        'Partnership Connected!',
-                        'To start syncing products, you need to connect a selling platform (Shopify, Square, etc).',
-                        [
-                            { text: 'Later', style: 'cancel', onPress: () => refreshData() },
-                            {
-                                text: 'Connect Now',
-                                onPress: () => {
-                                    refreshData();
-                                    navigation.navigate('Profile');
-                                }
-                            }
-                        ]
-                    );
+                    setOnboardingModal({
+                        visible: true,
+                        message: 'To start syncing products, you need to connect a selling platform (Shopify, Square, etc).'
+                    });
                 } else {
                     showMessage({
                         message: 'Partnership Established!',
@@ -364,13 +385,13 @@ export default function PartnersScreen() {
                 refreshData(); // Sync back to truth
 
                 if (errorData.code === 'EMAIL_MISMATCH') {
-                    Alert.alert('Wrong Account', `This invite was sent to ${errorData.inviteeEmail}. You are logged in as ${errorData.currentEmail}.`);
+                    showAlertModal('Wrong Account', `This invite was sent to ${errorData.inviteeEmail}. You are logged in as ${errorData.currentEmail}.`, 'error');
                 } else {
-                    Alert.alert('Error', errorData.message || 'Failed to accept invite');
+                    showAlertModal('Error', errorData.message || 'Failed to accept invite', 'error');
                 }
             }
         } catch (e: any) {
-            Alert.alert('Error', e.message || 'Failed to accept invite');
+            showAlertModal('Error', e.message || 'Failed to accept invite', 'error');
             refreshData();
         } finally {
             setSelectedInvite(null);
@@ -378,22 +399,25 @@ export default function PartnersScreen() {
     };
 
     const handleDeclineInvite = (invite: ReceivedInvite) => {
-        Alert.alert('Decline Invite', `Decline invitation from ${invite.sourceOrgName}?`, [
-            { text: 'Cancel', style: 'cancel' },
-            {
-                text: 'Decline', style: 'destructive', onPress: async () => {
-                    try {
-                        const token = await ensureSupabaseJwt();
-                        await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/${invite.token}/decline`, {
-                            method: 'POST',
-                            headers: { Authorization: `Bearer ${token}` }
-                        });
-                        setReceivedInvites(prev => prev.filter(i => i.id !== invite.id));
-                        showMessage({ message: 'Invite declined', type: 'info' });
-                    } catch (e) { console.error(e); }
-                }
+        setConfirmModal({
+            visible: true,
+            title: 'Decline Invite',
+            message: `Decline invitation from ${invite.sourceOrgName}?`,
+            confirmText: 'Decline',
+            confirmStyle: 'destructive',
+            onConfirm: async () => {
+                setConfirmModal(prev => ({ ...prev, visible: false }));
+                try {
+                    const token = await ensureSupabaseJwt();
+                    await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/${invite.token}/decline`, {
+                        method: 'POST',
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    setReceivedInvites(prev => prev.filter(i => i.id !== invite.id));
+                    showMessage({ message: 'Invite declined', type: 'info' });
+                } catch (e) { console.error(e); }
             }
-        ]);
+        });
     };
 
     const handlePressPartnership = (p: Partnership) => {
@@ -678,6 +702,125 @@ export default function PartnersScreen() {
                 onClose={() => setAcceptModalVisible(false)}
                 onConfirm={confirmAcceptInvite}
             />
+
+            {/* Alert Modal (simple info/error messages) */}
+            <BaseModal
+                visible={alertModal.visible}
+                onClose={() => {
+                    setAlertModal(prev => ({ ...prev, visible: false }));
+                    alertModal.onDismiss?.();
+                }}
+            >
+                <Icon
+                    name={alertModal.type === 'error' ? 'alert-circle' : alertModal.type === 'success' ? 'check-circle' : 'information'}
+                    size={48}
+                    color={alertModal.type === 'error' ? '#EF4444' : theme.colors.primary}
+                    style={{ marginBottom: 16 }}
+                />
+                <Text style={styles.modalAlertTitle}>{alertModal.title}</Text>
+                <Text style={styles.modalAlertMessage}>{alertModal.message}</Text>
+                <TouchableOpacity
+                    style={[styles.modalButton, { backgroundColor: alertModal.type === 'error' ? '#EF4444' : theme.colors.primary }]}
+                    onPress={() => {
+                        setAlertModal(prev => ({ ...prev, visible: false }));
+                        alertModal.onDismiss?.();
+                    }}
+                >
+                    <Text style={styles.modalButtonText}>OK</Text>
+                </TouchableOpacity>
+            </BaseModal>
+
+            {/* Confirm Modal (destructive actions) */}
+            <BaseModal
+                visible={confirmModal.visible}
+                onClose={() => setConfirmModal(prev => ({ ...prev, visible: false }))}
+            >
+                <Icon
+                    name="alert-outline"
+                    size={48}
+                    color={confirmModal.confirmStyle === 'destructive' ? '#EF4444' : theme.colors.primary}
+                    style={{ marginBottom: 16 }}
+                />
+                <Text style={styles.modalAlertTitle}>{confirmModal.title}</Text>
+                <Text style={styles.modalAlertMessage}>{confirmModal.message}</Text>
+                <View style={styles.modalButtonRow}>
+                    <TouchableOpacity
+                        style={[styles.modalButton, styles.modalCancelButton]}
+                        onPress={() => setConfirmModal(prev => ({ ...prev, visible: false }))}
+                    >
+                        <Text style={styles.modalCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.modalButton, { backgroundColor: confirmModal.confirmStyle === 'destructive' ? '#EF4444' : theme.colors.primary }]}
+                        onPress={confirmModal.onConfirm}
+                    >
+                        <Text style={styles.modalButtonText}>{confirmModal.confirmText}</Text>
+                    </TouchableOpacity>
+                </View>
+            </BaseModal>
+
+            {/* Invite Sent Modal */}
+            <BaseModal
+                visible={inviteSentModal.visible}
+                onClose={() => setInviteSentModal({ visible: false, inviteLink: '' })}
+            >
+                <Icon name="check-circle" size={48} color={theme.colors.primary} style={{ marginBottom: 16 }} />
+                <Text style={styles.modalAlertTitle}>Invite Sent!</Text>
+                <Text style={styles.modalAlertMessage}>Invite link created. Share this with your partner:</Text>
+                <Text style={styles.inviteLinkText} selectable numberOfLines={3}>{inviteSentModal.inviteLink}</Text>
+                <View style={styles.modalButtonRow}>
+                    <TouchableOpacity
+                        style={[styles.modalButton, styles.modalCancelButton]}
+                        onPress={() => setInviteSentModal({ visible: false, inviteLink: '' })}
+                    >
+                        <Text style={styles.modalCancelText}>OK</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.modalButton, { backgroundColor: theme.colors.primary }]}
+                        onPress={() => {
+                            Clipboard.setStringAsync(inviteSentModal.inviteLink);
+                            showMessage({ message: 'Link Copied!', type: 'success', backgroundColor: theme.colors.primary });
+                            setInviteSentModal({ visible: false, inviteLink: '' });
+                        }}
+                    >
+                        <Text style={styles.modalButtonText}>Copy Link</Text>
+                    </TouchableOpacity>
+                </View>
+            </BaseModal>
+
+            {/* Onboarding Modal (Connect Platform) */}
+            <BaseModal
+                visible={onboardingModal.visible}
+                onClose={() => {
+                    setOnboardingModal({ visible: false, message: '' });
+                    refreshData();
+                }}
+            >
+                <Icon name="check-circle" size={48} color={theme.colors.primary} style={{ marginBottom: 16 }} />
+                <Text style={styles.modalAlertTitle}>Partnership Connected!</Text>
+                <Text style={styles.modalAlertMessage}>{onboardingModal.message}</Text>
+                <View style={styles.modalButtonRow}>
+                    <TouchableOpacity
+                        style={[styles.modalButton, styles.modalCancelButton]}
+                        onPress={() => {
+                            setOnboardingModal({ visible: false, message: '' });
+                            refreshData();
+                        }}
+                    >
+                        <Text style={styles.modalCancelText}>Later</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.modalButton, { backgroundColor: theme.colors.primary }]}
+                        onPress={() => {
+                            setOnboardingModal({ visible: false, message: '' });
+                            refreshData();
+                            navigation.navigate('Profile');
+                        }}
+                    >
+                        <Text style={styles.modalButtonText}>Connect Now</Text>
+                    </TouchableOpacity>
+                </View>
+            </BaseModal>
 
         </View>
     );
@@ -1059,5 +1202,55 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#4B5563',
         fontWeight: '500',
+    },
+    // Modal Alert Styles
+    modalAlertTitle: {
+        fontSize: 20,
+        fontWeight: '700',
+        color: '#111827',
+        marginBottom: 8,
+        textAlign: 'center',
+    },
+    modalAlertMessage: {
+        fontSize: 15,
+        color: '#6B7280',
+        textAlign: 'center',
+        marginBottom: 24,
+        lineHeight: 22,
+    },
+    modalButton: {
+        flex: 1,
+        paddingVertical: 14,
+        paddingHorizontal: 24,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        minWidth: 100,
+    },
+    modalButtonText: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#FFFFFF',
+    },
+    modalButtonRow: {
+        flexDirection: 'row',
+        gap: 12,
+        width: '100%',
+    },
+    modalCancelButton: {
+        backgroundColor: '#F3F4F6',
+    },
+    modalCancelText: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#6B7280',
+    },
+    inviteLinkText: {
+        fontSize: 13,
+        color: '#3B82F6',
+        textAlign: 'center',
+        marginBottom: 20,
+        paddingHorizontal: 16,
+        lineHeight: 20,
     },
 });

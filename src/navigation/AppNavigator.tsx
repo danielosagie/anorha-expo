@@ -357,22 +357,7 @@ const TabNavigator = () => {
           ),
         }}
       />
-      {/* Always register both routes to keep child tree stable; hide the disabled one 
-      
-      <Tab.Screen 
-        name="Marketplace" 
-        component={MarketplaceScreen}
-        options={{
-          tabBarLabel: 'Marketplace',
-          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
-            <Icon name="store-outline" color={color} size={size} />
-          ),
-          // Hide button when feature is disabled
-          tabBarButton: isFeatureEnabled('MARKETPLACE_ENABLED') ? undefined : () => null,
-        }}
-      />
-      
-      */}
+  
 
       <Tab.Screen
         name="ActivityFeed"
