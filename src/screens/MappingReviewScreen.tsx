@@ -395,6 +395,16 @@ const MappingReviewScreen = () => {
   // Maps locationId -> poolId (which pool each location is assigned to)
   const [locationPoolAssignments, setLocationPoolAssignments] = useState<Record<string, string>>({});
 
+  // Hide virtual/default locations when at least one real location exists (same rule as ProductDetail)
+  const isVirtualDefaultLoc = (l: ConnectionLocation) =>
+    l.platformLocationId.startsWith('default-') ||
+    l.locationName === 'Default Location' ||
+    (l.locationName != null && l.locationName.endsWith(' Inventory'));
+  const displayConnectionLocations = useMemo(() => {
+    const hasReal = connectionLocations.some(l => !isVirtualDefaultLoc(l));
+    return hasReal ? connectionLocations.filter(l => !isVirtualDefaultLoc(l)) : connectionLocations;
+  }, [connectionLocations]);
+
 
   // Sync Settings
   const [syncMode, setSyncMode] = useState<'auto' | 'manual'>('auto');
@@ -822,8 +832,8 @@ const MappingReviewScreen = () => {
 
       // Get location IDs that should be assigned to this new pool
       // If user has specifically assigned locations to this pool, use those
-      // Otherwise, use all connection locations
-      const locationIdsForNewPool = connectionLocations
+      // Otherwise, use all displayed (real) connection locations
+      const locationIdsForNewPool = displayConnectionLocations
         .filter(loc => {
           const assignedPoolId = locationPoolAssignments[loc.platformLocationId];
           // Include if explicitly assigned to 'create-new' or not assigned at all (default to new pool)
@@ -4899,7 +4909,7 @@ const MappingReviewScreen = () => {
                               Loading locations and pools...
                             </Text>
                           </View>
-                        ) : connectionLocations.length === 0 ? (
+                        ) : displayConnectionLocations.length === 0 ? (
                           <View style={{ padding: 0, alignItems: 'center' }}>
 
                             {/*<Icon name="map-marker-off" size={48} color={theme.colors.textSecondary} />
@@ -4942,10 +4952,10 @@ const MappingReviewScreen = () => {
                             {/* Location-to-Pool Assignment Section */}
                             <View style={{ marginBottom: 20 }}>
                               <Text style={{ fontWeight: '700', fontSize: 14, color: theme.colors.text, marginBottom: 12, textTransform: 'uppercase' }}>
-                                {connection?.DisplayName || platformName} Locations ({connectionLocations.length})
+                                {connection?.DisplayName || platformName} Locations ({displayConnectionLocations.length})
                               </Text>
 
-                              {connectionLocations.map((location) => {
+                              {displayConnectionLocations.map((location) => {
                                 const assignedPoolId = locationPoolAssignments[location.platformLocationId] || selectedPool;
                                 const assignedPool = pools.find(p => p.id === assignedPoolId);
 
@@ -5079,7 +5089,7 @@ const MappingReviewScreen = () => {
                             )}
 
                             {/* Quick assign all to one pool */}
-                            {connectionLocations.length > 1 && pools.length > 0 && (
+                            {displayConnectionLocations.length > 1 && pools.length > 0 && (
                               <View style={{ marginBottom: 16 }}>
                                 <Text style={{ fontSize: 13, color: theme.colors.textSecondary, marginBottom: 8 }}>
                                   Quick assign all locations:
@@ -5099,7 +5109,7 @@ const MappingReviewScreen = () => {
                                         }}
                                         onPress={() => {
                                           const newAssignments: Record<string, string> = {};
-                                          connectionLocations.forEach(loc => {
+                                          displayConnectionLocations.forEach(loc => {
                                             newAssignments[loc.platformLocationId] = pool.id;
                                           });
                                           setLocationPoolAssignments(newAssignments);

@@ -10,7 +10,8 @@ import {
     Modal,
     TextInput,
     KeyboardAvoidingView,
-    Platform
+    Platform,
+    Switch
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
@@ -75,6 +76,7 @@ export default function PartnersScreen() {
     const [inviteModalVisible, setInviteModalVisible] = useState(false);
     const [inviteEmail, setInviteEmail] = useState('');
     const [invitePoolId, setInvitePoolId] = useState('');
+    const [inviteCanRevoke, setInviteCanRevoke] = useState(true); // true = consignment (can revoke), false = partnership
     const [pools, setPools] = useState<any[]>([]);
     const [sendingInvite, setSendingInvite] = useState(false);
 
@@ -82,6 +84,9 @@ export default function PartnersScreen() {
     const [acceptingInviteId, setAcceptingInviteId] = useState<string | null>(null);
     const [acceptModalVisible, setAcceptModalVisible] = useState(false);
     const [selectedInvite, setSelectedInvite] = useState<ReceivedInvite | null>(null);
+    const [acceptAvailableLocations, setAcceptAvailableLocations] = useState<Record<string, { connectionName: string; platformType: string; locations: { platformLocationId: string; locationName: string }[] }>>({});
+    const [acceptLocationsLoading, setAcceptLocationsLoading] = useState(false);
+    const [acceptSelectedLocationIds, setAcceptSelectedLocationIds] = useState<string[]>([]);
 
     // BaseModal State - for replacing Alert.alert
     const [alertModal, setAlertModal] = useState<{
@@ -239,9 +244,9 @@ export default function PartnersScreen() {
                 body: JSON.stringify({
                     inviteeEmail: inviteEmail,
                     poolId: invitePoolId,
-                    shareType: 'consignment',
+                    shareType: inviteCanRevoke ? 'consignment' : 'sync',
                     syncDirection: 'bidirectional',
-                    canRevoke: true,
+                    canRevoke: inviteCanRevoke,
                 })
             });
 
@@ -249,6 +254,8 @@ export default function PartnersScreen() {
                 const data = await res.json();
                 setInviteModalVisible(false);
                 setInviteEmail('');
+                setInvitePoolId('');
+                setInviteCanRevoke(true);
                 setInviteSentModal({ visible: true, inviteLink: data.inviteLink });
                 refreshData();
             } else {
@@ -686,6 +693,22 @@ export default function PartnersScreen() {
                             ))}
                         </ScrollView>
 
+                        <Text style={[styles.modalLabel, { marginTop: 16 }]}>Share type</Text>
+                        <View style={styles.consignmentRow}>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.consignmentLabel}>{inviteCanRevoke ? 'Consignment' : 'Partnership'}</Text>
+                                <Text style={styles.consignmentHint}>
+                                    {inviteCanRevoke ? 'You can revoke products.' : 'Shared quantities; you can\'t revoke.'}
+                                </Text>
+                            </View>
+                            <Switch
+                                value={inviteCanRevoke}
+                                onValueChange={setInviteCanRevoke}
+                                trackColor={{ false: '#d1d5db', true: theme.colors.primary + '80' }}
+                                thumbColor={inviteCanRevoke ? theme.colors.primary : '#f4f4f4'}
+                            />
+                        </View>
+
                         <Button
                             title={sendingInvite ? "Sending..." : "Send Invite"}
                             onPress={handleSendInvite}
@@ -701,6 +724,10 @@ export default function PartnersScreen() {
                 invite={selectedInvite}
                 onClose={() => setAcceptModalVisible(false)}
                 onConfirm={confirmAcceptInvite}
+                availableLocations={acceptAvailableLocations}
+                locationsLoading={acceptLocationsLoading}
+                selectedLocationIds={acceptSelectedLocationIds}
+                onSelectionChange={setAcceptSelectedLocationIds}
             />
 
             {/* Alert Modal (simple info/error messages) */}
@@ -1165,6 +1192,28 @@ const styles = StyleSheet.create({
     },
     activePoolChipText: {
         color: '#365E09',
+    },
+    consignmentRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginTop: 8,
+        paddingVertical: 12,
+        paddingHorizontal: 12,
+        backgroundColor: '#F9FAFB',
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    consignmentLabel: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#111827',
+    },
+    consignmentHint: {
+        fontSize: 12,
+        color: '#6B7280',
+        marginTop: 2,
     },
     // New Styles (Consolidated)
     dateBadge: {

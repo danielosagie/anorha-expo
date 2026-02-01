@@ -1653,8 +1653,7 @@ const ProfileScreen = () => {
     {
       icon: 'credit-card',
       title: 'Subscription & Billing',
-
-      onPress: () => handleOpenBilling()
+      onPress: () => navigation.navigate('Billing' as any)
     },
     {
       icon: 'handshake-outline',
@@ -1664,12 +1663,17 @@ const ProfileScreen = () => {
     {
       icon: 'account-group',
       title: 'Team',
-      onPress: () => handleOpenTeams()
+      onPress: () => navigation.navigate('Team' as any)
     },
     {
       icon: 'bell-outline',
       title: 'Notifications',
       onPress: () => navigation.navigate('NotificationSettings' as any),
+    },
+    {
+      icon: 'database-export',
+      title: 'Backups & restore',
+      onPress: () => navigation.navigate('Backups' as any),
     },
     {
       icon: 'help-circle',

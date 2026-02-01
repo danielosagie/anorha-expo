@@ -57,23 +57,26 @@ import { BackfillOptimizerScreen } from '../screens/BackfillOptimizerScreen';
 import { CSVColumnMappingScreen } from '../screens/CSVColumnMappingScreen';
 import PendingOrgInvitesScreen from '../screens/PendingOrgInvitesScreen';
 import LiquidationCampaignScreen from '../screens/LiquidationCampaignScreen';
+import BackupsScreen from '../screens/BackupsScreen';
+import BillingScreen from '../screens/BillingScreen';
 import { isFeatureEnabled } from '../config/features';
 import { SessionContext } from '../context/SessionContext';
 
 // --- Define Param Lists for Type Safety --- //
-type AuthStackParamList = {
+export type AuthStackParamList = {
   InitialScreen: undefined;
   OnboardingSlides: undefined;
   Auth: undefined;
   VerifyCode: { contactLabel?: string; mode?: 'signup' | 'signin' } | undefined;
   // PhoneAuthScreen: { phoneNumber: string } | undefined; // Commented out
   OnboardConnectionScreen: undefined;
+  CreateAccountScreen: undefined;
 };
 
 // Export the type
 export type AppStackParamList = {
-  CreateAccountScreen: undefined;
   PendingOrgInvitesScreen: undefined;
+  CreateAccountScreen: undefined;
   TabNavigator: undefined;
   AddListing?: { // The entire params object for AddListing is optional
     initialData?: {
@@ -110,6 +113,7 @@ export type AppStackParamList = {
   Profile: { refresh?: number }; // Add Profile screen with optional refresh param
   NotificationSettings: undefined;
   Team: undefined;
+  Billing: undefined;
   AddProduct: {
     firstPhotos: any[];
     bulkItems: any[];
@@ -259,6 +263,7 @@ export type AppStackParamList = {
     csvData: any[];
     sampleRow: Record<string, string>;
   };
+  Backups: undefined;
   LiquidationCampaignScreen: { campaignId: string };
   Partners: undefined;
 };
@@ -397,8 +402,7 @@ const AuthStack = ({ isFirstLaunch, devForceOnboarding }: { isFirstLaunch: boole
     ) : null}
     <AuthStackNav.Screen name="Auth" component={AuthScreen} />
     <AuthStackNav.Screen name="VerifyCode" component={VerifyCodeScreen} />
-    {/* Comment out PhoneAuthScreen */}
-    {/* <AuthStackNav.Screen name="PhoneAuthScreen" component={PhoneAuthScreen} /> */}
+    <AppStackNav.Screen name="CreateAccountScreen" component={CreateAccountScreen} />
   </AuthStackNav.Navigator>
 );
 
@@ -407,8 +411,8 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     screenOptions={{ headerShown: false }}
     initialRouteName={initialScreenName}
   >
-    <AppStackNav.Screen name="CreateAccountScreen" component={CreateAccountScreen} />
     <AppStackNav.Screen name="PendingOrgInvitesScreen" component={PendingOrgInvitesScreen} />
+    <AppStackNav.Screen name="CreateAccountScreen" component={CreateAccountScreen} />
     <AppStackNav.Screen name="Partners" component={PartnersScreen} />
     <AppStackNav.Screen name="LiquidationCampaignScreen" component={LiquidationCampaignScreen} options={{ headerTitle: 'Liquidation Campaign' }} />
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />
@@ -419,6 +423,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="Profile" component={ProfileScreen} />
     <AppStackNav.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
     <AppStackNav.Screen name="Team" component={TeamScreen} />
+    <AppStackNav.Screen name="Billing" component={BillingScreen} />
     <AppStackNav.Screen name="AddProduct" component={AddProductScreen} />
     <AppStackNav.Screen name="LoadingScreen" component={LoadingScreen} />
     <AppStackNav.Screen name="MatchSelectionScreen" component={MatchSelectionScreen} />
@@ -429,6 +434,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="PartnershipDetail" component={PartnershipDetailScreen} />
     <AppStackNav.Screen name="BackfillOptimizer" component={BackfillOptimizerScreen} />
     <AppStackNav.Screen name="CSVColumnMapping" component={CSVColumnMappingScreen} />
+    <AppStackNav.Screen name="Backups" component={BackupsScreen} />
   </AppStackNav.Navigator>
 );
 
@@ -446,7 +452,7 @@ const AppNavigator = () => {
   const [initialAppScreen, setInitialAppScreen] = useState<'CreateAccountScreen' | 'TabNavigator' | null>(null);
 
   // Dev tools to test onboarding flow
-  const [devForceOnboarding] = useState(true); // Set this to true only when testing onboarding - FTUX
+  const [devForceOnboarding] = useState(false); // Set this to true only when testing onboarding - FTUX
   const [devExpireSession, setDevExpireSession] = useState(false); // Set true to make you have to login new each time you leave/after session expires
 
   const [fontsLoaded] = useFonts({

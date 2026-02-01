@@ -273,37 +273,44 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
     // Track if we're currently syncing to prevent circular updates
     const isSyncingRef = React.useRef(false);
     const hasInitializedFromContextRef = React.useRef(false);
+    // Track last jobId we initialized so we don't re-call when context reference changes (avoids infinite loop)
+    const lastInitializedJobIdRef = React.useRef<string | null>(null);
+    // Ref to read latest jobsContext without putting it in effect deps (context value is new ref every render)
+    const jobsContextRef = React.useRef(jobsContext);
+    jobsContextRef.current = jobsContext;
     // Track last feedback sent to prevent duplicate requests
     const lastFeedbackKeyRef = React.useRef<string>('');
     // Track if we've already auto-selected to prevent repeated selections
     const hasAutoSelectedRef = React.useRef(false);
 
-    // Sync with JobsContext - initialize from context if available (ONE TIME ONLY)
+    // Sync with JobsContext - initialize from context if available (ONE TIME per jobId)
+    // Deps: only jobId and modalItems so we don't re-run on every context update (which would cause infinite loop)
     useEffect(() => {
-        if (!jobsContext || !jobId) return;
+        const ctx = jobsContextRef.current;
+        if (!ctx || !jobId) return;
         if (isSyncingRef.current) return;
 
-        // Initialize context with this match job's items when modalItems are ready
-        if (modalItems.length > 0 && jobsContext.matchJobId !== jobId) {
+        // Initialize context with this match job's items when modalItems are ready (once per jobId)
+        if (modalItems.length > 0 && ctx.matchJobId !== jobId && lastInitializedJobIdRef.current !== jobId) {
+            lastInitializedJobIdRef.current = jobId;
             isSyncingRef.current = true;
-            jobsContext.initializeFromMatchJob(jobId, modalItems.map((item, idx) => ({
+            ctx.initializeFromMatchJob(jobId, modalItems.map((item) => ({
                 index: item.index,
                 title: item.title,
                 thumb: item.thumb,
                 matchesCount: item.matchesCount,
                 matchJobId: jobId,
             })));
-            // Reset sync flag after a tick
             setTimeout(() => { isSyncingRef.current = false; }, 0);
         }
 
-        // Only merge context → local ONCE on initial load, not on every context change
-        if (!hasInitializedFromContextRef.current && Object.keys(jobsContext.generateJobs).length > 0) {
+        // Only merge context → local ONCE on initial load
+        if (!hasInitializedFromContextRef.current && Object.keys(ctx.generateJobs).length > 0) {
             hasInitializedFromContextRef.current = true;
             setItemGenerateJobs(prev => {
                 const merged = { ...prev };
                 let hasChanges = false;
-                Object.entries(jobsContext.generateJobs).forEach(([indexStr, genJob]) => {
+                Object.entries(ctx.generateJobs).forEach(([indexStr, genJob]) => {
                     const idx = parseInt(indexStr, 10);
                     if (!merged[idx] || (genJob.status === 'completed' && merged[idx].status !== 'completed')) {
                         merged[idx] = { jobId: genJob.jobId, status: genJob.status };
@@ -313,25 +320,25 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 return hasChanges ? merged : prev;
             });
         }
-    }, [jobsContext, jobId, modalItems]);
+    }, [jobId, modalItems]);
 
     // Sync local itemGenerateJobs changes to context - only for NEW jobs we create locally
+    // Deps: only itemGenerateJobs so we don't re-run on every context update (avoids infinite loop)
     useEffect(() => {
-        if (!jobsContext) return;
+        const ctx = jobsContextRef.current;
+        if (!ctx) return;
         if (isSyncingRef.current) return;
 
         Object.entries(itemGenerateJobs).forEach(([indexStr, job]) => {
             const idx = parseInt(indexStr, 10);
-            const contextJob = jobsContext.generateJobs[idx];
-            // Only push to context if this is a NEW job that context doesn't know about
-            // Don't push if we're just echoing back what context already has
+            const contextJob = ctx.generateJobs[idx];
             if (!contextJob && job.jobId) {
                 isSyncingRef.current = true;
-                jobsContext.startGenerateJob(idx, job.jobId);
+                ctx.startGenerateJob(idx, job.jobId);
                 setTimeout(() => { isSyncingRef.current = false; }, 0);
             }
         });
-    }, [itemGenerateJobs, jobsContext]);
+    }, [itemGenerateJobs]);
 
     // Dropdown options with icons
     const PLATFORM_OPTIONS = [

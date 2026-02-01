@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, memo } from 'react';
+import React, { useState, useRef, useCallback, memo, useContext } from 'react';
 import {
   View,
   Text,
@@ -19,10 +19,12 @@ import PhoneInput from 'react-native-phone-number-input';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
-import { useNavigation } from '@react-navigation/native';
+import { CompositeNavigationProp, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
+import type { AuthStackParamList, AppStackParamList } from '../navigation/AppNavigator';
 import { useOrganizationList, useUser } from '@clerk/clerk-expo';
 import { useOrg } from '../context/OrgContext';
+import { AuthContext } from '../context/AuthContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Animated, {
   FadeIn,
@@ -46,13 +48,11 @@ const THEME = {
   border: 'rgba(0, 0, 0, 0.25)',
 };
 
-type AppStackParamList = {
-  CreateAccountScreen: undefined;
-  TabNavigator: undefined;
-  Profile: { openAddConnection?: boolean };
-};
-
-type CreateAccountScreenNavigationProp = StackNavigationProp<AppStackParamList, 'CreateAccountScreen'>;
+// CreateAccountScreen can live in AuthStack (signup flow) or AppStack (resume incomplete onboarding).
+type CreateAccountScreenNavigationProp = CompositeNavigationProp<
+  StackNavigationProp<AuthStackParamList, 'CreateAccountScreen'>,
+  StackNavigationProp<AppStackParamList, 'CreateAccountScreen'>
+>;
 
 // --- TYPES ---
 
@@ -143,22 +143,73 @@ const Stepper = memo(({ currentStep }: { currentStep: Step }) => {
   );
 });
 
-const WelcomeStep = memo(({ onNext }: { onNext: () => void }) => (
+const WelcomeStep = memo(({ onNext, onBack, showBackButton, onSignOut }: { onNext: () => void; onBack: () => void; showBackButton: boolean; onSignOut?: () => void }) => (
   <Animated.View entering={FadeIn} exiting={FadeOut} style={styles.stepContainer}>
-    <View style={{ flex: 1, justifyContent: 'center' }}>
-      <View style={styles.logoContainer}>
+    <View style={{flex: 1, alignContent: "space-between"}}>
+      <View style={{
+        marginTop: 30,
+        flex: 1,
+      }}>
+        <View style={styles.logoContainer}>
         <View style={styles.logoBox}>
           <Image source={require('../assets/anorha_logo.png')} style={styles.logoImage} resizeMode="contain" />
         </View>
         <Text style={styles.logoTitle}>anorha</Text>
+        </View>
+        <Text style={styles.bigTitle}>Finish your setup</Text>
+        <Text style={styles.subtitle}>Let's get your business inventory synced.</Text>
+        <View style={{ flex: 1 }} />
       </View>
-      <Text style={styles.bigTitle}>Finish your setup</Text>
-      <Text style={styles.subtitle}>Let's get your business inventory synced.</Text>
-      <View style={{ flex: 1 }} />
-      <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
-        <Text style={styles.primaryButtonText}>Let's Go</Text>
-        <Icon name="arrow-right" size={24} color={THEME.bg} />
-      </TouchableOpacity>
+      
+      <View style={{gap: 12}}>
+        <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
+          <Text style={styles.primaryButtonText}>Let's Go</Text>
+          <Icon name="arrow-right" size={24} color={THEME.bg} />
+        </TouchableOpacity>
+
+        {(showBackButton ? (
+        <TouchableOpacity
+            style={{ 
+              minWidth: "100%",
+              justifyContent: "center",
+              paddingVertical: 20, 
+              paddingHorizontal: 32, 
+              alignSelf: "auto", 
+              backgroundColor: 'rgba(0, 0, 0, 0.1)', 
+              borderRadius: 8,
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.2,
+              shadowRadius: 8,
+              elevation: 5,
+              zIndex: 10
+            }}
+            onPress={onBack}
+          >
+            <Text style={{ textAlign: "center", fontSize: 18, color: THEME.textDim }}>Back</Text>
+          </TouchableOpacity>
+        ) : onSignOut ? (
+        <TouchableOpacity
+            style={{ 
+              minWidth: "100%",
+              justifyContent: "center",
+              paddingVertical: 20, 
+              paddingHorizontal: 32, 
+              alignSelf: "auto", 
+              backgroundColor: 'rgba(0, 0, 0, 0.1)', 
+              borderRadius: 8,
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.2,
+              shadowRadius: 8,
+              elevation: 5,
+              zIndex: 10
+            }}
+            onPress={onSignOut}
+          >
+            <Text style={{ textAlign: "center", fontSize: 18, color: THEME.textDim }}>Back</Text>
+          </TouchableOpacity>
+        ) : null)}
+      </View>
+      
     </View>
   </Animated.View>
 ));
@@ -606,6 +657,7 @@ const PermissionsAndLegalStep = memo(({
 
 export default function CreateAccountScreen() {
   const navigation = useNavigation<CreateAccountScreenNavigationProp>();
+  const authContext = useContext(AuthContext);
   const { user: clerkUser } = useUser();
   const { createOrganization } = useOrganizationList();
   const { refreshOrgs } = useOrg();
@@ -921,7 +973,12 @@ export default function CreateAccountScreen() {
 
       if (refreshOrgs) await refreshOrgs();
 
-      navigation.reset({ index: 0, routes: [{ name: 'TabNavigator' }] });
+      // After onboarding we go to main app. CreateAccountScreen can be in AuthStack or AppStack;
+      // TabNavigator lives in AppStack — cast so reset() is valid when we're in App stack.
+      (navigation as StackNavigationProp<AppStackParamList, 'CreateAccountScreen'>).reset({
+        index: 0,
+        routes: [{ name: 'TabNavigator' }],
+      });
 
     } catch (error: any) {
       console.error('Onboarding Error:', error);
@@ -956,7 +1013,14 @@ export default function CreateAccountScreen() {
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
-          {currentStep === 'WELCOME' && <WelcomeStep onNext={() => goToStep('BUSINESS_NAME')} />}
+          {currentStep === 'WELCOME' && (
+            <WelcomeStep
+              onNext={() => goToStep('BUSINESS_NAME')}
+              onBack={() => { if (navigation.canGoBack()) navigation.goBack(); }}
+              showBackButton={navigation.canGoBack()}
+              onSignOut={() => authContext?.signOut()}
+            />
+          )}
 
           {currentStep === 'BUSINESS_NAME' && (
             <BusinessNameStep
@@ -1076,7 +1140,7 @@ const styles = StyleSheet.create({
   stepContainer: {
     flex: 1,
     padding: 24,
-    justifyContent: 'center',
+    justifyContent: 'space-between',
   },
   progressContainer: {
     flexDirection: 'row',

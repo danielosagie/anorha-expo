@@ -23,7 +23,7 @@ interface Props {
 
 export default function MemberCard({ member, isCurrentUserAdmin, onPress, onRemove }: Props) {
   const theme = useTheme();
-  
+
   const displayName = member.User.FirstName && member.User.LastName
     ? `${member.User.FirstName} ${member.User.LastName}`
     : member.User.Email;
@@ -44,7 +44,7 @@ export default function MemberCard({ member, isCurrentUserAdmin, onPress, onRemo
     >
       <View style={styles.content}>
         {/* Avatar */}
-        <View style={[styles.avatar, { backgroundColor: roleColor + '20' }]}>
+        <View style={[styles.avatar, { backgroundColor: roleColor + '15', borderColor: roleColor + '30' }]}>
           <Text style={[styles.initials, { color: roleColor }]}>{initials}</Text>
         </View>
 
@@ -52,12 +52,12 @@ export default function MemberCard({ member, isCurrentUserAdmin, onPress, onRemo
         <View style={styles.info}>
           <Text style={styles.name}>{displayName}</Text>
           <Text style={styles.email}>{member.User.Email}</Text>
-          
+
           <View style={styles.metadata}>
-            <View style={[styles.roleBadge, { backgroundColor: roleColor + '15' }]}>
+            <View style={[styles.roleBadge, { backgroundColor: roleColor + '10', borderColor: roleColor + '20', borderWidth: 1 }]}>
               <Icon
-                name={member.Role === 'admin' ? 'shield-crown' : 'account'}
-                size={12}
+                name={member.Role === 'admin' ? 'crown' : 'account'}
+                size={14}
                 color={roleColor}
               />
               <Text style={[styles.roleText, { color: roleColor }]}>{roleLabel}</Text>
@@ -106,29 +106,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: 16,
+    borderWidth: 1,
   },
   initials: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 20,
+    fontWeight: '700',
   },
   info: {
     flex: 1,
   },
   name: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111827',
     marginBottom: 2,
   },
   email: {
-    fontSize: 13,
-    color: '#666',
-    marginBottom: 6,
+    fontSize: 14,
+    color: '#6B7280',
+    marginBottom: 8,
   },
   metadata: {
     flexDirection: 'row',
@@ -138,13 +140,13 @@ const styles = StyleSheet.create({
   roleBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 100,
     gap: 4,
   },
   roleText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
   },
   platformsBadge: {

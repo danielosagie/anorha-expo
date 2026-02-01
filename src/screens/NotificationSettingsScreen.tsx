@@ -11,6 +11,7 @@ export default function NotificationSettingsScreen() {
     const { getToken } = useAuth();
 
     const [loading, setLoading] = useState(true);
+    const [testSending, setTestSending] = useState(false);
     const [preferences, setPreferences] = useState({
         JobCompletions: true,
         InventorySharing: true,
@@ -27,15 +28,14 @@ export default function NotificationSettingsScreen() {
         try {
             setLoading(true);
             const token = await getToken({ template: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase' });
-            const apiBaseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL;
-
+            const apiBaseUrl = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || '').replace(/\/$/, '');
             if (!apiBaseUrl) {
                 console.warn('API Base URL not found');
                 setLoading(false);
                 return;
             }
 
-            const res = await fetch(`${apiBaseUrl}/notifications/preferences`, {
+            const res = await fetch(`${apiBaseUrl}/api/notifications/preferences`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
 
@@ -62,12 +62,12 @@ export default function NotificationSettingsScreen() {
 
         try {
             const token = await getToken({ template: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase' });
-            const apiBaseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL;
+            const apiBaseUrl = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || '').replace(/\/$/, '');
 
             // Map frontend key (PascalCase) to backend key (camelCase)
             const backendKey = key.charAt(0).toLowerCase() + key.slice(1);
 
-            await fetch(`${apiBaseUrl}/notifications/preferences`, {
+            await fetch(`${apiBaseUrl}/api/notifications/preferences`, {
                 method: 'PATCH',
                 headers: {
                     Authorization: `Bearer ${token}`,
@@ -80,6 +80,34 @@ export default function NotificationSettingsScreen() {
             // Revert on error
             setPreferences(prev => ({ ...prev, [key]: !newValue }));
             Alert.alert('Error', 'Failed to save setting');
+        }
+    };
+
+    const sendTestNotification = async () => {
+        try {
+            setTestSending(true);
+            const token = await getToken({ template: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase' });
+            const apiBaseUrl = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || '').replace(/\/$/, '');
+            if (!apiBaseUrl) {
+                Alert.alert('Error', 'API base URL not configured');
+                return;
+            }
+            const res = await fetch(`${apiBaseUrl}/api/notifications/test`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            if (res.ok) {
+                Alert.alert('Sent', 'If push is set up correctly, you should get a test notification shortly.');
+            } else {
+                const body = await res.text();
+                Alert.alert('Request failed', `Server returned ${res.status}. Check that your device is registered (open the app and stay on the main tabs).`);
+                console.warn('[NotificationSettings] Test failed:', res.status, body);
+            }
+        } catch (err: any) {
+            console.error('Test notification error:', err);
+            Alert.alert('Error', err?.message || 'Failed to send test notification');
+        } finally {
+            setTestSending(false);
         }
     };
 
@@ -158,6 +186,24 @@ export default function NotificationSettingsScreen() {
                         icon="bullhorn-outline"
                     />
 
+                    <View style={[styles.testSection, { backgroundColor: colors.surface, borderColor: 'rgba(0,0,0,0.05)' }]}>
+                        <Text style={[styles.testLabel, { color: colors.text }]}>Test push</Text>
+                        <Text style={[styles.testDescription, { color: colors.textSecondary }]}>
+                            Send a test notification to this device to verify push is working.
+                        </Text>
+                        <TouchableOpacity
+                            style={[styles.testButton, { backgroundColor: colors.primary }]}
+                            onPress={sendTestNotification}
+                            disabled={testSending}
+                        >
+                            {testSending ? (
+                                <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                                <Text style={styles.testButtonText}>Send test notification</Text>
+                            )}
+                        </TouchableOpacity>
+                    </View>
+
                 </ScrollView>
             )}
         </View>
@@ -218,5 +264,33 @@ const styles = StyleSheet.create({
     optionDescription: {
         fontSize: 13,
         lineHeight: 18,
+    },
+    testSection: {
+        borderRadius: 12,
+        marginTop: 8,
+        marginBottom: 24,
+        borderWidth: 1,
+        padding: 16,
+    },
+    testLabel: {
+        fontSize: 16,
+        fontWeight: '600',
+        marginBottom: 4,
+    },
+    testDescription: {
+        fontSize: 13,
+        lineHeight: 18,
+        marginBottom: 12,
+    },
+    testButton: {
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+        alignItems: 'center',
+    },
+    testButtonText: {
+        color: '#fff',
+        fontSize: 16,
+        fontWeight: '600',
     },
 });

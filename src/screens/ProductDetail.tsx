@@ -1259,6 +1259,19 @@ const ProductDetailScreen = observer(
         });
       });
 
+      // Hide virtual/default locations when platform has at least one real location
+      const isVirtualDefault = (l: { id: string; name: string }) =>
+        l.id.startsWith('default-') ||
+        l.name === 'Default Location' ||
+        (l.name != null && l.name.endsWith(' Inventory'));
+      Object.keys(locsByPlatform).forEach(platform => {
+        const locs = locsByPlatform[platform];
+        const hasReal = locs.some(l => !isVirtualDefault(l));
+        if (hasReal && locs.length > 0) {
+          locsByPlatform[platform] = locs.filter(l => !isVirtualDefault(l));
+        }
+      });
+
       // CRITICAL FIX: Ensure every connected platform has at least one location for inventory
       // This handles platforms like eBay that may not have explicit locations in the database
       connections.forEach(conn => {
@@ -3040,12 +3053,6 @@ const ProductDetailScreen = observer(
 
             console.log('[ProductDetail] Inventory level updated:', payload.eventType, 'for variant:', affectedVariantId);
 
-            // ✅ CRITICAL: Block during save window to prevent race conditions
-            if (isInSaveBlockingWindow()) {
-              console.log('[ProductDetail] ⚠️ Skipping inventory reload - in save blocking window');
-              return;
-            }
-
             // CRITICAL: Don't reload if user has unsaved changes - it will overwrite their edits
             if (hasUnsavedChangesRef.current) {
               console.log('[ProductDetail] ⚠️ Skipping inventory reload - user has unsaved changes');
@@ -3081,12 +3088,17 @@ const ProductDetailScreen = observer(
 
               // Merge into displayedPlatforms so VariantInventoryEditor updates live (hydration skips when count unchanged)
               const conn = connectionsRef.current.find(c => c.Id === updatedLevel.PlatformConnectionId);
-              const platformKey = conn?.PlatformType?.toLowerCase();
-              if (platformKey) {
+              let platformKey = conn?.PlatformType?.toLowerCase();
+              let resolvedConnId = conn?.Id;
+
+              const applyDisplayedPlatformsUpdate = (key: string) => {
                 setDisplayedPlatforms(prev => {
                   const next = { ...prev };
-                  if (!next[platformKey]) return prev;
-                  const plat = next[platformKey];
+                  if (!next[key]) {
+                    setTimeout(() => loadPlatformData(), 0);
+                    return prev;
+                  }
+                  const plat = next[key];
                   const locIdRaw = updatedLevel.PlatformLocationId ?? 'default';
                   const locs = plat.locations || [];
                   const matchingLoc = locs.find((l: any) => (l.locationId || l.id) === locIdRaw);
@@ -3102,15 +3114,36 @@ const ProductDetailScreen = observer(
                     });
                     return { ...v, inventoryByLocation: inv };
                   });
-                  next[platformKey] = { ...plat, locationQuantities: nextLocQty, variants: nextVariants };
+                  next[key] = { ...plat, locationQuantities: nextLocQty, variants: nextVariants };
                   return next;
                 });
+              };
+
+              if (platformKey) {
+                applyDisplayedPlatformsUpdate(platformKey);
+              } else {
+                // Resolve connection on demand when not in ref (e.g. realtime before loadPlatformData finished).
+                (async () => {
+                  const { data, error } = await supabase
+                    .from('PlatformConnections')
+                    .select('Id, PlatformType')
+                    .eq('Id', updatedLevel.PlatformConnectionId)
+                    .single();
+                  const resolvedKey = data?.PlatformType?.toLowerCase();
+                  if (resolvedKey && !error) {
+                    platformKey = resolvedKey;
+                    resolvedConnId = data?.Id;
+                    applyDisplayedPlatformsUpdate(resolvedKey);
+                  } else {
+                    console.log('[ProductDetail] Inventory update for variant', affectedVariantId, '- could not resolve connection, refetching platform data');
+                    loadPlatformData();
+                  }
+                })();
               }
 
               // Green border: per-field keys so only quantity or price input highlights.
-              // Set both raw location id (platform tab) and composite id (All tab: platformKey::connectionId::locationId)
               const locIdRaw = updatedLevel.PlatformLocationId ?? 'default';
-              const compositeId = `${platformKey}::${conn?.Id || 'unknown'}::${locIdRaw}`;
+              const compositeId = `${platformKey ?? 'unknown'}::${resolvedConnId || 'unknown'}::${locIdRaw}`;
               setExternalUpdates(prev => ({
                 ...prev,
                 [`inventory_${affectedVariantId}_${locIdRaw}_quantity`]: { quantity: updatedLevel.Quantity, updatedAt: Date.now() },
@@ -3120,7 +3153,9 @@ const ProductDetailScreen = observer(
               }));
 
               console.log('[ProductDetail] ✅ Inventory updated in place for variant', affectedVariantId);
-              showBanner('Inventory updated from external source');
+              if (!isInSaveBlockingWindow()) {
+                showBanner('Inventory updated from external source');
+              }
             } else {
               // For INSERT/DELETE, do a full reload only if not in blocking window
               console.log('[ProductDetail] Inventory INSERT/DELETE - triggering full reload');

@@ -77,14 +77,13 @@ export function usePushNotifications() {
 
         try {
             const authToken = await getToken({ template: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase' });
-            const apiBaseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL;
-
-            if (!apiBaseUrl) {
+            const base = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || '').replace(/\/$/, '');
+            if (!base) {
                 console.warn('[PushNotifications] No API base URL found');
                 return;
             }
 
-            await fetch(`${apiBaseUrl}/notifications/device`, {
+            const res = await fetch(`${base}/api/notifications/device`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -100,7 +99,10 @@ export function usePushNotifications() {
                     }
                 })
             });
-
+            if (!res.ok) {
+                const text = await res.text();
+                console.error('[PushNotifications] Backend rejected device registration:', res.status, text);
+            }
         } catch (err) {
             console.error('[PushNotifications] Failed to save token:', err);
         }
