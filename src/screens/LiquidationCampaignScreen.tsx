@@ -28,6 +28,7 @@ interface AgentSession {
         strategyId?: string;
         progress?: number;
         revenueGenerated?: number;
+        revenueCollected?: number;
         itemsSold?: number;
         totalItems?: number;
         lastUpdate?: string;
@@ -78,13 +79,17 @@ const LiquidationCampaignScreen = () => {
     // TIMELINE STATE
     const [selectedDate, setSelectedDate] = useState<Date>(new Date());
 
+    // CONFIG TAB: real campaign items from strategy
+    const [configItems, setConfigItems] = useState<CampaignItem[]>([]);
+    const [loadingConfig, setLoadingConfig] = useState(false);
+
     // 1. Fetch Campaign List
     const fetchCampaigns = useCallback(async () => {
         try {
             const token = await ensureSupabaseJwt();
             if (!token) return;
 
-            const response = await fetch(`${API_BASE_URL}/api/agent/sessions?type=liquidation&status=active,waiting_for_user`, {
+            const response = await fetch(`${API_BASE_URL}/api/agent/sessions?type=liquidation&status=active,waiting_user`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
 
@@ -120,8 +125,12 @@ const LiquidationCampaignScreen = () => {
             const data = await response.json();
             if (data.success) {
                 setCurrentSession(data.session);
-                // Augment messages with approval status if needed (mock for now if backend doesn't support)
-                setMessages(data.messages || []);
+                // Normalize messages: backend uses timestamp, UI uses createdAt
+                const raw = data.messages || [];
+                setMessages(raw.map((m: any) => ({
+                    ...m,
+                    createdAt: m.timestamp ?? m.createdAt ?? new Date().toISOString(),
+                })));
                 setError(null);
             }
         } catch (e: any) {
@@ -142,20 +151,84 @@ const LiquidationCampaignScreen = () => {
         }
     }, [selectedCampaignId, fetchSessionDetail]);
 
+    // 3. Fetch strategy items for Config tab when session has strategyId
+    const fetchStrategyItems = useCallback(async () => {
+        const strategyId = currentSession?.state?.strategyId;
+        if (!strategyId) {
+            setConfigItems([]);
+            return;
+        }
+        setLoadingConfig(true);
+        try {
+            const token = await ensureSupabaseJwt();
+            if (!token) return;
+            const response = await fetch(
+                `${API_BASE_URL}/api/liquidation/strategies/${strategyId}`,
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (!response.ok) {
+                setConfigItems([]);
+                return;
+            }
+            const data = await response.json();
+            if (!data.success || !data.strategy) {
+                setConfigItems([]);
+                return;
+            }
+            const strategy = data.strategy;
+            const phases = strategy.phases ?? strategy.Strategy ?? [];
+            const items: Array<{ name: string; suggestedPrice: number; quantity: number; confidence?: string; productId?: string; variantId?: string }> = [];
+            for (const phase of phases) {
+                const phaseItems = phase.items ?? [];
+                for (const it of phaseItems) {
+                    items.push({
+                        name: it.name ?? 'Item',
+                        suggestedPrice: it.suggestedPrice ?? it.currentPrice ?? 0,
+                        quantity: it.quantity ?? 1,
+                        confidence: it.confidence,
+                        productId: it.productId,
+                        variantId: it.variantId,
+                    });
+                }
+            }
+            const mapped: CampaignItem[] = items.map((it, idx) => ({
+                id: it.variantId ?? it.productId ?? `item-${idx}`,
+                name: it.name,
+                sku: it.productId ?? it.variantId ?? `SKU-${idx}`,
+                price: it.suggestedPrice,
+                inventory: it.quantity,
+                aggressiveness: (it.confidence === 'high' ? 'high' : it.confidence === 'low' ? 'low' : 'medium') as 'low' | 'medium' | 'high',
+            }));
+            setConfigItems(mapped);
+        } catch (e) {
+            console.error('Error fetching strategy items:', e);
+            setConfigItems([]);
+        } finally {
+            setLoadingConfig(false);
+        }
+    }, [currentSession?.state?.strategyId]);
+
+    useEffect(() => {
+        if (activeTab === 'config' && currentSession?.state?.strategyId) {
+            fetchStrategyItems();
+        } else if (!currentSession?.state?.strategyId) {
+            setConfigItems([]);
+        }
+    }, [activeTab, currentSession?.state?.strategyId, fetchStrategyItems]);
+
     const onRefresh = useCallback(() => {
         setRefreshing(true);
         fetchCampaigns();
         fetchSessionDetail();
     }, [fetchCampaigns, fetchSessionDetail]);
 
-    // Send Message
+    // Send Message — POST to Nest agent API, then refetch session detail
     const handleSendMessage = async () => {
-        if (!inputText.trim()) return;
+        if (!inputText.trim() || !selectedCampaignId) return;
 
         const content = inputText.trim();
         setInputText('');
 
-        // Optimistic add
         const tempMsg: AgentMessage = {
             id: `temp-${Date.now()}`,
             role: 'user',
@@ -163,21 +236,48 @@ const LiquidationCampaignScreen = () => {
             createdAt: new Date().toISOString()
         };
         setMessages(prev => [tempMsg, ...prev]);
+        setSending(true);
+        setError(null);
 
-        // In real app, POST to API
-        // For now, simulate delay and response
-        setTimeout(() => {
-            const responseMsg: AgentMessage = {
-                id: `resp-${Date.now()}`,
-                role: 'assistant',
-                content: "I've updated the plan based on your request.",
-                createdAt: new Date().toISOString()
-            };
-            setMessages(prev => [responseMsg, ...prev]);
-        }, 1500);
+        try {
+            const token = await ensureSupabaseJwt();
+            if (!token) {
+                setError('Not authenticated');
+                setMessages(prev => prev.filter(m => m.id !== tempMsg.id));
+                return;
+            }
+
+            const response = await fetch(
+                `${API_BASE_URL}/api/agent/sessions/${selectedCampaignId}/messages`,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token}`,
+                    },
+                    body: JSON.stringify({ content }),
+                }
+            );
+
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.message || `Request failed: ${response.status}`);
+            }
+
+            const data = await response.json();
+            if (data.success && data.response) {
+                // Refetch full session so we get the real assistant message and updated state
+                await fetchSessionDetail();
+            }
+        } catch (e: any) {
+            setError(e.message ?? 'Failed to send message');
+            setMessages(prev => prev.filter(m => m.id !== tempMsg.id));
+        } finally {
+            setSending(false);
+        }
     };
 
-    // Approval Action
+    // Approval Action — call backend approve (and execute if approved), then refetch
     const handleApproval = (msgId: string, approved: boolean) => {
         Alert.alert(
             approved ? "Approve Plan" : "Reject Plan",
@@ -187,13 +287,64 @@ const LiquidationCampaignScreen = () => {
                 {
                     text: "Confirm",
                     style: approved ? "default" : "destructive",
-                    onPress: () => {
-                        // Update local state
+                    onPress: async () => {
                         setMessages(prev => prev.map(m =>
                             m.id === msgId
                                 ? { ...m, approvalStatus: approved ? 'approved' : 'rejected' }
                                 : m
                         ));
+                        setSending(true);
+                        setError(null);
+                        try {
+                            const token = await ensureSupabaseJwt();
+                            if (!token) {
+                                setError('Not authenticated');
+                                return;
+                            }
+                            const strategyId = currentSession?.state?.strategyId;
+                            if (approved && strategyId) {
+                                const approveRes = await fetch(
+                                    `${API_BASE_URL}/api/liquidation/strategies/${strategyId}/approve`,
+                                    {
+                                        method: 'POST',
+                                        headers: { Authorization: `Bearer ${token}` },
+                                    }
+                                );
+                                if (!approveRes.ok) {
+                                    const errData = await approveRes.json().catch(() => ({}));
+                                    throw new Error(errData.message || 'Failed to approve strategy');
+                                }
+                                const executeRes = await fetch(
+                                    `${API_BASE_URL}/api/liquidation/strategies/${strategyId}/execute`,
+                                    {
+                                        method: 'POST',
+                                        headers: { Authorization: `Bearer ${token}` },
+                                    }
+                                );
+                                if (!executeRes.ok) {
+                                    const errData = await executeRes.json().catch(() => ({}));
+                                    throw new Error(errData.message || 'Approved but execution failed');
+                                }
+                            }
+                            if (!approved && selectedCampaignId) {
+                                await fetch(
+                                    `${API_BASE_URL}/api/agent/sessions/${selectedCampaignId}/messages`,
+                                    {
+                                        method: 'POST',
+                                        headers: {
+                                            'Content-Type': 'application/json',
+                                            Authorization: `Bearer ${token}`,
+                                        },
+                                        body: JSON.stringify({ content: 'Strategy rejected. Please revise the plan.' }),
+                                    }
+                                );
+                            }
+                            await fetchSessionDetail();
+                        } catch (e: any) {
+                            setError(e.message ?? (approved ? 'Failed to approve/execute' : 'Failed to send rejection'));
+                        } finally {
+                            setSending(false);
+                        }
                     }
                 }
             ]
@@ -219,11 +370,11 @@ const LiquidationCampaignScreen = () => {
         if (!currentSession) return null;
 
         const { state, goal, status } = currentSession;
-        const revenue = state.revenueGenerated || 0;
+        const revenue = state.revenueGenerated ?? state.revenueCollected ?? 0;
         const target = goal.targetRevenue || 1;
 
         let headline = "Campaign is active.";
-        if (status === 'waiting_for_user') headline = "Action required: Review strategy.";
+        if (status === 'waiting_user') headline = "Action required: Review strategy.";
         if (state.phase === 'analyzing') headline = "Analyzing inventory...";
 
         return {
@@ -236,18 +387,14 @@ const LiquidationCampaignScreen = () => {
                     { label: "Target", value: `$${target.toLocaleString()}`, color: "#6b7280" }
                 ],
             },
-            severity: status === 'waiting_for_user' ? 'warning' : 'good',
+            severity: status === 'waiting_user' ? 'warning' : 'good',
             timestamp: state.lastUpdate || currentSession.updatedAt,
             timeframe: 'short_term'
         };
     }, [currentSession]);
 
-    // Mock items for config
-    const mockItems: CampaignItem[] = useMemo(() => [
-        { id: '1', name: 'Vintage Leather Jacket', sku: 'VLJ-001', price: 145.00, inventory: 12, aggressiveness: 'medium' },
-        { id: '2', name: 'Summer Floral Dress', sku: 'SFD-042', price: 45.00, inventory: 50, aggressiveness: 'high' },
-        { id: '3', name: 'Denim Jeans Classic', sku: 'DJC-109', price: 89.99, inventory: 5, aggressiveness: 'low' },
-    ], []);
+    // Config tab uses real campaign items from strategy (configItems); fallback to empty when no strategy
+    const campaignItemsForConfig = configItems;
 
     // --- RENDERERS ---
 
@@ -401,8 +548,8 @@ const LiquidationCampaignScreen = () => {
                                     multiline
                                 />
                                 <TouchableOpacity
-                                    style={[styles.sendBtn, !inputText.trim() && styles.sendBtnDisabled]}
-                                    disabled={!inputText.trim()}
+                                    style={[styles.sendBtn, (!inputText.trim() || sending) && styles.sendBtnDisabled]}
+                                    disabled={!inputText.trim() || sending}
                                     onPress={handleSendMessage}
                                 >
                                     <Icon name="arrow-up" size={20} color="#ffffff" />
@@ -412,13 +559,19 @@ const LiquidationCampaignScreen = () => {
                     </KeyboardAvoidingView>
 
                 ) : (
-                    // CONFIG TAB
-                    <ScrollView style={styles.scrollView}>
-                        <CampaignInventorySettings
-                            items={mockItems}
-                            onUpdateItemStrategy={() => { }}
-                            onUpdateGlobalStrategy={() => { }}
-                        />
+                    // CONFIG TAB — real items from strategy API
+                    <ScrollView style={styles.scrollView} refreshControl={<RefreshControl refreshing={loadingConfig} onRefresh={fetchStrategyItems} />}>
+                        {currentSession?.state?.strategyId ? (
+                            <CampaignInventorySettings
+                                items={campaignItemsForConfig}
+                                onUpdateItemStrategy={() => { }}
+                                onUpdateGlobalStrategy={() => { }}
+                            />
+                        ) : (
+                            <View style={styles.emptyState}>
+                                <Text style={styles.emptyText}>No strategy yet. Create and approve a plan in Live Activity to see campaign items here.</Text>
+                            </View>
+                        )}
                     </ScrollView>
                 )
             ) : (

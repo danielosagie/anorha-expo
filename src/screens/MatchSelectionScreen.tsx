@@ -282,6 +282,8 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
     const lastFeedbackKeyRef = React.useRef<string>('');
     // Track if we've already auto-selected to prevent repeated selections
     const hasAutoSelectedRef = React.useRef(false);
+    // Polling timer ref so we can clear it on completed/failed and in cleanup (stop hitting backend)
+    const pollingTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Sync with JobsContext - initialize from context if available (ONE TIME per jobId)
     // Deps: only jobId and modalItems so we don't re-run on every context update (which would cause infinite loop)
@@ -440,7 +442,6 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         navigation.setOptions({ headerShown: false });
 
         let cancelled = false;
-        let timer: any;
 
         // If override results are provided, use them directly instead of polling
         if (overrideResults && Array.isArray(overrideResults) && overrideResults.length > 0) {
@@ -485,7 +486,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                         const delay = baseDelayMs * Math.pow(2, retryCount);
                         console.log(`[MatchSelectionScreen] Server error ${res.status}, retrying in ${delay}ms (attempt ${retryCount + 1}/${maxRetries})`);
                         setError(`Reconnecting... (attempt ${retryCount + 1}/${maxRetries})`);
-                        timer = setTimeout(() => pollStatus(retryCount + 1), delay);
+                        pollingTimerRef.current = setTimeout(() => pollStatus(retryCount + 1), delay);
                         return;
                     } else {
                         throw new Error(`Server unavailable after ${maxRetries} retries. Please try again later.`);
@@ -530,7 +531,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                     return; // stop polling
                 }
 
-                timer = setTimeout(() => pollStatus(0), 700); // Reset retry count on success
+                pollingTimerRef.current = setTimeout(() => pollStatus(0), 700); // Reset retry count on success
             } catch (err: any) {
                 if (!cancelled) {
                     // Network errors - retry with exponential backoff
@@ -539,7 +540,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                         const delay = baseDelayMs * Math.pow(2, retryCount);
                         console.log(`[MatchSelectionScreen] Network error, retrying in ${delay}ms (attempt ${retryCount + 1}/${maxRetries})`);
                         setError(`Reconnecting... (attempt ${retryCount + 1}/${maxRetries})`);
-                        timer = setTimeout(() => pollStatus(retryCount + 1), delay);
+                        pollingTimerRef.current = setTimeout(() => pollStatus(retryCount + 1), delay);
                         return;
                     }
                     setError(err.message);
@@ -568,7 +569,13 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
             setItemGenerateJobs(prev => ({ ...initialJobMap, ...prev }));
         }
 
-        return () => { cancelled = true; if (timer) clearTimeout(timer); };
+        return () => {
+            cancelled = true;
+            if (pollingTimerRef.current) {
+                clearTimeout(pollingTimerRef.current);
+                pollingTimerRef.current = null;
+            }
+        };
     }, [jobId, overrideResults, preSelectedIndices]);
 
     const fetchTemplatesPage = useCallback(async (offset: number, replace: boolean = false) => {

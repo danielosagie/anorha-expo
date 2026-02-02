@@ -16,6 +16,8 @@ interface SearchBarWithScannerProps {
   onScan: (barcode: string) => void;
   onScannerOpen: () => void;
   onClear?: () => void;
+  /** Voice button to the left of the barcode/scanner button */
+  onVoicePress?: () => void;
 }
 
 const SearchBarWithScanner: React.FC<SearchBarWithScannerProps> = ({
@@ -25,6 +27,7 @@ const SearchBarWithScanner: React.FC<SearchBarWithScannerProps> = ({
   onScan,
   onScannerOpen,
   onClear,
+  onVoicePress,
 }) => {
   const theme = useTheme();
 
@@ -43,6 +46,15 @@ const SearchBarWithScanner: React.FC<SearchBarWithScannerProps> = ({
           <Icon name="close" size={20} color="#999" />
         </TouchableOpacity>
       ) : null}
+      {onVoicePress != null && (
+        <TouchableOpacity
+          style={styles.voiceButton}
+          onPress={onVoicePress}
+          activeOpacity={0.7}
+        >
+          <Icon name="microphone" size={20} color="#6B7280" />
+        </TouchableOpacity>
+      )}
       <TouchableOpacity
         style={styles.scannerButton}
         onPress={onScannerOpen}
@@ -84,6 +96,10 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 40,
     fontSize: 16,
+  },
+  voiceButton: {
+    padding: 8,
+    marginLeft: 4,
   },
   scannerButton: {
     borderRadius: 8,

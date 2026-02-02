@@ -205,6 +205,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const debounceTimerRef = useRef<any>(null);
   const lastHydratedJobRef = useRef<string | null>(null);
   const lastSavedRef = useRef<string>('');
+  const lastScheduledRef = useRef<string | null>(null);
 
   // Track active regeneration jobs: jobId -> platformKey
   const activeRegenJobsRef = useRef<Record<string, string>>({});
@@ -407,11 +408,22 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
 
   // ========== AUTO-SAVE DEBOUNCE: Save to /api/products/drafts every 2s idle ==========
+  // Only run when variantId changes; only schedule save when draft content actually changed (stops spam when nothing changed)
+  const variantIdForDraft = (route.params as any)?.variantId || first?.variantId;
   useEffect(() => {
-    const variantId = (route.params as any)?.variantId || first?.variantId;
+    const variantId = variantIdForDraft;
     if (!variantId || !platformsRef.current || Object.keys(platformsRef.current).length === 0) {
       return;
     }
+
+    const currentJson = JSON.stringify(platformsRef.current);
+    if (currentJson === lastSavedRef.current) {
+      return;
+    }
+    if (lastScheduledRef.current !== null && lastScheduledRef.current === currentJson) {
+      return;
+    }
+    lastScheduledRef.current = currentJson;
 
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
@@ -424,12 +436,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
         if (!baseUrl || !token) {
           console.log('[GEN-DETAILS AutoSave] Missing baseUrl or token, skipping');
+          lastScheduledRef.current = null;
           return;
         }
 
         const currentData = JSON.stringify(platformsRef.current);
         if (currentData === lastSavedRef.current) {
           console.log('[GEN-DETAILS AutoSave] No changes, skipping save');
+          lastScheduledRef.current = null;
           return;
         }
 
@@ -448,13 +462,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
         if (response.ok) {
           lastSavedRef.current = currentData;
+          lastScheduledRef.current = null;
           console.log('[GEN-DETAILS AutoSave] ✅ Draft auto-saved successfully');
         } else {
           const errorText = await response.text();
           console.error('[GEN-DETAILS AutoSave] ❌ Failed to auto-save draft:', response.status, errorText);
+          lastScheduledRef.current = null;
         }
       } catch (error) {
         console.error('[GEN-DETAILS AutoSave] ❌ Error auto-saving draft:', error);
+        lastScheduledRef.current = null;
       }
     }, 2000);
 
@@ -463,7 +480,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [displayedPlatforms, first?.variantId, route.params]);
+  }, [variantIdForDraft, updateCounter]);
   const platformKeys: string[] = useMemo(() => Object.keys(displayedPlatforms as Record<string, any>), [displayedPlatforms]);
   const [jobsModalVisible, setJobsModalVisible] = useState(false);
   const [userGenerateJobs, setUserGenerateJobs] = useState<Array<{ jobId: string; status: string; createdAt: string; completedAt?: string }>>([]);
@@ -2088,6 +2105,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           // Restore the draft data into platformsRef
           platformsRef.current = currentDraft.DraftData;
           lastSavedRef.current = JSON.stringify(currentDraft.DraftData);
+          lastScheduledRef.current = null;
           forceUpdate({}); // Trigger re-render with restored data
         }
       } catch (error) {

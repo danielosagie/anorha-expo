@@ -285,9 +285,7 @@ export function useInventoryLevelsRealtime() {
         );
     };
 
-    setupSubscription();
-
-    return () => {
+    setupSubscription();    return () => {
       console.log('[Real-time] Cleaning up InventoryLevels subscription');
       if (retryTimeout) clearTimeout(retryTimeout);
       subscription?.unsubscribe();

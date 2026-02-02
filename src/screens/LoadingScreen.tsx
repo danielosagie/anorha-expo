@@ -79,6 +79,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
   // Poll job status using the jobId
   const [navigatedEarly, setNavigatedEarly] = useState(false);
   const BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
+  const pollingIntervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (!jobId) return;
@@ -122,8 +123,12 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
             console.log('[ANIMATION] Stage unchanged:', mappedStage, '- skipping animation');
           }
           
-          // If completed, navigate to next screen
+          // If completed, stop polling and navigate to next screen
           if (status.status === 'completed') {
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
             console.log(`Process "${processType}" complete! Navigating...`);
             setTimeout(() => {
               // Build items list for GenerateDetails modal
@@ -139,6 +144,10 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
               });
             }, 500);
           } else if (status.status === 'failed') {
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
             console.error('Job failed:', status.error);
             // Handle error - maybe go back or show error screen
           }
@@ -170,6 +179,10 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
           
           // Early navigate: as soon as we have initial results, go to selection screen (non-blocking rerank/embeddings continue server-side)
           if (!navigatedEarly && Array.isArray(status.results) && status.results.length > 0) {
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
             setNavigatedEarly(true);
             const itemsForModal = (status.results || []).map((res: any, idx: number) => {
               const first = res?.serpApiData?.[0];
@@ -203,8 +216,12 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
             return; // stop further handling in this tick
           }
 
-          // If completed, navigate (redundant if we already navigated early)
+          // If completed, stop polling and navigate (redundant if we already navigated early)
           if (status.status === 'completed' && !navigatedEarly) {
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
             console.log(`Process "${processType}" complete! Navigating...`);
             setTimeout(() => {
               navigation.replace(onCompleteRoute.screen, {
@@ -213,6 +230,10 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
               });
             }, 500);
           } else if (status.status === 'failed') {
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
             console.error('Job failed:', status.error);
             // Handle error - maybe go back or show error screen
           }
@@ -228,9 +249,14 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
 
     // Start polling immediately, then every 2 seconds
     pollJobStatus();
-    const interval = setInterval(pollJobStatus, 2000);
-    
-    return () => clearInterval(interval);
+    pollingIntervalRef.current = setInterval(pollJobStatus, 2000);
+
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    };
   }, [jobId, processType, navigation, onCompleteRoute, activeStages]);
 
   // Fallback timer for advancing stages if polling fails

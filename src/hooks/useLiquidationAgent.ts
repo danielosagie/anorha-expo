@@ -1,18 +1,22 @@
 /**
  * Convex Liquidation Agent Hook
- * 
+ *
  * Connects your mobile app to the Convex liquidation agent.
  * Authentication is handled by Convex + Clerk - no tokens passed from client.
- * 
- * Setup required:
+ *
+ * **Note:** For production liquidation campaigns, use the Nest API from
+ * LiquidationCampaignScreen (POST /api/agent/sessions, .../messages,
+ * /api/liquidation/strategies/:id/approve, .../execute). Convex agent tools
+ * call Nest without auth and get 401. Liquidation is Nest-only.
+ *
+ * Setup required (if using Convex path):
  * 1. In Clerk Dashboard: Create JWT Template for "convex"
  * 2. In Convex Dashboard: Set CLERK_JWT_ISSUER_DOMAIN env var
  * 3. Wrap app with ConvexProviderWithClerk (see ConvexProvider.tsx)
- * 
+ *
  * Usage:
  * ```tsx
  * const { startCampaign, chat, isLoading } = useLiquidationAgent();
- * 
  * const result = await startCampaign({
  *   targetRevenue: 4000,
  *   timeframeDays: 4,

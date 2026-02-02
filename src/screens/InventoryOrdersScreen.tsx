@@ -17,9 +17,12 @@ import PlatformFilterChips from '../components/PlatformFilterChips';
 import PoolLocationCombobox from '../components/PoolLocationCombobox';
 import InventoryListCard from '../components/InventoryListCard';
 import BaseModal from '../components/BaseModal';
+import SpeechModal from '../components/SpeechModal';
 import SortByDropdown from '../components/SortByDropdown';
 import { CameraView } from 'expo-camera';
 import { useProductVariantRealtime, useInventoryLevelsRealtime } from '../hooks/useProductVariantRealtime';
+import { useOrg } from '../context/OrgContext';
+import { parseFilterQuery } from '../utils/parseFilterQuery';
 
 type InventoryOrdersScreenNavigationProp = StackNavigationProp<AppStackParamList, 'TabNavigator'>;
 
@@ -56,6 +59,7 @@ const InventoryOrdersScreen = observer(() => {
   const navigation = useNavigation<InventoryOrdersScreenNavigationProp>();
   const route = useRoute<any>();
   const legendState: LegendStateObservables | null = useLegendState();
+  const { currentOrg } = useOrg();
 
   // Subscribe to real-time product variant and inventory changes
   // These hooks return updateCounter values that we'll use to trigger useMemo re-computation
@@ -70,6 +74,9 @@ const InventoryOrdersScreen = observer(() => {
   const [selectedPlatformType, setSelectedPlatformType] = useState<string | null>(null);
   const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
   const [lowStockOnly, setLowStockOnly] = useState(false);
+  const [priceMax, setPriceMax] = useState<number | null>(null);
+  const [presetVariantIds, setPresetVariantIds] = useState<string[] | null>(null);
+  const [loadingSlowMovers, setLoadingSlowMovers] = useState(false);
   const [scannedBarcode, setScannedBarcode] = useState<string | null>(null);
   const [barcodeSearchError, setBarcodeSearchError] = useState<string | null>(null);
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -85,6 +92,10 @@ const InventoryOrdersScreen = observer(() => {
       if (p.initialSortBy) setSortBy(p.initialSortBy);
       if (p.initialLocationIds) setSelectedLocationIds(p.initialLocationIds);
       if (p.lowStockOnly !== undefined) setLowStockOnly(p.lowStockOnly);
+      if (p.initialVariantIds != null) {
+        const ids = Array.isArray(p.initialVariantIds) ? p.initialVariantIds : String(p.initialVariantIds).split(',').filter(Boolean);
+        setPresetVariantIds(ids.length > 0 ? ids : null);
+      }
 
       if (p.openScannerOnMount) {
         setTimeout(() => {
@@ -115,6 +126,12 @@ const InventoryOrdersScreen = observer(() => {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
 
+  // Bulk action modal: filter by type/voice, review, then apply Delete/Archive/Liquidate
+  const [bulkActionModalVisible, setBulkActionModalVisible] = useState(false);
+  const [bulkActionModalQuery, setBulkActionModalQuery] = useState('');
+  const [bulkActionModalMatchIds, setBulkActionModalMatchIds] = useState<string[] | null>(null);
+  const [speechModalVisible, setSpeechModalVisible] = useState(false);
+
   // Bulk Selection Handlers
   const handleLongPressItem = (id: string) => {
     if (!isSelectionMode) {
@@ -130,20 +147,64 @@ const InventoryOrdersScreen = observer(() => {
     const newSet = new Set(selectedItems);
     if (newSet.has(id)) {
       newSet.delete(id);
-      if (newSet.size === 0) {
-        // Optional: Exit selection mode if last item deselected? 
-        // For now, let's keep it active until user manually cancels.
-      }
     } else {
       newSet.add(id);
     }
     setSelectedItems(newSet);
+    if (newSet.size === 0) {
+      handleExitSelectionMode();
+    }
   };
 
   const handleExitSelectionMode = () => {
     setIsSelectionMode(false);
     setSelectedItems(new Set());
+    setBulkActionModalVisible(false);
   };
+
+  // Preset: fetch slow movers variant IDs from nudges API (reuses insights data)
+  const fetchSlowMoversVariantIds = useCallback(async () => {
+    const orgId = currentOrg?.id;
+    if (!orgId) {
+      Alert.alert('No organization', 'Select an organization to load slow movers.');
+      return;
+    }
+    setLoadingSlowMovers(true);
+    try {
+      const token = await ensureSupabaseJwt();
+      if (!token) {
+        Alert.alert('Error', 'Not authenticated.');
+        return;
+      }
+      const response = await fetch(`https://api.sssync.app/api/insights/orgs/${encodeURIComponent(orgId)}/nudges`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        throw new Error(`Nudges failed: ${response.status}`);
+      }
+      const data = await response.json();
+      const insight = data?.insight ?? data;
+      const link = insight?.bottomDIN?.action?.link ?? '';
+      const affected = insight?.bottomDIN?.affectedProducts ?? [];
+      let ids: string[] = [];
+      const match = link.match(/variantIds=([^&]+)/);
+      if (match) {
+        ids = match[1].split(',').map((s: string) => s.trim()).filter(Boolean);
+      }
+      if (ids.length === 0 && affected.length > 0) {
+        ids = affected.map((p: { id: string }) => p.id).filter(Boolean);
+      }
+      setPresetVariantIds(ids.length > 0 ? ids : null);
+      if (ids.length === 0) {
+        Alert.alert('No slow movers', 'No slow-moving products data right now. Try again later.');
+      }
+    } catch (err) {
+      console.error('[InventoryOrdersScreen] fetchSlowMovers failed', err);
+      Alert.alert('Error', err instanceof Error ? err.message : 'Failed to load slow movers.');
+    } finally {
+      setLoadingSlowMovers(false);
+    }
+  }, [currentOrg?.id]);
 
   const [moreMenuVisible, setMoreMenuVisible] = useState(false);
   const [archiveModalVisible, setArchiveModalVisible] = useState(false);
@@ -160,47 +221,49 @@ const InventoryOrdersScreen = observer(() => {
     setSelectedItems(new Set(allIds));
   };
 
+  const runBulkDeleteByIds = useCallback(async (ids: string[]) => {
+    if (ids.length === 0) return;
+    try {
+      const { error } = await supabase
+        .from('ProductVariants')
+        .update({ IsArchived: true })
+        .in('Id', ids);
+      if (error) throw error;
+      setBulkActionModalVisible(false);
+      handleExitSelectionMode();
+    } catch (err) {
+      console.error('Bulk delete failed', err);
+      Alert.alert('Error', 'Failed to delete items. Please try again.');
+    }
+  }, []);
+
   const handleBulkDelete = () => {
+    const idsToDelete = Array.from(selectedItems);
     Alert.alert(
-      "Delete Items",
-      `Are you sure you want to delete ${selectedItems.size} items? This will archive them from your inventory.`,
+      'Delete Items',
+      `Are you sure you want to delete ${idsToDelete.length} items? This will archive them from your inventory.`,
       [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            // Perform soft delete
-            const idsToDelete = Array.from(selectedItems);
-            console.log('[BulkDelete] Deleting:', idsToDelete);
-
-            try {
-              const { error } = await supabase
-                .from('ProductVariants')
-                .update({ IsArchived: true })
-                .in('Id', idsToDelete);
-
-              if (error) throw error;
-
-              // Success feedback
-              // Ideally we should remove them from local state optimistically, 
-              // but the focusEffect or realtime subs should handle it.
-              // We can manually filter them out from directFetchVariants just in case.
-
-              // Close selection mode
-              handleExitSelectionMode();
-              // Trigger refresh logic
-              // (The useFocusEffect logic triggers on focus, but we might want to manually trigger a re-fetch or rely on realtime)
-
-            } catch (err) {
-              console.error("Bulk delete failed", err);
-              Alert.alert("Error", "Failed to delete items. Please try again.");
-            }
-          }
-        }
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => runBulkDeleteByIds(idsToDelete) },
       ]
     );
   };
+
+  const runBulkArchiveByIds = useCallback(async (ids: string[]) => {
+    if (ids.length === 0) return;
+    try {
+      const { error } = await supabase
+        .from('ProductVariants')
+        .update({ IsArchived: true })
+        .in('Id', ids);
+      if (error) throw error;
+      setBulkActionModalVisible(false);
+      handleExitSelectionMode();
+    } catch (err) {
+      console.error('Bulk archive failed', err);
+      Alert.alert('Error', 'Failed to archive items. Please try again.');
+    }
+  }, []);
 
 
 
@@ -788,6 +851,20 @@ const InventoryOrdersScreen = observer(() => {
       );
     }
 
+    // Preset allowlist (e.g. slow movers from nudges or route param)
+    if (presetVariantIds && presetVariantIds.length > 0) {
+      const allowSet = new Set(presetVariantIds);
+      filtered = filtered.filter((item: EnrichedProductVariant) => allowSet.has(item.Id));
+    }
+
+    // Price max preset (e.g. "Under $50")
+    if (priceMax != null && priceMax > 0) {
+      filtered = filtered.filter((item: EnrichedProductVariant) => {
+        const p = item.minPrice ?? item.Price ?? 0;
+        return p <= priceMax;
+      });
+    }
+
     // Barcode search
     if (scannedBarcode && !searchQuery) {
       filtered = filtered.filter((item: EnrichedProductVariant) =>
@@ -830,7 +907,35 @@ const InventoryOrdersScreen = observer(() => {
     }
 
     return filtered;
-  }, [enrichedProductVariants, searchQuery, scannedBarcode, sortBy, lowStockOnly]);
+  }, [enrichedProductVariants, searchQuery, scannedBarcode, sortBy, lowStockOnly, presetVariantIds, priceMax]);
+
+  // Bulk action modal: apply filter query to current list and set match IDs (used inside modal)
+  const applyBulkActionModalFilter = useCallback((query: string): string[] => {
+    const parsed = parseFilterQuery(query);
+    let list = [...filteredInventory];
+    if (parsed.priceMax != null && parsed.priceMax > 0) {
+      list = list.filter((item: EnrichedProductVariant) => (item.minPrice ?? item.Price ?? 0) <= parsed.priceMax!);
+    }
+    if (parsed.lowStockOnly === true) {
+      list = list.filter((item: EnrichedProductVariant) => (item.totalQuantity ?? 0) <= 5);
+    }
+    if (parsed.platform) {
+      const plat = parsed.platform.toLowerCase();
+      list = list.filter((item: EnrichedProductVariant) =>
+        item.platformNames?.includes(plat) ?? false
+      );
+    }
+    if (parsed.triggerSlowMovers === true && presetVariantIds?.length) {
+      const allowSet = new Set(presetVariantIds);
+      list = list.filter((item: EnrichedProductVariant) => allowSet.has(item.Id));
+    }
+    return list.map((item: EnrichedProductVariant) => item.Id);
+  }, [filteredInventory, presetVariantIds]);
+
+  const handleBulkActionModalApply = useCallback(() => {
+    const ids = applyBulkActionModalFilter(bulkActionModalQuery);
+    setBulkActionModalMatchIds(ids.length > 0 ? ids : null);
+  }, [bulkActionModalQuery, applyBulkActionModalFilter]);
 
   const inventoryToDisplay = useMemo(() => {
     return filteredInventory.slice(0, displayCount);
@@ -1029,6 +1134,7 @@ const InventoryOrdersScreen = observer(() => {
                     };
                   }}
                   onClear={handleSearchClear}
+                  onVoicePress={() => setBulkActionModalVisible(true)}
                 />
 
                 {/* Barcode Search Error Message */}
@@ -1052,6 +1158,70 @@ const InventoryOrdersScreen = observer(() => {
                 activeColor={theme.colors.primary}
               />
             </View>
+
+            {/* Preset / smart filter chips
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.presetChipsRow}
+              style={styles.presetChipsScroll}
+            >
+              <TouchableOpacity
+                style={[
+                  styles.presetChip,
+                  lowStockOnly && { backgroundColor: theme.colors.primary + '22', borderColor: theme.colors.primary },
+                ]}
+                onPress={() => setLowStockOnly(prev => !prev)}
+              >
+                <Text style={[styles.presetChipText, lowStockOnly && { color: theme.colors.primary, fontWeight: '600' }]}>Low stock</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.presetChip,
+                  priceMax === 50 && { backgroundColor: theme.colors.primary + '22', borderColor: theme.colors.primary },
+                ]}
+                onPress={() => setPriceMax(prev => (prev === 50 ? null : 50))}
+              >
+                <Text style={[styles.presetChipText, priceMax === 50 && { color: theme.colors.primary, fontWeight: '600' }]}>Under $50</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.presetChip,
+                  priceMax === 100 && { backgroundColor: theme.colors.primary + '22', borderColor: theme.colors.primary },
+                ]}
+                onPress={() => setPriceMax(prev => (prev === 100 ? null : 100))}
+              >
+                <Text style={[styles.presetChipText, priceMax === 100 && { color: theme.colors.primary, fontWeight: '600' }]}>Under $100</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.presetChip,
+                  presetVariantIds != null && presetVariantIds.length > 0 && { backgroundColor: theme.colors.primary + '22', borderColor: theme.colors.primary },
+                ]}
+                onPress={fetchSlowMoversVariantIds}
+                disabled={loadingSlowMovers}
+              >
+                {loadingSlowMovers ? (
+                  <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginRight: 4 }} />
+                ) : null}
+                <Text style={[
+                  styles.presetChipText,
+                  presetVariantIds != null && presetVariantIds.length > 0 && { color: theme.colors.primary, fontWeight: '600' },
+                ]}>
+                  Slow movers
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.presetChip}
+                onPress={() => {
+                  setPriceMax(null);
+                  setPresetVariantIds(null);
+                }}
+              >
+                <Text style={styles.presetChipText}>Clear</Text>
+              </TouchableOpacity>
+            </ScrollView>
+            */}
 
             {/* Pool/Location Combobox and Sort Dropdown */}
             <View style={styles.filterRow}>
@@ -1194,6 +1364,16 @@ const InventoryOrdersScreen = observer(() => {
               contentContainerStyle={styles.actionsScrollContent}
               style={styles.actionsScroll}
             >
+              <TouchableOpacity style={styles.actionChip} onPress={() => setBulkActionModalVisible(true)}>
+                <Icon name="filter-variant-plus" size={18} color="#374151" />
+                <Text style={styles.actionChipText}>Bulk action</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.actionChip} onPress={() => setLiquidationModalVisible(true)}>
+                <Icon name="tag-outline" size={18} color="#374151" />
+                <Text style={styles.actionChipText}>Liquidate</Text>
+              </TouchableOpacity>
+
               <TouchableOpacity style={styles.actionChip} onPress={handleBulkDelete}>
                 <Icon name="trash-can-outline" size={18} color="#374151" />
                 <Text style={styles.actionChipText}>Delete</Text>
@@ -1204,10 +1384,7 @@ const InventoryOrdersScreen = observer(() => {
                 <Text style={styles.actionChipText}>Archive</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.actionChip} onPress={() => setLiquidationModalVisible(true)}>
-                <Icon name="tag-outline" size={18} color="#374151" />
-                <Text style={styles.actionChipText}>Liquidate</Text>
-              </TouchableOpacity>
+              
 
               <TouchableOpacity style={styles.actionChip} onPress={() => setTagsModalVisible(true)}>
                 <Icon name="tag-plus-outline" size={18} color="#374151" />
@@ -1225,6 +1402,156 @@ const InventoryOrdersScreen = observer(() => {
           </View>
         </Animated.View>
       )}
+
+      {/* Bulk Action Modal: filter by type/voice, review, then apply Delete/Archive/Liquidate */}
+      <BaseModal
+        visible={bulkActionModalVisible}
+        onClose={() => {
+          setBulkActionModalVisible(false);
+          setBulkActionModalQuery('');
+          setBulkActionModalMatchIds(null);
+        }}
+        showCloseButton={true}
+        containerStyle={{ width: '90%', maxWidth: 400, borderRadius: 24, padding: 24 }}
+      >
+        <View style={{ width: '100%' }}>
+          <View style={{ marginBottom: 16 }}>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: '#111', marginBottom: 4 }}>
+              Filter & bulk action
+            </Text>
+            <Text style={{ fontSize: 13, color: '#6B7280', fontWeight: '500' }}>
+              Type or use voice to filter, then apply an action to matching items.
+            </Text>
+          </View>
+
+          <View style={styles.nlFilterRow}>
+            <TextInput
+              style={[styles.nlFilterInput, { color: theme.colors.text, borderColor: '#E5E7EB' }]}
+              placeholder="e.g. under 50 dollars, low stock, on eBay"
+              placeholderTextColor="#9CA3AF"
+              value={bulkActionModalQuery}
+              onChangeText={setBulkActionModalQuery}
+              returnKeyType="done"
+              onSubmitEditing={handleBulkActionModalApply}
+            />
+            <TouchableOpacity
+              style={[styles.nlFilterMicButton, { backgroundColor: '#F3F4F6', borderColor: '#E5E7EB' }]}
+              onPress={() => setSpeechModalVisible(true)}
+            >
+              <Icon name="microphone" size={22} color="#6B7280" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.nlFilterApplyButton, { backgroundColor: theme.colors.primary }]}
+              onPress={handleBulkActionModalApply}
+            >
+              <Text style={styles.nlFilterApplyText}>Apply</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={{ marginBottom: 16, paddingVertical: 12, paddingHorizontal: 14, backgroundColor: '#F9FAFB', borderRadius: 12 }}>
+            <Text style={{ fontSize: 15, fontWeight: '600', color: '#111' }}>
+              {bulkActionModalMatchIds != null
+                ? `${bulkActionModalMatchIds.length} item${bulkActionModalMatchIds.length !== 1 ? 's' : ''} match`
+                : selectedItems.size > 0
+                  ? `${selectedItems.size} selected — type above to refine`
+                  : 'Tap Apply after typing a filter'}
+            </Text>
+          </View>
+
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+            <TouchableOpacity
+              style={[styles.actionChip, { marginBottom: 0 }]}
+              onPress={() => {
+                const ids = (bulkActionModalMatchIds?.length ? bulkActionModalMatchIds : Array.from(selectedItems)) as string[];
+                if (ids.length === 0) {
+                  Alert.alert('No items', 'Apply a filter or select items first.');
+                  return;
+                }
+                Alert.alert(
+                  'Delete Items',
+                  `Delete ${ids.length} items? This will archive them.`,
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Delete', style: 'destructive', onPress: () => runBulkDeleteByIds(ids) },
+                  ]
+                );
+              }}
+            >
+              <Icon name="trash-can-outline" size={18} color="#374151" />
+              <Text style={styles.actionChipText}>Delete</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionChip, { marginBottom: 0 }]}
+              onPress={() => {
+                const ids = (bulkActionModalMatchIds?.length ? bulkActionModalMatchIds : Array.from(selectedItems)) as string[];
+                if (ids.length === 0) {
+                  Alert.alert('No items', 'Apply a filter or select items first.');
+                  return;
+                }
+                Alert.alert(
+                  'Archive Items',
+                  `Archive ${ids.length} items?`,
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Archive', onPress: () => runBulkArchiveByIds(ids) },
+                  ]
+                );
+              }}
+            >
+              <Icon name="archive-outline" size={18} color="#374151" />
+              <Text style={styles.actionChipText}>Archive</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionChip, { marginBottom: 0 }]}
+              onPress={() => {
+                const ids = bulkActionModalMatchIds?.length ? bulkActionModalMatchIds : Array.from(selectedItems);
+                if (ids.length === 0) {
+                  Alert.alert('No items', 'Apply a filter or select items first.');
+                  return;
+                }
+                setSelectedItems(new Set(ids));
+                setBulkActionModalVisible(false);
+                setBulkActionModalQuery('');
+                setBulkActionModalMatchIds(null);
+                setLiquidationModalVisible(true);
+              }}
+            >
+              <Icon name="tag-outline" size={18} color="#374151" />
+              <Text style={styles.actionChipText}>Liquidate</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionChip, { marginBottom: 0 }]}
+              onPress={() => {
+                const ids = bulkActionModalMatchIds?.length ? bulkActionModalMatchIds : Array.from(selectedItems);
+                if (ids.length === 0) {
+                  Alert.alert('No items', 'Apply a filter or select items first.');
+                  return;
+                }
+                setSelectedItems(new Set(ids));
+                setBulkActionModalVisible(false);
+                setBulkActionModalQuery('');
+                setBulkActionModalMatchIds(null);
+                setTagsModalVisible(true);
+              }}
+            >
+              <Icon name="tag-plus-outline" size={18} color="#374151" />
+              <Text style={styles.actionChipText}>Tags</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </BaseModal>
+
+      <SpeechModal
+        visible={speechModalVisible}
+        onClose={() => setSpeechModalVisible(false)}
+        onTranscript={(text) => {
+          setBulkActionModalQuery(text);
+          const ids = applyBulkActionModalFilter(text);
+          setBulkActionModalMatchIds(ids.length > 0 ? ids : null);
+          setSpeechModalVisible(false);
+        }}
+        title="Speak your filter"
+      />
 
       {/* More Actions Modal - Cleaner "Lowkey" Design */}
       <BaseModal
@@ -1297,12 +1624,7 @@ const InventoryOrdersScreen = observer(() => {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.modalButton, styles.confirmButton]}
-            onPress={() => {
-              console.log('[BulkArchive] Archiving:', Array.from(selectedItems));
-              // TODO: Actual API Call
-              setArchiveModalVisible(false);
-              handleExitSelectionMode();
-            }}
+            onPress={() => runBulkArchiveByIds(Array.from(selectedItems))}
           >
             <Text style={styles.confirmButtonText}>Archive</Text>
           </TouchableOpacity>
@@ -1489,6 +1811,116 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     marginBottom: 16,
     justifyContent: "space-between",
+  },
+  filterActRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    marginBottom: 10,
+  },
+  filterActChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  filterActChipText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  filterMatchStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  filterMatchText: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  filterMatchActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  filterMatchButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+  filterMatchButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  filterMatchButtonSecondary: {
+    backgroundColor: 'transparent',
+  },
+  filterMatchButtonTextSecondary: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  presetChipsScroll: {
+    marginBottom: 8,
+  },
+  presetChipsRow: {
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 4,
+  },
+  presetChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#F9FAFB',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  presetChipText: {
+    fontSize: 13,
+    color: '#374151',
+  },
+  nlFilterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    gap: 8,
+  },
+  nlFilterInput: {
+    flex: 1,
+    height: 44,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    fontSize: 14,
+  },
+  nlFilterMicButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nlFilterApplyButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  nlFilterApplyText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   listContent: {
     paddingBottom: 16,
