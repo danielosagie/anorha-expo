@@ -8,6 +8,8 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../context/ThemeContext';
@@ -15,13 +17,23 @@ import Button from '../Button';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { showMessage } from 'react-native-flash-message';
 
-const SSSYNC_API_BASE_URL = "https://api.sssync.app";
+const ANORHA_GREEN = '#8cc63f';
+const NEUTRAL_GRAY = '#6B7280';
+const MEMBER_YELLOW = '#F59E0B';
 
-interface Platform {
-  Id: string;
-  DisplayName: string;
-  PlatformType: string;
-  Status: string;
+const API_BASE_URL =
+  process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL ||
+  process.env.EXPO_PUBLIC_API_BASE_URL ||
+  'https://api.sssync.app';
+const API_BASE_RAW = API_BASE_URL.replace(/\/$/, '');
+const API_BASE = API_BASE_RAW.endsWith('/api') ? API_BASE_RAW : `${API_BASE_RAW}/api`;
+
+
+
+interface Pool {
+  id: string;
+  name: string;
+  description?: string | null;
 }
 
 interface Props {
@@ -33,49 +45,51 @@ interface Props {
 
 export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }: Props) {
   const theme = useTheme();
-  
+
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<'admin' | 'member'>('member');
-  const [selectedPlatforms, setSelectedPlatforms] = useState<Set<string>>(new Set());
-  const [platforms, setPlatforms] = useState<Platform[]>([]);
+  const [selectedPoolIds, setSelectedPoolIds] = useState<Set<string>>(new Set());
+  const [pools, setPools] = useState<Pool[]>([]);
   const [loading, setLoading] = useState(false);
-  const [loadingPlatforms, setLoadingPlatforms] = useState(true);
+  const [loadingPools, setLoadingPools] = useState(true);
 
   useEffect(() => {
     if (visible) {
-      loadPlatforms();
+      loadPools();
     }
   }, [visible]);
 
-  const loadPlatforms = async () => {
+  const loadPools = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      const token = await ensureSupabaseJwt();
+      if (!token) return;
 
-      const { data, error } = await supabase
-        .from('PlatformConnections')
-        .select('*')
-        .eq('UserId', user.id)
-        .eq('IsEnabled', true);
+      const res = await fetch(`${API_BASE}/pools/org/${orgId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-      if (error) throw error;
-      
-      setPlatforms(data || []);
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(errText || `Failed to load pools (${res.status})`);
+      }
+
+      const data = await res.json();
+      setPools(Array.isArray(data) ? data : []);
     } catch (error) {
-      console.error('[InviteMemberModal] Error loading platforms:', error);
+      console.error('[InviteMemberModal] Error loading pools:', error);
     } finally {
-      setLoadingPlatforms(false);
+      setLoadingPools(false);
     }
   };
 
-  const togglePlatform = (platformId: string) => {
-    const newSelected = new Set(selectedPlatforms);
-    if (newSelected.has(platformId)) {
-      newSelected.delete(platformId);
+  const togglePool = (poolId: string) => {
+    const next = new Set(selectedPoolIds);
+    if (next.has(poolId)) {
+      next.delete(poolId);
     } else {
-      newSelected.add(platformId);
+      next.add(poolId);
     }
-    setSelectedPlatforms(newSelected);
+    setSelectedPoolIds(next);
   };
 
   const handleSendInvite = async () => {
@@ -88,10 +102,10 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
       return;
     }
 
-    if (role === 'member' && selectedPlatforms.size === 0) {
+    if (role === 'member' && selectedPoolIds.size === 0) {
       showMessage({
         message: 'Error',
-        description: 'Please select at least one platform for this member',
+        description: 'Please select at least one pool for this member',
         type: 'danger',
       });
       return;
@@ -101,8 +115,9 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
 
     try {
       const token = await ensureSupabaseJwt();
+
       const response = await fetch(
-        `${SSSYNC_API_BASE_URL}/api/organizations/${orgId}/invitations`,
+        `${API_BASE}/organizations/${orgId}/invitations`,
         {
           method: 'POST',
           headers: {
@@ -112,7 +127,8 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
           body: JSON.stringify({
             email: email.trim(),
             role,
-            platformAccess: role === 'admin' ? undefined : Array.from(selectedPlatforms),
+            // Pool-based access for members (admins get full access)
+            assignedPoolIds: role === 'admin' ? undefined : Array.from(selectedPoolIds),
           }),
         }
       );
@@ -121,6 +137,8 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
         const error = await response.json();
         throw new Error(error.message || 'Failed to send invitation');
       }
+
+      capture(AnalyticsEvents.TEAM_INVITE_SENT);
 
       showMessage({
         message: 'Success',
@@ -131,8 +149,8 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
       // Reset form
       setEmail('');
       setRole('member');
-      setSelectedPlatforms(new Set());
-      
+      setSelectedPoolIds(new Set());
+
       onSuccess();
     } catch (error: any) {
       showMessage({
@@ -152,7 +170,10 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
       transparent={true}
       onRequestClose={onClose}
     >
-      <View style={styles.overlay}>
+      <KeyboardAvoidingView 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
+        style={styles.overlay}
+      >
         <View style={[styles.modal, { backgroundColor: '#fff' }]}>
           {/* Header */}
           <View style={styles.header}>
@@ -165,7 +186,7 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
           <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
             {/* Email Input */}
             <View style={styles.section}>
-              <Text style={styles.label}>Email Address *</Text>
+              <Text style={[styles.label, { marginTop: 0 }]}>Email Address *</Text>
               <TextInput
                 style={styles.input}
                 placeholder="colleague@company.com"
@@ -184,7 +205,7 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
                 <TouchableOpacity
                   style={[
                     styles.roleOption,
-                    role === 'admin' && styles.roleOptionSelected,
+                    role === 'admin' && styles.roleOptionSelectedAdmin,
                   ]}
                   onPress={() => setRole('admin')}
                 >
@@ -192,12 +213,12 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
                     <Icon
                       name="shield-crown"
                       size={20}
-                      color={role === 'admin' ? '#9b59b6' : '#999'}
+                      color={role === 'admin' ? ANORHA_GREEN : '#999'}
                     />
                     <Text
                       style={[
                         styles.roleTitle,
-                        role === 'admin' && { color: '#9b59b6' },
+                        role === 'admin' && { color: ANORHA_GREEN },
                       ]}
                     >
                       Admin
@@ -211,7 +232,7 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
                 <TouchableOpacity
                   style={[
                     styles.roleOption,
-                    role === 'member' && styles.roleOptionSelected,
+                    role === 'member' && styles.roleOptionSelectedMember,
                   ]}
                   onPress={() => setRole('member')}
                 >
@@ -219,12 +240,12 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
                     <Icon
                       name="account"
                       size={20}
-                      color={role === 'member' ? '#3498db' : '#999'}
+                      color={role === 'member' ? MEMBER_YELLOW : '#999'}
                     />
                     <Text
                       style={[
                         styles.roleTitle,
-                        role === 'member' && { color: '#3498db' },
+                        role === 'member' && { color: MEMBER_YELLOW },
                       ]}
                     >
                       Member
@@ -237,48 +258,48 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
               </View>
             </View>
 
-            {/* Platform Access (for Members) */}
+            {/* Pool Access (for Members) */}
             {role === 'member' && (
               <View style={styles.section}>
-                <Text style={styles.label}>Platform Access *</Text>
+                <Text style={styles.label}>Pool Access *</Text>
                 <Text style={styles.hint}>
-                  Select which platforms this member can access
+                  Select which pools this member can access
                 </Text>
 
-                {loadingPlatforms ? (
-                  <ActivityIndicator color={theme.colors.primary} />
-                ) : platforms.length === 0 ? (
+                {loadingPools ? (
+                  <ActivityIndicator color={ANORHA_GREEN} />
+                ) : pools.length === 0 ? (
                   <Text style={styles.noPlatforms}>
-                    No platforms connected yet
+                    No pools created yet
                   </Text>
                 ) : (
-                  platforms.map((platform) => (
+                  pools.map((pool) => (
                     <TouchableOpacity
-                      key={platform.Id}
+                      key={pool.id}
                       style={styles.platformOption}
-                      onPress={() => togglePlatform(platform.Id)}
+                      onPress={() => togglePool(pool.id)}
                     >
                       <View style={styles.platformInfo}>
-                        <Icon name="store" size={20} color={theme.colors.primary} />
+                        <Icon name="folder-outline" size={20} color={ANORHA_GREEN} />
                         <View style={styles.platformDetails}>
                           <Text style={styles.platformName}>
-                            {platform.DisplayName}
+                            {pool.name}
                           </Text>
                           <Text style={styles.platformType}>
-                            {platform.PlatformType}
+                            {pool.description || 'Pool'}
                           </Text>
                         </View>
                       </View>
                       <Icon
                         name={
-                          selectedPlatforms.has(platform.Id)
+                          selectedPoolIds.has(pool.id)
                             ? 'checkbox-marked'
                             : 'checkbox-blank-outline'
                         }
                         size={24}
                         color={
-                          selectedPlatforms.has(platform.Id)
-                            ? theme.colors.primary
+                          selectedPoolIds.has(pool.id)
+                            ? ANORHA_GREEN
                             : '#ccc'
                         }
                       />
@@ -306,7 +327,7 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
             />
           </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -318,27 +339,28 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modal: {
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 48,
     maxHeight: '90%',
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    marginBottom: 24,
   },
   title: {
     fontSize: 20,
-    fontWeight: '600',
+    fontWeight: '700',
+    color: '#111827',
   },
   closeButton: {
     padding: 4,
   },
   content: {
-    padding: 20,
+    // Padding removed since modal now has padding
   },
   section: {
     marginBottom: 24,
@@ -346,14 +368,17 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 14,
     fontWeight: '600',
+    color: '#374151',
     marginBottom: 8,
+    marginTop: 16,
   },
   input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 12,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     fontSize: 16,
+    color: '#111827',
   },
   roleOptions: {
     gap: 12,
@@ -364,10 +389,15 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 16,
   },
-  roleOptionSelected: {
-    borderColor: '#5c9c00',
+  roleOptionSelectedAdmin: {
+    borderColor: ANORHA_GREEN,
     borderWidth: 2,
-    backgroundColor: '#5c9c00' + '05',
+    backgroundColor: ANORHA_GREEN + '05',
+  },
+  roleOptionSelectedMember: {
+    borderColor: MEMBER_YELLOW,
+    borderWidth: 2,
+    backgroundColor: MEMBER_YELLOW + '14',
   },
   roleHeader: {
     flexDirection: 'row',
@@ -381,12 +411,12 @@ const styles = StyleSheet.create({
   },
   roleDescription: {
     fontSize: 13,
-    color: '#666',
+    color: NEUTRAL_GRAY,
     marginLeft: 28,
   },
   hint: {
     fontSize: 13,
-    color: '#666',
+    color: NEUTRAL_GRAY,
     marginBottom: 12,
   },
   platformOption: {
@@ -411,7 +441,7 @@ const styles = StyleSheet.create({
   },
   platformType: {
     fontSize: 12,
-    color: '#666',
+    color: NEUTRAL_GRAY,
     textTransform: 'capitalize',
   },
   noPlatforms: {
@@ -422,9 +452,7 @@ const styles = StyleSheet.create({
   },
   footer: {
     flexDirection: 'row',
-    padding: 20,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
+    marginTop: 24,
     gap: 12,
   },
   cancelButton: {
@@ -432,6 +460,7 @@ const styles = StyleSheet.create({
   },
   sendButton: {
     flex: 1,
+    backgroundColor: ANORHA_GREEN,
   },
 });
 

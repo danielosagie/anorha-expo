@@ -1,3 +1,6 @@
+export const ENABLE_DOC_MODES: boolean =
+  process.env.EXPO_PUBLIC_ENABLE_DOC_MODES === 'true';
+
 // Centralized feature flags for runtime toggles
 // Keep simple boolean flags for now; can evolve to remote config later
 

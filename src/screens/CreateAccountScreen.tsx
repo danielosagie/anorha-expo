@@ -26,6 +26,7 @@ import { useOrganizationList, useUser } from '@clerk/clerk-expo';
 import { useOrg } from '../context/OrgContext';
 import { AuthContext } from '../context/AuthContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { capture, AnalyticsEvents } from '../lib/analytics';
 import Animated, {
   FadeIn,
   FadeOut,
@@ -37,15 +38,15 @@ import Animated, {
 const { width } = Dimensions.get('window');
 const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/$/, '');
 
-// --- THEME CONSTANTS ---
-const THEME = {
-  bg: '#93C822',      // Anorha Lime
-  primary: 'rgba(0,0,0,0.5)', // Darker semi-transparent black
-  secondary: '#0D2B14', // Deep Forest Green (Accents)
-  text: '#FFFFFF',    // White text
-  textDim: 'rgba(255, 255, 255, 0.9)',
-  cardBg: 'rgba(0, 0, 0, 0.18)',
-  border: 'rgba(0, 0, 0, 0.25)',
+// --- THEME (matches OnboardingSlides.tsx) ---
+const ONBOARDING = {
+  bg: '#FEF4DD',           // Cream background
+  green: '#5c9c00',        // Active buttons, dots, cards
+  title: '#313131ff',      // Primary text
+  subtitle: '#666',        // Secondary text
+  dotInactive: '#E5E5E5',  // Inactive pagination dots
+  cardBg: 'rgba(255,255,255,0.9)',
+  border: 'rgba(0,0,0,0.15)',
 };
 
 // CreateAccountScreen can live in AuthStack (signup flow) or AppStack (resume incomplete onboarding).
@@ -164,7 +165,7 @@ const WelcomeStep = memo(({ onNext, onBack, showBackButton, onSignOut }: { onNex
       <View style={{gap: 12}}>
         <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
           <Text style={styles.primaryButtonText}>Let's Go</Text>
-          <Icon name="arrow-right" size={24} color={THEME.bg} />
+          <Icon name="arrow-right" size={24} color="#fff" />
         </TouchableOpacity>
 
         {(showBackButton ? (
@@ -176,7 +177,7 @@ const WelcomeStep = memo(({ onNext, onBack, showBackButton, onSignOut }: { onNex
               paddingHorizontal: 32, 
               alignSelf: "auto", 
               backgroundColor: 'rgba(0, 0, 0, 0.1)', 
-              borderRadius: 8,
+              borderRadius: 16,
               shadowOffset: { width: 0, height: 2 },
               shadowOpacity: 0.2,
               shadowRadius: 8,
@@ -185,7 +186,7 @@ const WelcomeStep = memo(({ onNext, onBack, showBackButton, onSignOut }: { onNex
             }}
             onPress={onBack}
           >
-            <Text style={{ textAlign: "center", fontSize: 18, color: THEME.textDim }}>Back</Text>
+            <Text style={{ textAlign: "center", fontSize: 18, color: ONBOARDING.title }}>Back</Text>
           </TouchableOpacity>
         ) : onSignOut ? (
         <TouchableOpacity
@@ -205,7 +206,7 @@ const WelcomeStep = memo(({ onNext, onBack, showBackButton, onSignOut }: { onNex
             }}
             onPress={onSignOut}
           >
-            <Text style={{ textAlign: "center", fontSize: 18, color: THEME.textDim }}>Back</Text>
+            <Text style={{ textAlign: "center", fontSize: 18, fontWeight: 500, color: ONBOARDING.title }}>Back</Text>
           </TouchableOpacity>
         ) : null)}
       </View>
@@ -220,7 +221,7 @@ const BusinessNameStep = memo(({ value, onChange, onNext }: { value: string, onC
     <TextInput
       style={styles.input}
       placeholder="e.g. Acme Inc"
-      placeholderTextColor={THEME.textDim}
+      placeholderTextColor={ONBOARDING.subtitle}
       value={value}
       onChangeText={onChange}
       autoFocus
@@ -275,14 +276,15 @@ const StoreAddressStep = memo(({
 
     {/* Use My Location Button */}
     <TouchableOpacity
-      style={styles.useLocationButton}
+      style={[styles.useLocationButton, isLoadingLocation && { opacity: 0.7 }]}
       onPress={onUseLocation}
       disabled={isLoadingLocation}
+      activeOpacity={0.8}
     >
       {isLoadingLocation ? (
-        <ActivityIndicator size="small" color={"rgba(56, 56, 56, 1)"} />
+        <ActivityIndicator size="small" color={ONBOARDING.title} />
       ) : (
-        <Icon name="crosshairs-gps" size={20} color={"rgba(56, 56, 56, 1)"} />
+        <Icon name="crosshairs-gps" size={20} color={ONBOARDING.title} />
       )}
       <Text style={styles.useLocationText}>
         {isLoadingLocation ? 'Finding your location...' : 'Use My Location'}
@@ -293,7 +295,7 @@ const StoreAddressStep = memo(({
       <TextInput
         style={styles.input}
         placeholder="Street Address"
-        placeholderTextColor={THEME.textDim}
+        placeholderTextColor={ONBOARDING.subtitle}
         value={street1}
         onChangeText={onStreet1Change}
         autoFocus
@@ -303,7 +305,7 @@ const StoreAddressStep = memo(({
       <TextInput
         style={styles.input}
         placeholder="Apt, Suite, Unit (optional)"
-        placeholderTextColor={THEME.textDim}
+        placeholderTextColor={ONBOARDING.subtitle}
         value={street2}
         onChangeText={onStreet2Change}
         textContentType="streetAddressLine2"
@@ -313,7 +315,7 @@ const StoreAddressStep = memo(({
         <TextInput
           style={[styles.input, { flex: 2 }]}
           placeholder="City"
-          placeholderTextColor={THEME.textDim}
+          placeholderTextColor={ONBOARDING.subtitle}
           value={city}
           onChangeText={onCityChange}
           textContentType="addressCity"
@@ -322,7 +324,7 @@ const StoreAddressStep = memo(({
         <TextInput
           style={[styles.input, { flex: 1 }]}
           placeholder="State"
-          placeholderTextColor={THEME.textDim}
+          placeholderTextColor={ONBOARDING.subtitle}
           value={state}
           onChangeText={onStateChange}
           autoCapitalize="characters"
@@ -335,7 +337,7 @@ const StoreAddressStep = memo(({
         <TextInput
           style={[styles.input, { flex: 1 }]}
           placeholder="ZIP Code"
-          placeholderTextColor={THEME.textDim}
+          placeholderTextColor={ONBOARDING.subtitle}
           value={postalCode}
           onChangeText={onPostalCodeChange}
           keyboardType="numeric"
@@ -345,7 +347,7 @@ const StoreAddressStep = memo(({
         <TextInput
           style={[styles.input, { flex: 1 }]}
           placeholder="US"
-          placeholderTextColor={THEME.textDim}
+          placeholderTextColor={ONBOARDING.subtitle}
           value={country}
           onChangeText={onCountryChange}
           autoCapitalize="characters"
@@ -362,7 +364,7 @@ const StoreAddressStep = memo(({
         <Text style={styles.primaryButtonText}>Next</Text>
       </TouchableOpacity>
       <TouchableOpacity onPress={onSkip} style={{ backgroundColor: "rgba(0, 0, 0, 0.11)", alignItems: 'center', paddingVertical: 24, borderRadius: 12 }}>
-        <Text style={{ color: THEME.text, fontWeight: 500, fontSize: 16 }}>Skip for now</Text>
+        <Text style={{ color: ONBOARDING.title, fontWeight: 500, fontSize: 16 }}>Skip for now</Text>
       </TouchableOpacity>
     </View>
   </Animated.View>
@@ -392,7 +394,7 @@ const BusinessTypeStep = memo(({
           style={[styles.card, selectedType === type.id && styles.cardActive]}
           onPress={() => onSelect(type.id)}
         >
-          <Icon name={type.icon} size={28} color={selectedType === type.id ? THEME.bg : THEME.primary} />
+          <Icon name={type.icon} size={28} color={selectedType === type.id ? '#FFFFFF' : ONBOARDING.title} />
           <Text style={[styles.cardText, selectedType === type.id && styles.cardTextActive]}>{type.label}</Text>
         </TouchableOpacity>
       ))}
@@ -403,7 +405,7 @@ const BusinessTypeStep = memo(({
         <TextInput
           style={styles.input}
           placeholder="e.g. Service Provider"
-          placeholderTextColor={THEME.textDim}
+          placeholderTextColor={ONBOARDING.subtitle}
           value={customType}
           onChangeText={onCustomChange}
           autoFocus // Focus when revealed
@@ -442,9 +444,9 @@ const RoleStep = memo(({
         >
           <View>
             <Text style={[styles.listCardTitle, selectedRole === role.id && styles.cardTextActive]}>{role.label}</Text>
-            <Text style={[styles.listCardDesc, selectedRole === role.id && { color: 'rgba(0,0,0,0.6)' }]}>{role.description}</Text>
+            <Text style={[styles.listCardDesc, selectedRole === role.id && { color: 'rgba(255,255,255,0.9)' }]}>{role.description}</Text>
           </View>
-          {selectedRole === role.id && <Icon name="check-circle" size={24} color={THEME.bg} />}
+          {selectedRole === role.id && <Icon name="check-circle" size={24} color="#FFFFFF" />}
         </TouchableOpacity>
       ))}
     </View>
@@ -456,7 +458,7 @@ const RoleStep = memo(({
         <TextInput
           style={styles.input}
           placeholder="e.g. Consultant"
-          placeholderTextColor={THEME.textDim}
+          placeholderTextColor={ONBOARDING.subtitle}
           value={customRole}
           onChangeText={onCustomChange}
           autoFocus
@@ -495,7 +497,6 @@ const ContactStep = memo(({
           defaultCode="US"
           layout="first"
           onChangeFormattedText={onChangeFormatted}
-          withDarkTheme
           containerStyle={styles.phoneContainer}
           textContainerStyle={styles.phoneTextContainer}
           textInputStyle={styles.phoneInput}
@@ -536,7 +537,7 @@ const TeamStep = memo(({
           <TextInput
             style={styles.inviteInput}
             placeholder="colleague@example.com"
-            placeholderTextColor={THEME.textDim}
+            placeholderTextColor={ONBOARDING.subtitle}
             value={inviteEmail}
             onChangeText={onEmailChange}
             autoCapitalize="none"
@@ -557,7 +558,7 @@ const TeamStep = memo(({
                 <Text style={styles.inviteEmail}>{email}</Text>
               </View>
               <TouchableOpacity onPress={() => onRemove(email)}>
-                <Icon name="close-circle" size={20} color={THEME.textDim} />
+                <Icon name="close-circle" size={20} color={ONBOARDING.subtitle} />
               </TouchableOpacity>
             </View>
           ))}
@@ -595,36 +596,44 @@ const PermissionsAndLegalStep = memo(({
 }) => (
   <Animated.View entering={SlideInRight} exiting={SlideOutLeft} style={styles.stepContainer}>
     <Text style={styles.stepTitle}>Review & Finish</Text>
-    <Text style={styles.subtitle}>Enable specific features to get the most out of Anorha.</Text>
+    <Text style={styles.subtitle}>Enable specific features to get the most out of Anorha</Text>
 
     <View style={{ marginTop: 32, gap: 16 }}>
       {/* Location */}
-      <TouchableOpacity style={styles.permCard} onPress={onRequestLoc}>
-        <View style={[styles.iconCircle, { backgroundColor: locPerm ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.2)' }]}>
-          <Icon name="map-marker" size={24} color={locPerm ? THEME.secondary : THEME.text} />
+      <TouchableOpacity
+        style={[styles.permCard, locPerm && { borderWidth: 2, borderColor: ONBOARDING.green, backgroundColor: 'rgba(92,156,0,0.12)' }]}
+        onPress={onRequestLoc}
+        activeOpacity={0.8}
+      >
+        <View style={[styles.iconCircle, { backgroundColor: locPerm ? 'rgba(92,156,0,0.25)' : 'rgba(0,0,0,0.15)' }]}>
+          <Icon name="map-marker" size={24} color={locPerm ? ONBOARDING.green : ONBOARDING.title} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.permTitle}>Use my Location</Text>
           <Text style={styles.permDesc}>{locPerm ? "Region & Currency set" : "To auto-detect Region & Currency"}</Text>
         </View>
-        {locPerm ? <Icon name="check" size={24} color={THEME.secondary} /> : <Icon name="chevron-right" size={24} color={THEME.textDim} />}
+        {locPerm ? <Icon name="check-circle" size={24} color={ONBOARDING.green} /> : <Icon name="chevron-right" size={24} color={ONBOARDING.title} />}
       </TouchableOpacity>
 
       {/* Notification */}
-      <TouchableOpacity style={styles.permCard} onPress={onRequestNotif}>
-        <View style={[styles.iconCircle, { backgroundColor: notifPerm ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.2)' }]}>
-          <Icon name="bell" size={24} color={notifPerm ? THEME.secondary : THEME.text} />
+      <TouchableOpacity
+        style={[styles.permCard, notifPerm && { borderWidth: 2, borderColor: ONBOARDING.green, backgroundColor: 'rgba(92,156,0,0.12)' }]}
+        onPress={onRequestNotif}
+        activeOpacity={0.8}
+      >
+        <View style={[styles.iconCircle, { backgroundColor: notifPerm ? 'rgba(92,156,0,0.25)' : 'rgba(0,0,0,0.15)' }]}>
+          <Icon name="bell" size={24} color={notifPerm ? ONBOARDING.green : ONBOARDING.title} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.permTitle}>Enable Notifications</Text>
           <Text style={styles.permDesc}>{notifPerm ? "Enabled" : "For sync alerts & updates"}</Text>
         </View>
-        {notifPerm ? <Icon name="check" size={24} color={THEME.secondary} /> : <Icon name="chevron-right" size={24} color={THEME.textDim} />}
+        {notifPerm ? <Icon name="check-circle" size={24} color={ONBOARDING.green} /> : <Icon name="chevron-right" size={24} color={ONBOARDING.title} />}
       </TouchableOpacity>
     </View>
 
     {/* Legal Section at Bottom */}
-    <View style={{ marginTop: 32, padding: 16, backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: 16 }}>
+    <View style={{ marginTop: 32, padding: 16, backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: 16 }}>
       <TouchableOpacity style={styles.checkboxRow} onPress={onToggleAgree}>
         <View style={[styles.checkbox, agreed && styles.checkboxActive]}>
           {agreed && <Icon name="check" size={16} color="#FFFFFF" />}
@@ -648,7 +657,7 @@ const PermissionsAndLegalStep = memo(({
       onPress={onFinish}
       disabled={!agreed || loading}
     >
-      {loading ? <ActivityIndicator color={THEME.bg} /> : <Text style={styles.primaryButtonText}>Agree & Finish</Text>}
+      {loading ? <ActivityIndicator color={ONBOARDING.green} /> : <Text style={styles.primaryButtonText}>Agree & Finish</Text>}
     </TouchableOpacity>
   </Animated.View>
 ));
@@ -851,12 +860,28 @@ export default function CreateAccountScreen() {
 
   const requestNotifications = useCallback(async () => {
     try {
-      const { status } = await Notifications.requestPermissionsAsync();
-      if (status === 'granted') {
+      const { status: existingStatus } = await Notifications.getPermissionsAsync();
+      if (existingStatus === 'granted') {
         setFormData(prev => ({ ...prev, notificationPermission: true }));
+        return;
+      }
+      if (existingStatus === 'denied') {
+        setFormData(prev => ({ ...prev, notificationPermission: false }));
+        Alert.alert(
+          'Notifications off',
+          'Turn on in Settings for sync alerts and updates.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+      const { status } = await Notifications.requestPermissionsAsync();
+      setFormData(prev => ({ ...prev, notificationPermission: status === 'granted' }));
+      if (status !== 'granted') {
+        setFormData(prev => ({ ...prev, notificationPermission: false }));
       }
     } catch (err) {
       console.log('Notif error', err);
+      setFormData(prev => ({ ...prev, notificationPermission: false }));
     }
   }, []);
 
@@ -973,6 +998,8 @@ export default function CreateAccountScreen() {
 
       if (refreshOrgs) await refreshOrgs();
 
+      capture(AnalyticsEvents.ONBOARDING_COMPLETED, { create_organization: !!createOrganization });
+
       // After onboarding we go to main app. CreateAccountScreen can be in AuthStack or AppStack;
       // TabNavigator lives in AppStack — cast so reset() is valid when we're in App stack.
       (navigation as StackNavigationProp<AppStackParamList, 'CreateAccountScreen'>).reset({
@@ -1002,7 +1029,7 @@ export default function CreateAccountScreen() {
             if (currentStep === 'TEAM') goToStep('CONTACT');
             if (currentStep === 'FINISH') goToStep('TEAM');
           }} style={{ padding: 10 }}>
-            <Icon name="arrow-left" size={24} color={THEME.text} />
+            <Icon name="arrow-left" size={24} color={ONBOARDING.title} />
           </TouchableOpacity>
 
           <Stepper currentStep={currentStep} />
@@ -1012,7 +1039,11 @@ export default function CreateAccountScreen() {
       )}
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
+        <ScrollView
+          contentContainerStyle={{ flexGrow: 1 }}
+          keyboardShouldPersistTaps="always"
+          keyboardDismissMode="on-drag"
+        >
           {currentStep === 'WELCOME' && (
             <WelcomeStep
               onNext={() => goToStep('BUSINESS_NAME')}
@@ -1113,7 +1144,7 @@ export default function CreateAccountScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: THEME.bg,
+    backgroundColor: '#FEF4DD',
   },
   headerRow: {
     flexDirection: 'row',
@@ -1132,10 +1163,13 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: 'rgba(0,0,0,0.2)',
+    backgroundColor: "#FFF",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.3)"
   },
   stepDotActive: {
-    backgroundColor: THEME.primary,
+    backgroundColor: ONBOARDING.green,
+    width: 24,
   },
   stepContainer: {
     flex: 1,
@@ -1170,13 +1204,13 @@ const styles = StyleSheet.create({
   logoTitle: {
     fontSize: 48,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: THEME.text,
+    color: ONBOARDING.title,
     letterSpacing: -2,
   },
   bigTitle: {
     fontSize: 36,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: THEME.text,
+    color: ONBOARDING.title,
     textAlign: 'center',
     marginBottom: 16,
   },
@@ -1190,14 +1224,14 @@ const styles = StyleSheet.create({
   stepTitle: {
     fontSize: 32,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: THEME.text,
+    color: ONBOARDING.title,
     marginBottom: 16,
     textAlign: 'center',
   },
   subtitle: {
     fontSize: 18,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: THEME.textDim,
+    color: ONBOARDING.subtitle,
     textAlign: 'center',
     lineHeight: 26,
   },
@@ -1205,7 +1239,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.11)',
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    borderWidth: 1,
+    borderColor: ONBOARDING.border,
     paddingVertical: 14,
     paddingHorizontal: 20,
     borderRadius: 12,
@@ -1215,19 +1251,19 @@ const styles = StyleSheet.create({
   useLocationText: {
     fontSize: 16,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: "rgba(56, 56, 56, 1)",
+    color: ONBOARDING.title,
   },
   label: {
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: THEME.primary,
+    color: ONBOARDING.subtitle,
     marginBottom: 8,
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
   // Buttons
   primaryButton: {
-    backgroundColor: THEME.primary,
+    backgroundColor: ONBOARDING.green,
     height: 64,
     borderRadius: 16,
     flexDirection: 'row',
@@ -1249,36 +1285,36 @@ const styles = StyleSheet.create({
   card: {
     width: (width - 48 - 12) / 2, // 2 columns
     height: 100,
-    backgroundColor: THEME.cardBg,
+    backgroundColor: ONBOARDING.cardBg,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: THEME.border,
+    borderColor: ONBOARDING.border,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 12,
   },
   cardActive: {
-    backgroundColor: THEME.primary,
-    borderColor: THEME.primary,
+    backgroundColor: ONBOARDING.green,
+    borderColor: ONBOARDING.green,
   },
   cardText: {
     marginTop: 8,
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: THEME.text,
+    color: ONBOARDING.title,
     textAlign: 'center',
   },
   cardTextActive: {
-    color: THEME.bg,
+    color: '#fff',
   },
   // Input
   input: {
     backgroundColor: 'transparent',
     borderBottomWidth: 2,
-    borderBottomColor: THEME.border,
+    borderBottomColor: ONBOARDING.border,
     fontSize: 24,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: THEME.text,
+    color: ONBOARDING.title,
     paddingVertical: 12,
   },
   // List Layout (Role)
@@ -1291,21 +1327,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: THEME.cardBg,
+    backgroundColor: ONBOARDING.cardBg,
     padding: 20,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: THEME.border,
+    borderColor: ONBOARDING.border,
   },
   listCardTitle: {
     fontSize: 18,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: THEME.text,
+    color: ONBOARDING.title,
   },
   listCardDesc: {
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: THEME.textDim,
+    color: ONBOARDING.subtitle,
     marginTop: 4,
   },
   // Phone
@@ -1313,8 +1349,8 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: THEME.border,
-    backgroundColor: 'rgba(0,0,0,0.15)',
+    borderColor: ONBOARDING.border,
+    backgroundColor: 'rgba(255,255,255,0.9)',
   },
   phoneContainer: {
     width: '100%',
@@ -1327,13 +1363,13 @@ const styles = StyleSheet.create({
     height: 64,
   },
   phoneInput: {
-    color: THEME.text,
+    color: ONBOARDING.title,
     fontSize: 20,
     fontFamily: 'PlusJakartaSans_500Medium',
     height: 64,
   },
   phoneCode: {
-    color: THEME.text,
+    color: ONBOARDING.title,
     fontSize: 20,
     fontFamily: 'PlusJakartaSans_700Bold',
   },
@@ -1349,12 +1385,12 @@ const styles = StyleSheet.create({
   permCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: THEME.cardBg,
+    backgroundColor: ONBOARDING.cardBg,
     padding: 16,
     borderRadius: 20,
     gap: 16,
     borderWidth: 1,
-    borderColor: THEME.border,
+    borderColor: ONBOARDING.border,
   },
   iconCircle: {
     width: 48,
@@ -1366,13 +1402,13 @@ const styles = StyleSheet.create({
   permTitle: {
     fontSize: 16,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: THEME.text,
+    color: ONBOARDING.title,
     marginBottom: 2,
   },
   permDesc: {
     fontSize: 13,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: THEME.textDim,
+    color: ONBOARDING.subtitle,
   },
   // Legal Checkbox
   checkboxRow: {
@@ -1385,32 +1421,32 @@ const styles = StyleSheet.create({
     height: 24,
     borderRadius: 8,
     borderWidth: 2,
-    borderColor: THEME.textDim,
+    borderColor: ONBOARDING.subtitle,
     justifyContent: 'center',
     alignItems: 'center',
   },
   checkboxActive: {
-    backgroundColor: THEME.primary,
-    borderColor: THEME.primary,
+    backgroundColor: ONBOARDING.green,
+    borderColor: ONBOARDING.green,
   },
   checkboxText: {
     flex: 1,
     fontSize: 15,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: THEME.text,
+    color: ONBOARDING.title,
   },
 
   // Legal Links
   linkText: {
     fontSize: 18,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: THEME.text,
+    color: ONBOARDING.title,
     textAlign: 'center',
   },
   legalLinkSmall: {
     fontSize: 13,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: THEME.textDim,
+    color: ONBOARDING.title,
     textDecorationLine: 'underline',
   },
   // INvite List
@@ -1421,20 +1457,20 @@ const styles = StyleSheet.create({
   },
   inviteInput: {
     flex: 1,
-    backgroundColor: THEME.cardBg,
+    backgroundColor: ONBOARDING.cardBg,
     borderRadius: 16,
     paddingHorizontal: 20,
-    color: THEME.text,
+    color: ONBOARDING.title,
     fontSize: 16,
     fontFamily: 'PlusJakartaSans_500Medium',
     height: 60,
     borderWidth: 1,
-    borderColor: THEME.border,
+    borderColor: ONBOARDING.border,
   },
   addButton: {
     width: 60,
     height: 60,
-    backgroundColor: THEME.primary,
+    backgroundColor: ONBOARDING.green,
     borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1447,17 +1483,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: THEME.cardBg,
+    backgroundColor: ONBOARDING.cardBg,
     padding: 16,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: THEME.border,
+    borderColor: ONBOARDING.border,
   },
   inviteAvatar: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: THEME.secondary,
+    backgroundColor: ONBOARDING.green,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
@@ -1468,12 +1504,12 @@ const styles = StyleSheet.create({
     fontFamily: 'PlusJakartaSans_700Bold',
   },
   inviteEmail: {
-    color: THEME.text,
+    color: ONBOARDING.title,
     fontSize: 16,
     fontFamily: 'PlusJakartaSans_500Medium',
   },
   emptyText: {
-    color: THEME.textDim,
+    color: ONBOARDING.subtitle,
     textAlign: 'center',
     marginTop: 20,
     fontStyle: 'italic',

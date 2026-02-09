@@ -23,6 +23,7 @@ import AmazonSvg from '../assets/amazon.svg';
 import EbaySvg from '../assets/ebay.svg';
 import FacebookSvg from '../assets/facebook.svg';
 import PlatformFilterChips from './PlatformFilterChips';
+import { capture, AnalyticsEvents } from '../lib/analytics';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -353,6 +354,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
       }
 
       await onSave(updates);
+      capture(AnalyticsEvents.INVENTORY_UPDATED, { product_id: product?.id, update_count: updates.length });
       Alert.alert('Success', `Updated ${updates.length} item(s)`);
       onClose();
     } catch (error) {

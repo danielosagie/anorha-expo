@@ -28,6 +28,7 @@ import { OrgProvider } from './src/context/OrgContext';
 import { JobsProvider } from './src/context/JobsContext';
 import { SystemNotificationProvider } from './src/context/SystemNotificationContext';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { PostHogProvider, PostHogIdentify } from './src/providers/PostHogProvider';
 
 // Feature flag to disable new functionality during debugging
 const ENABLE_PROCESS_FEATURES = false;
@@ -250,7 +251,7 @@ const App: React.FC = () => {
               overlay.hide();
             }}
           />
-          <View style={{ flexDirection: "column", alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 12, paddingBottom: 24, minHeight: '50%', height: "50%", maxHeight: '55%' }}>
+          <View style={{ flexDirection: "column", alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 12, paddingBottom: 24, width: '100%' }}>
             <BottomNav
               state={'platformPicker'}
               selectedCount={0}
@@ -320,6 +321,7 @@ const App: React.FC = () => {
     const template = process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'mobile';
     return (
       <SessionProvider getClerkToken={() => getToken({ template }).catch(async () => getToken())}>
+        <PostHogIdentify />
         {children}
       </SessionProvider>
     );
@@ -396,11 +398,13 @@ const App: React.FC = () => {
 
   return (
     <ClerkProvider publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!} tokenCache={tokenCache}>
-      <SafeAreaProvider>
-        <SystemNotificationProvider>
-          <DebugClerkState />
-        </SystemNotificationProvider>
-      </SafeAreaProvider>
+      <PostHogProvider>
+        <SafeAreaProvider>
+          <SystemNotificationProvider>
+            <DebugClerkState />
+          </SystemNotificationProvider>
+        </SafeAreaProvider>
+      </PostHogProvider>
     </ClerkProvider>
   );
 };

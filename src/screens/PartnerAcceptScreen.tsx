@@ -11,6 +11,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import Button from '../components/Button';
 import { ensureSupabaseJwt } from '../lib/supabase';
+import { capture, AnalyticsEvents } from '../lib/analytics';
 
 const API_BASE_URL = 'https://api.sssync.app';
 
@@ -115,6 +116,7 @@ const PartnerAcceptScreen: React.FC = () => {
         throw new Error(data.message || 'Failed to accept invite');
       }
 
+      capture(AnalyticsEvents.PARTNER_INVITE_ACCEPTED, { source: 'deep_link' });
       setStatus('success');
 
       // Navigate to Partners screen after success

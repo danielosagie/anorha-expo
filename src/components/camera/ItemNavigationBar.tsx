@@ -30,11 +30,11 @@ export const ItemNavigationBar: React.FC<ItemNavigationBarProps> = ({
     const totalPhotos = items.reduce((sum, item) => sum + item.photos.length, 0);
     const hasPhotos = totalPhotos > 0;
 
-    // Determine the continue button text
+    // Determine the continue button text (item count, not photo count, for clarity)
     const getContinueText = () => {
         if (!hasPhotos) return 'Take a photo to get started';
-        if (totalItems === 1) return `Continue with ${totalPhotos} photo${totalPhotos > 1 ? 's' : ''}`;
-        return `Continue with ${totalItems} items`;
+        if (totalItems > 1) return `Continue with ${totalItems} items`;
+        return 'Manage items';
     };
 
     return (
@@ -112,6 +112,9 @@ export const ItemNavigationBar: React.FC<ItemNavigationBarProps> = ({
                                     size={24}
                                     color={hasPhotos ? "#000" : "rgba(255,255,255,0.3)"}
                                 />
+                                <Text style={[styles.newItemLabel, !hasPhotos && styles.newItemLabelDisabled]}>
+                                    New item
+                                </Text>
                             </TouchableOpacity>
                         )}
                     </View>
@@ -179,6 +182,17 @@ const styles = StyleSheet.create({
     },
     newItemButton: {
         backgroundColor: '#93C822',
+        flexDirection: 'row',
+        gap: 6,
+        paddingHorizontal: 10,
+    },
+    newItemLabel: {
+        color: '#000',
+        fontSize: 13,
+        fontWeight: '600',
+    },
+    newItemLabelDisabled: {
+        color: 'rgba(255,255,255,0.5)',
     },
     continueButton: {
         flex: 1,

@@ -50,8 +50,13 @@ export default function PhotoUploadScreen({ route, navigation }: Props) {
         keyExtractor={(u, i)=>`${u}-${i}`}
         horizontal
         style={{ marginTop: 12 }}
-        renderItem={({ item }) => (
-          <View style={styles.thumbWrap}><Image source={{ uri: item }} style={{ width: '100%', height: '100%' }} /></View>
+        renderItem={({ item, index }) => (
+          <View style={styles.thumbWrap}>
+            <Image source={{ uri: item }} style={styles.thumbImage} />
+            <View style={styles.thumbNumberBadge}>
+              <Text style={styles.thumbNumberText}>{index + 1}</Text>
+            </View>
+          </View>
         )}
       />
       <TouchableOpacity disabled={uris.length === 0} style={[styles.doneBtn, uris.length === 0 && { opacity: 0.6 }]} onPress={done}>
@@ -64,7 +69,20 @@ export default function PhotoUploadScreen({ route, navigation }: Props) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff', padding: 16 },
   pickBtn: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingVertical: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row' },
-  thumbWrap: { width: 80, height: 80, borderRadius: 8, overflow: 'hidden', marginRight: 8, borderWidth: 1, borderColor: '#E5E5E5' },
+  thumbWrap: { width: 80, height: 80, borderRadius: 8, overflow: 'hidden', marginRight: 8, borderWidth: 1, borderColor: '#E5E5E5', position: 'relative' },
+  thumbImage: { width: '100%', height: '100%' },
+  thumbNumberBadge: {
+    position: 'absolute',
+    bottom: 0,
+    left: 4,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  thumbNumberText: { color: 'white', fontSize: 11, fontWeight: 'bold' },
   doneBtn: { position: 'absolute', left: 16, right: 16, bottom: 24, backgroundColor: '#93C822', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
 });
 

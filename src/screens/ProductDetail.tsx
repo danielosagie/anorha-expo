@@ -32,6 +32,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useCollaboration } from '../hooks/useCollaboration';
 import { useOrg } from '../context/OrgContext';
 import LoadingOverlay from '../components/LoadingOverlay';
+import { capture, AnalyticsEvents } from '../lib/analytics';
 // Base URL for API
 const SSSYNC_API_BASE_URL = 'https://api.sssync.app';
 
@@ -1795,6 +1796,13 @@ const ProductDetailScreen = observer(
 
         showBanner(`🚀 Published to ${platformKey}!`);
 
+        capture(AnalyticsEvents.PUBLISH_COMPLETED, {
+          origin: 'edit',
+          product_id: detailedItem?.ProductId,
+          variant_id: detailedItem?.Id,
+          platforms: [platformKey],
+        });
+
         // Refresh mappings to show the new listing
         await loadPlatformData();
 
@@ -1917,6 +1925,7 @@ const ProductDetailScreen = observer(
         });
 
         console.log('Inventory updated successfully');
+        capture(AnalyticsEvents.INVENTORY_UPDATED, { product_id: detailedItem?.ProductId });
 
       } catch (error) {
         console.error('Failed to update inventory:', error);

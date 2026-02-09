@@ -4,6 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PlatformButton from './PlatformButton';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
+import { ENABLED_PLATFORMS } from '../config/platforms';
 
 
 
@@ -18,6 +19,7 @@ type Props = {
   platformActiveCounts?: Record<string, number>;
   onShowSelection: () => void;
   onShowTemplates: () => void;
+  onShowPlatforms: () => void;
   onBackToEmpty: () => void;
   onBackToSelection: () => void;
   onOpenTemplateModal: () => void;
@@ -38,6 +40,7 @@ const BottomNav: React.FC<Props> = ({
   platformActiveCounts = {},
   onShowSelection,
   onShowTemplates,
+  onShowPlatforms,
   onBackToEmpty,
   onBackToSelection,
   onOpenTemplateModal,
@@ -54,7 +57,7 @@ const BottomNav: React.FC<Props> = ({
       style={[
         {
           marginBottom: 3,
-          ...(state === 'platformPicker' ? { flex: 1, width: '100%' } : {}),
+          ...(state === 'platformPicker' ? { width: '100%' } : {}),
         },
         style
       ]}
@@ -70,7 +73,7 @@ const BottomNav: React.FC<Props> = ({
 
       {state === 'selection' && selectedCount > 0 && (
         <View style={styles.emptyButtonSolo}>
-          <TouchableOpacity style={styles.mainButton} onPress={onShowTemplates}>
+          <TouchableOpacity style={styles.mainButton} onPress={onShowPlatforms}>
             <Icon name="check-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
             <Text style={styles.mainButtonText}>Selected {selectedCount} Match{selectedCount !== 1 ? 'es' : ''}</Text>
           </TouchableOpacity>
@@ -88,7 +91,7 @@ const BottomNav: React.FC<Props> = ({
           </TouchableOpacity>
           <Text style={styles.platformHeaderText}>Want Specific Sources?</Text>
           <TouchableOpacity style={styles.dropdownSelect} onPress={onOpenTemplateModal}>
-            <Text style={styles.dropdownSelectText}>{selectedTemplate ? selectedTemplate : 'Select a Template'}</Text>
+            <Text style={styles.dropdownSelectText}>{selectedTemplate ? selectedTemplate : 'Select a Source Template'}</Text>
             <Icon name="chevron-down" size={20} color="#000" style={{ marginRight: 8 }} />
           </TouchableOpacity>
           <TouchableOpacity style={styles.secondaryButton} onPress={() => onTemplateSelect(null)}>
@@ -107,7 +110,7 @@ const BottomNav: React.FC<Props> = ({
             <Text style={styles.platformHeaderText}>Want Specific Sources?</Text>
             <TouchableOpacity style={styles.dropdownSelect} onPress={onOpenTemplateModal}>
               <Text style={styles.dropdownSelectText}>
-                {selectedTemplate ? selectedTemplate : 'Select a Template'}
+                {selectedTemplate ? selectedTemplate : 'Select a Source Template'}
               </Text>
               <Icon name="chevron-down" size={20} color="#000" style={{ marginRight: 8 }} />
             </TouchableOpacity>
@@ -116,45 +119,17 @@ const BottomNav: React.FC<Props> = ({
           <View style={{ flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 12, paddingVertical: 12 }}>
             <View style={styles.platformHeader}>
               <Text style={styles.platformHeaderText}>Which Platforms?</Text>
-              <View style={{ width: 24 }} />
             </View>
             <View style={styles.platformGrid}>
-              <PlatformButton
-                platform={'shopify'}
-                isSelected={selectedPlatforms.includes('shopify')}
-                onPress={() => onPlatformToggle('shopify')}
-                isConnected={isConnected('shopify')}
-              />
-              <PlatformButton
-                platform={'amazon'}
-                isSelected={selectedPlatforms.includes('amazon')}
-                onPress={() => onPlatformToggle('amazon')}
-                isConnected={isConnected('amazon')}
-              />
-              <PlatformButton
-                platform={'ebay'}
-                isSelected={selectedPlatforms.includes('ebay')}
-                onPress={() => onPlatformToggle('ebay')}
-                isConnected={isConnected('ebay')}
-              />
-              <PlatformButton
-                platform={'clover'}
-                isSelected={selectedPlatforms.includes('clover')}
-                onPress={() => onPlatformToggle('clover')}
-                isConnected={isConnected('clover')}
-              />
-              <PlatformButton
-                platform={'square'}
-                isSelected={selectedPlatforms.includes('square')}
-                onPress={() => onPlatformToggle('square')}
-                isConnected={isConnected('square')}
-              />
-              <PlatformButton
-                platform={'facebook'}
-                isSelected={selectedPlatforms.includes('facebook')}
-                onPress={() => onPlatformToggle('facebook')}
-                isConnected={isConnected('facebook')}
-              />
+              {ENABLED_PLATFORMS.map((p) => (
+                <PlatformButton
+                  key={p}
+                  platform={p}
+                  isSelected={selectedPlatforms.includes(p)}
+                  onPress={() => onPlatformToggle(p)}
+                  isConnected={isConnected(p)}
+                />
+              ))}
             </View>
             <TouchableOpacity
               style={[styles.mainButton, selectedPlatforms.length === 0 && styles.disabledButton]}
@@ -175,7 +150,7 @@ const BottomNav: React.FC<Props> = ({
             <View style={{ width: 24 }} />
           </View>
           <View style={styles.platformGrid}>
-            {['shopify', 'square', 'clover', 'ebay', 'facebook'].map((p) => (
+            {ENABLED_PLATFORMS.map((p) => (
               <PlatformButton
                 key={p}
                 platform={p}
@@ -213,14 +188,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingLeft: 30,
     paddingRight: 30,
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     marginTop: 10,
-    minHeight: 550,
-    maxHeight: 950,
     backgroundColor: 'rgb(255, 255, 255)',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingTop: 20,
+    paddingBottom: 24,
   },
   platformPickerContainer: {
     flexDirection: 'column',
@@ -228,10 +202,10 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingLeft: 20,
     paddingRight: 20,
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     marginTop: 10,
-    flex: 1,
-    backgroundColor: 'rgb(255, 255, 255)'
+    backgroundColor: 'rgb(255, 255, 255)',
+    paddingBottom: 24,
   },
   bottomNavStepContainer: {
     alignItems: 'center',
@@ -306,6 +280,15 @@ const styles = StyleSheet.create({
     width: '100%'
   },
   backButtonText: { color: '#888', fontSize: 16, fontWeight: '600' },
+  optionalTemplateLink: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  optionalTemplateLinkText: {
+    color: '#666',
+    fontSize: 13,
+    textDecorationLine: 'underline',
+  },
   disabledButton: { backgroundColor: '#555' },
   dropdownSelect: {
     flexDirection: 'row',
@@ -329,8 +312,9 @@ const styles = StyleSheet.create({
   platformHeader: {
     flexDirection: 'row',
     justifyContent: 'center',
-    width: '100%',
-    marginBottom: 12
+    minWidth: '100%',
+    marginBottom: 12,
+    marginTop: 16
   },
   platformHeaderText: {
     fontSize: 24,

@@ -12,19 +12,13 @@ import { FlashMode } from 'expo-camera';
 interface CameraControlsProps {
   flash: FlashMode;
   onToggleFlash: () => void;
-  onToggleFacing: () => void;
   onPastScans: () => void;
-  isBulkMode: boolean;
-  onToggleBulkMode: () => void;
 }
 
 const CameraControls: React.FC<CameraControlsProps> = ({ 
   flash, 
   onToggleFlash, 
-  onToggleFacing, 
   onPastScans,
-  isBulkMode,
-  onToggleBulkMode
 }) => {
   const getFlashIcon = () => {
     switch (flash) {
@@ -39,25 +33,11 @@ const CameraControls: React.FC<CameraControlsProps> = ({
     <SafeAreaView style={styles.cameraControlsContainer}>
       <Animated.View entering={FadeIn.delay(300)} style={styles.cameraControlsContent}>
         <TouchableOpacity style={styles.controlButton} onPress={onToggleFlash}>
-          <Icon name={getFlashIcon()} size={20} color="white" />
-        </TouchableOpacity>
-        
-        <TouchableOpacity style={styles.controlButton} onPress={onToggleFacing}>
-          <Icon name="camera-switch-outline" size={20} color="white" />
+          <Icon name={getFlashIcon()} size={22} color="white" />
         </TouchableOpacity>
         
         <TouchableOpacity style={styles.controlButton} onPress={onPastScans}>
-          <Icon name="history" size={20} color="white" />
-        </TouchableOpacity>
-        
-        <TouchableOpacity 
-          style={[
-            styles.controlButton, 
-            isBulkMode && styles.activeBulkButton
-          ]} 
-          onPress={onToggleBulkMode}
-        >
-          <Icon name="view-grid-plus-outline" size={20} color={isBulkMode ? "#4CAF50" : "white"} />
+          <Icon name="history" size={22} color="white" />
         </TouchableOpacity>
       </Animated.View>
     </SafeAreaView>
@@ -83,11 +63,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.3)',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  activeBulkButton: {
-    backgroundColor: 'rgba(76, 175, 80, 0.3)',
-    borderWidth: 2,
-    borderColor: '#4CAF50',
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+    borderColor: "rgba(255,255,255,0.3)",
+    borderWidth: 2
   },
 });
 

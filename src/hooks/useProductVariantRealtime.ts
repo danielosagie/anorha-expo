@@ -242,15 +242,11 @@ export function useInventoryLevelsRealtime() {
               levelId,
               variantId,
               quantity,
-            });
-
-            const observables = getLegendStateObservables();
+            });            const observables = getLegendStateObservables();
             if (!observables?.inventoryLevels$) {
               console.warn('[Real-time] Legend-state inventoryLevels$ not available');
               return;
-            }
-
-            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            }            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
               const level = payload.new;
               console.log('[Real-time] ✅ Updating inventory level', levelId, 'qty:', quantity);
               observables.inventoryLevels$[levelId].set(level);
@@ -283,9 +279,7 @@ export function useInventoryLevelsRealtime() {
             }
           }
         );
-    };
-
-    setupSubscription();    return () => {
+    };    setupSubscription();    return () => {
       console.log('[Real-time] Cleaning up InventoryLevels subscription');
       if (retryTimeout) clearTimeout(retryTimeout);
       subscription?.unsubscribe();

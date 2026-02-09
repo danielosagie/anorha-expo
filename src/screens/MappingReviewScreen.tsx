@@ -31,7 +31,7 @@ import FacebookSvg from '../assets/facebook.svg';
 import AmazonSvg from '../assets/amazon.svg';
 const AnorhaLogo = require('../assets/rounded_anorha.png');
 import { CameraView } from 'expo-camera';
-
+import { capture, AnalyticsEvents } from '../lib/analytics';
 
 interface MappingSuggestion {
   action: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE' | 'UNMATCHED';
@@ -1727,6 +1727,11 @@ const MappingReviewScreen = () => {
         // Optional: Update progress UI here if we had a detailed progress bar
       }
 
+      capture(AnalyticsEvents.INVENTORY_IMPORT_COMPLETED, {
+        product_count: successCount,
+        failed_count: failCount,
+      });
+
       Alert.alert(
         "Import Complete",
         `Successfully imported ${successCount} products.${failCount > 0 ? ` Failed: ${failCount}` : ''}`,
@@ -1902,6 +1907,8 @@ const MappingReviewScreen = () => {
 
       const { jobId: activationJobId } = await activateResponse.json();
       console.log(`[MappingReviewScreen] Sync activated successfully. New Job ID: ${activationJobId}`);
+
+      capture(AnalyticsEvents.SYNC_ACTIVATED, { source: 'import', connection_id: connectionId });
 
       // Show custom success notification and navigate back properly
       setNotificationMessage(`Your ${platformName} connection is now active and syncing!`);

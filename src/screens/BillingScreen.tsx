@@ -189,6 +189,7 @@ export default function BillingScreen() {
       }
       const data = await res.json().catch(() => null);
       if (data?.url) {
+        capture(AnalyticsEvents.BILLING_PORTAL_OPENED);
         await Linking.openURL(data.url);
       } else {
         setActionError('Unable to open subscription portal.');

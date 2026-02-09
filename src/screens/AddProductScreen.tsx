@@ -37,11 +37,12 @@ import { PanGestureHandler, TapGestureHandler, State, PanGestureHandlerGestureEv
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useNavigation, useIsFocused } from '@react-navigation/native';
+import { useNavigation, useIsFocused, useFocusEffect } from '@react-navigation/native';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { SvgXml } from 'react-native-svg';
 import PhotoStack, { CapturedPhoto } from '../components/camera/PhotoStack';
+import ViewPhotosModal from '../components/camera/ViewPhotosModal';
 import CameraControls from '../components/camera/CameraControls';
 import BusinessTemplateModal, { BusinessTemplate } from '../components/camera/BusinessTemplateModal';
 import ItemNavigationBar from '../components/camera/ItemNavigationBar';
@@ -53,6 +54,9 @@ import UsageCounter from '../components/UsageCounter';
 import useFreemiumUsage from '../hooks/useFreemiumUsage';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { File, Directory, Paths } from 'expo-file-system';
+import BarcodeEntrySheet from '../components/camera/BarcodeEntrySheet';
+import { ENABLE_DOC_MODES } from '../config/features';
+import { capture, AnalyticsEvents } from '../lib/analytics';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -205,6 +209,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [barcodeSearching, setBarcodeSearching] = useState(false);
   const [showBarcodeResultModal, setShowBarcodeResultModal] = useState(false);
   const [platformLocations, setPlatformLocations] = useState<{ id: string; name: string; platformType?: string; connectionId: string }[]>([]);
+  const [manualBarcode, setManualBarcode] = useState('');
+  const [showBarcodeEntry, setShowBarcodeEntry] = useState(false);
+  const [barcodeEntryError, setBarcodeEntryError] = useState<string | null>(null);
 
   // Manifest state
   const [showManifestSheet, setShowManifestSheet] = useState(false);
@@ -240,6 +247,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // UI state
   const [currentInstruction, setCurrentInstruction] = useState<CameraInstruction>('ready');
   const [showMatchSheet, setShowMatchSheet] = useState(false);
+  const [showViewPhotosModal, setShowViewPhotosModal] = useState(false);
   const [showDeepSearchSheet, setShowDeepSearchSheet] = useState(false);
   const [matchData, setMatchData] = useState<MatchResponse | null>(null);
   // Quick scan storage per item and current sheet context
@@ -406,7 +414,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     switch (instruction) {
       case 'ready': cameraMode === 'receipt' ? 'Upload/take picture of receipt' : 'Upload/take picture of receipt';
       case 'ready': cameraMode === 'manifest' ? 'Upload/take picture of manifest' : 'Upload/take picture of manifest';
-      case 'ready': return cameraMode === 'camera' ? 'Point camera at product' : 'Scan barcode on product';
+      case 'ready': return cameraMode === 'camera' ? 'Take photos to get started' : 'Scan barcode on product';
       case 'move_closer': return 'Move closer to product';
       case 'move_back': return 'Move back from product';
       case 'add_light': return 'Add more light to scene';
@@ -415,7 +423,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       case 'matches_found': return `${matchData?.totalMatches || 0} match${(matchData?.totalMatches || 0) > 1 ? 'es' : ''} found!`;
       case 'no_matches': return 'No matches yet - try another angle';
       case 'barcode_scanned': return scannedBarcode || 'Barcode scanned';
-      default: return cameraMode === 'camera' ? 'Point camera at product' : 'lol';
+      default: return cameraMode === 'camera' ? 'Take photos to get started' : 'lol';
     }
   };
 
@@ -509,6 +517,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           };
           setBulkItems([firstItem]);
           setActiveItemId(firstItem.id);
+          capture(AnalyticsEvents.PRODUCT_ADDED, { source: 'camera' });
           console.log('[ITEM CREATION] Created first item:', firstItem.id);
           console.log('[ITEM CREATION] Triggering quick scan (first photo of first item)');
 
@@ -663,6 +672,21 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       setCurrentInstruction('ready');
     }
   }, []);
+
+  const handleManualBarcodeSubmit = useCallback(async () => {
+    const trimmed = manualBarcode.trim();
+    if (!trimmed) {
+      setBarcodeEntryError('Please enter a barcode.');
+      return;
+    }
+
+    setBarcodeEntryError(null);
+    setScannedBarcode(trimmed);
+    setCurrentInstruction('barcode_scanned');
+    setShowBarcodeEntry(false);
+
+    await searchBarcodeOnBackend(trimmed);
+  }, [manualBarcode, searchBarcodeOnBackend]);
 
   // Toggle flash mode
   const toggleFlash = useCallback(() => {
@@ -880,90 +904,68 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return;
     }
 
-    const crop_window_shape: ImagePicker.CropShape = 'rectangle';
-
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [9, 16],
-      shape: crop_window_shape,
+      allowsEditing: false,
       allowsMultipleSelection: true,
       quality: 0.8,
     });
 
-    if (!result.canceled && result.assets[0]) {
-      const asset = result.assets[0];
-      const newPhoto: CapturedPhoto = {
-        id: `upload-${Date.now()}`,
+    if (!result.canceled && result.assets?.length) {
+      const assets = result.assets;
+      console.log('[IMAGE UPLOAD] Adding', assets.length, 'uploaded image(s) to bulkItems system');
+
+      // Build CapturedPhoto for each selected asset (no crop frame)
+      const newPhotos: CapturedPhoto[] = assets.map((asset, idx) => ({
+        id: `upload-${Date.now()}-${idx}`,
         uri: asset.uri,
         width: asset.width || SCREEN_WIDTH,
         height: asset.height || SCREEN_HEIGHT,
         timestamp: Date.now(),
-        isCover: false, // Will be set based on item logic
-      };
+        isCover: false,
+      }));
 
-      console.log('[IMAGE UPLOAD] Adding uploaded image to bulkItems system');
-
-      // Use the same logic as camera capture - add to bulkItems
       if (bulkItems.length === 0) {
-        // Create first item with uploaded photo
         const firstItem = {
           id: `item-${Date.now()}`,
-          photos: [{ ...newPhoto, isCover: true }],
+          photos: newPhotos.map((p, i) => ({ ...p, isCover: i === 0 })),
           title: undefined,
           isActive: true
         };
         setBulkItems([firstItem]);
         setActiveItemId(firstItem.id);
-        console.log('[IMAGE UPLOAD] Created first item with uploaded photo');
-        console.log('[IMAGE UPLOAD] Created first item with uploaded photo, ID:', firstItem.id);
-        setTimeout(() => {
-          console.log('[IMAGE UPLOAD] About to call performQuickScan for first item:', firstItem.id);
-          performQuickScan(newPhoto, firstItem.id);
-        }, 500);
+        setCapturedPhotos(prev => [...prev, ...newPhotos]);
+        if (newPhotos[0]) {
+          setTimeout(() => performQuickScan(newPhotos[0], firstItem.id), 500);
+        }
       } else if (activeItemId) {
-        // Add to existing active item
         setBulkItems(prev => prev.map(item => {
-          if (item.id === activeItemId) {
-            const isFirstPhoto = item.photos.length === 0;
-            return {
-              ...item,
-              photos: [...item.photos, { ...newPhoto, isCover: isFirstPhoto }]
-            };
-          }
-          return item;
+          if (item.id !== activeItemId) return item;
+          const wasEmpty = item.photos.length === 0;
+          const added = newPhotos.map((p, i) => ({ ...p, isCover: wasEmpty && i === 0 }));
+          return { ...item, photos: [...item.photos, ...added] };
         }));
-        console.log('[IMAGE UPLOAD] Added to active item:', activeItemId);
-        // Trigger quick scan only if it was the first photo in this item
+        setCapturedPhotos(prev => [...prev, ...newPhotos]);
         const activeItem = bulkItems.find(i => i.id === activeItemId);
-        if (activeItem && activeItem.photos.length === 0) {
-          console.log('[IMAGE UPLOAD] First photo for existing active item:', activeItemId);
-          setTimeout(() => {
-            console.log('[IMAGE UPLOAD] About to call performQuickScan for existing active item:', activeItemId);
-            performQuickScan(newPhoto, activeItemId);
-          }, 500);
+        if (activeItem?.photos.length === 0 && newPhotos[0]) {
+          setTimeout(() => performQuickScan(newPhotos[0], activeItemId), 500);
         }
       } else {
-        // Create new item
         const newItem = {
           id: `item-${Date.now()}`,
-          photos: [{ ...newPhoto, isCover: true }],
+          photos: newPhotos.map((p, i) => ({ ...p, isCover: i === 0 })),
           title: undefined,
           isActive: true
         };
         setBulkItems(prev => [...prev.map(item => ({ ...item, isActive: false })), newItem]);
         setActiveItemId(newItem.id);
-        console.log('[IMAGE UPLOAD] Created new item with uploaded photo, ID:', newItem.id);
-        setTimeout(() => {
-          console.log('[IMAGE UPLOAD] About to call performQuickScan for new item:', newItem.id);
-          performQuickScan(newPhoto, newItem.id);
-        }, 500);
+        setCapturedPhotos(prev => [...prev, ...newPhotos]);
+        if (newPhotos[0]) {
+          setTimeout(() => performQuickScan(newPhotos[0], newItem.id), 500);
+        }
       }
-
-      // Also keep legacy array for backward compatibility during transition
-      setCapturedPhotos(prev => [...prev, newPhoto]);
     }
-  }, [bulkItems.length, activeItemId]);
+  }, [bulkItems, activeItemId]);
 
   // Copy barcode to clipboard
   const copyBarcodeToClipboard = useCallback(() => {
@@ -1660,6 +1662,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     quickScanCancelledRef,
   ]);
 
+  // When screen loses focus (user navigates away), close sheets so camera can resume when they return
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        setShowMatchSheet(false);
+        setShowDeepSearchSheet(false);
+        setShowBarcodeResultModal(false);
+      };
+    }, [])
+  );
+
   // Animated styles
   const captureButtonAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: captureButtonScale.value }],
@@ -1732,8 +1745,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         </View>
       )}
 
-      {/* Camera View */}
+      {/* Camera View - key forces remount when returning to screen so camera feed resumes */}
       <CameraView
+        key={`camera-${isFocused}`}
         ref={cameraRef}
         style={styles.camera}
         facing={facing}
@@ -1779,50 +1793,35 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           }}
         />
 
-        {/* Photo stack (top left) - shows active item's photos in bulk mode */}
+        {/* Photo stack (top left) - vertical, stacks after 3, tap opens modal */}
         {(() => {
           const activeItem = activeItemId ? bulkItems.find(item => item.id === activeItemId) : null;
           const displayPhotos = activeItem?.photos || [];
           const itemIndex = activeItem ? bulkItems.findIndex(item => item.id === activeItemId) + 1 : 0;
 
-          console.log('[PHOTO STACK] Rendering for activeItemId:', activeItemId);
-          console.log('[PHOTO STACK] Found activeItem:', activeItem ? 'YES' : 'NO');
-          console.log('[PHOTO STACK] displayPhotos count:', displayPhotos.length);
-          console.log('[PHOTO STACK] displayPhotos IDs:', displayPhotos.map(p => p.id));
-
           return (
-            <View style={styles.photoStackContainer} key={`photo-stack-${activeItemId || 'none'}`}>
-              {/* Active item indicator - always show if there's an active item */}
-              {activeItemId && itemIndex > 0 && (
-                <View style={styles.activeItemIndicator}>
-                  <Text style={styles.activeItemIndicatorText}>
-                    Item {itemIndex}
-                  </Text>
-                </View>
-              )}
-
-              {displayPhotos.length > 0 && (
-                <PhotoStack
-                  key={`photos-${activeItemId}-${displayPhotos.length}`}
+            <View style={[styles.photoStackContainer, { zIndex: 25 }]} key={`photo-stack-${activeItemId || 'none'}`}>
+              <View style={styles.photoStackRow}>
+                {activeItemId && itemIndex > 0 && (
+                  <View style={styles.activeItemIndicator}>
+                    <Text style={styles.activeItemIndicatorText}>Item {itemIndex}</Text>
+                  </View>
+                )}
+                {displayPhotos.length >= 1 && (
+                  <PhotoStack
+                  key={`photos-${activeItemId}`}
                   photos={displayPhotos}
-                  onSetCover={activeItemId
-                    ? (photoId: string) => setBulkItemCoverPhoto(activeItemId, photoId)
-                    : () => console.log('No active item for cover photo')
-                  }
-                  onRemovePhoto={activeItemId
-                    ? (photoId: string) => removeBulkItemPhoto(activeItemId, photoId)
-                    : () => console.log('No active item for photo removal')
-                  }
-                  onDoubleTap={activeItemId
-                    ? (photoId: string) => setBulkItemCoverPhoto(activeItemId, photoId)
-                    : () => console.log('No active item for double tap')
-                  }
+                  onSetCover={activeItemId ? (photoId: string) => setBulkItemCoverPhoto(activeItemId, photoId) : () => {}}
+                  onRemovePhoto={activeItemId ? (photoId: string) => removeBulkItemPhoto(activeItemId, photoId) : () => {}}
+                  onDoubleTap={activeItemId ? (photoId: string) => setBulkItemCoverPhoto(activeItemId, photoId) : undefined}
                   onDragStart={handleDragStart}
                   onDragEnd={handleDragEnd}
                   onReorder={reorderPhotos}
                   draggedPhotoId={draggedPhotoId}
+                  onPress={() => setShowViewPhotosModal(true)}
                 />
-              )}
+                )}
+              </View>
             </View>
           );
         })()}
@@ -1831,13 +1830,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         <CameraControls
           flash={flash}
           onToggleFlash={toggleFlash}
-          onToggleFacing={toggleFacing}
           onPastScans={() => navigation.navigate('PastScans' as never)}
-          isBulkMode={isBulkMode}
-          onToggleBulkMode={toggleBulkMode}
         />
 
-        {/* Center overlay with instructions */}
+        {/* Center overlay with instructions - hidden when user has photos (camera mode) */}
         <CenterOverlay
           instruction={getInstructionText(currentInstruction)}
           isProcessing={currentInstruction === 'processing'}
@@ -1845,6 +1841,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           scannedBarcode={scannedBarcode}
           onCopyBarcode={copyBarcodeToClipboard}
           onPress={handleMatchIndicatorPress}
+          totalPhotos={bulkItems.reduce((sum, item) => sum + item.photos.length, 0)}
         />
 
 
@@ -1860,11 +1857,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           </View>
         )}
 
-        {cameraMode === 'manifest' && (
+        {ENABLE_DOC_MODES && cameraMode === 'manifest' && (
           <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
         )}
 
-        {cameraMode === 'receipt' && (
+        {ENABLE_DOC_MODES && cameraMode === 'receipt' && (
           <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
         )}
 
@@ -1889,54 +1886,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           />
         )}
 
-        {/* DEBUG: Visual State Indicator 
-         {__DEV__ && (
-           <View style={styles.debugOverlay}>
-             <Text style={styles.debugText}>
-               Items: {bulkItems.length} | 
-               Total Photos: {bulkItems.reduce((sum, item) => sum + item.photos.length, 0)} | 
-               Active: {activeItemId ? bulkItems.findIndex(i => i.id === activeItemId) + 1 : 'none'} |
-               Legacy Photos: {capturedPhotos.length} |
-               Renders: {forceRenderCount}
-             </Text>
-             <Text style={[styles.debugText, { 
-               backgroundColor: (!showDeepSearchSheet && !showMatchSheet && !showBarcodeResultModal) ? '#4CAF50' : '#FF5722',
-               borderRadius: 4,
-               paddingHorizontal: 4
-             }]}>
-               📷 Camera: {(!showDeepSearchSheet && !showMatchSheet && !showBarcodeResultModal) ? 'ACTIVE' : 'PAUSED'}
-             </Text>
-             <View style={styles.debugButtons}>
-               <TouchableOpacity 
-                 style={styles.debugButton} 
-                 onPress={() => {
-                   console.log('[DEBUG] Manual item creation test');
-                   const testItem = {
-                     id: `test-item-${Date.now()}`,
-                     photos: [{
-                       id: `test-photo-${Date.now()}`,
-                       uri: 'https://via.placeholder.com/300x300.png?text=Test',
-                       width: 300,
-                       height: 300,
-                       timestamp: Date.now(),
-                       isCover: true
-                     }],
-                     title: undefined,
-                     isActive: true
-                   };
-                   setBulkItems(prev => [...prev, testItem]);
-                   setActiveItemId(testItem.id);
-                 }}
-               >
-                 <Text style={styles.debugButtonText}>Add Test Item</Text>
-            </TouchableOpacity>
-               <TouchableOpacity style={styles.debugButton} onPress={forceRerender}>
-                 <Text style={styles.debugButtonText}>Force Render</Text>
-            </TouchableOpacity>
-          </View>
-           </View>
-         )} 
-        */}
+  
 
         {/* Bottom controls */}
         <BottomControls
@@ -1966,6 +1916,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             }]);
             setActiveItemId(newItemId);
           }}
+          onOpenBarcodeEntry={
+            cameraMode === 'barcode'
+              ? () => {
+                  setShowBarcodeEntry(true);
+                  setManualBarcode(scannedBarcode || '');
+                  setBarcodeEntryError(null);
+                }
+              : undefined
+          }
         />
       </CameraView>
 
@@ -2052,12 +2011,51 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               setJobResponse={setJobResponse}
               quickScanStore={quickScanStore}
               onOpenQuickMatches={openQuickMatchesForItem}
+              onOpenPhotoModal={(itemId) => {
+                selectActiveItem(itemId);
+                setShowViewPhotosModal(true);
+              }}
               itemLoadingStates={itemLoadingStates}
               setItemLoadingStates={setItemLoadingStates}
             />
           );
         })()}
       </Modal>
+
+      {/* View Photos Modal - photo management with item switcher */}
+      <ViewPhotosModal
+        visible={showViewPhotosModal}
+        onClose={() => setShowViewPhotosModal(false)}
+        photos={(() => {
+          const activeItem = activeItemId ? bulkItems.find(item => item.id === activeItemId) : null;
+          return activeItem?.photos || [];
+        })()}
+        activeItemId={activeItemId}
+        totalItems={bulkItems.length}
+        activeIndex={bulkItems.findIndex(i => i.id === activeItemId)}
+        onSetCover={(photoId) => activeItemId && setBulkItemCoverPhoto(activeItemId, photoId)}
+        onRemovePhoto={(photoId) => activeItemId && removeBulkItemPhoto(activeItemId, photoId)}
+        onReorder={reorderPhotos}
+        onSelectItem={selectActiveItem}
+        onImageUpload={handleImageUpload}
+        items={bulkItems}
+      />
+
+      <BarcodeEntrySheet
+        visible={showBarcodeEntry}
+        barcode={manualBarcode}
+        onChangeBarcode={(value) => {
+          setManualBarcode(value.replace(/[^0-9]/g, ''));
+          if (barcodeEntryError) setBarcodeEntryError(null);
+        }}
+        onSubmit={handleManualBarcodeSubmit}
+        onCancel={() => {
+          setShowBarcodeEntry(false);
+          setBarcodeEntryError(null);
+        }}
+        loading={barcodeSearching}
+        errorMessage={barcodeEntryError || undefined}
+      />
 
       {/* Barcode Quick Inventory Editor Modal (Reused MatchSheet Style) */}
       <Modal
@@ -2307,7 +2305,8 @@ const CenterOverlay: React.FC<{
   scannedBarcode: string | null;
   onCopyBarcode: () => void;
   onPress?: () => void;
-}> = ({ instruction, isProcessing, cameraMode, scannedBarcode, onCopyBarcode, onPress }) => {
+  totalPhotos?: number;
+}> = ({ instruction, isProcessing, cameraMode, scannedBarcode, onCopyBarcode, onPress, totalPhotos = 0 }) => {
   // Barcode overlay at top middle
   if (cameraMode === 'barcode' && scannedBarcode) {
     return (
@@ -2321,6 +2320,11 @@ const CenterOverlay: React.FC<{
         </Animated.View>
       </View>
     );
+  }
+
+  // Hide "Take photos to get started" overlay when user already has photos (cleaner view)
+  if (cameraMode === 'camera' && totalPhotos > 0 && instruction === 'Take photos to get started') {
+    return null;
   }
 
   // Regular instruction overlay - moved to top-middle like barcode
@@ -2358,6 +2362,7 @@ const BottomControls: React.FC<{
   activeItemId: string | null;
   onSelectItem: (id: string) => void;
   onNewItem: () => void;
+  onOpenBarcodeEntry?: () => void;
 }> = ({
   onCapture,
   isCapturing,
@@ -2372,7 +2377,8 @@ const BottomControls: React.FC<{
   items,
   activeItemId,
   onSelectItem,
-  onNewItem
+  onNewItem,
+  onOpenBarcodeEntry,
 }) => {
     const activeIndex = items.findIndex(i => i.id === activeItemId);
     const totalItems = items.length;
@@ -2415,8 +2421,12 @@ const BottomControls: React.FC<{
       setHoveredMode(null);
     }, [onSetCameraMode, popupScale, popupOpacity]);
 
-    const POPUP_WIDTH = 350;
-    const ITEM_WIDTH = POPUP_WIDTH / 4;
+    const modes: CameraMode[] = ENABLE_DOC_MODES
+      ? ['camera', 'barcode', 'manifest', 'receipt']
+      : ['camera', 'barcode'];
+
+    const POPUP_WIDTH = 90 * modes.length;
+    const ITEM_WIDTH = POPUP_WIDTH / modes.length;
 
     // EXPERIMENTAL: Long press on mode button to toggle text search
     const onLongPressMode = () => {
@@ -2462,41 +2472,43 @@ const BottomControls: React.FC<{
       switch (mode) {
         case 'camera': return 'Camera';
         case 'barcode': return 'Barcode';
-        case 'manifest': return 'Manifest';
-        case 'receipt': return 'Receipt';
+        case 'manifest': return ENABLE_DOC_MODES ? 'Manifest' : '';
+        case 'receipt': return ENABLE_DOC_MODES ? 'Receipt' : '';
       }
     };
 
     const getContinueText = () => {
       if (cameraMode === 'barcode' && hasBarcodeResult) {
-        return productName
-          ? `Update: ${productName.slice(0, 25)}${productName.length > 25 ? '...' : ''}`
-          : 'Open Update Product';
+        return 'Open scanned item';
       }
-      if (cameraMode === 'manifest') {
+      if (cameraMode === 'manifest' && ENABLE_DOC_MODES) {
         return photosCount > 0
           ? `Parse ${photosCount} page${photosCount > 1 ? 's' : ''}`
           : 'Capture manifest pages';
       }
-      if (cameraMode === 'receipt') {
+      if (cameraMode === 'receipt' && ENABLE_DOC_MODES) {
         return photosCount > 0
           ? `Process ${photosCount} receipt${photosCount > 1 ? 's' : ''}`
           : 'Capture receipt';
       }
-      return photosCount > 0
-        ? `Continue with ${photosCount} photo${photosCount > 1 ? 's' : ''}`
-        : 'Take a photo to get started';
+      if (photosCount === 0) return 'Take a photo to get started';
+      if (totalItems > 1) return `Continue w/ ${totalItems} items`;
+      return `Manage ${totalItems} item${totalItems > 1 ? 's' : ''}`;
     };
 
-    const modes: CameraMode[] = ['camera', 'barcode', 'manifest', 'receipt'];
     const activeMode = hoveredMode || cameraMode;
 
     return (
       <View style={styles.bottomControls}>
         <Animated.View entering={FadeIn.delay(500)} style={styles.controlsRow}>
-          <TouchableOpacity style={styles.galleryButton} onPress={onImageUpload}>
-            <Icon name="image-multiple-outline" size={24} color="white" />
-          </TouchableOpacity>
+          <View style={{gap: 4, justifyContent: "center"}}>
+            <TouchableOpacity style={[styles.galleryButton, {gap: 4}]} onPress={onImageUpload}>
+              <Icon name="image-multiple-outline" size={24} color="white" />
+            </TouchableOpacity>
+            <Text style={{color: "#FFF", fontSize: 12, fontWeight: 500, textAlign: "center"}}>Upload</Text>
+          </View>
+          
+          
 
           <Animated.View style={captureButtonAnimatedStyle}>
             <TouchableOpacity
@@ -2517,7 +2529,7 @@ const BottomControls: React.FC<{
                   onGestureEvent={onPanGestureEvent}
                   onHandlerStateChange={onPanHandlerStateChange}
                 >
-                  <Animated.View style={styles.modePopupContent}>
+                  <Animated.View style={[styles.modePopupContent, { width: POPUP_WIDTH }]}>
                     {modes.map((mode, index) => (
                       <TouchableOpacity
                         key={mode}
@@ -2567,57 +2579,95 @@ const BottomControls: React.FC<{
                 color="white"
               />
             </TouchableOpacity>
+            <Text style={{color: "#FFF", fontSize: 12, fontWeight: 500, textAlign: "center"}}>Mode</Text>
           </View>
         </Animated.View>
 
-        <Animated.View entering={SlideInDown.delay(700)} style={styles.continueButtonContainer}>
-          <View style={styles.itemNavRow}>
-            {/* Left Arrow - Previous Item */}
-            <TouchableOpacity
-              style={[styles.itemNavArrow, (photosCount === 0 || activeIndex <= 0) && styles.itemNavArrowDisabled]}
-              onPress={() => {
-                if (activeIndex > 0) onSelectItem(items[activeIndex - 1].id);
-              }}
-              disabled={photosCount === 0 || activeIndex <= 0}
-            >
-              <Icon name="chevron-left" size={24} color={photosCount > 0 && activeIndex > 0 ? "#FFF" : "rgba(255,255,255,0.3)"} />
-            </TouchableOpacity>
-
-            {/* Center - Continue Button with item counter */}
-            <TouchableOpacity
-              style={[styles.continueButton, photosCount === 0 && styles.continueButtonDisabled]}
-              onPress={onContinue}
-              disabled={photosCount === 0}
-            >
-              {totalItems > 1 && (
-                <View style={styles.itemCountBadge}>
-                  <Text style={styles.itemCountBadgeText}>{activeIndex + 1}/{totalItems}</Text>
+        {(cameraMode === 'barcode' || photosCount >= 1) && (
+          <Animated.View entering={SlideInDown.delay(700)} style={styles.continueButtonContainer}>
+            {cameraMode === 'barcode' ? (
+              hasBarcodeResult ? (
+                <View style={styles.barcodeActionsRow}>
+                  {onOpenBarcodeEntry && (
+                    <TouchableOpacity
+                      style={styles.barcodeSecondaryButton}
+                      onPress={onOpenBarcodeEntry}
+                    >
+                      <Text style={styles.barcodeSecondaryText}>Enter manually</Text>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity
+                    style={styles.continueButton}
+                    onPress={onContinue}
+                  >
+                    <Text style={styles.continueButtonText} numberOfLines={1}>
+                      {getContinueText()}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
-              )}
-              <Text style={styles.continueButtonText} numberOfLines={1}>
-                {getContinueText()}
-              </Text>
-            </TouchableOpacity>
-
-            {/* Right Arrow/New Item */}
-            {activeIndex < totalItems - 1 ? (
-              <TouchableOpacity
-                style={styles.itemNavArrow}
-                onPress={() => onSelectItem(items[activeIndex + 1].id)}
-              >
-                <Icon name="chevron-right" size={24} color="#FFF" />
-              </TouchableOpacity>
+              ) : (
+                <View style={styles.barcodeActionsRow}>
+                  {onOpenBarcodeEntry && (
+                    <TouchableOpacity
+                      style={styles.continueButton}
+                      onPress={onOpenBarcodeEntry}
+                    >
+                      <Text style={styles.continueButtonText} numberOfLines={1}>
+                        Enter barcode manually
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )
             ) : (
-              <TouchableOpacity
-                style={[styles.itemNavArrow, styles.itemNavNewButton, photosCount === 0 && styles.itemNavArrowDisabled]}
-                onPress={onNewItem}
-                disabled={photosCount === 0}
-              >
-                <Icon name="plus" size={24} color={photosCount > 0 ? "#000" : "rgba(255,255,255,0.3)"} />
-              </TouchableOpacity>
+              <View style={styles.itemNavRow}>
+                {/* Left Arrow - Previous Item */}
+                <TouchableOpacity
+                  style={[styles.itemNavArrow, activeIndex <= 0 && styles.itemNavArrowDisabled]}
+                  onPress={() => {
+                    if (activeIndex > 0) onSelectItem(items[activeIndex - 1].id);
+                  }}
+                  disabled={activeIndex <= 0}
+                >
+                  <Icon name="chevron-left" size={24} color={activeIndex > 0 ? "#FFF" : "rgba(255,255,255,0.3)"} />
+                </TouchableOpacity>
+
+                {/* Center - Continue Button with item counter */}
+                <TouchableOpacity
+                  style={styles.continueButton}
+                  onPress={onContinue}
+                >
+                  {totalItems > 1 && (
+                    <View style={styles.itemCountBadge}>
+                      <Text style={styles.itemCountBadgeText}>{activeIndex + 1}/{totalItems}</Text>
+                    </View>
+                  )}
+                  <Text style={styles.continueButtonText} numberOfLines={1}>
+                    {getContinueText()}
+                  </Text>
+                </TouchableOpacity>
+
+                {/* Right Arrow/New Item */}
+                {activeIndex < totalItems - 1 ? (
+                  <TouchableOpacity
+                    style={styles.itemNavArrow}
+                    onPress={() => onSelectItem(items[activeIndex + 1].id)}
+                  >
+                    <Icon name="chevron-right" size={24} color="#FFF" />
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={[styles.itemNavArrow, styles.itemNavNewButton]}
+                    onPress={onNewItem}
+                  >
+                    <Icon name="plus" size={24} color="#FFF" />
+                    <Text style={styles.continueButtonText}>New Item</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
             )}
-          </View>
-        </Animated.View>
+          </Animated.View>
+        )}
       </View>
     );
   };
@@ -2813,9 +2863,10 @@ const BulkItemsSheet: React.FC<{
   navigation: any;
   quickScanStore?: Record<string, { matchData: MatchResponse; serpApiData: any[] }>;
   onOpenQuickMatches?: (itemId: string) => void;
+  onOpenPhotoModal?: (itemId: string) => void;
   itemLoadingStates: Record<string, { isLoading: boolean; stage: string; }>;
   setItemLoadingStates: React.Dispatch<React.SetStateAction<Record<string, { isLoading: boolean; stage: string; }>>>;
-}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, itemLoadingStates, setItemLoadingStates }) => {
+}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates }) => {
 
   console.log('[SHEET RENDER] ==================');
   console.log('[SHEET RENDER] BulkItemsSheet RE-RENDERED at:', new Date().toISOString());
@@ -2937,10 +2988,14 @@ const BulkItemsSheet: React.FC<{
             : `Creating ${totalItems} New Item${totalItems > 1 ? 's' : ''}`
           }
         </Text>
-        {/* New Item button */}
+
+        <View style={{height: 4, width: 4}}/>
+
+        {/* New Item button
         <TouchableOpacity style={styles.headerNewItemButton} onPress={onAddNewItem}>
           <Icon name="plus" size={20} color="#93C822" />
         </TouchableOpacity>
+         */}
       </View>
 
 
@@ -3045,59 +3100,61 @@ const BulkItemsSheet: React.FC<{
 
                     <View style={styles.photoSlotsContainer}>
                       {item.photos.map((photo: CapturedPhoto, photoIndex: number) => (
-                        <TapGestureHandler
-                          key={`photo-${item.id}-${photo.id}`}
-                          numberOfTaps={2}
-                          onHandlerStateChange={(event) => {
-                            if (event.nativeEvent.state === State.ACTIVE) {
-                              onSetCoverPhoto(item.id, photo.id);
-                            }
-                          }}
-                        >
-                          <Animated.View
-                            style={[
-                              styles.photoSlot,
-                              photo.isCover && styles.coverPhotoSlot // Green border for cover photo
-                            ]}
+                        <View key={`photo-${item.id}-${photo.id}`} style={styles.photoSlotWrapper}>
+                          <TapGestureHandler
+                            numberOfTaps={2}
+                            onHandlerStateChange={(event) => {
+                              if (event.nativeEvent.state === State.ACTIVE) {
+                                onSetCoverPhoto(item.id, photo.id);
+                              }
+                            }}
                           >
-                            <TouchableOpacity
-                              onPress={() => {
-                                // Single tap just selects photo (no action for now)
-                                console.log('Selected photo:', photo.id);
-                              }}
-                              onLongPress={() => {
-                                // Long press options
-                                Alert.alert(
-                                  'Photo Options',
-                                  `Photo ${photoIndex + 1}${photo.isCover ? ' (Cover)' : ''}`,
-                                  [
-                                    { text: 'Set as Cover', onPress: () => onSetCoverPhoto(item.id, photo.id) },
-                                    { text: 'Remove from Item', onPress: () => onRemovePhoto(item.id, photo.id) },
-                                    { text: 'Cancel', style: 'cancel' },
-                                  ]
-                                );
-                              }}
+                            <Animated.View
+                              style={[
+                                styles.photoSlot,
+                                photo.isCover && styles.coverPhotoSlot
+                              ]}
                             >
-                              <Image source={{ uri: photo.uri }} style={styles.photoSlotImage} />
-                              <View style={[
-                                styles.photoSlotLabel,
-                                photo.isCover && styles.coverPhotoLabel
-                              ]}>
-                                <Text style={styles.photoSlotLabelText}>
-                                  {photo.isCover ? 'COVER' : `pic ${photoIndex + 1}`}
-                                </Text>
-                              </View>
-                              {/* Delete button for bulk item photos */}
                               <TouchableOpacity
-                                style={styles.bulkPhotoDeleteButton}
-                                onPress={() => onRemovePhoto(item.id, photo.id)}
-                                hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
+                                style={StyleSheet.absoluteFill}
+                                onPress={() => onOpenPhotoModal?.(item.id)}
+                                onLongPress={() => {
+                                  Alert.alert(
+                                    'Photo Options',
+                                    `Photo ${photoIndex + 1}${photo.isCover ? ' (Cover)' : ''}`,
+                                    [
+                                      { text: 'Set as Cover', onPress: () => onSetCoverPhoto(item.id, photo.id) },
+                                      { text: 'Remove from Item', onPress: () => onRemovePhoto(item.id, photo.id) },
+                                      { text: 'Cancel', style: 'cancel' },
+                                    ]
+                                  );
+                                }}
                               >
-                                <Icon name="close-circle" size={14} color="#ff4444" />
+                                <Image source={{ uri: photo.uri }} style={styles.photoSlotImage} />
+                                <View style={styles.photoSlotNumberBadge}>
+                                  <Text style={styles.photoSlotNumberBadgeText}>{photoIndex + 1}</Text>
+                                </View>
+                                {photo.isCover && (
+                                  <View style={[
+                                    styles.photoSlotLabel,
+                                    styles.coverPhotoLabel
+                                  ]}>
+                                    <Text style={styles.photoSlotLabelText}>COVER</Text>
+                                  </View>
+                                )}
                               </TouchableOpacity>
-                            </TouchableOpacity>
-                          </Animated.View>
-                        </TapGestureHandler>
+                            </Animated.View>
+                          </TapGestureHandler>
+                          {/* Delete button outside TapGestureHandler so it receives taps reliably */}
+                          <TouchableOpacity
+                            style={styles.bulkPhotoDeleteButton}
+                            onPress={() => onRemovePhoto(item.id, photo.id)}
+                            hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
+                            activeOpacity={1}
+                          >
+                            <Icon name="close-circle" size={18} color="#ff4444" />
+                          </TouchableOpacity>
+                        </View>
                       ))}
 
                       {/* Add Photo Button - Only show if less than 12 photos */}
@@ -3154,7 +3211,7 @@ const BulkItemsSheet: React.FC<{
             }}
           >
             <Icon name="plus" size={16} color="#999" />
-            <Text style={styles.newItemButtonText}>New Item</Text>
+            <Text style={styles.newItemButtonText}>Add Item</Text>
           </TouchableOpacity>
 
           {/* Search Button */}
@@ -3233,7 +3290,7 @@ const BulkItemsSheet: React.FC<{
               styles.searchForProductButtonText,
               totalItems === 0 && { color: '#999' }
             ]}>
-              Search For Product (Broad)
+              Continue
             </Text>
           </TouchableOpacity>
         </View>
@@ -3275,18 +3332,26 @@ const styles = StyleSheet.create({
     left: 20,
     zIndex: 10,
   },
+  photoStackRow: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 8,
+  },
   activeItemIndicator: {
-    backgroundColor: '93C822',
+    width: 72,
+    backgroundColor: '#93C822',
+    borderWidth: 2,
+    borderColor: '#93C822',
     borderRadius: 12,
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    marginBottom: 8,
-    alignSelf: 'flex-start',
+    paddingVertical: 5,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   activeItemIndicatorText: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: '600',
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
   photoStackItem: {
     position: 'absolute',
@@ -3485,12 +3550,15 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   galleryButton: {
+    flexDirection: "column",
+    justifyContent: 'center',
+    alignItems: 'center',
     width: 50,
     height: 50,
     borderRadius: 25,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
   },
   captureButton: {
     width: 80,
@@ -3519,6 +3587,7 @@ const styles = StyleSheet.create({
   // Mode Selector Styles
   modeSelectorWrapper: {
     alignItems: 'center',
+    gap: 4,
     justifyContent: 'center',
     zIndex: 100, // Ensure popup is above other elements
   },
@@ -3571,7 +3640,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   modePopupItemActive: {
-    backgroundColor: 'rgba(76, 175, 80, 0.2)', // Green tint for active
+    backgroundColor: 'rgba(147, 200, 34, 0.2)', // Anorha green tint for active
   },
   modePopupLabel: {
     color: 'rgba(255,255,255,0.6)',
@@ -3593,7 +3662,7 @@ const styles = StyleSheet.create({
   },
   modePopupIconContainerActive: {
     borderColor: '#fff',
-    backgroundColor: '#4CAF50', // Green background for active icon
+    backgroundColor: '#93C822', // Anorha green for active icon
   },
   modePopupArrow: {
     width: 0,
@@ -3617,14 +3686,35 @@ const styles = StyleSheet.create({
   continueButtonContainer: {
     paddingHorizontal: 20,
   },
+  barcodeActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  barcodeSecondaryButton: {
+    flex: 1,
+    borderRadius: 22,
+    paddingVertical: 14,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  barcodeSecondaryText: {
+    color: '#E5E7EB',
+    fontSize: 14,
+    fontWeight: '500',
+  },
   itemNavRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
   itemNavArrow: {
-    width: 44,
-    height: 44,
+    height: 48,
+    flexDirection: "row",
+    paddingHorizontal: 8,
+    gap: 4,
     borderRadius: 22,
     backgroundColor: 'rgba(255,255,255,0.15)',
     justifyContent: 'center',
@@ -4023,6 +4113,11 @@ const styles = StyleSheet.create({
     gap: 8,
     alignItems: 'center',
   },
+  photoSlotWrapper: {
+    position: 'relative',
+    width: 60,
+    height: 60,
+  },
   photoSlot: {
     width: 60,
     height: 60,
@@ -4037,6 +4132,22 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     resizeMode: 'cover',
+  },
+  photoSlotNumberBadge: {
+    position: 'absolute',
+    bottom: 36,
+    left: 0,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  photoSlotNumberBadgeText: {
+    color: 'white',
+    fontSize: 11,
+    fontWeight: 'bold',
   },
   emptyPhotoSlot: {
     flex: 1,

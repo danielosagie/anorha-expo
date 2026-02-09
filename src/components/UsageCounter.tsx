@@ -37,7 +37,7 @@ const UsageCounter: React.FC<UsageCounterProps> = ({
                 ]}>
                     {isExhausted
                         ? `Free scans used (${usageCount}/${freeLimit})`
-                        : `${remaining}/${freeLimit} free scans`
+                        : `${remaining}/${freeLimit} daily free scans`
                     }
                 </Text>
             </View>

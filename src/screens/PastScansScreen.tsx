@@ -7,6 +7,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import { supabase } from '../../lib/supabase';
+import BackButton from '../components/BackButton';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { JobResponse } from './MatchSelectionScreen';
 
@@ -102,7 +103,6 @@ const PastScansScreen = () => {
       setLoading(true);
       setError(null);
       const { data: { user } } = await supabase.auth.getUser();
-
       if (!user) throw new Error('No authenticated user');
 
       const { data, error } = await supabase
@@ -122,13 +122,64 @@ const PastScansScreen = () => {
         return;
       }
 
+      const rawJobs = data as any[];
+
+      // Collect all unique variantIds from results across jobs
+      const variantIdSet = new Set<string>();
+      rawJobs.forEach(job => {
+        const results = Array.isArray(job.results) ? job.results : [];
+        results.forEach((r: any) => {
+          if (r && typeof r.variantId === 'string' && r.variantId) {
+            variantIdSet.add(r.variantId);
+          }
+        });
+      });
+
+      // Fetch PrimaryImageUrl (cover image) for all variants we found
+      let variantCoverMap: Record<string, string> = {};
+      const variantIds = Array.from(variantIdSet);
+
+      if (variantIds.length > 0) {
+        const { data: variants, error: variantError } = await supabase
+          .from('ProductVariants')
+          .select('Id, PrimaryImageUrl')
+          .in('Id', variantIds);
+
+        if (variantError) {
+          console.error('Error fetching ProductVariants for generate_jobs:', variantError);
+        } else if (Array.isArray(variants)) {
+          variantCoverMap = variants.reduce((acc: Record<string, string>, v: any) => {
+            const id = v?.Id;
+            const cover = v?.PrimaryImageUrl;
+            if (typeof id === 'string' && typeof cover === 'string' && cover) {
+              acc[id] = cover;
+            }
+            return acc;
+          }, {});
+        }
+      }
+
       // The table has `job_id`, but our keyExtractor needs `id`. Let's map it.
-      const formattedJobs = (data as any[]).map(job => {
+      const formattedJobs = rawJobs.map(job => {
         const results = Array.isArray(job.results) ? job.results : [];
         const first = results[0] || null;
+        const firstVariantId = first?.variantId;
+        const coverFromVariant = firstVariantId ? variantCoverMap[firstVariantId] : undefined;
+
         const platforms = (first && first.platforms) ? first.platforms : {};
-        const title = platforms?.shopify?.title || platforms?.amazon?.title || platforms?.ebay?.title || 'Generated Listing';
-        const thumb = first?.sourceImageUrl || '';
+        const title =
+          job.summary?.firstTitle ||
+          platforms?.shopify?.title ||
+          platforms?.amazon?.title ||
+          platforms?.ebay?.title ||
+          'Generated Listing';
+
+        const thumb =
+          coverFromVariant ||
+          job.summary?.firstThumb ||
+          first?.sourceImageUrl ||
+          '';
+
         const summary = { ...(job.summary || {}), firstTitle: title, firstThumb: thumb };
         return { ...job, id: job.job_id, summary, results } as GenerationJob;
       });
@@ -389,13 +440,12 @@ const PastScansScreen = () => {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
-          <Icon name="arrow-left" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
+        <BackButton style={styles.backButton} onPress={() => navigation.goBack()}/>
+        
         <Text style={styles.headerTitle}>History</Text>
+        <View>
+          <TouchableOpacity style={{width: 80, marginRight: 16, borderColor: "#FFF"}}/>
+        </View>
       </View>
 
       <View style={styles.tabContainer}>
@@ -425,10 +475,11 @@ const styles = StyleSheet.create({
   },
   header: {
     flexDirection: 'row',
+    justifyContent: "space-around",
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    paddingTop: 50, // Adjust for status bar
+    paddingTop: 60, // Adjust for status bar
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
   },

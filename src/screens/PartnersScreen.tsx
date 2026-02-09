@@ -20,6 +20,7 @@ import Button from '../components/Button';
 import Card from '../components/Card';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { showMessage } from 'react-native-flash-message';
+import { capture, AnalyticsEvents } from '../lib/analytics';
 import * as Clipboard from 'expo-clipboard';
 import { useOrg } from '../context/OrgContext';
 import { PartnerAcceptModal } from '../components/PartnerAcceptModal';
@@ -369,6 +370,7 @@ export default function PartnersScreen() {
 
             if (res.ok) {
                 const result = await res.json();
+                capture(AnalyticsEvents.PARTNER_INVITE_ACCEPTED, { source: 'partners_screen' });
 
                 // Check for onboarding next steps (e.g. no platform connected yet)
                 if (result.onboarding?.nextStep === 'connect_platform') {

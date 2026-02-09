@@ -19,6 +19,9 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { ItemJobState, StepStatus } from '../hooks/useJobsState';
 
+// Anorha green - same as selected match, done states across the app
+const ANORHA_GREEN = '#93C822';
+
 // Step configuration
 const STEPS = [
   { key: 'scan', label: 'Scan', icon: 'camera' },
@@ -120,7 +123,7 @@ const StatusIndicator: React.FC<{ status: StepStatus; size?: number }> = ({
 }) => {
   switch (status) {
     case 'completed':
-      return <Icon name="check-circle" size={size} color="#10B981" />;
+      return <Icon name="check-circle" size={size} color={ANORHA_GREEN} />;
     case 'processing':
     case 'queued':
       return <SpinningLoader size={size} color="#FFD700" />;
@@ -243,7 +246,7 @@ const ItemCard: React.FC<{
             <Icon
               name={isSelected ? 'checkbox-marked' : 'checkbox-blank-outline'}
               size={20}
-              color={isSelected ? '#93C822' : '#888'}
+              color={isSelected ? ANORHA_GREEN : '#888'}
             />
           </TouchableOpacity>
         )}
@@ -267,7 +270,7 @@ const ItemCard: React.FC<{
         </View>
 
         {isCurrent && !selectMode && (
-          <Icon name="check-circle" size={18} color="#93C822" />
+          <Icon name="check-circle" size={18} color={ANORHA_GREEN} />
         )}
       </View>
 
@@ -360,7 +363,7 @@ export default function ItemJobsModal(props: Props) {
       } else {
         const legacyProps = props as LegacyProps;
         const detailsColor = legacyProps.detailsColor(item.index);
-        if (detailsColor === '#93C822' || detailsColor === '#10B981') counts.completed++;
+        if (detailsColor === ANORHA_GREEN) counts.completed++;
         else if (detailsColor === '#FFD700') counts.processing++;
         else if (detailsColor === '#e11d48' || detailsColor === '#EF4444') counts.failed++;
         else counts.pending++;
@@ -395,7 +398,7 @@ export default function ItemJobsModal(props: Props) {
         } else {
           const legacyProps = props as LegacyProps;
           const detailsColor = legacyProps.detailsColor(item.index);
-          if (statusFilter === 'completed') return detailsColor === '#93C822' || detailsColor === '#10B981';
+          if (statusFilter === 'completed') return detailsColor === ANORHA_GREEN;
           if (statusFilter === 'processing') return detailsColor === '#FFD700';
           if (statusFilter === 'failed') return detailsColor === '#e11d48' || detailsColor === '#EF4444';
           if (statusFilter === 'pending') return !detailsColor || detailsColor === '#4B5563';
@@ -731,7 +734,8 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#000'
+    color: '#000',
+    marginLeft: 8,
   },
   scrollArea: {
     flex: 1,
@@ -760,7 +764,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   cardCurrent: {
-    borderColor: '#93C822',
+    borderColor: ANORHA_GREEN,
     backgroundColor: 'rgba(147, 200, 34, 0.04)',
   },
   cardHeader: {
@@ -821,7 +825,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   stepPillActive: {
-    borderColor: '#93C822',
+    borderColor: ANORHA_GREEN,
     backgroundColor: 'rgba(147, 200, 34, 0.08)',
   },
   stepPillDisabled: {
@@ -903,7 +907,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#93C822',
+    backgroundColor: ANORHA_GREEN,
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 8,

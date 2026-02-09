@@ -20,6 +20,7 @@ import { useJobProgress } from '../hooks/useJobProgress';
 import { useCollaboration } from '../hooks/useCollaboration';
 import PublishConfirmationModal from '../components/PublishConfirmationModal';
 import { PLATFORM_META } from '../utils/platformConstants';
+import { capture, AnalyticsEvents } from '../lib/analytics';
 
 // Feature flag to hide AI refill functionality
 const ENABLE_AI_REFILL_FEATURES = false;
@@ -1768,6 +1769,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       // Success! Navigate to confirmation screen
       // The product is now being created/synced in the background on the backend
       setIsPublishing(false);
+      capture(AnalyticsEvents.PUBLISH_COMPLETED, {
+        origin: 'generate',
+        product_id: navigationParams?.productId,
+        variant_id: navigationParams?.variantId,
+        platforms: navigationParams?.platforms || [],
+      });
       navigation.navigate('PublishConfirmation', {
         ...navigationParams,
         isPublishing: false, // Publish completed successfully

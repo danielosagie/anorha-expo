@@ -31,6 +31,7 @@ import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import * as Crypto from 'expo-crypto'; // For generating random string
 import { showMessage } from 'react-native-flash-message';
 import { logError, logInfo } from '../utils/logger';
+import { capture, AnalyticsEvents } from '../lib/analytics';
 import { fetchUserEntitlements } from '../utils/entitlements';
 import { AuthContext } from '../context/AuthContext';
 import { useLegendStateControl } from '../context/LegendStateControlContext';
@@ -808,6 +809,8 @@ const ProfileScreen = () => {
         const sampleRow = csvData[0] || {};
 
         console.log('[ProfileScreen] Parsed CSV:', { headers, rowCount: csvData.length });
+
+        capture(AnalyticsEvents.INVENTORY_IMPORT_STARTED, { source: 'csv', row_count: csvData.length });
 
         // Navigate to column mapping screen
         navigation.navigate('CSVColumnMapping' as any, {
@@ -1740,7 +1743,7 @@ const ProfileScreen = () => {
   // Add a state for the realtime channel
   const [realtimeChannel, setRealtimeChannel] = useState<RealtimeChannel | null>(null);
 
-  // Hide tab bar when platform picker overlay is visible
+  // Hide tab bar when platform picker overlay is visible; always restore on close or unmount
   useEffect(() => {
     const parentNav: any = (navigation as any)?.getParent?.();
     try {
@@ -1753,7 +1756,7 @@ const ProfileScreen = () => {
         parentNav?.setOptions?.({ tabBarStyle: { display: 'flex' } });
       } catch { }
     };
-  }, [overlay.visible]);
+  }, [overlay.visible, navigation]);
 
   // Add this function to set up the real-time subscription
   const setupRealtimeSubscription = async () => {
@@ -2105,6 +2108,7 @@ const ProfileScreen = () => {
               platformActiveCounts={platformActiveCounts}
               onShowSelection={() => { }}
               onShowTemplates={() => { }}
+              onShowPlatforms={() => { }}
               onBackToEmpty={() => { }}
               onBackToSelection={() => { }}
               onOpenTemplateModal={() => { }}
@@ -2459,7 +2463,7 @@ const ProfileScreen = () => {
                 flex: 1,
                 backgroundColor: '#DC2626', // Always red, let the component handle disabled opacity
               }}
-              textStyle={{ color: 'white' }}
+              textStyle={{ color: 'white', textAlign: 'left' }}
               disabled={isDeletingAccount || deleteConfirmName.toLowerCase() !== (currentOrg?.name || '').toLowerCase() || !deleteReason}
             />
           </View>

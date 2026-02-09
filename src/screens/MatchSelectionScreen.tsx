@@ -5,12 +5,14 @@ import {
     Pressable, Modal, TouchableOpacity, SafeAreaView, ScrollView, TextInput, Alert
 } from 'react-native';
 import { AppStackParamList } from '../navigation/AppNavigator';
+import { ENABLED_PLATFORM_OPTIONS } from '../config/platforms';
 import { FlashList } from '@shopify/flash-list';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes } from 'lucide-react-native';
 import ItemJobsModal from '../components/ItemJobsModal';
 import BottomNav from '../components/BottomNav';
+import BackButton from '../components/BackButton';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { PackageCheck } from 'lucide-react';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -341,16 +343,6 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
             }
         });
     }, [itemGenerateJobs]);
-
-    // Dropdown options with icons
-    const PLATFORM_OPTIONS = [
-        { key: 'shopify', label: 'Shopify', icon: 'shopping' },
-        { key: 'amazon', label: 'Amazon', icon: 'package' },
-        { key: 'ebay', label: 'eBay', icon: 'shopping' },
-        { key: 'clover', label: 'Clover', icon: 'leaf' },
-        { key: 'square', label: 'Square', icon: 'square-outline' },
-        { key: 'facebook', label: 'Facebook', icon: 'facebook' },
-    ];
 
     const FIELD_OPTIONS = [
         { key: 'title', label: 'Title' },
@@ -746,6 +738,10 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         setBottomNavState('template');
     }, []);
 
+    const handleShowPlatforms = useCallback(() => {
+        setBottomNavState('platform');
+    }, []);
+
     const handleShowSelection = useCallback(() => {
         setBottomNavState('selection');
     }, []);
@@ -1005,21 +1001,12 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         <View style={styles.container}>
 
             <View style={{ flex: 1, position: 'absolute', top: 70, left: 16, zIndex: 1, flexDirection: 'row', gap: 8, minWidth: 100, minHeight: 34, alignContent: "flex-end" }}>
-                <TouchableOpacity
-                    onPress={() => {
-                        // Navigate back to past scans page
-                        navigation.goBack();
-                    }}
-                    style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, maxHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}
-                >
-                    <Icon name="arrow-left" size={18} color={'#000'} />
-                    <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Back</Text>
-                </TouchableOpacity>
+                <BackButton onPress={() => navigation.goBack()} />
 
                 {/* Tiny bulk button top-left */}
                 <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' as any }}>
                     <Boxes size={18} color="#000" />
-                    <Text style={{ color: '#000', fontWeight: '600' }}>Current Jobs</Text>
+                    <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Current Jobs</Text>
                 </TouchableOpacity>
             </View>
 
@@ -1027,7 +1014,14 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 data={serpApiData}
                 extraData={selectedIndices}
                 numColumns={COLUMNS}
-                contentContainerStyle={{ padding: GRID_PADDING, paddingBottom: 140 }}
+                contentContainerStyle={{ padding: GRID_PADDING, marginTop: 90, paddingBottom: 140 }}
+                ListHeaderComponent={
+                    <View style={{ paddingHorizontal: GRID_PADDING, paddingBottom: 12 }}>
+                        <Text style={{ fontSize: 16, fontWeight: 500, color: 'rgb(57, 57, 57)', lineHeight: 22, textAlign: "center"}}>
+                            Select the best match(es) for the item 
+                        </Text>
+                    </View>
+                }
                 // Use a more stable key if possible to prevent recreation
                 keyExtractor={(item, index) => item.link || item.position?.toString() || index.toString()}
                 estimatedItemSize={220}
@@ -1070,6 +1064,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                     isConnected={isConnected}
                     onShowSelection={handleShowSelection}
                     onShowTemplates={handleShowTemplates}
+                    onShowPlatforms={handleShowPlatforms}
                     onBackToEmpty={handleBackToEmpty}
                     onBackToSelection={handleBackToSelection}
                     onOpenTemplateModal={() => setTemplateModalVisible(true)}
@@ -1441,8 +1436,8 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                                                             onPress={() => setOpenDropdown(prev => ({ rowId: prev.rowId === row.id && prev.type === 'platform' ? null : row.id, type: 'platform' }))}
                                                         >
                                                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                                                                <Icon name={PLATFORM_OPTIONS.find(p => p.key === row.platform)?.icon || 'store'} size={18} color="#555" />
-                                                                <Text style={{ color: '#000' }}>{PLATFORM_OPTIONS.find(p => p.key === row.platform)?.label || 'Platform'}</Text>
+                                                                <Icon name={ENABLED_PLATFORM_OPTIONS.find(p => p.key === row.platform)?.icon || 'store'} size={18} color="#555" />
+                                                                <Text style={{ color: '#000' }}>{ENABLED_PLATFORM_OPTIONS.find(p => p.key === row.platform)?.label || 'Platform'}</Text>
                                                             </View>
                                                             <Icon name="chevron-down" size={18} color="#000" />
                                                         </TouchableOpacity>
@@ -1459,7 +1454,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                                                                         />
                                                                     </View>
                                                                     <ScrollView style={{ maxHeight: 210 }}>
-                                                                        {PLATFORM_OPTIONS.filter(opt => opt.label.toLowerCase().includes(dropdownSearchQuery.toLowerCase())).map(opt => (
+                                                                        {ENABLED_PLATFORM_OPTIONS.filter(opt => opt.label.toLowerCase().includes(dropdownSearchQuery.toLowerCase())).map(opt => (
                                                                             <TouchableOpacity key={opt.key} style={{ padding: 10, flexDirection: 'row', alignItems: 'center', gap: 8 }} onPress={() => { updateFieldRow(row.id, { platform: opt.key }); setOpenDropdown({ rowId: null, type: null }); setDropdownSearchQuery(''); }}>
                                                                                 <Icon name={opt.icon} size={18} color="#555" />
                                                                                 <Text style={{ color: '#000' }}>{opt.label}</Text>
@@ -1730,7 +1725,7 @@ export default MatchSelectionScreen;
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: 'rgba(255, 255, 255, 0)',
+        backgroundColor: 'rgb(255, 255, 255)',
         paddingVertical: 20,
     },
     centerContainer: {

@@ -1,15 +1,13 @@
-import React, { useRef } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TouchableOpacity, 
-  Image, 
-  Alert,
+import React from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Image,
 } from 'react-native';
-import Animated, { SlideInDown } from 'react-native-reanimated';
-import { TapGestureHandler, PanGestureHandler, State } from 'react-native-gesture-handler';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+
+const ANORHA_GREEN = '#93C822';
 
 interface CapturedPhoto {
   id: string;
@@ -29,176 +27,70 @@ interface PhotoStackProps {
   onDragEnd?: () => void;
   onReorder?: (fromIndex: number, toIndex: number) => void;
   draggedPhotoId?: string | null;
+  onPress?: () => void; // Opens modal when tapped
 }
 
-const PhotoStack: React.FC<PhotoStackProps> = ({ 
-  photos, 
-  onSetCover, 
-  onRemovePhoto,
-  onDoubleTap,
-  onDragStart,
-  onDragEnd,
-  onReorder,
-  draggedPhotoId
-}) => {
-  const doubleTapRef = useRef(null);
-  
-  const handleDoubleTap = (event: any, photoId: string) => {
-    if (event.nativeEvent.state === State.ACTIVE) {
-      if (onDoubleTap) {
-        onDoubleTap(photoId);
-      } else {
-        onSetCover(photoId);
-      }
-    }
-  };
+const PhotoStack: React.FC<PhotoStackProps> = ({ photos, onPress }) => {
+  const coverPhoto = photos.find((p) => p.isCover) || photos[0];
+  const count = photos.length;
 
-  const handlePanGestureStateChange = (event: any, photoId: string, index: number) => {
-    if (event.nativeEvent.state === State.BEGAN) {
-      onDragStart?.(photoId);
-    } else if (event.nativeEvent.state === State.END) {
-      onDragEnd?.();
-      // Simple reordering logic based on vertical drag
-      const dragY = event.nativeEvent.translationY;
-      if (Math.abs(dragY) > 30) { // Threshold for reordering
-        const direction = dragY > 0 ? 1 : -1;
-        const newIndex = Math.max(0, Math.min(photos.length - 1, index + direction));
-        if (newIndex !== index) {
-          onReorder?.(index, newIndex);
-        }
-      }
-    }
-  };
-
-  const renderPhoto = (photo: CapturedPhoto, index: number) => (
-    <PanGestureHandler
-      key={photo.id}
-      onHandlerStateChange={(event) => handlePanGestureStateChange(event, photo.id, index)}
-    >
-      <Animated.View
-        style={[
-          styles.photoStackItem,
-          { 
-            top: index * 75,
-            zIndex: photos.length - index,
-            borderColor: photo.isCover ? '#4CAF50' : 'rgba(255,255,255,0.3)',
-            borderWidth: photo.isCover ? 2 : 1,
-            opacity: draggedPhotoId === photo.id ? 0.7 : 1,
-          }
-        ]}
-      >
-        <TapGestureHandler
-          ref={doubleTapRef}
-          numberOfTaps={2}
-          onHandlerStateChange={(event) => handleDoubleTap(event, photo.id)}
-        >
-          <Animated.View>
-            <TouchableOpacity
-              onPress={() => onSetCover(photo.id)}
-              onLongPress={() => {
-                Alert.alert(
-                  'Photo Options',
-                  `Photo ${index + 1}${photo.isCover ? ' (Cover)' : ''}`,
-                  [
-                    { text: 'Set as Cover', onPress: () => onSetCover(photo.id) },
-                    { text: 'Remove', onPress: () => onRemovePhoto(photo.id), style: 'destructive' },
-                    { text: 'Cancel', style: 'cancel' },
-                  ]
-                );
-              }}
-            >
-              <Image source={{ uri: photo.uri }} style={styles.photoStackImage} />
-              <View style={styles.photoStackNumber}>
-                <Text style={styles.photoStackNumberText}>{index + 1}</Text>
-              </View>
-              {photo.isCover && (
-                <View style={styles.coverBadge}>
-                  <Icon name="star" size={12} color="white" />
-                </View>
-              )}
-              {/* Delete button */}
-              <TouchableOpacity 
-                style={styles.deleteButton}
-                onPress={() => onRemovePhoto(photo.id)}
-                hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
-              >
-                <Icon name="close-circle" size={16} color="#ff4444" />
-              </TouchableOpacity>
-            </TouchableOpacity>
-          </Animated.View>
-        </TapGestureHandler>
-      </Animated.View>
-    </PanGestureHandler>
-  );
+  if (!coverPhoto || count === 0) return null;
 
   return (
-    <Animated.View entering={SlideInDown.delay(400)} style={styles.photoStackContainer}>
-      {photos.map(renderPhoto)}
-    </Animated.View>
+    <TouchableOpacity
+      style={styles.container}
+      onPress={() => onPress?.()}
+      activeOpacity={0.9}
+    >
+      <View style={styles.photoWrapper}>
+        <Image source={{ uri: coverPhoto.uri }} style={styles.photo} />
+        <View style={styles.counterBadge}>
+          <Text style={styles.counterText}>{count}</Text>
+        </View>
+      </View>
+    </TouchableOpacity>
   );
 };
 
 const styles = StyleSheet.create({
-  photoStackContainer: {
-    position: 'absolute',
-    top: 40,
-    left: 0,
-    zIndex: 10,
-    marginBottom: 100,
+  container: {
+    alignSelf: 'flex-start',
   },
-  photoStackItem: {
-    position: 'absolute',
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    overflow: 'hidden',
+  photoWrapper: {
+    width: 72,
+    height: 72,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: ANORHA_GREEN,
+    overflow: 'visible',
     backgroundColor: 'rgba(0,0,0,0.3)',
   },
-  photoStackImage: {
+  photo: {
     width: '100%',
     height: '100%',
+    borderRadius: 14,
     resizeMode: 'cover',
   },
-  photoStackNumber: {
+  counterBadge: {
     position: 'absolute',
-    top: 4,
-    left: 4,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    bottom: -4,
+    right: -4,
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: ANORHA_GREEN,
+    borderWidth: 2,
+    borderColor: ANORHA_GREEN,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 6,
   },
-  photoStackNumberText: {
-    color: 'white',
-    fontSize: 10,
-    fontWeight: 'bold',
-  },
-  coverBadge: {
-    position: 'absolute',
-    top: 4,
-    right: 4,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#4CAF50',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  deleteButton: {
-    position: 'absolute',
-    top: -2,
-    right: -2,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10,
+  counterText: {
+    color: "#FFF",
+    fontSize: 12,
+    fontWeight: '700',
   },
 });
 
 export default PhotoStack;
-export type { CapturedPhoto, PhotoStackProps }; 
+export type { CapturedPhoto, PhotoStackProps };
