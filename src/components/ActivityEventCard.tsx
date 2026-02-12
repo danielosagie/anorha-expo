@@ -29,6 +29,10 @@ interface ActivityEventCardProps {
   ownerImageUrl?: string; // User avatar URL
   eventType?: string;
   onPress: () => void;
+  /** Show Undo button and call this when tapped (for reversible events) */
+  canUndo?: boolean;
+  onUndo?: () => void;
+  undone?: boolean;
 }
 
 const ActivityEventCard: React.FC<ActivityEventCardProps> = ({
@@ -44,6 +48,9 @@ const ActivityEventCard: React.FC<ActivityEventCardProps> = ({
   ownerImageUrl,
   eventType,
   onPress,
+  canUndo,
+  onUndo,
+  undone,
 }) => {
   const theme = useTheme();
 
@@ -119,6 +126,19 @@ const ActivityEventCard: React.FC<ActivityEventCardProps> = ({
                </Text>
             </View>
           </View>
+          {(undone || (canUndo && onUndo)) && (
+            <View style={styles.undoRow}>
+              {undone && (
+                <Text style={[styles.undoneLabel, { color: theme.colors.textSecondary }]}>Undone</Text>
+              )}
+              {canUndo && onUndo && !undone && (
+                <TouchableOpacity style={styles.undoButton} onPress={onUndo} activeOpacity={0.7}>
+                  <Icon name="undo" size={16} color="#647653" />
+                  <Text style={styles.undoButtonText}>Undo</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
 
           {/* Product Title */}
           <Text style={[styles.productTitle, { color: '#6B7280' }]} numberOfLines={1}>
@@ -237,6 +257,28 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#111',
+  },
+  undoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+    marginBottom: 2,
+  },
+  undoneLabel: {
+    fontSize: 12,
+    fontStyle: 'italic',
+  },
+  undoButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  undoButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#647653',
   },
   productTitle: {
     fontSize: 13,

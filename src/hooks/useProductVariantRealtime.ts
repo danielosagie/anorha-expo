@@ -235,9 +235,7 @@ export function useInventoryLevelsRealtime() {
           (payload) => {
             const levelId = payload.new?.Id || payload.old?.Id;
             const variantId = payload.new?.ProductVariantId || payload.old?.ProductVariantId;
-            const quantity = payload.new?.Quantity;
-
-            console.log('[Real-time] InventoryLevel change:', {
+            const quantity = payload.new?.Quantity;            console.log('[Real-time] InventoryLevel change:', {
               eventType: payload.eventType,
               levelId,
               variantId,

@@ -133,16 +133,19 @@ async function getToken() {
 // --- Reusable Components ---
 
 // Optimized ProductGridItem with instant feedback
-const ProductGridItem = React.memo(({ item, index, isSelected, onSelect, isBest }: {
+const ProductGridItem = React.memo(({ item, index, isSelected, onSelect, isBest, isAutoMatched }: {
     item: SerpApiData,
     index: number,
     isSelected: boolean,
     onSelect: (index: number) => void,
     isBest?: boolean,
+    isAutoMatched?: boolean,
 }) => {
     const handlePress = useCallback(() => {
         onSelect(index);
     }, [index, onSelect]);
+
+    const badgeLabel = isAutoMatched ? 'Auto matched' : (isBest ? 'BEST' : null);
 
     return (
         <Pressable
@@ -158,9 +161,9 @@ const ProductGridItem = React.memo(({ item, index, isSelected, onSelect, isBest 
                 style={styles.itemImage}
                 resizeMode="cover"
             />
-            {isBest ? (
+            {badgeLabel ? (
                 <View style={{ position: 'absolute', top: 6, left: 6, backgroundColor: 'rgba(147,200,34,0.95)', borderRadius: 10, paddingVertical: 2, paddingHorizontal: 6 }}>
-                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>BEST</Text>
+                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>{badgeLabel}</Text>
                 </View>
             ) : null}
             {isSelected && (
@@ -205,11 +208,9 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    // State for the new UI flow
-    const [
-        selectedIndices,
-        setSelectedIndices
-    ] = useState<number[]>([]);
+    // State for the new UI flow - per-item match selection (fixes batch generate)
+    const [selectedMatchesByIndex, setSelectedMatchesByIndex] = useState<Record<number, number[]>>({});
+    const selectedIndices = selectedMatchesByIndex[currentProductIndex] ?? [];
     const [
         selectedProducts,
         setSelectedProducts
@@ -282,8 +283,10 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
     jobsContextRef.current = jobsContext;
     // Track last feedback sent to prevent duplicate requests
     const lastFeedbackKeyRef = React.useRef<string>('');
-    // Track if we've already auto-selected to prevent repeated selections
-    const hasAutoSelectedRef = React.useRef(false);
+    // Track per-item whether we've already auto-selected (so each item can get auto-match when switching)
+    const hasAutoSelectedByIndexRef = React.useRef<Set<number>>(new Set());
+    // Track when current selection was auto-matched (for "Auto matched" badge)
+    const [wasAutoMatched, setWasAutoMatched] = useState(false);
     // Polling timer ref so we can clear it on completed/failed and in cleanup (stop hitting backend)
     const pollingTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -442,10 +445,10 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
             setJobStatus('completed');
             setIsLoading(false);
 
-            // Apply pre-selected indices if provided
+            // Apply pre-selected indices if provided (for first product in override)
             if (preSelectedIndices.length > 0) {
                 console.log('[MatchSelectionScreen] Pre-selecting indices:', preSelectedIndices);
-                setSelectedIndices(preSelectedIndices);
+                setSelectedMatchesByIndex(prev => ({ ...prev, [0]: preSelectedIndices }));
                 setBottomNavState('selection');
             }
             return;
@@ -495,9 +498,19 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 const status = await res.json();
                 if (cancelled) return;
 
-                // Normalize to Analysis shape expected by screen
+                // Normalize to Analysis shape; merge rerankedResults so we don't lose them when backend sends partial updates
                 const results = Array.isArray(status?.results) ? status.results : [];
-                setAnalysisData({ jobId: status?.jobId, results });
+                setAnalysisData(prev => {
+                    const merged = results.map((r: any, i: number) => {
+                        const hasNewReranked = Array.isArray(r?.rerankedResults) && r.rerankedResults.length > 0;
+                        const prevResult = prev?.results?.[i] as any;
+                        const hasPrevReranked = prevResult && Array.isArray(prevResult?.rerankedResults) && prevResult.rerankedResults.length > 0;
+                        if (hasNewReranked) return r;
+                        if (hasPrevReranked) return { ...r, rerankedResults: prevResult.rerankedResults };
+                        return r;
+                    });
+                    return { jobId: status?.jobId, results: merged };
+                });
                 setJobStatus((status?.status as any) || 'unknown');
                 // Render as soon as we have serpApiData (initial scan). Don't block on rerank/embeddings.
                 const shouldKeepLoading = results.length === 0 && (status?.status === 'queued' || status?.status === 'processing');
@@ -688,21 +701,23 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
     const MAX_MATCH_SELECTIONS = 4; // Limit to 4 matches for optimal scraping performance
 
     const handleSelectProduct = useCallback((index: number) => {
-        setSelectedIndices(prev => {
+        setWasAutoMatched(false); // User is selecting manually
+        setSelectedMatchesByIndex(prev => {
+            const current = prev[currentProductIndex] ?? [];
             // If already selected, allow deselection
-            if (prev.includes(index)) {
-                const newSelection = prev.filter(i => i !== index);
+            if (current.includes(index)) {
+                const newSelection = current.filter(i => i !== index);
                 // Reset flow when all items are deselected
                 if (newSelection.length === 0) {
                     setBottomNavState('empty');
                     setSelectedPlatforms([]);
                     setSelectedTemplate(null);
                 }
-                return newSelection;
+                return { ...prev, [currentProductIndex]: newSelection };
             }
 
             // If trying to add but already at limit, don't add (show feedback via UI)
-            if (prev.length >= MAX_MATCH_SELECTIONS) {
+            if (current.length >= MAX_MATCH_SELECTIONS) {
                 Alert.alert(
                     'Match Limit Reached',
                     `You can select up to ${MAX_MATCH_SELECTIONS} matches for optimal performance.`,
@@ -712,22 +727,23 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
             }
 
             // Add the new selection
-            const newSelection = [...prev, index];
+            const newSelection = [...current, index];
 
             // Auto-advance to template stage when first item is selected
             if (newSelection.length > 0 && bottomNavState === 'empty') {
                 setBottomNavState('selection');
             }
-            return newSelection;
+            return { ...prev, [currentProductIndex]: newSelection };
         });
-    }, [bottomNavState]);
+    }, [bottomNavState, currentProductIndex]);
 
     const handleBackToEmpty = useCallback(() => {
-        setSelectedIndices([]);
+        setSelectedMatchesByIndex(prev => ({ ...prev, [currentProductIndex]: [] }));
+        setWasAutoMatched(false);
         setBottomNavState('empty');
         setSelectedPlatforms([]);
         setSelectedTemplate(null);
-    }, []);
+    }, [currentProductIndex]);
 
     const handleBackToTemplate = useCallback(() => {
         setBottomNavState('template');
@@ -765,23 +781,45 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         );
     }, []);
 
-    const handleGenerate = useCallback(async () => {
-        const token = await getToken();
-        const serpApiData = analysisData?.results[currentProductIndex]?.serpApiData || [];
-        const indicesToUse = selectedIndices.length > 0 ? selectedIndices : [0];
-        const selectedMatches = indicesToUse.map(i => serpApiData[i]).filter(Boolean);
+    // Resolve serp order for a given item (uses rerankedResults if available)
+    const getResolvedSerpForItem = useCallback((idx: number): SerpApiData[] => {
+        const result = analysisData?.results[idx];
+        const rawSerp = result?.serpApiData || [];
+        const reranked = result?.rerankedResults;
+        if (Array.isArray(reranked) && reranked.length > 0) {
+            const reordered: SerpApiData[] = [];
+            const usedIndices = new Set<number>();
+            reranked.forEach((r: any) => {
+                if (typeof r.serpApiIndex === 'number' && rawSerp[r.serpApiIndex]) {
+                    reordered.push(rawSerp[r.serpApiIndex]);
+                    usedIndices.add(r.serpApiIndex);
+                }
+            });
+            rawSerp.forEach((item, i) => {
+                if (!usedIndices.has(i)) reordered.push(item);
+            });
+            return reordered;
+        }
+        return rawSerp;
+    }, [analysisData]);
 
-        // CRITICAL FIX: Use actual user photos for imageUrls (from camera), NOT match thumbnails
-        // Match thumbnails should ONLY be used for LoadingScreen display (firstPhotos)
-        const actualUserPhotos = userImagesByIndex[currentProductIndex] || [];
+    const handleGenerateForItem = useCallback(async (
+        idx: number,
+        matchIndices: number[],
+        serpOverride?: SerpApiData[]
+    ): Promise<JobResponse> => {
+        const serp = serpOverride ?? getResolvedSerpForItem(idx);
+        const indicesToUse = matchIndices.length > 0 ? matchIndices : [0];
+        const selectedMatches = indicesToUse.map(i => serp[i]).filter(Boolean);
+        const actualUserPhotos = userImagesByIndex[idx] || [];
+        const token = await getToken();
 
         const payload: GenerateJobSubmitPayload = {
             products: [
                 {
-                    productId: analysisData?.results[currentProductIndex]?.productId,
-                    variantId: analysisData?.results[currentProductIndex]?.variantId,
-                    productIndex: currentProductIndex,
-                    // Use the user's actual product photos, not match thumbnails
+                    productId: analysisData?.results[idx]?.productId,
+                    variantId: analysisData?.results[idx]?.variantId,
+                    productIndex: idx,
                     imageUrls: actualUserPhotos.length > 0 ? actualUserPhotos : [],
                     coverImageIndex: 0,
                     selectedMatches,
@@ -812,11 +850,10 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         }
 
         const data = await response.json();
-        console.log('[GENERATE] Submitted job', data?.jobId, 'for productIndex', currentProductIndex, 'selectedCount', selectedIndices.length);
-
+        console.log('[GENERATE] Submitted job', data?.jobId, 'for productIndex', idx, 'selectedCount', matchIndices.length);
         return data;
+    }, [analysisData, selectedTemplate, selectedPlatforms, userImagesByIndex, getResolvedSerpForItem]);
 
-    }, [selectedIndices, analysisData, selectedTemplate, selectedPlatforms, currentProductIndex]);
 
     // Memoize expensive computations
     const baseSerpApiData = useMemo(() => {
@@ -894,6 +931,10 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
 
     const serpApiData = clientRerankedSerp || baseSerpApiData;
 
+    const handleGenerate = useCallback(async () => {
+        return handleGenerateForItem(currentProductIndex, selectedIndices, serpApiData);
+    }, [handleGenerateForItem, currentProductIndex, selectedIndices, serpApiData]);
+
     const selectedCount = selectedIndices.length;
 
     // Find best reranked index for current item in the RENDERED LIST
@@ -912,20 +953,48 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         return idx >= 0 ? idx : null;
     }, [analysisData, currentProductIndex, serpApiData]);
 
-    // Auto-select best only if rerankedResults exist and nothing selected (ONE TIME ONLY)
+    // Auto-select best only if rerankedResults exist and nothing selected (ONE TIME per item)
     useEffect(() => {
-        // Skip if already auto-selected or user has made a selection
-        if (hasAutoSelectedRef.current) return;
+        if (hasAutoSelectedByIndexRef.current.has(currentProductIndex)) return;
         if (selectedIndices.length > 0) {
-            hasAutoSelectedRef.current = true; // User made a selection, don't auto-select
+            hasAutoSelectedByIndexRef.current.add(currentProductIndex);
             return;
         }
         if (bestIndex !== null) {
-            hasAutoSelectedRef.current = true;
-            setSelectedIndices([bestIndex]);
+            hasAutoSelectedByIndexRef.current.add(currentProductIndex);
+            setSelectedMatchesByIndex(prev => ({ ...prev, [currentProductIndex]: [bestIndex] }));
             setBottomNavState('selection');
+            setWasAutoMatched(true);
         }
-    }, [bestIndex, selectedIndices.length]);
+    }, [bestIndex, selectedIndices.length, currentProductIndex]);
+
+    // Track selection count per item to detect "just selected" for auto-advance
+    const lastSelectionCountRef = React.useRef<number>(0);
+    // Reset when switching items so the new item can trigger advance when selected
+    useEffect(() => {
+        lastSelectionCountRef.current = selectedIndices.length;
+    }, [currentProductIndex]); // eslint-disable-line react-hooks/exhaustive-deps -- only reset on item switch, not on selection change
+
+    // Auto-advance to next unmatched item after selecting a match (reduces taps for 50 items)
+    useEffect(() => {
+        if (selectedIndices.length === 0) return;
+        if (lastSelectionCountRef.current > 0) return; // Already had selection (e.g. returning from Reselect)
+        lastSelectionCountRef.current = selectedIndices.length;
+
+        const total = modalItems.length || (analysisData?.results?.length ?? 0);
+        if (total <= 1) return;
+
+        // Find next item with no selection
+        for (let i = 1; i < total; i++) {
+            const nextIdx = (currentProductIndex + i) % total;
+            const nextSelection = selectedMatchesByIndex[nextIdx];
+            if (!nextSelection || nextSelection.length === 0) {
+                setCurrentProductIndex(nextIdx);
+                setBottomNavState('empty');
+                return;
+            }
+        }
+    }, [selectedIndices.length, currentProductIndex, modalItems.length, analysisData?.results?.length, selectedMatchesByIndex]);
 
     // Client-side rerank feedback: if background rerank reorders and user had already selected a different item
     // OPTIMIZED: Only send feedback ONCE per unique selection (prevents spam requests)
@@ -1012,7 +1081,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
 
             <FlashList
                 data={serpApiData}
-                extraData={selectedIndices}
+                extraData={[selectedIndices, wasAutoMatched]}
                 numColumns={COLUMNS}
                 contentContainerStyle={{ padding: GRID_PADDING, marginTop: 90, paddingBottom: 140 }}
                 ListHeaderComponent={
@@ -1024,7 +1093,6 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 }
                 // Use a more stable key if possible to prevent recreation
                 keyExtractor={(item, index) => item.link || item.position?.toString() || index.toString()}
-                estimatedItemSize={220}
                 renderItem={({ item, index }) => (
                     <ProductGridItem
                         item={item}
@@ -1032,6 +1100,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                         isSelected={selectedIndices.includes(index)}
                         onSelect={handleSelectProduct}
                         isBest={index === (bestIndex ?? 0)}
+                        isAutoMatched={wasAutoMatched && selectedIndices.length === 1 && selectedIndices[0] === index}
                     />
                 )}
                 removeClippedSubviews={true} // Re-enable for performance
@@ -1611,7 +1680,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                     if (isFailed) return '#e11d48'; // Red for failed
                     return analysisData ? '#93C822' : (isLoading ? '#FFD700' : '#4B5563');
                 }}
-                matchColor={(idx) => (idx === currentProductIndex && selectedIndices.length > 0 ? '#93C822' : '#FFD700')}
+                matchColor={(idx) => ((selectedMatchesByIndex[idx]?.length ?? 0) > 0 ? '#93C822' : '#FFD700')}
                 detailsColor={(idx) => {
                     const s = itemGenerateJobs[idx]?.status;
                     if (s === 'completed') return '#93C822';
@@ -1629,10 +1698,10 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 enableMultiSelect
                 onBatchGenerateSelected={async (indices) => {
                     try {
-                        // Generate for each selected index sequentially to avoid overwhelming backend
+                        // Generate for each selected index using per-item match selection
                         for (const idx of indices) {
-                            setCurrentProductIndex(idx);
-                            const submit: JobResponse = await handleGenerate();
+                            const matchIndices = selectedMatchesByIndex[idx] ?? [];
+                            const submit: JobResponse = await handleGenerateForItem(idx, matchIndices);
                             const jid = submit?.jobId;
                             if (jid) setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: jid } }));
                         }
@@ -1691,7 +1760,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 }}
                 onPickScan={(idx) => {
                     setCurrentProductIndex(idx);
-                    setSelectedIndices([]);
+                    setSelectedMatchesByIndex(prev => ({ ...prev, [idx]: [] }));
                     setSelectedPlatforms([]);
                     setSelectedTemplate(null);
                     setJobsModalVisible(false);

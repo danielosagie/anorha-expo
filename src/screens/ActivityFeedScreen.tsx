@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Platform,
   TextInput,
+  Alert,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useTheme } from '../context/ThemeContext';
@@ -85,6 +86,9 @@ interface ActivityListItem {
   event?: ActivityEvent; // for event items
   key: string;
 }
+
+// Event types that support undo (must have reversible details in backend)
+const REVERSIBLE_EVENT_TYPES = ['INVENTORY_ADJUSTMENT', 'INVENTORY_SET', 'INVENTORY_UPDATED'];
 
 // Helper to check if an event is user-relevant (ONLY orders, inventory, product updates/publishes)
 const isUserRelevantEvent = (eventType: string): boolean => {
@@ -466,6 +470,24 @@ const ActivityFeedScreen = observer(() => {
     fetchCampaigns();
   }, [fetchCampaigns]);
 
+  const handleUndo = useCallback(async (activityId: string) => {
+    const orgId = currentOrg?.id;
+    if (!orgId) return;
+    try {
+      const token = await ensureSupabaseJwt();
+      if (!token) throw new Error('Not authenticated');
+      const res = await fetch(
+        `${process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app'}/api/organizations/${encodeURIComponent(orgId)}/activity/${encodeURIComponent(activityId)}/undo`,
+        { method: 'POST', headers: { Authorization: `Bearer ${token}` } }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || 'Undo failed');
+      await fetchActivityFeed();
+    } catch (e) {
+      Alert.alert('Undo failed', (e as Error).message);
+    }
+  }, [currentOrg?.id, fetchActivityFeed]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await Promise.all([fetchActivityFeed(), fetchCampaigns()]);
@@ -786,6 +808,9 @@ const ActivityFeedScreen = observer(() => {
               navigation.navigate('ProductDetail', { productId: item.productVariantId });
             }
           }}
+          canUndo={REVERSIBLE_EVENT_TYPES.includes((item.eventType || '').toUpperCase())}
+          onUndo={() => handleUndo(String(item.id))}
+          undone={Boolean(item.details?.undone)}
         />
       </Animated.View>
     );

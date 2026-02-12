@@ -257,7 +257,10 @@ export type AppStackParamList = {
   PartnershipDetail: {
     partnership: any;
   };
-  BackfillOptimizer: undefined;
+  BackfillOptimizer: {
+    newlyImportedIds?: string[];
+    source?: string;
+  } | undefined;
   CSVColumnMapping: {
     csvHeaders: string[];
     csvData: any[];

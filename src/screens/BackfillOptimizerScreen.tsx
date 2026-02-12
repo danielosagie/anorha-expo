@@ -17,7 +17,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import { ensureSupabaseJwt, supabase } from '../lib/supabase';
 import * as Haptics from 'expo-haptics';
@@ -59,7 +59,10 @@ type FilterType = 'all' | 'urgent' | 'quick_wins';
 
 export function BackfillOptimizerScreen() {
     const navigation = useNavigation<NativeStackNavigationProp<any>>();
+    const route = useRoute<any>();
     const { getToken } = useAuth();
+    const newlyImportedIds: string[] = Array.isArray(route.params?.newlyImportedIds) ? route.params.newlyImportedIds : [];
+    const newlyImportedSet = React.useMemo(() => new Set(newlyImportedIds), [newlyImportedIds]);
 
     const [loading, setLoading] = useState(true);
     const [mode, setMode] = useState<OptimizerMode>('dashboard');
@@ -164,6 +167,8 @@ export function BackfillOptimizerScreen() {
         return true;
     }).sort((a, b) => {
         const priority = { urgent: 0, warning: 1, standard: 2, completed: 3 };
+        if (newlyImportedSet.has(a.Id) && !newlyImportedSet.has(b.Id)) return -1;
+        if (!newlyImportedSet.has(a.Id) && newlyImportedSet.has(b.Id)) return 1;
         const tierA = completedIds.has(a.Id) ? 'completed' : a.tier;
         const tierB = completedIds.has(b.Id) ? 'completed' : b.tier;
         return priority[tierA as keyof typeof priority] - priority[tierB as keyof typeof priority];
@@ -185,6 +190,31 @@ export function BackfillOptimizerScreen() {
                 </View>
             ) : (
                 <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+                    {newlyImportedIds.length > 0 && (
+                        <View style={styles.importBanner}>
+                            <MaterialCommunityIcons name="sparkles" size={18} color={COLORS.primaryDark} />
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.importBannerTitle}>
+                                    {newlyImportedIds.length} newly imported items are prioritized
+                                </Text>
+                                <Text style={styles.importBannerSub}>
+                                    Tap any item, then open Product Detail to edit with the full listing editor.
+                                </Text>
+                            </View>
+                            <TouchableOpacity
+                                style={styles.importBannerButton}
+                                onPress={() => {
+                                    const firstId = newlyImportedIds[0];
+                                    if (firstId) {
+                                        navigation.navigate('ProductDetail', { productId: firstId } as any);
+                                    }
+                                }}
+                            >
+                                <Text style={styles.importBannerButtonText}>Edit First</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
+
                     {/* Ring Overview */}
                     <View style={styles.overviewSection}>
                         <OptimizerProgressRing progress={overallCompleteness / 100} />
@@ -225,7 +255,13 @@ export function BackfillOptimizerScreen() {
                                 item={item}
                                 tier={completedIds.has(item.Id) ? 'completed' : item.tier}
                                 onPress={() => openProductDetail(item)}
-                                onAction={() => switchMode(item.tier === 'urgent' ? 'photo' : 'batch')}
+                                onAction={() => {
+                                    if (newlyImportedSet.has(item.Id)) {
+                                        navigation.navigate('ProductDetail', { productId: item.Id } as any);
+                                        return;
+                                    }
+                                    switchMode(item.tier === 'urgent' ? 'photo' : 'batch');
+                                }}
                             />
                         ))}
 
@@ -255,6 +291,10 @@ export function BackfillOptimizerScreen() {
                 product={selectedProduct}
                 onStartSession={() => {
                     setIsDetailSheetVisible(false);
+                    if (selectedProduct?.Id) {
+                        navigation.navigate('ProductDetail', { productId: selectedProduct.Id } as any);
+                        return;
+                    }
                     switchMode(selectedProduct?.tier === 'urgent' ? 'photo' : 'batch');
                 }}
             />
@@ -303,6 +343,39 @@ const styles = StyleSheet.create({
     },
     scrollContainer: {
         paddingTop: 10,
+    },
+    importBanner: {
+        marginHorizontal: 20,
+        marginBottom: 14,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#dcefd0',
+        backgroundColor: '#f4fbe9',
+        padding: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+    },
+    importBannerTitle: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#355b12',
+    },
+    importBannerSub: {
+        fontSize: 11,
+        color: '#4b6f24',
+        marginTop: 2,
+    },
+    importBannerButton: {
+        backgroundColor: '#355b12',
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        borderRadius: 8,
+    },
+    importBannerButtonText: {
+        color: '#fff',
+        fontSize: 11,
+        fontWeight: '700',
     },
     overviewSection: {
         flexDirection: 'row',

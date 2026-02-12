@@ -208,7 +208,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
             }
             navigation.replace(onCompleteRoute.screen, {
               ...onCompleteRoute.params,
-              // Preserve any existing response fields and merge jobId
+              jobId: status.jobId,
               response: { ...(onCompleteRoute?.params as any)?.response, jobId: status.jobId },
               items: itemsForModal,
               userImagesByIndex: (onCompleteRoute?.params as any)?.userImagesByIndex || (Object.keys(userImagesByIndex).length ? userImagesByIndex : undefined),

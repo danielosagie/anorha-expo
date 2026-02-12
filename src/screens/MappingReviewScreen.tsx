@@ -376,6 +376,51 @@ const MappingReviewScreen = () => {
   type ProductCreationMode = 'sync_everywhere' | 'pull_only' | 'push_only' | 'do_nothing';
   const [productCreationMode, setProductCreationMode] = useState<ProductCreationMode>('pull_only');
 
+  const getSyncRuleDirectionPatch = (mode: ProductCreationMode) => {
+    if (mode === 'sync_everywhere') {
+      return {
+        syncDirection: 'bidirectional',
+        allowPullFromPlatform: true,
+        allowPushToPlatform: true,
+        propagateCreates: true,
+        propagateUpdates: true,
+        propagateDeletes: false,
+        propagateInventory: true,
+      };
+    }
+    if (mode === 'pull_only') {
+      return {
+        syncDirection: 'pull_only',
+        allowPullFromPlatform: true,
+        allowPushToPlatform: false,
+        propagateCreates: false,
+        propagateUpdates: false,
+        propagateDeletes: false,
+        propagateInventory: false,
+      };
+    }
+    if (mode === 'push_only') {
+      return {
+        syncDirection: 'push_only',
+        allowPullFromPlatform: false,
+        allowPushToPlatform: true,
+        propagateCreates: true,
+        propagateUpdates: true,
+        propagateDeletes: false,
+        propagateInventory: true,
+      };
+    }
+    return {
+      syncDirection: 'bidirectional',
+      allowPullFromPlatform: true,
+      allowPushToPlatform: true,
+      propagateCreates: false,
+      propagateUpdates: true,
+      propagateDeletes: false,
+      propagateInventory: true,
+    };
+  };
+
 
   // Pools Selection State
   const [pools, setPools] = useState<any[]>([]);
@@ -731,6 +776,19 @@ const MappingReviewScreen = () => {
           setDelistMode(quickSettings.autoDelist ? 'auto' : 'manual');
           setPriceBuffer(quickSettings.priceAdjustment || {});
           setInventoryBuffer(quickSettings.inventoryBuffer || {});
+
+          const direction = quickSettings?.syncRules?.syncDirection;
+          const canPush = quickSettings?.syncRules?.allowPushToPlatform !== false;
+          const canPull = quickSettings?.syncRules?.allowPullFromPlatform !== false;
+          if (direction === 'push_only' || (canPush && !canPull)) {
+            setProductCreationMode('push_only');
+          } else if (direction === 'pull_only' || (!canPush && canPull)) {
+            setProductCreationMode('pull_only');
+          } else if (quickSettings?.syncRules?.propagateCreates === false) {
+            setProductCreationMode('do_nothing');
+          } else {
+            setProductCreationMode('sync_everywhere');
+          }
         } else {
           console.log('[MappingReviewScreen] No existing quick settings found, using defaults');
           // Keep default values for new connections
@@ -1668,6 +1726,7 @@ const MappingReviewScreen = () => {
       const selectedItems = suggestions.filter(s => s.isSelected);
       let successCount = 0;
       let failCount = 0;
+      const createdVariantIds: string[] = [];
 
       const total = selectedItems.length;
 
@@ -1717,6 +1776,17 @@ const MappingReviewScreen = () => {
             console.error(`Failed to import item ${i}: status ${res.status}`);
             failCount++;
           } else {
+            const created = await res.json().catch(() => ({}));
+            const createdVariantId =
+              created?.variant?.Id ||
+              created?.variantId ||
+              created?.data?.variant?.Id ||
+              created?.data?.variantId ||
+              created?.Id ||
+              created?.id;
+            if (createdVariantId) {
+              createdVariantIds.push(String(createdVariantId));
+            }
             successCount++;
           }
         } catch (e) {
@@ -1735,12 +1805,23 @@ const MappingReviewScreen = () => {
       Alert.alert(
         "Import Complete",
         `Successfully imported ${successCount} products.${failCount > 0 ? ` Failed: ${failCount}` : ''}`,
-        [{
-          text: "OK",
-          onPress: () => {
-            navigation.navigate('TabNavigator', { screen: 'InventoryOrders' } as any);
+        [
+          {
+            text: "Go to Inventory",
+            onPress: () => {
+              navigation.navigate('TabNavigator', { screen: 'InventoryOrders' } as any);
+            }
+          },
+          {
+            text: "Improve Now",
+            onPress: () => {
+              navigation.navigate('BackfillOptimizer' as any, {
+                newlyImportedIds: createdVariantIds,
+                source: 'csv_import',
+              });
+            }
           }
-        }]
+        ]
       );
 
     } catch (error: any) {
@@ -1858,20 +1939,19 @@ const MappingReviewScreen = () => {
 
       // Step 2: Update quick settings (settings already configured during wizard)
       // CRITICAL: Include propagateCreates and propagateChanges to enable cross-platform sync
+      const directionPatch = getSyncRuleDirectionPatch(productCreationMode);
       const quickSettings = {
         poolId: selectedPool || undefined,
         autoSyncMode: syncMode === 'auto',
         autoDelist: delistMode === 'auto',
         priceAdjustment: priceBuffer,
         inventoryBuffer: inventoryBuffer,
-        // Enable cross-platform product propagation by default
+        // Sync direction + propagation derived from wizard selection
         syncRules: {
-          propagateCreates: true,  // Sync new products to other platforms
-          propagateUpdates: true,  // Sync updates to other platforms
-          propagateDeletes: false, // Don't auto-delete (safer default)
-          propagateInventory: true, // Sync inventory changes
           syncInventory: true,
           syncPricing: true,
+          ...directionPatch,
+          productCreationMode: productCreationMode,
         }
       };
 
@@ -4782,6 +4862,9 @@ const MappingReviewScreen = () => {
                             <Text style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text, textAlign: 'center' }}>
                               Sync Everywhere
                             </Text>
+                            <Text style={{ fontSize: 10, color: '#4A6C1C', marginTop: 2, fontWeight: '700' }}>
+                              Recommended
+                            </Text>
                             <Text style={{ fontSize: 11, color: theme.colors.textSecondary, textAlign: 'center', marginTop: 4 }}>
                               Adds missing items to ALL platforms
                             </Text>
@@ -4871,6 +4954,9 @@ const MappingReviewScreen = () => {
                         </View>
 
                         {/* Continue button */}
+                        <Text style={{ color: theme.colors.textSecondary, fontSize: 12, textAlign: 'center', marginBottom: 10 }}>
+                          You can change this later in Sync Rules.
+                        </Text>
                         <TouchableOpacity
                           style={{
                             backgroundColor: "#5C9B00",
@@ -5506,15 +5592,7 @@ const MappingReviewScreen = () => {
                                 }
 
                                 // Step 3: Update quick settings with wizard selections
-                                // CRITICAL: Include propagateCreates and propagateChanges to enable cross-platform sync
-                                // productCreationMode controls whether products sync to other platforms:
-                                // - sync_everywhere: Products sync bidirectionally to ALL platforms
-                                // - push_only: Anorha items push TO this platform (propagateCreates = true)
-                                // - pull_only: Import from platform TO Anorha only (propagateCreates = false)
-                                // - do_nothing: No automatic product creation (propagateCreates = false)
-                                const shouldPropagateCreates =
-                                  productCreationMode === 'sync_everywhere' ||
-                                  productCreationMode === 'push_only';
+                                const directionPatch = getSyncRuleDirectionPatch(productCreationMode);
 
                                 const quickSettings = {
                                   poolId: mapPoolId || undefined, // Use resolved ID (real existing or newly created)
@@ -5522,14 +5600,11 @@ const MappingReviewScreen = () => {
                                   autoDelist: delistMode === 'auto',
                                   priceAdjustment: priceBuffer,
                                   inventoryBuffer: inventoryBuffer,
-                                  // Cross-platform product propagation based on wizard Step 0 choice
+                                  // Direction + propagation rules from wizard Step 0 choice
                                   syncRules: {
-                                    propagateCreates: shouldPropagateCreates,  // Create products on other platforms
-                                    propagateUpdates: true,  // Sync updates to other platforms
-                                    propagateDeletes: false, // Don't auto-delete (safer default)
-                                    propagateInventory: true, // Sync inventory changes
                                     syncInventory: true,
                                     syncPricing: true,
+                                    ...directionPatch,
                                     productCreationMode: productCreationMode, // Store the raw choice for reference
                                   }
                                 };

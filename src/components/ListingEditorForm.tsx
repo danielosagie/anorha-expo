@@ -68,7 +68,8 @@ type PlatformState = {
   description?: string;
   tags?: string[];
   price?: number;
-  aiRecommendedPrice?: number; // AI-generated price suggestion from backend metadata
+  aiRecommendedPrice?: number; // Legacy: single AI price
+  aiPriceRecommendation?: { recommended: number; band?: number; low: number; high: number }; // From SerpAPI/scraped data
   weight?: number;
   weightUnit?: string;
   sku?: string;
@@ -1670,21 +1671,61 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           </View>
         )}
 
-        {/* AI Recommended Price Tag - Only show if different from current price */}
-        {(activeData as any).aiRecommendedPrice &&
-          Number((activeData as any).aiRecommendedPrice) !== Number((activeData as any).price) && (
+        {/* AI Price with Confidence Bands - 3 pills: low (fast sale), recommended, high (max profit) */}
+        {(() => {
+          const apr = (activeData as any).aiPriceRecommendation;
+          const legacy = (activeData as any).aiRecommendedPrice;
+          const band = apr && typeof apr.low === 'number' && typeof apr.recommended === 'number' && typeof apr.high === 'number'
+            ? { low: apr.low, recommended: apr.recommended, high: apr.high }
+            : (typeof legacy === 'number' && legacy > 0
+              ? { low: Math.round(legacy * 0.85 * 100) / 100, recommended: legacy, high: Math.round(legacy * 1.15 * 100) / 100 }
+              : null);
+          const currentPrice = Number((activeData as any).price) || 0;
+          if (!band || band.recommended <= 0) return null;
+
+          const applyPrice = (p: number) => {
+            patchField('price', String(p.toFixed(2)));
+          };
+
+          const pillStyle = (isSelected: boolean) => ({
+            flex: 1,
+            paddingVertical: 10,
+            paddingHorizontal: 12,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: isSelected ? '#3B82F6' : '#E5E7EB',
+            backgroundColor: isSelected ? '#EFF6FF' : '#FFF',
+            alignItems: 'center' as const,
+          });
+
+          return (
             <View style={{ backgroundColor: '#F0F9FF', borderRadius: 8, padding: 10, marginBottom: 8, borderLeftWidth: 3, borderLeftColor: '#3B82F6' }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
                 <Sparkles size={16} color="#3B82F6" />
                 <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#1E40AF' }}>AI Suggested Price</Text>
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#059669', marginTop: 2 }}>
-                    ${Number((activeData as any).aiRecommendedPrice).toFixed(2)}
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#1E40AF' }}>Suggested Price</Text>
+                  <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>
+                    ${band.low.toFixed(0)} – ${band.high.toFixed(0)} (recommended ${band.recommended.toFixed(0)})
                   </Text>
                 </View>
               </View>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TouchableOpacity style={pillStyle(Math.abs(currentPrice - band.low) < 0.02)} onPress={() => applyPrice(band.low)}>
+                  <Text style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>Fast sale</Text>
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#1F2937' }}>${band.low.toFixed(2)}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={pillStyle(Math.abs(currentPrice - band.recommended) < 0.02)} onPress={() => applyPrice(band.recommended)}>
+                  <Text style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>Recommended</Text>
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#1F2937' }}>${band.recommended.toFixed(2)}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={pillStyle(Math.abs(currentPrice - band.high) < 0.02)} onPress={() => applyPrice(band.high)}>
+                  <Text style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>Max profit</Text>
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#1F2937' }}>${band.high.toFixed(2)}</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          )}
+          );
+        })()}
 
         {/* Price field - if variants with options exist and have prices, don't require main price */}
         {(() => {
@@ -2257,10 +2298,11 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           <>
             {/* Suggested Price Tag - Apply to All */}
             {activeTab === 'all' && (() => {
-              // Get suggested price from any platform that has it
+              // Get suggested price from any platform: prefer aiPriceRecommendation.recommended, else aiRecommendedPrice
               const suggestedPrice = (() => {
                 for (const pk of platformKeys) {
                   const pd = platforms[pk] as PlatformState;
+                  if (pd?.aiPriceRecommendation?.recommended) return pd.aiPriceRecommendation!.recommended;
                   if (pd?.aiRecommendedPrice) return pd.aiRecommendedPrice;
                 }
                 return null;
