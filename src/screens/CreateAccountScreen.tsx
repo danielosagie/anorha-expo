@@ -146,37 +146,37 @@ const Stepper = memo(({ currentStep }: { currentStep: Step }) => {
 
 const WelcomeStep = memo(({ onNext, onBack, showBackButton, onSignOut }: { onNext: () => void; onBack: () => void; showBackButton: boolean; onSignOut?: () => void }) => (
   <Animated.View entering={FadeIn} exiting={FadeOut} style={styles.stepContainer}>
-    <View style={{flex: 1, alignContent: "space-between"}}>
+    <View style={{ flex: 1, alignContent: "space-between" }}>
       <View style={{
         marginTop: 30,
         flex: 1,
       }}>
         <View style={styles.logoContainer}>
-        <View style={styles.logoBox}>
-          <Image source={require('../assets/anorha_logo.png')} style={styles.logoImage} resizeMode="contain" />
-        </View>
-        <Text style={styles.logoTitle}>anorha</Text>
+          <View style={styles.logoBox}>
+            <Image source={require('../assets/anorha_logo.png')} style={styles.logoImage} resizeMode="contain" />
+          </View>
+          <Text style={styles.logoTitle}>anorha</Text>
         </View>
         <Text style={styles.bigTitle}>Finish your setup</Text>
         <Text style={styles.subtitle}>Let's get your business inventory synced.</Text>
         <View style={{ flex: 1 }} />
       </View>
-      
-      <View style={{gap: 12}}>
+
+      <View style={{ gap: 12 }}>
         <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
           <Text style={styles.primaryButtonText}>Let's Go</Text>
           <Icon name="arrow-right" size={24} color="#fff" />
         </TouchableOpacity>
 
         {(showBackButton ? (
-        <TouchableOpacity
-            style={{ 
+          <TouchableOpacity
+            style={{
               minWidth: "100%",
               justifyContent: "center",
-              paddingVertical: 20, 
-              paddingHorizontal: 32, 
-              alignSelf: "auto", 
-              backgroundColor: 'rgba(0, 0, 0, 0.1)', 
+              paddingVertical: 20,
+              paddingHorizontal: 32,
+              alignSelf: "auto",
+              backgroundColor: 'rgba(0, 0, 0, 0.1)',
               borderRadius: 16,
               shadowOffset: { width: 0, height: 2 },
               shadowOpacity: 0.2,
@@ -189,14 +189,14 @@ const WelcomeStep = memo(({ onNext, onBack, showBackButton, onSignOut }: { onNex
             <Text style={{ textAlign: "center", fontSize: 18, color: ONBOARDING.title }}>Back</Text>
           </TouchableOpacity>
         ) : onSignOut ? (
-        <TouchableOpacity
-            style={{ 
+          <TouchableOpacity
+            style={{
               minWidth: "100%",
               justifyContent: "center",
-              paddingVertical: 20, 
-              paddingHorizontal: 32, 
-              alignSelf: "auto", 
-              backgroundColor: 'rgba(0, 0, 0, 0.1)', 
+              paddingVertical: 20,
+              paddingHorizontal: 32,
+              alignSelf: "auto",
+              backgroundColor: 'rgba(0, 0, 0, 0.1)',
               borderRadius: 8,
               shadowOffset: { width: 0, height: 2 },
               shadowOpacity: 0.2,
@@ -210,7 +210,7 @@ const WelcomeStep = memo(({ onNext, onBack, showBackButton, onSignOut }: { onNex
           </TouchableOpacity>
         ) : null)}
       </View>
-      
+
     </View>
   </Animated.View>
 ));
@@ -576,6 +576,8 @@ const TeamStep = memo(({
 });
 
 const PermissionsAndLegalStep = memo(({
+  isRequestingLoc,
+  isRequestingNotif,
   locPerm,
   notifPerm,
   agreed,
@@ -585,6 +587,8 @@ const PermissionsAndLegalStep = memo(({
   onToggleAgree,
   onFinish
 }: {
+  isRequestingLoc: boolean,
+  isRequestingNotif: boolean,
   locPerm: boolean,
   notifPerm: boolean,
   agreed: boolean,
@@ -604,9 +608,14 @@ const PermissionsAndLegalStep = memo(({
         style={[styles.permCard, locPerm && { borderWidth: 2, borderColor: ONBOARDING.green, backgroundColor: 'rgba(92,156,0,0.12)' }]}
         onPress={onRequestLoc}
         activeOpacity={0.8}
+        disabled={isRequestingLoc || locPerm}
       >
         <View style={[styles.iconCircle, { backgroundColor: locPerm ? 'rgba(92,156,0,0.25)' : 'rgba(0,0,0,0.15)' }]}>
-          <Icon name="map-marker" size={24} color={locPerm ? ONBOARDING.green : ONBOARDING.title} />
+          {isRequestingLoc ? (
+            <ActivityIndicator size="small" color={ONBOARDING.title} />
+          ) : (
+            <Icon name="map-marker" size={24} color={locPerm ? ONBOARDING.green : ONBOARDING.title} />
+          )}
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.permTitle}>Use my Location</Text>
@@ -620,9 +629,14 @@ const PermissionsAndLegalStep = memo(({
         style={[styles.permCard, notifPerm && { borderWidth: 2, borderColor: ONBOARDING.green, backgroundColor: 'rgba(92,156,0,0.12)' }]}
         onPress={onRequestNotif}
         activeOpacity={0.8}
+        disabled={isRequestingNotif || notifPerm}
       >
         <View style={[styles.iconCircle, { backgroundColor: notifPerm ? 'rgba(92,156,0,0.25)' : 'rgba(0,0,0,0.15)' }]}>
-          <Icon name="bell" size={24} color={notifPerm ? ONBOARDING.green : ONBOARDING.title} />
+          {isRequestingNotif ? (
+            <ActivityIndicator size="small" color={ONBOARDING.title} />
+          ) : (
+            <Icon name="bell" size={24} color={notifPerm ? ONBOARDING.green : ONBOARDING.title} />
+          )}
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.permTitle}>Enable Notifications</Text>
@@ -675,6 +689,8 @@ export default function CreateAccountScreen() {
   const [currentStep, setCurrentStep] = useState<Step>('WELCOME');
   const [loading, setLoading] = useState(false);
   const [isLoadingAddress, setIsLoadingAddress] = useState(false);
+  const [isRequestingLoc, setIsRequestingLoc] = useState(false);
+  const [isRequestingNotif, setIsRequestingNotif] = useState(false);
 
   const [formData, setFormData] = useState<FormData>({
     businessName: '',
@@ -816,10 +832,19 @@ export default function CreateAccountScreen() {
   }, []);
 
   const requestLocation = useCallback(async () => {
+    if (isRequestingLoc) return;
+    setIsRequestingLoc(true);
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        // Silent or small native alert
+        Alert.alert(
+          'Location Permission',
+          'We need your location to auto-detect your region and currency. Please enable it in settings.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() }
+          ]
+        );
         return;
       }
 
@@ -850,40 +875,52 @@ export default function CreateAccountScreen() {
             currency: currency,
             locationPermission: true
           }));
-          // No large alert, just UI update
         }
       }
     } catch (err) {
       console.log('Location error', err);
+    } finally {
+      setIsRequestingLoc(false);
     }
-  }, []);
+  }, [isRequestingLoc]);
 
   const requestNotifications = useCallback(async () => {
+    if (isRequestingNotif) return;
+    setIsRequestingNotif(true);
     try {
       const { status: existingStatus } = await Notifications.getPermissionsAsync();
+
+      // If already granted, just update state
       if (existingStatus === 'granted') {
         setFormData(prev => ({ ...prev, notificationPermission: true }));
         return;
       }
+
+      // If already denied, prompt settings
       if (existingStatus === 'denied') {
-        setFormData(prev => ({ ...prev, notificationPermission: false }));
         Alert.alert(
-          'Notifications off',
-          'Turn on in Settings for sync alerts and updates.',
-          [{ text: 'OK' }]
+          'Notifications are disabled',
+          'To receive sync alerts and updates, please enable notifications in settings.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() }
+          ]
         );
+        setFormData(prev => ({ ...prev, notificationPermission: false }));
         return;
       }
+
+      // Request new
       const { status } = await Notifications.requestPermissionsAsync();
       setFormData(prev => ({ ...prev, notificationPermission: status === 'granted' }));
-      if (status !== 'granted') {
-        setFormData(prev => ({ ...prev, notificationPermission: false }));
-      }
+
     } catch (err) {
       console.log('Notif error', err);
       setFormData(prev => ({ ...prev, notificationPermission: false }));
+    } finally {
+      setIsRequestingNotif(false);
     }
-  }, []);
+  }, [isRequestingNotif]);
 
   const handleFinish = useCallback(async () => {
     if (!formData.agreedToLegal) return;
@@ -1129,6 +1166,8 @@ export default function CreateAccountScreen() {
               notifPerm={formData.notificationPermission}
               agreed={formData.agreedToLegal}
               loading={loading}
+              isRequestingLoc={isRequestingLoc}
+              isRequestingNotif={isRequestingNotif}
               onRequestLoc={requestLocation}
               onRequestNotif={requestNotifications}
               onToggleAgree={() => setFormData(p => ({ ...p, agreedToLegal: !p.agreedToLegal }))}
