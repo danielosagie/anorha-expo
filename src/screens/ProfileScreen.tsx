@@ -1,5 +1,5 @@
 import React, { useState, useContext, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput, Image, Linking } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput, Image, Linking, InteractionManager } from 'react-native';
 import { WebView } from 'react-native-webview';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -45,6 +45,7 @@ import { useSystemNotifications } from '../context/SystemNotificationContext';
 import { Zap, ShieldCheck, CheckCircle as LucideCheckCircle, Bell as LucideBell } from 'lucide-react-native';
 
 import LocationsManagerV2 from '../components/LocationsManagerV2';
+import ConnectedPlatformList from '../components/ConnectedPlatformList';
 import BaseModal from '../components/BaseModal';
 import ConnectedPlatformItem from '../components/ConnectedPlatformItem';
 import { AppDropdown } from '../components/ui/AppDropdown';
@@ -469,6 +470,13 @@ const ProfileScreen = () => {
   const [showManagePool, setShowManagePool] = useState(false);
   const [selectedPoolId, setSelectedPoolId] = useState<string | null>(null);
 
+  // CSV Name Prompt Modal
+  const [csvNameModalVisible, setCsvNameModalVisible] = useState(false);
+  const [csvConnectionName, setCsvConnectionName] = useState('');
+  const [isCsvPicking, setIsCsvPicking] = useState(false);
+
+
+
 
 
   // New state for error reporting modal
@@ -766,62 +774,11 @@ const ProfileScreen = () => {
   const overlay = usePlatformPickerOverlay();
   const handleStartConnectPlatform = useCallback(async (platform: string) => {
     if (platform === 'csv') {
-      // Handle CSV import
-      try {
-        overlay.hide();
-        const result = await DocumentPicker.getDocumentAsync({
-          type: ['text/csv', 'text/comma-separated-values', 'application/csv', '*/*'],
-          copyToCacheDirectory: true,
-        });
-
-        if (result.canceled || !result.assets?.[0]) {
-          console.log('[ProfileScreen] CSV picking cancelled');
-          return;
-        }
-
-        const file = result.assets[0];
-        console.log('[ProfileScreen] CSV selected:', file.name);
-
-        // Read file contents using legacy FileSystem API
-        const fileContent = await FileSystem.readAsStringAsync(file.uri);
-
-        // Simple CSV parsing
-        const lines = fileContent.split('\n').filter((line: string) => line.trim());
-        if (lines.length < 2) {
-          Alert.alert('Invalid CSV', 'The file must have headers and at least one data row.');
-          return;
-        }
-
-        // Parse headers (first line)
-        const headers = lines[0].split(',').map((h: string) => h.trim().replace(/^"|"$/g, ''));
-
-        // Parse data rows
-        const csvData = lines.slice(1).map((line: string) => {
-          const values = line.split(',').map((v: string) => v.trim().replace(/^"|"$/g, ''));
-          const row: Record<string, string> = {};
-          headers.forEach((header: string, i: number) => {
-            row[header] = values[i] || '';
-          });
-          return row;
-        });
-
-        // Get sample row for preview
-        const sampleRow = csvData[0] || {};
-
-        console.log('[ProfileScreen] Parsed CSV:', { headers, rowCount: csvData.length });
-
-        capture(AnalyticsEvents.INVENTORY_IMPORT_STARTED, { source: 'csv', row_count: csvData.length });
-
-        // Navigate to column mapping screen
-        navigation.navigate('CSVColumnMapping' as any, {
-          csvHeaders: headers,
-          csvData,
-          sampleRow,
-        });
-      } catch (error) {
-        console.error('[ProfileScreen] CSV import error:', error);
-        Alert.alert('Import Error', 'Failed to read the CSV file. Please try again.');
-      }
+      // Prompt for connection name
+      setCsvConnectionName('');
+      overlay.hide();
+      setCsvNameModalVisible(true);
+      return;
     } else if (platform === 'shopify') {
       setShopifyFlowStep('enterInfo');
       setPastedShopifyUrl('');
@@ -887,6 +844,88 @@ const ProfileScreen = () => {
     }
   }, [route.params?.openAddConnection]);
   // --- END GLOBAL OVERLAY wiring ---
+
+  const handleCsvNameSubmit = async () => {
+    if (!csvConnectionName.trim()) {
+      Alert.alert('Name Required', 'Please enter a name for this connection (e.g. "My Shop Inventory")');
+      return;
+    }
+
+    // 1. Close the modal first
+    setCsvNameModalVisible(false);
+
+    // 2. Wait for the modal dismissal animation to finish completely
+    // InteractionManager ensures we wait for any animations/interactions to clear
+    // We also add a small safety delay because sometimes the native modal dismissal
+    // reports "finished" slightly before the view hierarchy is ready for a new presentation.
+    setTimeout(() => {
+      InteractionManager.runAfterInteractions(async () => {
+        try {
+          console.log('[ProfileScreen] Starting document picker via InteractionManager...');
+
+          const result = await DocumentPicker.getDocumentAsync({
+            type: ['text/csv', 'text/comma-separated-values', 'application/csv', '*/*'],
+            copyToCacheDirectory: true,
+          });
+
+          if (result.canceled || !result.assets?.[0]) {
+            console.log('[ProfileScreen] CSV picking cancelled');
+            return;
+          }
+
+          const file = result.assets[0];
+          console.log('[ProfileScreen] CSV selected:', file.name);
+
+          // Check for null uri
+          if (!file.uri) {
+            Alert.alert('Error', 'Could not access the file URI.');
+            return;
+          }
+
+          // Read file contents using legacy FileSystem API
+          const fileContent = await FileSystem.readAsStringAsync(file.uri);
+
+          // Simple CSV parsing (just enough to validate headers/rows before full mapping)
+          const lines = fileContent.split('\n').filter((line: string) => line.trim());
+          if (lines.length < 2) {
+            Alert.alert('Invalid CSV', 'The file must have headers and at least one data row.');
+            return;
+          }
+
+          // Parse headers (first line)
+          const headers = lines[0].split(',').map((h: string) => h.trim().replace(/^"|"$/g, ''));
+
+          // Parse data rows
+          const csvData = lines.slice(1).map((line: string) => {
+            const values = line.split(',').map((v: string) => v.trim().replace(/^"|"$/g, ''));
+            const row: Record<string, string> = {};
+            headers.forEach((header: string, i: number) => {
+              row[header] = values[i] || '';
+            });
+            return row;
+          });
+
+          const sampleRow = csvData[0] || {};
+          console.log('[ProfileScreen] Parsed CSV:', { headers, rowCount: csvData.length });
+
+          capture(AnalyticsEvents.INVENTORY_IMPORT_STARTED, { source: 'csv', row_count: csvData.length });
+
+          // Navigate to column mapping screen with connectionName
+          navigation.navigate('CSVColumnMapping' as any, {
+            csvHeaders: headers,
+            csvData,
+            sampleRow,
+            connectionName: csvConnectionName.trim(), // Pass name
+          });
+
+        } catch (error: any) {
+          console.error('[ProfileScreen] CSV import error:', error);
+          Alert.alert('Import Error', `Failed to read the CSV file: ${error.message}`);
+        }
+      });
+    }, 600); // 600ms delay + InteractionManager to be extremely safe on iOS
+  };
+
 
   // --- Unified API token helper (Supabase session only via bridge) ---
   const getApiToken = useCallback(async (): Promise<string | null> => {
@@ -1675,7 +1714,7 @@ const ProfileScreen = () => {
     },
     {
       icon: 'database-export',
-      title: 'Backups & restore',
+      title: 'Backups & Export',
       onPress: () => navigation.navigate('Backups' as any),
     },
     {
@@ -1770,7 +1809,6 @@ const ProfileScreen = () => {
 
       // Unsubscribe from any existing channel
       if (realtimeChannel) {
-        console.log('[ProfileScreen] Unsubscribing from existing realtime channel');
         realtimeChannel.unsubscribe();
       }
 
@@ -1788,9 +1826,11 @@ const ProfileScreen = () => {
           },
           (payload) => {
             console.log('[ProfileScreen] Received realtime update:', payload);
+            const newRecord = payload.new as any; // Cast to any to handle potential casing mismatch if needed, but usually matches DB cols
+
             const oldStatus = payload.old.Status;
-            const newStatus = payload.new.Status;
-            const platformName = payload.new.DisplayName || payload.new.PlatformType;
+            const newStatus = newRecord.Status;
+            const platformName = newRecord.DisplayName || newRecord.PlatformType;
 
             if (oldStatus !== newStatus) {
               showStatusNotification(
@@ -1800,8 +1840,17 @@ const ProfileScreen = () => {
               );
             }
 
-            // Refresh connections when a change is detected
-            loadConnections();
+            // Optimistically update local state to ensure "live" feel
+            setPlatformConnections(prevConnections => {
+              return prevConnections.map(conn =>
+                conn.Id === newRecord.Id ? { ...conn, ...newRecord } : conn
+              );
+            });
+
+            // Also refresh connections to be safe (sync with API logic)
+            // But debounced or delayed slightly to avoid overwriting the optimistic update with stale data immediately
+            // effectively we trust the realtime stream for specific row updates
+            // loadConnections(); 
           }
         )
         .subscribe((status) => {
@@ -1979,33 +2028,18 @@ const ProfileScreen = () => {
                 if (filteredConnections.length === 0) {
                   return null;
                 } else {
-                  return filteredConnections.map((connection) => {
-                    let platformConfig = AVAILABLE_PLATFORMS.find(p => p.key === connection.PlatformType);
-                    // Fallback for unknown platforms (e.g. 'pool')
-                    if (!platformConfig) {
-                      platformConfig = {
-                        key: connection.PlatformType,
-                        name: connection.PlatformType.charAt(0).toUpperCase() + connection.PlatformType.slice(1),
-                        icon: 'cube-outline' as any
-                      };
-                    }
-
-
-                    return (
-                      <ConnectedPlatformItem
-                        key={connection.Id}
-                        connection={connection}
-                        platformConfig={platformConfig}
-                        isEditMode={isEditMode}
-                        onStartScan={startPlatformScan}
-                        onReview={handleReviewAndSync}
-                        onReconnect={handleReconnectPlatform}
-                        onDisconnect={handleDisconnectPlatform}
-                        onFix={(id: string, name: string) => fixAndResumeConnection(id, name)}
-                        navigation={navigation}
-                      />
-                    );
-                  });
+                  return (
+                    <ConnectedPlatformList
+                      connections={filteredConnections}
+                      isEditMode={isEditMode}
+                      onStartScan={startPlatformScan}
+                      onReview={handleReviewAndSync}
+                      onReconnect={handleReconnectPlatform}
+                      onDisconnect={handleDisconnectPlatform}
+                      onFix={(id: string, name: string) => fixAndResumeConnection(id, name)}
+                      navigation={navigation}
+                    />
+                  );
                 }
               })()}
 
@@ -2094,6 +2128,44 @@ const ProfileScreen = () => {
       </Animated.View>
 
       {/* --- NEW: Add Connection Modal --- */}
+
+      {/* --- CSV Manage Modal --- */}
+      {/* --- CSV Name Prompt Modal --- */}
+      <BaseModal
+        visible={csvNameModalVisible}
+        onClose={() => setCsvNameModalVisible(false)}
+        showCloseButton={true}
+        containerStyle={{ padding: 24, borderRadius: 24, width: '90%', maxWidth: 400 }}
+      >
+        <View>
+          <Text style={{ fontSize: 20, fontWeight: '600', marginBottom: 16, color: '#000' }}>Name Connection</Text>
+          <Text style={{ fontSize: 15, color: '#666', marginBottom: 12 }}>Give this CSV import a name to identify it later.</Text>
+
+          <TextInput
+            value={csvConnectionName}
+            onChangeText={setCsvConnectionName}
+            placeholder="e.g. Warehouse Inventory, Supplier A"
+            style={{
+              borderWidth: 1,
+              borderColor: '#E5E7EB',
+              borderRadius: 12,
+              padding: 14,
+              fontSize: 16,
+              marginBottom: 20,
+              color: '#000',
+              backgroundColor: '#F9FAFB'
+            }}
+            autoFocus={true}
+          />
+
+          <Button
+            title="Continue to Import"
+            onPress={handleCsvNameSubmit}
+            style={{ minWidth: '100%', justifyContent: "center", }}
+          />
+        </View>
+      </BaseModal>
+
       {/* --- Platform Picker Bottom Bar Overlay (no modal) --- */}
       {isAddConnectionModalVisible && (
         <View style={styles.overlayContainer}>
@@ -2792,7 +2864,7 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
   addConnectionButton: {
-    marginTop: 20,
+    marginTop: 10,
     marginBottom: 10,
   },
   modalOverlay: {

@@ -1,5 +1,23 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, ScrollView, Modal, ActivityIndicator, Alert, SafeAreaView, TextInput } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  FlatList,
+  ScrollView,
+  Modal,
+  ActivityIndicator,
+  Alert,
+  SafeAreaView,
+  TextInput,
+  View as KeyboardAvoidingView, // ALIASING KAV TO VIEW temporarily if needed, but no, I'll just import View
+  Platform,
+  Keyboard,
+  PanResponder,
+  PanResponderInstance,
+  LayoutChangeEvent
+} from 'react-native';
 import Animated, { FadeInUp, FadeInDown, SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -17,7 +35,8 @@ import PlatformFilterChips from '../components/PlatformFilterChips';
 import PoolLocationCombobox from '../components/PoolLocationCombobox';
 import InventoryListCard from '../components/InventoryListCard';
 import BaseModal from '../components/BaseModal';
-import SpeechModal from '../components/SpeechModal';
+import { SmartCommandInput } from '../components/SmartCommandInput';
+import { VoiceRecorder } from '../components/VoiceRecorder';
 import SortByDropdown from '../components/SortByDropdown';
 import { CameraView } from 'expo-camera';
 import { useProductVariantRealtime, useInventoryLevelsRealtime } from '../hooks/useProductVariantRealtime';
@@ -25,6 +44,8 @@ import { useOrg } from '../context/OrgContext';
 import { parseFilterQuery } from '../utils/parseFilterQuery';
 
 type InventoryOrdersScreenNavigationProp = StackNavigationProp<AppStackParamList, 'TabNavigator'>;
+
+type MatchLocation = 'title' | 'description' | 'sku' | 'barcode' | 'tags';
 
 type EnrichedProductVariant = ProductVariantData & {
   imageUrl?: string;
@@ -42,6 +63,8 @@ type EnrichedProductVariant = ProductVariantData & {
   IsArchived?: boolean;
   optionVariantCount?: number; // Count of option variants for this product
   CreatedAt?: string; // For date-based sorting
+  matchLocations?: MatchLocation[]; // Where the search query matched
+  matchSnippet?: string; // Snippet of text where match occurred
 };
 
 interface MockOrderItemData {
@@ -132,6 +155,23 @@ const InventoryOrdersScreen = observer(() => {
   const [bulkActionModalMatchIds, setBulkActionModalMatchIds] = useState<string[] | null>(null);
   const [speechModalVisible, setSpeechModalVisible] = useState(false);
 
+  // Bulk action review flow state
+  type PlannedAction = {
+    itemId: string;
+    title: string;
+    thumbnail?: string;
+    actionType: string;
+    description: string;
+    changes: { field: string; from: string; to: string }[];
+    approved: boolean;
+  };
+  const [bulkPhase, setBulkPhase] = useState<'command' | 'planning' | 'review'>('command');
+  const [plannedActions, setPlannedActions] = useState<PlannedAction[]>([]);
+  const [planSummary, setPlanSummary] = useState('');
+  const [planLoading, setPlanLoading] = useState(false);
+  const [executeLoading, setExecuteLoading] = useState(false);
+  const [reviewModalVisible, setReviewModalVisible] = useState(false);
+
   // Bulk Selection Handlers
   const handleLongPressItem = (id: string) => {
     if (!isSelectionMode) {
@@ -143,18 +183,21 @@ const InventoryOrdersScreen = observer(() => {
     }
   };
 
-  const handleToggleSelection = (id: string) => {
-    const newSet = new Set(selectedItems);
-    if (newSet.has(id)) {
-      newSet.delete(id);
-    } else {
-      newSet.add(id);
-    }
-    setSelectedItems(newSet);
-    if (newSet.size === 0) {
-      handleExitSelectionMode();
-    }
-  };
+  const handleToggleSelection = useCallback((id: string, forceState?: boolean) => {
+    setSelectedItems(prev => {
+      const next = new Set(prev);
+      const isSelected = next.has(id);
+
+      if (forceState !== undefined) {
+        if (forceState) next.add(id);
+        else next.delete(id);
+      } else {
+        if (isSelected) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  }, []);
 
   const handleExitSelectionMode = () => {
     setIsSelectionMode(false);
@@ -214,6 +257,136 @@ const InventoryOrdersScreen = observer(() => {
   const [liquidationTimeline, setLiquidationTimeline] = useState("");
   const [liquidationAmount, setLiquidationAmount] = useState("");
   const [liquidationStrategy, setLiquidationStrategy] = useState<'aggressive' | 'moderate' | 'conservative'>('moderate');
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  // Drag-to-select refs
+  const itemLayouts = useRef<{ [key: string]: { y: number; height: number } }>({});
+  const listRef = useRef<FlatList>(null);
+  const isDraggingSelection = useRef(false);
+  const lastSelectedId = useRef<string | null>(null);
+
+  // Auto-scroll refs
+  const listHeight = useRef(0);
+  const autoScrollActive = useRef(false);
+  const autoScrollSpeed = useRef(0);
+  const currentTouchY = useRef(0);
+
+  const performSelectionAt = (touchY: number, offset: number) => {
+    const absoluteY = touchY + offset;
+    for (const [id, layout] of Object.entries(itemLayouts.current)) {
+      if (absoluteY >= layout.y && absoluteY <= layout.y + layout.height) {
+        if (lastSelectedId.current !== id) {
+          handleToggleSelection(id, true);
+          lastSelectedId.current = id;
+        }
+        break;
+      }
+    }
+  };
+
+  const runAutoScroll = () => {
+    if (!autoScrollActive.current) return;
+
+    const speed = autoScrollSpeed.current;
+    if (speed === 0) {
+      requestAnimationFrame(runAutoScroll);
+      return;
+    }
+
+    const newOffset = Math.max(0, scrollOffset.current + speed);
+    listRef.current?.scrollToOffset({ offset: newOffset, animated: false });
+
+    // We manually update scrollOffset here because the onScroll event might be slightly delayed
+    // and we need precise calculation for selection.
+    // However, onScroll will eventually fire and correct it. 
+    // For smoother selection during scroll, we optimistically use newOffset.
+    performSelectionAt(currentTouchY.current, newOffset);
+
+    requestAnimationFrame(runAutoScroll);
+  };
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponderCapture: (evt, gestureState) => {
+        // Use Capture to steal events from the FlatList child
+        // Use pageX to be safe regardless of target hierarchy
+        return isSelectionMode && evt.nativeEvent.pageX < 60 && Math.abs(gestureState.dy) > 5;
+      },
+      onPanResponderGrant: () => {
+        isDraggingSelection.current = true;
+        autoScrollActive.current = false;
+      },
+      onPanResponderMove: (evt, gestureState) => {
+        if (!isSelectionMode) return;
+
+        const y = evt.nativeEvent.locationY;
+        currentTouchY.current = y;
+
+        // Auto-scroll logic
+        const threshold = 100;
+        const maxSpeed = 20;
+        let speed = 0;
+
+        if (y < threshold) {
+          // Top edge - scroll up
+          // closer to 0 (top) -> faster
+          const ratio = (threshold - y) / threshold;
+          speed = -maxSpeed * ratio;
+        } else if (listHeight.current > 0 && y > listHeight.current - threshold) {
+          // Bottom edge - scroll down
+          const ratio = (y - (listHeight.current - threshold)) / threshold;
+          speed = maxSpeed * ratio;
+        }
+
+        autoScrollSpeed.current = speed;
+
+        if (speed !== 0) {
+          if (!autoScrollActive.current) {
+            autoScrollActive.current = true;
+            runAutoScroll();
+          }
+        } else {
+          autoScrollActive.current = false;
+        }
+
+        // Standard selection if not scrolling fast (or even if scrolling, we update here too)
+        performSelectionAt(y, scrollOffset.current);
+      },
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderRelease: () => {
+        isDraggingSelection.current = false;
+        lastSelectedId.current = null;
+        autoScrollActive.current = false;
+      },
+      onPanResponderTerminate: () => {
+        isDraggingSelection.current = false;
+        lastSelectedId.current = null;
+        autoScrollActive.current = false;
+      },
+    })
+  ).current;
+
+  // Track scroll offset
+  const scrollOffset = useRef(0);
+  const handleScroll = (event: any) => {
+    scrollOffset.current = event.nativeEvent.contentOffset.y;
+  };
+
+
+
+
+  useEffect(() => {
+    const keyboardShowListener = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', (e) => {
+      setKeyboardHeight(e.endCoordinates.height);
+    });
+    const keyboardHideListener = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => {
+      setKeyboardHeight(0);
+    });
+    return () => {
+      keyboardShowListener.remove();
+      keyboardHideListener.remove();
+    };
+  }, []);
 
   const handleSelectAll = () => {
     // Select all currently filtered items
@@ -837,11 +1010,54 @@ const InventoryOrdersScreen = observer(() => {
     // CRITICAL FIX: Clone the array to ensure reference changes for useMemo
     let filtered = [...enrichedProductVariants];
 
-    // Search by title
+    // Search across multiple fields: title, description, sku, barcode, tags
     if (searchQuery) {
-      filtered = filtered.filter((item: EnrichedProductVariant) =>
-        item.Title?.toLowerCase().includes(searchQuery.toLowerCase())
-      );
+      const queryLower = searchQuery.toLowerCase();
+      filtered = filtered.filter((item: EnrichedProductVariant) => {
+        const matches: MatchLocation[] = [];
+        let snippet = '';
+
+        // Check title
+        if (item.Title?.toLowerCase().includes(queryLower)) {
+          matches.push('title');
+          snippet = item.Title;
+        }
+
+        // Check description
+        if (item.Description?.toLowerCase().includes(queryLower)) {
+          matches.push('description');
+          if (!snippet) snippet = item.Description.substring(0, 60) + '...';
+        }
+
+        // Check SKU
+        if (item.Sku?.toLowerCase().includes(queryLower)) {
+          matches.push('sku');
+          if (!snippet) snippet = `SKU: ${item.Sku}`;
+        }
+
+        // Check barcode
+        if (item.Barcode?.toLowerCase().includes(queryLower)) {
+          matches.push('barcode');
+          if (!snippet) snippet = `Barcode: ${item.Barcode}`;
+        }
+
+        // Check tags
+        const hasTagMatch = item.Tags?.some(tag => tag.toLowerCase().includes(queryLower));
+        if (hasTagMatch) {
+          matches.push('tags');
+          if (!snippet) {
+            const matchedTag = item.Tags?.find(tag => tag.toLowerCase().includes(queryLower));
+            snippet = `Tag: ${matchedTag}`;
+          }
+        }
+
+        if (matches.length > 0) {
+          item.matchLocations = matches;
+          item.matchSnippet = snippet || item.Title || 'Match found';
+          return true;
+        }
+        return false;
+      });
     }
 
     // Low stock filter
@@ -1018,11 +1234,18 @@ const InventoryOrdersScreen = observer(() => {
     setBarcodeSearchError(null);
   };
 
-  const renderInventoryItem = ({ item }: { item: EnrichedProductVariant }) => {
-    const navigateToDetail = () => {
-      navigation.navigate('ProductDetail', { productId: item.Id });
-    };
+  // Memoized callback for list items
+  const handleItemPress = useCallback((id: string) => {
+    if (isSelectionMode) {
+      handleToggleSelection(id);
+    } else {
+      navigation.navigate('ProductDetail', { productId: id });
+    }
+  }, [isSelectionMode, navigation, handleToggleSelection]); // Dependencies need check
 
+  // Needs to be defined before renderInventoryItem
+
+  const renderInventoryItem = ({ item, index }: { item: EnrichedProductVariant; index: number }) => {
     return (
       <InventoryListCard
         id={item.Id}
@@ -1034,16 +1257,29 @@ const InventoryOrdersScreen = observer(() => {
         imageUrl={item.imageUrl}
         totalQuantity={item.totalQuantity}
         platformNames={item.platformNames}
-        onPress={() => {
-          if (isSelectionMode) {
-            handleToggleSelection(item.Id);
-          } else {
-            navigateToDetail();
-          }
-        }}
+        matchLocations={item.matchLocations}
+        matchSnippet={item.matchSnippet}
+        searchQuery={searchQuery}
+        onPress={handleItemPress}
         onLongPress={() => handleLongPressItem(item.Id)}
         isSelectionMode={isSelectionMode}
         isSelected={selectedItems.has(item.Id)}
+        onLayout={(e) => {
+          // Approximate layout tracking (index * estimated height) is faster but less accurate.
+          // Accurate: use event. But unrelated to scroll.
+          // Actually, in FlatList `onLayout` gives relative-to-item coords (0,0)?
+          // We need `index`. 
+          // If implementing drag, we might need a simpler fixed-height assumption or `onLayout` of the container?
+          // Let's use simple estimation for now: index * 130 (card height + margin).
+          // Or aggregate heights.
+
+          // Correction: inside FlatList, item onLayout x/y are relative to parent list content.
+          // So event.nativeEvent.layout.y IS the scroll position Y.
+          itemLayouts.current[item.Id] = {
+            y: e.nativeEvent.layout.y,
+            height: e.nativeEvent.layout.height
+          };
+        }}
       />
     );
   };
@@ -1134,7 +1370,7 @@ const InventoryOrdersScreen = observer(() => {
                     };
                   }}
                   onClear={handleSearchClear}
-                  onVoicePress={() => setBulkActionModalVisible(true)}
+                  onVoicePress={() => setSpeechModalVisible(true)}
                 />
 
                 {/* Barcode Search Error Message */}
@@ -1242,59 +1478,70 @@ const InventoryOrdersScreen = observer(() => {
             </View>
 
             {/* Inventory List */}
-            <FlatList
-              data={inventoryToDisplay}
-              renderItem={renderInventoryItem}
-              keyExtractor={item => item.Id.toString()}
-              contentContainerStyle={styles.listContent}
-              onEndReached={handleLoadMore}
-              onEndReachedThreshold={0.5}
-              initialNumToRender={20}
-              maxToRenderPerBatch={20}
-              windowSize={21}
-              ListFooterComponent={
-                <>
-                  {isLoadingMore && (
-                    <View style={styles.loadingMoreContainer}>
-                      <ActivityIndicator size="small" color={theme.colors.primary} />
-                      <Text style={[styles.loadingMoreText, { color: theme.colors.textSecondary }]}>
-                        Loading more products...
+            <View
+              style={{ flex: 1 }}
+              {...panResponder.panHandlers}
+              onLayout={(e) => {
+                listHeight.current = e.nativeEvent.layout.height;
+              }}
+            >
+              <FlatList
+                ref={listRef}
+                data={inventoryToDisplay}
+                renderItem={renderInventoryItem}
+                keyExtractor={item => item.Id.toString()}
+                contentContainerStyle={styles.listContent}
+                onScroll={handleScroll}
+                scrollEventThrottle={16}
+                onEndReached={handleLoadMore}
+                onEndReachedThreshold={0.5}
+                initialNumToRender={20}
+                maxToRenderPerBatch={20}
+                windowSize={21}
+                ListFooterComponent={
+                  <>
+                    {isLoadingMore && (
+                      <View style={styles.loadingMoreContainer}>
+                        <ActivityIndicator size="small" color={theme.colors.primary} />
+                        <Text style={[styles.loadingMoreText, { color: theme.colors.textSecondary }]}>
+                          Loading more products...
+                        </Text>
+                      </View>
+                    )}
+                    {displayCount < filteredInventory.length && !isLoadingMore && (
+                      <TouchableOpacity
+                        style={styles.loadMoreButton}
+                        onPress={handleLoadMore}
+                      >
+                        <Text style={[styles.loadMoreButtonText, { color: theme.colors.primary }]}>
+                          Load more ({filteredInventory.length - displayCount} remaining)
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    <View style={styles.listFooter} />
+                  </>
+                }
+                ListHeaderComponent={
+                  <>
+
+                  </>
+                }
+                ListEmptyComponent={
+                  isLoadingConnections ? (
+                    <View style={styles.loadingContainer}>
+                      <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
+                        Loading platform connections...
                       </Text>
                     </View>
-                  )}
-                  {displayCount < filteredInventory.length && !isLoadingMore && (
-                    <TouchableOpacity
-                      style={styles.loadMoreButton}
-                      onPress={handleLoadMore}
-                    >
-                      <Text style={[styles.loadMoreButtonText, { color: theme.colors.primary }]}>
-                        Load more ({filteredInventory.length - displayCount} remaining)
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                  <View style={styles.listFooter} />
-                </>
-              }
-              ListHeaderComponent={
-                <>
-
-                </>
-              }
-              ListEmptyComponent={
-                isLoadingConnections ? (
-                  <View style={styles.loadingContainer}>
-                    <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
-                      Loading platform connections...
+                  ) : (
+                    <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
+                      No products found.
+                      {selectedPlatformType && ` Try selecting a different platform or location.`}
                     </Text>
-                  </View>
-                ) : (
-                  <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
-                    No products found.
-                    {selectedPlatformType && ` Try selecting a different platform or location.`}
-                  </Text>
-                )
-              }
-            />
+                  )
+                }
+              />
+            </View>
           </Animated.View>
         )}
 
@@ -1311,247 +1558,451 @@ const InventoryOrdersScreen = observer(() => {
       </View>
 
       {/* Full-screen Scanner Modal - renders above everything */}
-      {scannerOpen && (
-        <View style={styles.scannerDockFull} pointerEvents="box-none">
-          <View style={styles.scannerFullBleed}>
-            <CameraView
-              style={styles.scannerCamera}
-              facing="back"
-              onBarcodeScanned={(result: any) => {
-                const code = result?.data || result?.rawValue;
-                if (code && scannerResultHandlerRef.current) {
-                  scannerResultHandlerRef.current(code);
-                }
-              }}
-              barcodeScannerSettings={{
-                barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
-              }}
-            />
-            <TouchableOpacity
-              onPress={() => {
-                console.log('[InventoryOrdersScreen] Scanner close button pressed');
-                setScannerOpen(false);
-              }}
-              style={styles.scannerCloseButton}
-            >
-              <Icon name="close" size={28} color="#fff" />
-            </TouchableOpacity>
+      {
+        scannerOpen && (
+          <View style={styles.scannerDockFull} pointerEvents="box-none">
+            <View style={styles.scannerFullBleed}>
+              <CameraView
+                style={styles.scannerCamera}
+                facing="back"
+                onBarcodeScanned={(result: any) => {
+                  const code = result?.data || result?.rawValue;
+                  if (code && scannerResultHandlerRef.current) {
+                    scannerResultHandlerRef.current(code);
+                  }
+                }}
+                barcodeScannerSettings={{
+                  barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
+                }}
+              />
+              <TouchableOpacity
+                onPress={() => {
+                  console.log('[InventoryOrdersScreen] Scanner close button pressed');
+                  setScannerOpen(false);
+                }}
+                style={styles.scannerCloseButton}
+              >
+                <Icon name="close" size={28} color="#fff" />
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
-      )}
+        )
+      }
 
       {/* Bulk Action Bar - Cleaner Light Mode */}
-      {isSelectionMode && (
-        <Animated.View
-          entering={SlideInDown.duration(300)}
-          exiting={SlideOutDown}
-          style={styles.bulkActionBar}
-        >
-          <View style={styles.bulkActionContent}>
-            {/* Left: Count Badge with Cancel */}
+      {
+        isSelectionMode && !bulkActionModalVisible && (
+          <Animated.View
+            entering={SlideInDown.duration(300)}
+            exiting={SlideOutDown}
+            style={styles.bulkActionBar}
+          >
+            <View style={styles.bulkActionContent}>
+              {/* Left: Count Badge with Cancel */}
+              <TouchableOpacity
+                onPress={handleExitSelectionMode}
+                style={styles.countBadge}
+              >
+                <Icon name="close-circle" size={18} color="#4B5563" />
+                <Text style={styles.countBadgeText}>{selectedItems.size}</Text>
+              </TouchableOpacity>
+
+              {/* Center: Horizontal Scrollable Actions */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.actionsScrollContent}
+                style={styles.actionsScroll}
+              >
+                <TouchableOpacity style={styles.actionChip} onPress={() => setBulkActionModalVisible(true)}>
+                  <Icon name="filter-variant-plus" size={18} color="#374151" />
+                  <Text style={styles.actionChipText}>Bulk action</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.actionChip} onPress={() => setLiquidationModalVisible(true)}>
+                  <Icon name="tag-outline" size={18} color="#374151" />
+                  <Text style={styles.actionChipText}>Liquidate</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.actionChip} onPress={handleBulkDelete}>
+                  <Icon name="trash-can-outline" size={18} color="#374151" />
+                  <Text style={styles.actionChipText}>Delete</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.actionChip} onPress={() => setArchiveModalVisible(true)}>
+                  <Icon name="archive-outline" size={18} color="#374151" />
+                  <Text style={styles.actionChipText}>Archive</Text>
+                </TouchableOpacity>
+
+
+
+                <TouchableOpacity style={styles.actionChip} onPress={() => setTagsModalVisible(true)}>
+                  <Icon name="tag-plus-outline" size={18} color="#374151" />
+                  <Text style={styles.actionChipText}>Tags</Text>
+                </TouchableOpacity>
+              </ScrollView>
+
+              {/* Right: More Menu */}
+              <TouchableOpacity
+                style={styles.moreButton}
+                onPress={() => setMoreMenuVisible(true)}
+              >
+                <Icon name="dots-horizontal" size={24} color="#374151" />
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+        )
+      }
+
+      {/* Bulk Action Inline Card — replaces BaseModal, acts as command entry */}
+      {
+        bulkActionModalVisible && (
+          <View
+            style={{
+              position: 'absolute',
+              bottom: keyboardHeight > 0 ? keyboardHeight : (Platform.OS === 'ios' ? 140 : 120),
+              left: 0,
+              right: 0,
+              zIndex: 1001,
+            }}
+          >
             <TouchableOpacity
-              onPress={handleExitSelectionMode}
-              style={styles.countBadge}
-            >
-              <Icon name="close-circle" size={18} color="#4B5563" />
-              <Text style={styles.countBadgeText}>{selectedItems.size}</Text>
-            </TouchableOpacity>
-
-            {/* Center: Horizontal Scrollable Actions */}
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.actionsScrollContent}
-              style={styles.actionsScroll}
-            >
-              <TouchableOpacity style={styles.actionChip} onPress={() => setBulkActionModalVisible(true)}>
-                <Icon name="filter-variant-plus" size={18} color="#374151" />
-                <Text style={styles.actionChipText}>Bulk action</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.actionChip} onPress={() => setLiquidationModalVisible(true)}>
-                <Icon name="tag-outline" size={18} color="#374151" />
-                <Text style={styles.actionChipText}>Liquidate</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.actionChip} onPress={handleBulkDelete}>
-                <Icon name="trash-can-outline" size={18} color="#374151" />
-                <Text style={styles.actionChipText}>Delete</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.actionChip} onPress={() => setArchiveModalVisible(true)}>
-                <Icon name="archive-outline" size={18} color="#374151" />
-                <Text style={styles.actionChipText}>Archive</Text>
-              </TouchableOpacity>
-
-              
-
-              <TouchableOpacity style={styles.actionChip} onPress={() => setTagsModalVisible(true)}>
-                <Icon name="tag-plus-outline" size={18} color="#374151" />
-                <Text style={styles.actionChipText}>Tags</Text>
-              </TouchableOpacity>
-            </ScrollView>
-
-            {/* Right: More Menu */}
-            <TouchableOpacity
-              style={styles.moreButton}
-              onPress={() => setMoreMenuVisible(true)}
-            >
-              <Icon name="dots-horizontal" size={24} color="#374151" />
-            </TouchableOpacity>
-          </View>
-        </Animated.View>
-      )}
-
-      {/* Bulk Action Modal: filter by type/voice, review, then apply Delete/Archive/Liquidate */}
-      <BaseModal
-        visible={bulkActionModalVisible}
-        onClose={() => {
-          setBulkActionModalVisible(false);
-          setBulkActionModalQuery('');
-          setBulkActionModalMatchIds(null);
-        }}
-        showCloseButton={true}
-        containerStyle={{ width: '90%', maxWidth: 400, borderRadius: 24, padding: 24 }}
-      >
-        <View style={{ width: '100%' }}>
-          <View style={{ marginBottom: 16 }}>
-            <Text style={{ fontSize: 18, fontWeight: '700', color: '#111', marginBottom: 4 }}>
-              Filter & bulk action
-            </Text>
-            <Text style={{ fontSize: 13, color: '#6B7280', fontWeight: '500' }}>
-              Type or use voice to filter, then apply an action to matching items.
-            </Text>
-          </View>
-
-          <View style={styles.nlFilterRow}>
-            <TextInput
-              style={[styles.nlFilterInput, { color: theme.colors.text, borderColor: '#E5E7EB' }]}
-              placeholder="e.g. under 50 dollars, low stock, on eBay"
-              placeholderTextColor="#9CA3AF"
-              value={bulkActionModalQuery}
-              onChangeText={setBulkActionModalQuery}
-              returnKeyType="done"
-              onSubmitEditing={handleBulkActionModalApply}
+              activeOpacity={1}
+              onPress={() => setBulkActionModalVisible(false)}
+              style={{ position: 'absolute', top: -1000, left: 0, right: 0, bottom: -500, backgroundColor: 'transparent' }}
             />
+
+            <View style={{
+              backgroundColor: 'rgba(255, 255, 255, 1)',
+              borderRadius: 32,
+              borderWidth: keyboardHeight > 0 ? 0 : 1,
+              borderColor: '#F3F4F6',
+              paddingHorizontal: 20,
+              marginHorizontal: 12,
+              paddingBottom: 16,
+              marginBottom: 16,
+              paddingTop: 16,
+              ...Platform.select({
+                ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12 },
+                android: { elevation: 8 },
+              }),
+            }}>
+              {/* Header */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 }}>
+                <Text style={{ fontSize: 16, fontWeight: '700', color: '#111' }}>Bulk Action</Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    setBulkActionModalVisible(false);
+                    setBulkActionModalQuery('');
+                    setBulkActionModalMatchIds(null);
+                    setBulkPhase('command');
+                  }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Icon name="close" size={20} color="#9CA3AF" />
+                </TouchableOpacity>
+              </View>
+
+              {bulkPhase === 'command' && (
+                <View style={{ paddingHorizontal: 4, paddingBottom: 4 }}>
+                  <SmartCommandInput
+                    mode="voice_filter"
+                    startExpanded={true}
+                    initialMode="text"
+                    variant="inline"
+                    disableKeyboardHandling={true}
+                    fullWidth={true}
+                    apiBaseUrl={process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL}
+                    getAuthToken={ensureSupabaseJwt}
+                    onSubmit={async (text) => {
+                      setBulkActionModalQuery(text);
+                      setBulkPhase('planning');
+                      setPlanLoading(true);
+
+                      try {
+                        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+                        const token = await ensureSupabaseJwt();
+                        if (!baseUrl || !token) throw new Error('Missing config');
+
+                        // Gather selected items data for the planner
+                        const selectedIds = Array.from(selectedItems);
+                        const itemsForPlanner = filteredInventory
+                          .filter(item => selectedIds.includes(item.Id))
+                          .map(item => ({
+                            id: item.Id,
+                            title: item.Title || 'Untitled',
+                            price: item.Price ?? item.minPrice ?? 0,
+                            quantity: item.totalQuantity ?? 0,
+                            sku: item.Sku || '',
+                            platform: item.platformNames?.join(', ') || '',
+                            tags: item.Tags || '',
+                            imageUrl: item.imageUrl || '',
+                          }));
+
+                        const res = await fetch(`${baseUrl}/api/products/bulk-actions/plan`, {
+                          method: 'POST',
+                          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ command: text, items: itemsForPlanner }),
+                        });
+
+                        if (!res.ok) throw new Error(`Plan failed: ${res.status}`);
+                        const plan = await res.json();
+
+                        const actionsWithApproval = (plan.actions || []).map((a: any) => ({ ...a, approved: true }));
+                        setPlannedActions(actionsWithApproval);
+                        setPlanSummary(plan.summary || `${actionsWithApproval.length} actions planned`);
+                        setBulkPhase('review');
+                        setBulkActionModalVisible(false);
+                        setReviewModalVisible(true);
+                      } catch (err) {
+                        console.error('[BulkAction] Planning failed:', err);
+                        Alert.alert('Error', 'Failed to plan bulk actions. Please try again.');
+                        setBulkPhase('command');
+                      } finally {
+                        setPlanLoading(false);
+                      }
+                    }}
+                    onCollapse={() => {
+                      setBulkActionModalVisible(false);
+                      setBulkPhase('command');
+                    }}
+                  />
+                </View>
+              )}
+
+              {bulkPhase === 'planning' && (
+                <View style={{ paddingVertical: 32, alignItems: 'center', gap: 12 }}>
+                  <ActivityIndicator size="large" color="#8BB04F" />
+                  <Text style={{ color: '#6B7280', fontSize: 14, fontWeight: '500' }}>Planning actions…</Text>
+                </View>
+              )}
+            </View>
+          </View>
+        )
+      }
+
+      {/* Full-Screen Review Modal */}
+      <Modal
+        visible={reviewModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => {
+          setReviewModalVisible(false);
+          setBulkPhase('command');
+          setPlannedActions([]);
+        }}
+      >
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#F9FAFB' }}>
+          {/* Review Header */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E5E7EB' }}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: '#111' }}>Review Changes</Text>
+              <Text style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }}>{planSummary}</Text>
+            </View>
             <TouchableOpacity
-              style={[styles.nlFilterMicButton, { backgroundColor: '#F3F4F6', borderColor: '#E5E7EB' }]}
-              onPress={() => setSpeechModalVisible(true)}
+              onPress={() => {
+                setReviewModalVisible(false);
+                setBulkPhase('command');
+                setPlannedActions([]);
+              }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Icon name="microphone" size={22} color="#6B7280" />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.nlFilterApplyButton, { backgroundColor: theme.colors.primary }]}
-              onPress={handleBulkActionModalApply}
-            >
-              <Text style={styles.nlFilterApplyText}>Apply</Text>
+              <Icon name="close" size={24} color="#6B7280" />
             </TouchableOpacity>
           </View>
 
-          <View style={{ marginBottom: 16, paddingVertical: 12, paddingHorizontal: 14, backgroundColor: '#F9FAFB', borderRadius: 12 }}>
-            <Text style={{ fontSize: 15, fontWeight: '600', color: '#111' }}>
-              {bulkActionModalMatchIds != null
-                ? `${bulkActionModalMatchIds.length} item${bulkActionModalMatchIds.length !== 1 ? 's' : ''} match`
-                : selectedItems.size > 0
-                  ? `${selectedItems.size} selected — type above to refine`
-                  : 'Tap Apply after typing a filter'}
+          {/* Select All / Deselect All bar */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 10, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
+            <Text style={{ fontSize: 13, color: '#6B7280' }}>
+              {plannedActions.filter(a => a.approved).length} of {plannedActions.length} approved
             </Text>
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <TouchableOpacity onPress={() => setPlannedActions(prev => prev.map(a => ({ ...a, approved: true })))}>
+                <Text style={{ fontSize: 13, color: '#8BB04F', fontWeight: '600' }}>Select All</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setPlannedActions(prev => prev.map(a => ({ ...a, approved: false })))}>
+                <Text style={{ fontSize: 13, color: '#9CA3AF', fontWeight: '600' }}>Deselect All</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+          {/* Action Cards List */}
+          <FlatList
+            data={plannedActions}
+            keyExtractor={(item) => item.itemId}
+            contentContainerStyle={{ padding: 16, gap: 10, paddingBottom: 100 }}
+            renderItem={({ item, index }) => (
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() => setPlannedActions(prev => prev.map((a, i) => i === index ? { ...a, approved: !a.approved } : a))}
+                style={{
+                  backgroundColor: '#fff',
+                  borderRadius: 14,
+                  borderWidth: 1,
+                  borderColor: item.approved ? '#8BB04F' : '#E5E7EB',
+                  padding: 14,
+                  opacity: item.approved ? 1 : 0.5,
+                  ...Platform.select({
+                    ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 4 },
+                    android: { elevation: 1 },
+                  }),
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  {/* Checkbox */}
+                  <View style={{
+                    width: 22, height: 22, borderRadius: 6,
+                    borderWidth: 2, borderColor: item.approved ? '#8BB04F' : '#D1D5DB',
+                    backgroundColor: item.approved ? '#8BB04F' : 'transparent',
+                    alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    {item.approved && <Icon name="check" size={14} color="#fff" />}
+                  </View>
+
+                  {/* Item info */}
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#111' }} numberOfLines={1}>{item.title}</Text>
+                    <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>{item.description}</Text>
+                  </View>
+                </View>
+
+                {/* Changes */}
+                {item.changes.length > 0 && (
+                  <View style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#F3F4F6' }}>
+                    {item.changes.map((change, ci) => (
+                      <View key={ci} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <Text style={{ fontSize: 12, color: '#9CA3AF', fontWeight: '500', textTransform: 'capitalize' }}>{change.field}:</Text>
+                        <Text style={{ fontSize: 12, color: '#EF4444', textDecorationLine: 'line-through' }}>{change.from}</Text>
+                        <Icon name="arrow-right" size={12} color="#D1D5DB" />
+                        <Text style={{ fontSize: 12, color: '#10B981', fontWeight: '600' }}>{change.to}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
+          />
+
+          {/* Bottom Action Bar */}
+          <View style={{
+            position: 'absolute', bottom: 0, left: 0, right: 0,
+            backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#E5E7EB',
+            paddingHorizontal: 20, paddingTop: 12, paddingBottom: Platform.OS === 'ios' ? 34 : 16,
+            flexDirection: 'row', gap: 12,
+          }}>
             <TouchableOpacity
-              style={[styles.actionChip, { marginBottom: 0 }]}
+              style={{
+                flex: 1, paddingVertical: 14, borderRadius: 12,
+                backgroundColor: '#F3F4F6', alignItems: 'center',
+              }}
               onPress={() => {
-                const ids = (bulkActionModalMatchIds?.length ? bulkActionModalMatchIds : Array.from(selectedItems)) as string[];
-                if (ids.length === 0) {
-                  Alert.alert('No items', 'Apply a filter or select items first.');
-                  return;
-                }
-                Alert.alert(
-                  'Delete Items',
-                  `Delete ${ids.length} items? This will archive them.`,
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Delete', style: 'destructive', onPress: () => runBulkDeleteByIds(ids) },
-                  ]
-                );
+                setReviewModalVisible(false);
+                setBulkPhase('command');
+                setPlannedActions([]);
               }}
             >
-              <Icon name="trash-can-outline" size={18} color="#374151" />
-              <Text style={styles.actionChipText}>Delete</Text>
+              <Text style={{ color: '#6B7280', fontSize: 15, fontWeight: '600' }}>Cancel</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.actionChip, { marginBottom: 0 }]}
-              onPress={() => {
-                const ids = (bulkActionModalMatchIds?.length ? bulkActionModalMatchIds : Array.from(selectedItems)) as string[];
-                if (ids.length === 0) {
-                  Alert.alert('No items', 'Apply a filter or select items first.');
-                  return;
+              style={{
+                flex: 2, paddingVertical: 14, borderRadius: 12,
+                backgroundColor: plannedActions.some(a => a.approved) ? '#8BB04F' : '#D1D5DB',
+                alignItems: 'center',
+                ...Platform.select({
+                  ios: { shadowColor: '#8BB04F', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 6 },
+                  android: { elevation: 3 },
+                }),
+              }}
+              disabled={!plannedActions.some(a => a.approved) || executeLoading}
+              onPress={async () => {
+                const approved = plannedActions.filter(a => a.approved);
+                if (approved.length === 0) return;
+
+                setExecuteLoading(true);
+                try {
+                  const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+                  const token = await ensureSupabaseJwt();
+                  if (!baseUrl || !token) throw new Error('Missing config');
+
+                  const res = await fetch(`${baseUrl}/api/products/bulk-actions/execute`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      actions: approved.map(a => ({
+                        itemId: a.itemId,
+                        actionType: a.actionType,
+                        changes: a.changes,
+                      })),
+                    }),
+                  });
+
+                  if (!res.ok) throw new Error(`Execute failed: ${res.status}`);
+                  const result = await res.json();
+
+                  Alert.alert(
+                    'Done',
+                    `${result.successful} of ${result.total} changes applied successfully.`,
+                    [{ text: 'OK' }]
+                  );
+
+                  setReviewModalVisible(false);
+                  setBulkPhase('command');
+                  setPlannedActions([]);
+                  handleExitSelectionMode();
+                } catch (err) {
+                  console.error('[BulkAction] Execute failed:', err);
+                  Alert.alert('Error', 'Failed to execute bulk actions. Please try again.');
+                } finally {
+                  setExecuteLoading(false);
                 }
-                Alert.alert(
-                  'Archive Items',
-                  `Archive ${ids.length} items?`,
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Archive', onPress: () => runBulkArchiveByIds(ids) },
-                  ]
-                );
               }}
             >
-              <Icon name="archive-outline" size={18} color="#374151" />
-              <Text style={styles.actionChipText}>Archive</Text>
+              {executeLoading ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>
+                  Approve {plannedActions.filter(a => a.approved).length} changes
+                </Text>
+              )}
             </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.actionChip, { marginBottom: 0 }]}
-              onPress={() => {
-                const ids = bulkActionModalMatchIds?.length ? bulkActionModalMatchIds : Array.from(selectedItems);
-                if (ids.length === 0) {
-                  Alert.alert('No items', 'Apply a filter or select items first.');
-                  return;
-                }
-                setSelectedItems(new Set(ids));
-                setBulkActionModalVisible(false);
-                setBulkActionModalQuery('');
-                setBulkActionModalMatchIds(null);
-                setLiquidationModalVisible(true);
+          </View>
+        </SafeAreaView>
+      </Modal>
+
+      {/* Voice Search Modal - Dedicated voice recorder for instant recording */}
+      <Modal
+        visible={speechModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSpeechModalVisible(false)}
+      >
+        <View
+          style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+        >
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            activeOpacity={1}
+            onPress={() => setSpeechModalVisible(false)}
+          />
+          <View style={{
+            backgroundColor: 'transparent',
+            paddingHorizontal: 16,
+            paddingBottom: Platform.OS === 'ios' ? 100 : 80
+          }}>
+            <VoiceRecorder
+              apiBaseUrl={process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL}
+              getAuthToken={ensureSupabaseJwt}
+              onTranscription={(text) => {
+                setSearchQuery(text);
+                setScannedBarcode(null);
+                setBarcodeSearchError(null);
+                setSpeechModalVisible(false);
               }}
-            >
-              <Icon name="tag-outline" size={18} color="#374151" />
-              <Text style={styles.actionChipText}>Liquidate</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.actionChip, { marginBottom: 0 }]}
-              onPress={() => {
-                const ids = bulkActionModalMatchIds?.length ? bulkActionModalMatchIds : Array.from(selectedItems);
-                if (ids.length === 0) {
-                  Alert.alert('No items', 'Apply a filter or select items first.');
-                  return;
-                }
-                setSelectedItems(new Set(ids));
-                setBulkActionModalVisible(false);
-                setBulkActionModalQuery('');
-                setBulkActionModalMatchIds(null);
-                setTagsModalVisible(true);
-              }}
-            >
-              <Icon name="tag-plus-outline" size={18} color="#374151" />
-              <Text style={styles.actionChipText}>Tags</Text>
-            </TouchableOpacity>
+              onCancel={() => setSpeechModalVisible(false)}
+            />
           </View>
         </View>
-      </BaseModal>
-
-      <SpeechModal
-        visible={speechModalVisible}
-        onClose={() => setSpeechModalVisible(false)}
-        onTranscript={(text) => {
-          setBulkActionModalQuery(text);
-          const ids = applyBulkActionModalFilter(text);
-          setBulkActionModalMatchIds(ids.length > 0 ? ids : null);
-          setSpeechModalVisible(false);
-        }}
-        title="Speak your filter"
-      />
+      </Modal>
 
       {/* More Actions Modal - Cleaner "Lowkey" Design */}
       <BaseModal
@@ -1786,7 +2237,7 @@ const InventoryOrdersScreen = observer(() => {
         </View>
       </BaseModal>
 
-    </View>
+    </View >
   );
 });
 

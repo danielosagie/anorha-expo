@@ -10,11 +10,15 @@ type Props = {
   secondaryLabel?: string;
   secondaryDisabled?: boolean;
   onSecondary?: () => void;
+  /** Optional content rendered above the action buttons (e.g., SmartCommandInput) */
+  tertiaryContent?: React.ReactNode;
+  style?: any;
 };
 
-export default function BottomActionBar({ primaryLabel, primaryDisabled, onPrimary, secondaryLabel, secondaryDisabled, onSecondary }: Props) {
+export default function BottomActionBar({ primaryLabel, primaryDisabled, onPrimary, secondaryLabel, secondaryDisabled, onSecondary, tertiaryContent, style }: Props) {
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, style]}>
+      {tertiaryContent}
       <TouchableOpacity disabled={!!primaryDisabled} onPress={onPrimary} style={[styles.primaryBtn, primaryDisabled && styles.disabled]}>
 
         <CloudUpload size={20} color="white" />

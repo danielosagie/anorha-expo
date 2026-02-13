@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   Image,
   Platform,
+  LayoutChangeEvent,
 } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import PlaceholderImage from './PlaceholderImage';
@@ -17,6 +18,8 @@ import Animated, { FadeInLeft, FadeOutLeft, Layout } from 'react-native-reanimat
   InventoryListCard - Matches "Needs Attention" design
 */
 
+type MatchLocation = 'title' | 'description' | 'sku' | 'barcode' | 'tags';
+
 interface InventoryListCardProps {
   id: string;
   title: string;
@@ -27,13 +30,17 @@ interface InventoryListCardProps {
   imageUrl?: string;
   totalQuantity?: number;
   platformNames?: string[];
-  onPress: () => void;
-  onLongPress?: () => void;
+  matchLocations?: MatchLocation[];
+  matchSnippet?: string;
+  searchQuery?: string;
+  onPress: (id: string) => void;
+  onLongPress?: (id: string) => void;
   isSelectionMode?: boolean;
   isSelected?: boolean;
+  onLayout?: (event: LayoutChangeEvent) => void;
 }
 
-const InventoryListCard: React.FC<InventoryListCardProps> = ({
+const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
   id,
   title,
   price,
@@ -43,10 +50,14 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
   imageUrl,
   totalQuantity,
   platformNames = [],
+  matchLocations,
+  matchSnippet,
+  searchQuery,
   onPress,
   onLongPress,
   isSelectionMode,
   isSelected,
+  onLayout,
 }) => {
   const theme = useTheme();
 
@@ -83,16 +94,41 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
     return `$${price?.toFixed(2) ?? '0.00'}`;
   };
 
+  // Get display label for match location
+  const getMatchLabel = (location: MatchLocation): string => {
+    switch (location) {
+      case 'title': return 'Title';
+      case 'description': return 'Description';
+      case 'sku': return 'SKU';
+      case 'barcode': return 'Barcode';
+      case 'tags': return 'Tags';
+      default: return location;
+    }
+  };
+
+  // Highlight search term in snippet
+  const highlightMatch = (text: string, query: string): React.ReactNode => {
+    if (!query || !text) return text;
+    const parts = text.split(new RegExp(`(${query})`, 'gi'));
+    return parts.map((part, index) =>
+      part.toLowerCase() === query.toLowerCase() ? (
+        <Text key={index} style={{ backgroundColor: '#FEF3C7', fontWeight: '700' }}>{part}</Text>
+      ) : (
+        <Text key={index}>{part}</Text>
+      )
+    );
+  };
+
   return (
     <TouchableOpacity
       style={styles.cardContainer}
-      onPress={onPress}
-      onLongPress={onLongPress}
+      onPress={() => onPress(id)}
+      onLongPress={onLongPress ? () => onLongPress(id) : undefined}
       activeOpacity={0.7}
       delayLongPress={300}
+      onLayout={onLayout}
     >
       <View style={[styles.card, { backgroundColor: isSelected ? 'rgba(132, 204, 22, 0.1)' : 'rgba(228, 228, 228, 0.01)', borderColor: isSelected ? '#84CC16' : 'transparent', borderWidth: 1 }]}>
-
 
         {/* Selection Indicator */}
         {isSelectionMode && (
@@ -112,7 +148,7 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
 
         {/* Left side - Image */}
         <View style={styles.imageContainer}>
-          {imageUrl ? (
+          {imageUrl && typeof imageUrl === 'string' && imageUrl.trim().length > 0 ? (
             <Image
               source={{ uri: imageUrl }}
               style={styles.productImage}
@@ -143,6 +179,24 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
             {sku && (
               <Text style={[styles.sku, { color: theme.colors.textSecondary }]}>
                 SKU: {sku}
+              </Text>
+            )}
+
+            {/* Match chips - only show when there's a search query and matches */}
+            {searchQuery && matchLocations && matchLocations.length > 0 && (
+              <View style={styles.matchChipsContainer}>
+                {matchLocations.map((location, index) => (
+                  <View key={location} style={styles.matchChip}>
+                    <Text style={styles.matchChipText}>{getMatchLabel(location)}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Match snippet */}
+            {searchQuery && matchSnippet && (
+              <Text style={styles.matchSnippet} numberOfLines={2}>
+                {highlightMatch(matchSnippet, searchQuery)}
               </Text>
             )}
           </View>
@@ -195,7 +249,7 @@ const InventoryListCard: React.FC<InventoryListCardProps> = ({
       </View>
     </TouchableOpacity>
   );
-};
+});
 
 const styles = StyleSheet.create({
   cardContainer: {
@@ -280,6 +334,34 @@ const styles = StyleSheet.create({
   selectionIndicatorContainer: {
     justifyContent: 'center',
     paddingRight: 12,
+  },
+  matchChipsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  matchChip: {
+    backgroundColor: '#DBEAFE',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+  },
+  matchChipText: {
+    fontSize: 10,
+    color: '#1E40AF',
+    fontWeight: '600',
+    textTransform: 'capitalize',
+  },
+  matchSnippet: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 4,
+    fontStyle: 'italic',
+    lineHeight: 16,
   },
 });
 

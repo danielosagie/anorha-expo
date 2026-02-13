@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard } from 'react-native';
 import { CameraView } from 'expo-camera';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -8,7 +8,8 @@ import ItemJobsModal from '../components/ItemJobsModal';
 import PyramidGrid from '../components/PyramidGrid';
 import { getPlatformRequirements } from '../utils/platformRequirements';
 import { Boxes, X, Sparkles, Pencil, ArrowLeft } from 'lucide-react-native';
-import BottomActionBar from '../components/BottomActionBar';
+import KeyboardAwareBottomActionBar from '../components/KeyboardAwareBottomActionBar';
+import { SmartCommandInput, FieldOption } from '../components/SmartCommandInput';
 import ListingEditorForm from '../components/ListingEditorForm';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { hydratePlatformsFromBackend, normalizeForListingEditor, isEmpty } from '../utils/platformDataHydration';
@@ -21,6 +22,7 @@ import { useCollaboration } from '../hooks/useCollaboration';
 import PublishConfirmationModal from '../components/PublishConfirmationModal';
 import { PLATFORM_META } from '../utils/platformConstants';
 import { capture, AnalyticsEvents } from '../lib/analytics';
+import { LinearGradient } from 'expo-linear-gradient';
 
 // Feature flag to hide AI refill functionality
 const ENABLE_AI_REFILL_FEATURES = false;
@@ -91,6 +93,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [fetched, setFetched] = useState(false);
   const [jobData, setJobData] = useState<{ status?: string; results?: GeneratedResult[]; summary?: any; completedAt?: string } | null>(null);
   const [dbImages, setDbImages] = useState<Record<string, string[]>>({});
+  const [isInputExpanded, setIsInputExpanded] = useState(false);
+
 
   // If we only get a jobId, fetch the job payload from Supabase once
   useEffect(() => {
@@ -299,14 +303,21 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const userImagesByIndex: Record<number, string[]> = useMemo(() => {
     const map: Record<number, string[]> = {};
 
+    // Helper to filter valid image URLs
+    const filterValidImages = (imgs: any[]): string[] => {
+      if (!Array.isArray(imgs)) return [];
+      return imgs.filter((url: any) => typeof url === 'string' && url.trim().length > 0);
+    };
+
     // Priority 0: Images passed via navigation params (from MatchSelectionScreen bulk scan)
     const paramsImages = (route.params as any)?.userImagesByIndex;
     if (paramsImages && typeof paramsImages === 'object') {
       Object.entries(paramsImages).forEach(([idxStr, imgs]) => {
         const idx = parseInt(idxStr, 10);
-        if (!isNaN(idx) && Array.isArray(imgs) && imgs.length > 0) {
-          map[idx] = imgs as string[];
-          console.log(`[userImagesByIndex] P0: Using params images for index ${idx}:`, (imgs as string[]).length);
+        const validImgs = filterValidImages(imgs as any[]);
+        if (!isNaN(idx) && validImgs.length > 0) {
+          map[idx] = validImgs;
+          console.log(`[userImagesByIndex] P0: Using params images for index ${idx}:`, validImgs.length);
         }
       });
     }
@@ -317,7 +328,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         if (r.variantId && dbImages[r.variantId]) {
           // Merge with params images, avoiding duplicates
           const existing = map[idx] || [];
-          const dbImgs = dbImages[r.variantId];
+          const dbImgs = filterValidImages(dbImages[r.variantId]);
           const merged = Array.from(new Set([...existing, ...dbImgs]));
           map[idx] = merged;
           console.log(`[userImagesByIndex] P1: Merged DB images for index ${idx}:`, dbImgs.length, 'Total:', merged.length);
@@ -332,8 +343,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const canonicalKey = keys.includes('shopify') ? 'shopify' : keys[0];
       if (canonicalKey) {
         const p = displayedPlatforms[canonicalKey];
-        const draftImages = p.images || p.imageUris || [];
-        if (Array.isArray(draftImages) && draftImages.length > 0) {
+        const draftImages = filterValidImages(p.images || p.imageUris || []);
+        if (draftImages.length > 0) {
           const idx = (first?.productIndex as number) ?? 0;
           // Merge with existing images if any, avoiding duplicates
           const existing = map[idx] || [];
@@ -377,12 +388,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
       // Create shopify with core fields from first platform
       // Handle various image field names across platforms
-      const imageUrls = firstPlatformData.images ||
+      const rawImageUrls = firstPlatformData.images ||
         firstPlatformData.imageUrls ||
         firstPlatformData.imageUrl ||
         firstPlatformData.image_link ||
         firstPlatformData.picURL ||
         (first.sourceImageUrl ? [first.sourceImageUrl] : []);
+
+      // Filter out empty strings, null, undefined values to prevent gray placeholder images
+      const imageUrls = (Array.isArray(rawImageUrls) ? rawImageUrls : (rawImageUrls ? [rawImageUrls] : []))
+        .filter((url: any) => typeof url === 'string' && url.trim().length > 0);
 
       normalized.shopify = {
         title: firstPlatformData.title || firstPlatformData.name || '',
@@ -395,7 +410,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         weight: firstPlatformData.weight || 0,
         weightUnit: firstPlatformData.weightUnit || 'kg',
         tags: firstPlatformData.tags || [],
-        images: Array.isArray(imageUrls) ? imageUrls : (imageUrls ? [imageUrls] : []),
+        images: imageUrls,
       };
     }
 
@@ -519,6 +534,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [regenActiveVersion, setRegenActiveVersion] = useState(0);
   const [regenSubmitting, setRegenSubmitting] = useState(false);
   const [regenAutoRun, setRegenAutoRun] = useState(false);
+  const [quickFixLoading, setQuickFixLoading] = useState(false);
   const [publishModalOpen, setPublishModalOpen] = useState(false);
   const [allConnections, setAllConnections] = useState<any[]>([]);
   const [selectedConnectionIds, setSelectedConnectionIds] = useState<Record<string, string>>({});
@@ -1239,7 +1255,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           const arr = p.images || p.imageUris || [];
           if (Array.isArray(arr)) {
             arr.forEach((u: string) => {
-              if (typeof u === 'string' && u && !u.includes('firecrawl') && !u.includes('serpapi')) {
+              // Filter out empty strings, null, undefined, and scraped URLs
+              if (typeof u === 'string' && u.trim().length > 0 && !u.includes('firecrawl') && !u.includes('serpapi')) {
                 imgs.add(u);
               }
             });
@@ -1250,7 +1267,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         const idx = (first?.productIndex as number) ?? 0;
         const userImages = userImagesByIndex[idx] || [];
         userImages.forEach((u: string) => {
-          if (typeof u === 'string' && u) {
+          // Filter out empty strings
+          if (typeof u === 'string' && u.trim().length > 0) {
             imgs.add(u);
           }
         });
@@ -2230,7 +2248,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               <ListingEditorForm
                 platforms={displayedPlatforms}
                 updateCounter={updateCounter}
-                images={(userImagesByIndex[(first?.productIndex as number) ?? 0] || []).filter(Boolean)}
+                images={(userImagesByIndex[(first?.productIndex as number) ?? 0] || []).filter((url: string) => typeof url === 'string' && url.trim().length > 0)}
                 onChangeImages={handleImagesChange}
                 platformLocations={platformLocations}
                 onChangePlatforms={(next) => {
@@ -2414,19 +2432,146 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         />
 
       </ScrollView>
-      <View style={{ backgroundColor: 'white', paddingBottom: 24 }}>
-        <BottomActionBar
-          primaryLabel={
-            canPublish
-              ? `Publish to ${readyPlatforms.length} platform${readyPlatforms.length === 1 ? '' : 's'}`
-              : 'Publish listing (not ready)'
-          }
-          primaryDisabled={!canPublish}
-          onPrimary={doPublish}
-          secondaryLabel={'Save draft'}
-          onSecondary={doSaveDraft}
-        />
-      </View>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+        }}
+      >
+        <View style={{
+          backgroundColor: 'transparent',
+          width: '100%',
+          zIndex: 100,
+        }}
+          pointerEvents="box-none"
+        >
+          <LinearGradient
+            colors={["rgba(255, 255, 255, 0)", "rgb(255, 255, 255)", "rgb(255, 255, 255)"]}
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left: 0,
+              right: 0,
+            }}
+            pointerEvents="none"
+          />
+
+          <View style={{ paddingTop: 20, paddingBottom: 24, paddingHorizontal: isInputExpanded ? 0 : 16 }}>
+            <SmartCommandInput
+              mode="quick_fix"
+              disableKeyboardHandling={true}
+              fullWidth={false}
+              onExpand={() => setIsInputExpanded(true)}
+              onCollapse={() => setIsInputExpanded(false)}
+              isLoading={quickFixLoading}
+              apiBaseUrl={process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL}
+              getAuthToken={ensureSupabaseJwt}
+              availableFields={(() => {
+                const fields: FieldOption[] = [];
+                platformKeys.forEach(pk => {
+                  ['title', 'description', 'tags', 'price', 'categorySuggestion', 'brand', 'condition'].forEach(f => {
+                    const label = platformKeys.length > 1 ? `${f.charAt(0).toUpperCase() + f.slice(1)} (${pk})` : f.charAt(0).toUpperCase() + f.slice(1);
+                    fields.push({ key: `${pk}.${f}`, label, platform: pk });
+                  });
+                });
+                return fields;
+              })()}
+              onSubmit={async (text, mentionedFields) => {
+                try {
+                  setQuickFixLoading(true);
+                  const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+                  const token = await ensureSupabaseJwt();
+                  const productId = (route.params as any)?.productId || first?.productId;
+                  const variantId = (route.params as any)?.variantId || first?.variantId;
+                  if (!baseUrl || !productId || !token) return;
+
+                  // Determine target platform from mentions or default to first
+                  const targetPlatform = mentionedFields.length > 0
+                    ? mentionedFields[0].split('.')[0]
+                    : platformKeys[0];
+
+                  const targetFields = mentionedFields.map(f => f.split('.').slice(1).join('.'));
+
+                  const res = await fetch(`${baseUrl}/api/products/regenerate/submit`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      mode: 'quick_fix',
+                      products: [{
+                        productIndex: currentProductIndex,
+                        productId,
+                        variantId,
+                        regenerateType: 'specific_fields',
+                        targetPlatform,
+                        targetFields: targetFields.length > 0 ? targetFields : undefined,
+                        userQuery: text,
+                        currentProductData: displayedPlatforms,
+                      }],
+                    }),
+                  });
+
+                  if (!res.ok) throw new Error('Quick fix failed');
+                  const data = await res.json();
+
+                  // Apply fixes to displayed platforms
+                  if (data?.results?.[0]?.fixes) {
+                    const fixes = data.results[0].fixes;
+                    const changedFields = data.results[0].changedFields || [];
+
+                    updatePlatforms(prev => {
+                      const updated = { ...prev };
+                      for (const [platform, fieldChanges] of Object.entries(fixes as Record<string, any>)) {
+                        updated[platform] = {
+                          ...(updated[platform] || {}),
+                          ...fieldChanges,
+                          __refilled: Array.from(new Set([
+                            ...((updated[platform] as any)?.__refilled || []),
+                            ...Object.keys(fieldChanges as Record<string, any>),
+                          ])),
+                        };
+                      }
+                      return updated;
+                    });
+
+                    console.log('[QuickFix] Applied fixes to fields:', changedFields);
+                  }
+                } catch (e) {
+                  console.error('[QuickFix] Error:', e);
+                  Alert.alert('Fix failed', 'Could not apply the AI fix. Please try again.');
+                } finally {
+                  setQuickFixLoading(false);
+                }
+              }}
+            />
+
+            <KeyboardAwareBottomActionBar
+              visible={!isInputExpanded}
+              style={{
+                position: 'relative',
+                bottom: 0,
+                left: 0,
+                right: 0,
+                paddingHorizontal: 0,
+                marginBottom: 0,
+              }}
+              primaryLabel={
+                canPublish
+                  ? `Publish to ${readyPlatforms.length} platform${readyPlatforms.length === 1 ? '' : 's'}`
+                  : 'Publish listing (not ready)'
+              }
+              primaryDisabled={!canPublish}
+              onPrimary={doPublish}
+              secondaryLabel={'Save draft'}
+              onSecondary={doSaveDraft}
+              tertiaryContent={<View style={{ height: 10 }} />}
+            />
+          </View>
+        </View>
+      </KeyboardAvoidingView>
 
 
       {!!lastFillCount && ENABLE_AI_REFILL_FEATURES && (
@@ -2891,14 +3036,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
             {/* Media Gallery Display */}
             <ScrollView style={{ marginBottom: 16, maxHeight: 300 }}>
-              {mediaGallery.length === 0 ? (
+              {mediaGallery.filter((url): url is string => typeof url === 'string' && url.trim().length > 0).length === 0 ? (
                 <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 32 }}>
                   <Icon name="image-off" size={48} color="#CCC" />
                   <Text style={{ color: '#666', marginTop: 12, fontSize: 14 }}>No images yet. Tap "Add Photos" to get started.</Text>
                 </View>
               ) : (
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                  {mediaGallery.map((imageUrl, index) => (
+                  {mediaGallery.filter((url): url is string => typeof url === 'string' && url.trim().length > 0).map((imageUrl, index) => (
                     <View key={index} style={{ position: 'relative', width: '30%', aspectRatio: 1 }}>
                       <Image source={{ uri: imageUrl }} style={{ width: '100%', height: '100%', borderRadius: 8 }} />
                       <TouchableOpacity

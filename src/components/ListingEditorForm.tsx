@@ -1378,7 +1378,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       <View style={styles.mediaRow}>
         <ScrollView style={{ paddingVertical: 10 }} horizontal={true} showsHorizontalScrollIndicator={false}>
           {/* Images first - Cover (index 0) appears on left */}
-          {(images || []).map((uri, i) => (
+          {/* Filter out empty/invalid URLs to prevent gray placeholder images */}
+          {(images || []).filter((uri): uri is string => typeof uri === 'string' && uri.trim().length > 0).map((uri, i) => (
             <View key={`${uri}-${i}`} style={{ position: 'relative', marginRight: 8 }}>
               <TouchableOpacity
                 style={[styles.thumbWrap, i === 0 && styles.thumbCover]}
@@ -1424,7 +1425,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           ))}
 
           {/* Pending uploads (optimistic UI) */}
-          {(pendingImages || []).map((uri, i) => (
+          {(pendingImages || []).filter((uri): uri is string => typeof uri === 'string' && uri.trim().length > 0).map((uri, i) => (
             <View key={`pending-${i}`} style={[styles.thumbWrap, { opacity: 0.6 }]}>
               <Image source={{ uri }} style={styles.thumb} />
               <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: 12 }]}>

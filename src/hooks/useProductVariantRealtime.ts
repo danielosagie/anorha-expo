@@ -220,9 +220,7 @@ export function useInventoryLevelsRealtime() {
   const maxRetries = 3;  useEffect(() => {
     console.log('[Real-time] Setting up InventoryLevels subscription...');
     let subscription: ReturnType<typeof supabase.channel> | null = null;
-    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
-
-    const setupSubscription = () => {
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;    const setupSubscription = () => {
       subscription = supabase
         .channel('inventory-levels-all')
         .on(

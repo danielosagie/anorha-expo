@@ -17,6 +17,7 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import Animated, { FadeInUp, FadeIn } from 'react-native-reanimated';
 import PillTabs from '../components/ui/PillTabs';
+import { supabase } from '../../lib/supabase';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -43,6 +44,7 @@ interface RouteParams {
     csvHeaders: string[];
     csvData: any[];
     sampleRow: Record<string, string>;
+    connectionName?: string;
 }
 
 type CSVColumnMappingScreenRouteProp = RouteProp<{ CSVColumnMapping: RouteParams }, 'CSVColumnMapping'>;
@@ -53,7 +55,7 @@ export function CSVColumnMappingScreen() {
     const { getToken } = useAuth();
 
     // Default empty params if undefined to prevent crashes
-    const { csvHeaders = [], csvData = [], sampleRow = {} } = route.params || {};
+    const { csvHeaders = [], csvData = [], sampleRow = {}, connectionName = 'CSV Import' } = route.params || {};
 
     const [mappings, setMappings] = useState<Record<string, string>>({});
     const [isProcessing, setIsProcessing] = useState(false);
@@ -156,12 +158,42 @@ export function CSVColumnMappingScreen() {
                 return transformed;
             });
 
+            // Create persistent CSV connection record in UserPlatforms
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) throw new Error('Not authenticated');
+
+            const { data: newConnection, error: insertError } = await supabase
+                .from('UserPlatforms')
+                .insert({
+                    UserId: user.id,
+                    PlatformType: 'csv',
+                    DisplayName: connectionName,
+                    Status: 'active',
+                    IsEnabled: true,
+                })
+                .select()
+                .single();
+
+            if (insertError) {
+                console.error('[CSVColumnMapping] Failed to create CSV connection:', insertError);
+                // Fall back to old behavior if insert fails
+                navigation.navigate('MappingReview', {
+                    connectionId: 'csv-import',
+                    platformName: connectionName,
+                    importedProducts: transformedData,
+                    isCSVImport: true,
+                } as any);
+                return;
+            }
+
+            console.log('[CSVColumnMapping] Created CSV connection:', newConnection.Id);
+
             navigation.navigate('MappingReview', {
-                connectionId: 'csv-import',
-                platformName: 'CSV Import',
+                connectionId: newConnection.Id,
+                platformName: connectionName,
                 importedProducts: transformedData,
                 isCSVImport: true,
-            });
+            } as any);
         } catch (error) {
             console.error('[CSVColumnMapping] Error processing data:', error);
             Alert.alert('Error', 'Failed to process CSV data.');

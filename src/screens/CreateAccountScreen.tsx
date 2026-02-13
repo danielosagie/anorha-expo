@@ -18,6 +18,8 @@ import {
 import PhoneInput from 'react-native-phone-number-input';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
+import { Camera } from 'expo-camera';
+import { AudioModule } from 'expo-audio';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { CompositeNavigationProp, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -79,6 +81,8 @@ interface FormData {
   invites: string[];
   locationPermission: boolean;
   notificationPermission: boolean;
+  microphonePermission: boolean;
+  cameraPermission: boolean;
   agreedToLegal: boolean;
   // Business Address fields
   street1: string;
@@ -578,23 +582,35 @@ const TeamStep = memo(({
 const PermissionsAndLegalStep = memo(({
   isRequestingLoc,
   isRequestingNotif,
+  isRequestingMic,
+  isRequestingCamera,
   locPerm,
   notifPerm,
+  micPerm,
+  cameraPerm,
   agreed,
   loading,
   onRequestLoc,
   onRequestNotif,
+  onRequestMic,
+  onRequestCamera,
   onToggleAgree,
   onFinish
 }: {
   isRequestingLoc: boolean,
   isRequestingNotif: boolean,
+  isRequestingMic: boolean,
+  isRequestingCamera: boolean,
   locPerm: boolean,
   notifPerm: boolean,
+  micPerm: boolean,
+  cameraPerm: boolean,
   agreed: boolean,
   loading: boolean,
   onRequestLoc: () => void,
   onRequestNotif: () => void,
+  onRequestMic: () => void,
+  onRequestCamera: () => void,
   onToggleAgree: () => void,
   onFinish: () => void
 }) => (
@@ -644,6 +660,48 @@ const PermissionsAndLegalStep = memo(({
         </View>
         {notifPerm ? <Icon name="check-circle" size={24} color={ONBOARDING.green} /> : <Icon name="chevron-right" size={24} color={ONBOARDING.title} />}
       </TouchableOpacity>
+
+      {/* Microphone */}
+      <TouchableOpacity
+        style={[styles.permCard, micPerm && { borderWidth: 2, borderColor: ONBOARDING.green, backgroundColor: 'rgba(92,156,0,0.12)' }]}
+        onPress={onRequestMic}
+        activeOpacity={0.8}
+        disabled={isRequestingMic || micPerm}
+      >
+        <View style={[styles.iconCircle, { backgroundColor: micPerm ? 'rgba(92,156,0,0.25)' : 'rgba(0,0,0,0.15)' }]}>
+          {isRequestingMic ? (
+            <ActivityIndicator size="small" color={ONBOARDING.title} />
+          ) : (
+            <Icon name="microphone" size={24} color={micPerm ? ONBOARDING.green : ONBOARDING.title} />
+          )}
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.permTitle}>Enable Microphone</Text>
+          <Text style={styles.permDesc}>{micPerm ? "Enabled" : "For voice search & commands"}</Text>
+        </View>
+        {micPerm ? <Icon name="check-circle" size={24} color={ONBOARDING.green} /> : <Icon name="chevron-right" size={24} color={ONBOARDING.title} />}
+      </TouchableOpacity>
+
+      {/* Camera */}
+      <TouchableOpacity
+        style={[styles.permCard, cameraPerm && { borderWidth: 2, borderColor: ONBOARDING.green, backgroundColor: 'rgba(92,156,0,0.12)' }]}
+        onPress={onRequestCamera}
+        activeOpacity={0.8}
+        disabled={isRequestingCamera || cameraPerm}
+      >
+        <View style={[styles.iconCircle, { backgroundColor: cameraPerm ? 'rgba(92,156,0,0.25)' : 'rgba(0,0,0,0.15)' }]}>
+          {isRequestingCamera ? (
+            <ActivityIndicator size="small" color={ONBOARDING.title} />
+          ) : (
+            <Icon name="camera" size={24} color={cameraPerm ? ONBOARDING.green : ONBOARDING.title} />
+          )}
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.permTitle}>Enable Camera</Text>
+          <Text style={styles.permDesc}>{cameraPerm ? "Enabled" : "For scanning barcodes & photos"}</Text>
+        </View>
+        {cameraPerm ? <Icon name="check-circle" size={24} color={ONBOARDING.green} /> : <Icon name="chevron-right" size={24} color={ONBOARDING.title} />}
+      </TouchableOpacity>
     </View>
 
     {/* Legal Section at Bottom */}
@@ -691,6 +749,8 @@ export default function CreateAccountScreen() {
   const [isLoadingAddress, setIsLoadingAddress] = useState(false);
   const [isRequestingLoc, setIsRequestingLoc] = useState(false);
   const [isRequestingNotif, setIsRequestingNotif] = useState(false);
+  const [isRequestingMic, setIsRequestingMic] = useState(false);
+  const [isRequestingCamera, setIsRequestingCamera] = useState(false);
 
   const [formData, setFormData] = useState<FormData>({
     businessName: '',
@@ -704,6 +764,8 @@ export default function CreateAccountScreen() {
     invites: [],
     locationPermission: false,
     notificationPermission: false,
+    microphonePermission: false,
+    cameraPermission: false,
     agreedToLegal: false,
     // Business Address
     street1: '',
@@ -921,6 +983,82 @@ export default function CreateAccountScreen() {
       setIsRequestingNotif(false);
     }
   }, [isRequestingNotif]);
+
+  const requestMicrophone = useCallback(async () => {
+    if (isRequestingMic) return;
+    setIsRequestingMic(true);
+    try {
+      const { status: existingStatus } = await AudioModule.getPermissionsAsync();
+
+      // If already granted, just update state
+      if (existingStatus === 'granted') {
+        setFormData(prev => ({ ...prev, microphonePermission: true }));
+        return;
+      }
+
+      // If already denied, prompt settings
+      if (existingStatus === 'denied') {
+        Alert.alert(
+          'Microphone Access Disabled',
+          'To use voice search and voice commands, please enable microphone access in settings.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() }
+          ]
+        );
+        setFormData(prev => ({ ...prev, microphonePermission: false }));
+        return;
+      }
+
+      // Request new
+      const { status } = await AudioModule.requestRecordingPermissionsAsync();
+      setFormData(prev => ({ ...prev, microphonePermission: status === 'granted' }));
+
+    } catch (err) {
+      console.log('Microphone error', err);
+      setFormData(prev => ({ ...prev, microphonePermission: false }));
+    } finally {
+      setIsRequestingMic(false);
+    }
+  }, [isRequestingMic]);
+
+  const requestCamera = useCallback(async () => {
+    if (isRequestingCamera) return;
+    setIsRequestingCamera(true);
+    try {
+      const { status: existingStatus } = await Camera.getCameraPermissionsAsync();
+
+      // If already granted, just update state
+      if (existingStatus === 'granted') {
+        setFormData(prev => ({ ...prev, cameraPermission: true }));
+        return;
+      }
+
+      // If already denied, prompt settings
+      if (existingStatus === 'denied') {
+        Alert.alert(
+          'Camera Access Disabled',
+          'To scan barcodes and take photos, please enable camera access in settings.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() }
+          ]
+        );
+        setFormData(prev => ({ ...prev, cameraPermission: false }));
+        return;
+      }
+
+      // Request new
+      const { status } = await Camera.requestCameraPermissionsAsync();
+      setFormData(prev => ({ ...prev, cameraPermission: status === 'granted' }));
+
+    } catch (err) {
+      console.log('Camera error', err);
+      setFormData(prev => ({ ...prev, cameraPermission: false }));
+    } finally {
+      setIsRequestingCamera(false);
+    }
+  }, [isRequestingCamera]);
 
   const handleFinish = useCallback(async () => {
     if (!formData.agreedToLegal) return;
@@ -1164,12 +1302,18 @@ export default function CreateAccountScreen() {
             <PermissionsAndLegalStep
               locPerm={formData.locationPermission}
               notifPerm={formData.notificationPermission}
+              micPerm={formData.microphonePermission}
+              cameraPerm={formData.cameraPermission}
               agreed={formData.agreedToLegal}
               loading={loading}
               isRequestingLoc={isRequestingLoc}
               isRequestingNotif={isRequestingNotif}
+              isRequestingMic={isRequestingMic}
+              isRequestingCamera={isRequestingCamera}
               onRequestLoc={requestLocation}
               onRequestNotif={requestNotifications}
+              onRequestMic={requestMicrophone}
+              onRequestCamera={requestCamera}
               onToggleAgree={() => setFormData(p => ({ ...p, agreedToLegal: !p.agreedToLegal }))}
               onFinish={handleFinish}
             />
