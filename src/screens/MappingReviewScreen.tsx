@@ -1406,7 +1406,7 @@ const MappingReviewScreen = () => {
     console.log(`[MappingReviewScreen] Effect triggered - isPolling: ${isPolling}, connectionId: ${connectionId}, jobId: ${jobId}, loading: ${loading}`);
 
     // Initial fetch
-    if (isCSVImport && importedProducts) {
+    if ((isCSVImport || connectionId === 'csv-import') && importedProducts) {
       // Initialize suggestions from CSV data
       setLoading(true);
       try {
@@ -1741,24 +1741,27 @@ const MappingReviewScreen = () => {
         // but for now relying on the mapped suggestion data is safer.
 
         // Construct the DTO expected by POST /api/products
+        // Construct the DTO expected by POST /api/products
+        // Sanitize data to match ProductVariants table columns to avoid 500 errors
+        const options: Record<string, any> = {};
+        if ((item as any).originalData?.size) options['Size'] = (item as any).originalData.size;
+        if ((item as any).originalData?.color) options['Color'] = (item as any).originalData.color;
+        if ((item as any).originalData?.brand) options['Brand'] = (item as any).originalData.brand;
+        if ((item as any).originalData?.category) options['Category'] = (item as any).originalData.category;
+        if ((item as any).originalData?.condition) options['Condition'] = (item as any).originalData.condition;
+
         const productData = {
-          userId: (legendState?.userId) || '', // Will be validated by backend token anyway
+          userId: (legendState?.userId) || '',
           variantData: {
             Title: item.platformProduct.title,
             Sku: item.platformProduct.sku,
             Price: item.platformProduct.price,
-            Description: (item as any).originalData?.description || item.platformProduct.title, // Fallback
-            // Add other fields if captured in originalData
+            Description: (item as any).originalData?.description || item.platformProduct.title,
             Barcode: (item as any).originalData?.barcode,
-            Quantity: (item as any).originalData?.quantity ? Number((item as any).originalData.quantity) : 0,
-            Cost: (item as any).originalData?.cost ? Number((item as any).originalData.cost) : undefined,
+            // Only include fields that exist in ProductVariants table
             Weight: (item as any).originalData?.weight ? Number((item as any).originalData.weight) : undefined,
-            Size: (item as any).originalData?.size,
-            Color: (item as any).originalData?.color,
-            Brand: (item as any).originalData?.brand,
-            Category: (item as any).originalData?.category,
-            Condition: (item as any).originalData?.condition,
-            PrimaryImageUrl: item.platformProduct.imageUrl,
+            Options: Object.keys(options).length > 0 ? options : undefined,
+            PrimaryImageUrl: item.platformProduct.imageUrl, // Backend now handles this separately!
           }
         };
 
@@ -1773,7 +1776,8 @@ const MappingReviewScreen = () => {
           });
 
           if (!res.ok) {
-            console.error(`Failed to import item ${i}: status ${res.status}`);
+            const errorText = await res.text().catch(() => 'No error body');
+            console.error(`Failed to import item ${i}: status ${res.status}`, errorText);
             failCount++;
           } else {
             const created = await res.json().catch(() => ({}));
@@ -1789,8 +1793,8 @@ const MappingReviewScreen = () => {
             }
             successCount++;
           }
-        } catch (e) {
-          console.error(`Failed to import item ${i}:`, e);
+        } catch (e: any) {
+          console.error(`Failed to import item ${i}:`, e.message || e);
           failCount++;
         }
 

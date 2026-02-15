@@ -173,14 +173,20 @@ const InventoryOrdersScreen = observer(() => {
   const [reviewModalVisible, setReviewModalVisible] = useState(false);
 
   // Bulk Selection Handlers
+  // Bulk Selection Handlers
   const handleLongPressItem = (id: string) => {
-    if (!isSelectionMode) {
-      setIsSelectionMode(true);
-      const newSet = new Set<string>();
-      newSet.add(id);
-      setSelectedItems(newSet);
-      // Haptic feedback could be added here
-    }
+    // Standardize: Long press ALWAYS enters drag mode for that item
+    setIsSelectionMode(true);
+
+    // Select the item if not selected (or ensure it's the start of drag)
+    const newSet = new Set(selectedItems);
+    newSet.add(id);
+    setSelectedItems(newSet);
+
+    // Start Drag Session
+    isDraggingSelection.current = true;
+    lastSelectedId.current = id;
+    setScrollEnabled(false);
   };
 
   const handleToggleSelection = useCallback((id: string, forceState?: boolean) => {
@@ -258,6 +264,7 @@ const InventoryOrdersScreen = observer(() => {
   const [liquidationAmount, setLiquidationAmount] = useState("");
   const [liquidationStrategy, setLiquidationStrategy] = useState<'aggressive' | 'moderate' | 'conservative'>('moderate');
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [scrollEnabled, setScrollEnabled] = useState(true);
 
   // Drag-to-select refs
   const itemLayouts = useRef<{ [key: string]: { y: number; height: number } }>({});
@@ -308,16 +315,16 @@ const InventoryOrdersScreen = observer(() => {
   const panResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponderCapture: (evt, gestureState) => {
-        // Use Capture to steal events from the FlatList child
-        // Use pageX to be safe regardless of target hierarchy
-        return isSelectionMode && evt.nativeEvent.pageX < 60 && Math.abs(gestureState.dy) > 5;
+        // Only capture if we are explicitly in a drag session (triggered by long press)
+        // AND there is movement.
+        return isDraggingSelection.current && Math.abs(gestureState.dy) > 2;
       },
       onPanResponderGrant: () => {
-        isDraggingSelection.current = true;
+        // Already handled in long press, but ensure state
         autoScrollActive.current = false;
       },
       onPanResponderMove: (evt, gestureState) => {
-        if (!isSelectionMode) return;
+        if (!isDraggingSelection.current) return;
 
         const y = evt.nativeEvent.locationY;
         currentTouchY.current = y;
@@ -349,7 +356,7 @@ const InventoryOrdersScreen = observer(() => {
           autoScrollActive.current = false;
         }
 
-        // Standard selection if not scrolling fast (or even if scrolling, we update here too)
+        // Standard selection
         performSelectionAt(y, scrollOffset.current);
       },
       onPanResponderTerminationRequest: () => false,
@@ -357,11 +364,13 @@ const InventoryOrdersScreen = observer(() => {
         isDraggingSelection.current = false;
         lastSelectedId.current = null;
         autoScrollActive.current = false;
+        setScrollEnabled(true);
       },
       onPanResponderTerminate: () => {
         isDraggingSelection.current = false;
         lastSelectedId.current = null;
         autoScrollActive.current = false;
+        setScrollEnabled(true);
       },
     })
   ).current;
@@ -1487,6 +1496,7 @@ const InventoryOrdersScreen = observer(() => {
             >
               <FlatList
                 ref={listRef}
+                scrollEnabled={scrollEnabled}
                 data={inventoryToDisplay}
                 renderItem={renderInventoryItem}
                 keyExtractor={item => item.Id.toString()}

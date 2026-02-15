@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, memo, useContext } from 'react';
+import React, { useState, useRef, useCallback, memo, useContext, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,10 +11,10 @@ import {
   ActivityIndicator,
   Linking,
   Alert,
-  SafeAreaView,
   ScrollView,
   Image,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import PhoneInput from 'react-native-phone-number-input';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
@@ -139,8 +139,8 @@ const Stepper = memo(({ currentStep }: { currentStep: Step }) => {
             style={[
               styles.stepDot,
               isActive && styles.stepDotActive,
-              index === (currentIndex - 1) && { transform: [{ scale: 1.2 }] }
             ]}
+
           />
         );
       })}
@@ -150,7 +150,7 @@ const Stepper = memo(({ currentStep }: { currentStep: Step }) => {
 
 const WelcomeStep = memo(({ onNext, onBack, showBackButton, onSignOut }: { onNext: () => void; onBack: () => void; showBackButton: boolean; onSignOut?: () => void }) => (
   <Animated.View entering={FadeIn} exiting={FadeOut} style={styles.stepContainer}>
-    <View style={{ flex: 1, alignContent: "space-between" }}>
+    <View style={{ flex: 1, alignContent: "space-between", marginTop: 0 }}>
       <View style={{
         marginTop: 30,
         flex: 1,
@@ -166,7 +166,7 @@ const WelcomeStep = memo(({ onNext, onBack, showBackButton, onSignOut }: { onNex
         <View style={{ flex: 1 }} />
       </View>
 
-      <View style={{ gap: 12 }}>
+      <View style={{ gap: 12}}>
         <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
           <Text style={styles.primaryButtonText}>Let's Go</Text>
           <Icon name="arrow-right" size={24} color="#fff" />
@@ -201,7 +201,7 @@ const WelcomeStep = memo(({ onNext, onBack, showBackButton, onSignOut }: { onNex
               paddingHorizontal: 32,
               alignSelf: "auto",
               backgroundColor: 'rgba(0, 0, 0, 0.1)',
-              borderRadius: 8,
+              borderRadius: 16,
               shadowOffset: { width: 0, height: 2 },
               shadowOpacity: 0.2,
               shadowRadius: 8,
@@ -210,7 +210,7 @@ const WelcomeStep = memo(({ onNext, onBack, showBackButton, onSignOut }: { onNex
             }}
             onPress={onSignOut}
           >
-            <Text style={{ textAlign: "center", fontSize: 18, fontWeight: 500, color: ONBOARDING.title }}>Back</Text>
+            <Text style={{ textAlign: "center", fontSize: 18, fontWeight: 600, color: ONBOARDING.title }}>Back</Text>
           </TouchableOpacity>
         ) : null)}
       </View>
@@ -553,15 +553,15 @@ const TeamStep = memo(({
           </TouchableOpacity>
         </View>
         <View style={styles.inviteList}>
-          {invites.map((email, index) => (
-            <View key={index} style={styles.inviteItem}>
+          {invites.map((email) => (
+            <View key={email} style={styles.inviteItem}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <View style={styles.inviteAvatar}>
                   <Text style={styles.inviteInitials}>{email.charAt(0).toUpperCase()}</Text>
                 </View>
                 <Text style={styles.inviteEmail}>{email}</Text>
               </View>
-              <TouchableOpacity onPress={() => onRemove(email)}>
+              <TouchableOpacity onPress={() => onRemove(email)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <Icon name="close-circle" size={20} color={ONBOARDING.subtitle} />
               </TouchableOpacity>
             </View>
@@ -572,7 +572,7 @@ const TeamStep = memo(({
         </View>
       </View>
       <View style={{ flex: 1 }} />
-      <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
+      <TouchableOpacity style={styles.primaryButton} onPress={onNext} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
         <Text style={styles.primaryButtonText}>{invites.length > 0 ? "Next" : "Skip"}</Text>
       </TouchableOpacity>
     </Animated.View>
@@ -706,7 +706,7 @@ const PermissionsAndLegalStep = memo(({
 
     {/* Legal Section at Bottom */}
     <View style={{ marginTop: 32, padding: 16, backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: 16 }}>
-      <TouchableOpacity style={styles.checkboxRow} onPress={onToggleAgree}>
+      <TouchableOpacity style={styles.checkboxRow} onPress={onToggleAgree} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
         <View style={[styles.checkbox, agreed && styles.checkboxActive]}>
           {agreed && <Icon name="check" size={16} color="#FFFFFF" />}
         </View>
@@ -728,6 +728,7 @@ const PermissionsAndLegalStep = memo(({
       style={[styles.primaryButton, (!agreed || loading) && { opacity: 0.5 }]}
       onPress={onFinish}
       disabled={!agreed || loading}
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
     >
       {loading ? <ActivityIndicator color={ONBOARDING.green} /> : <Text style={styles.primaryButtonText}>Agree & Finish</Text>}
     </TouchableOpacity>
@@ -742,6 +743,7 @@ export default function CreateAccountScreen() {
   const { user: clerkUser } = useUser();
   const { createOrganization } = useOrganizationList();
   const { refreshOrgs } = useOrg();
+  const insets = useSafeAreaInsets();
 
   // State
   const [currentStep, setCurrentStep] = useState<Step>('WELCOME');
@@ -776,7 +778,13 @@ export default function CreateAccountScreen() {
     country: 'US',
   });
 
+  // Refs for stable callbacks
+  const formDataRef = useRef(formData);
   const phoneInputRef = useRef<PhoneInput>(null);
+
+  // Update ref on render
+  formDataRef.current = formData;
+
   const [formattedPhone, setFormattedPhone] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
 
@@ -785,6 +793,19 @@ export default function CreateAccountScreen() {
   const goToStep = useCallback((step: Step) => {
     setCurrentStep(step);
   }, []);
+
+  // Stable handlers
+  const setBusinessName = useCallback((t: string) => setFormData(p => ({ ...p, businessName: t })), []);
+  const setStreet1 = useCallback((t: string) => setFormData(p => ({ ...p, street1: t })), []);
+  const setStreet2 = useCallback((t: string) => setFormData(p => ({ ...p, street2: t })), []);
+  const setCity = useCallback((t: string) => setFormData(p => ({ ...p, city: t })), []);
+  const setState = useCallback((t: string) => setFormData(p => ({ ...p, state: t })), []);
+  const setPostalCode = useCallback((t: string) => setFormData(p => ({ ...p, postalCode: t })), []);
+  const setCountry = useCallback((t: string) => setFormData(p => ({ ...p, country: t })), []);
+  const setBusinessType = useCallback((id: string) => setFormData(p => ({ ...p, businessType: id })), []);
+  const setCustomBusinessType = useCallback((t: string) => setFormData(p => ({ ...p, customBusinessType: t })), []);
+  const setRole = useCallback((id: string) => setFormData(p => ({ ...p, role: id })), []);
+  const setCustomRole = useCallback((t: string) => setFormData(p => ({ ...p, customRole: t })), []);
 
   // Use My Location for address autofill
   const handleUseLocation = useCallback(async () => {
@@ -824,7 +845,6 @@ export default function CreateAccountScreen() {
         }
       }
     } catch (err) {
-      console.log('Location error', err);
       Alert.alert('Location Error', 'Could not get your location. Please enter your address manually.');
     } finally {
       setIsLoadingAddress(false);
@@ -832,8 +852,10 @@ export default function CreateAccountScreen() {
   }, []);
 
   const handleNext = useCallback(async () => {
+    const currentFormData = formDataRef.current;
+
     if (currentStep === 'BUSINESS_NAME') {
-      if (!formData.businessName.trim()) {
+      if (!currentFormData.businessName.trim()) {
         Alert.alert('Missing Info', 'Please enter your business name.');
         return;
       }
@@ -842,21 +864,21 @@ export default function CreateAccountScreen() {
       // Address is optional, just proceed
       goToStep('BUSINESS_TYPE');
     } else if (currentStep === 'BUSINESS_TYPE') {
-      if (!formData.businessType) {
+      if (!currentFormData.businessType) {
         Alert.alert('Missing Info', 'Please select a business type.');
         return;
       }
-      if (formData.businessType === 'other' && !formData.customBusinessType.trim()) {
+      if (currentFormData.businessType === 'other' && !currentFormData.customBusinessType.trim()) {
         Alert.alert('Missing Info', 'Please specify your business type.');
         return;
       }
       goToStep('ROLE');
     } else if (currentStep === 'ROLE') {
-      if (!formData.role) {
+      if (!currentFormData.role) {
         Alert.alert('Missing Info', 'Please select your role.');
         return;
       }
-      if (formData.role === 'other' && !formData.customRole.trim()) {
+      if (currentFormData.role === 'other' && !currentFormData.customRole.trim()) {
         Alert.alert('Missing Info', 'Please specify your role.');
         return;
       }
@@ -871,7 +893,7 @@ export default function CreateAccountScreen() {
     } else if (currentStep === 'TEAM') {
       goToStep('FINISH');
     }
-  }, [currentStep, formData, formattedPhone, goToStep]);
+  }, [currentStep, formattedPhone, goToStep]);
 
   const addInvite = useCallback(() => {
     const email = inviteEmail.trim();
@@ -940,7 +962,7 @@ export default function CreateAccountScreen() {
         }
       }
     } catch (err) {
-      console.log('Location error', err);
+      // ignore
     } finally {
       setIsRequestingLoc(false);
     }
@@ -977,7 +999,6 @@ export default function CreateAccountScreen() {
       setFormData(prev => ({ ...prev, notificationPermission: status === 'granted' }));
 
     } catch (err) {
-      console.log('Notif error', err);
       setFormData(prev => ({ ...prev, notificationPermission: false }));
     } finally {
       setIsRequestingNotif(false);
@@ -988,16 +1009,16 @@ export default function CreateAccountScreen() {
     if (isRequestingMic) return;
     setIsRequestingMic(true);
     try {
-      const { status: existingStatus } = await AudioModule.getPermissionsAsync();
+      const permission = await AudioModule.requestRecordingPermissionsAsync();
 
       // If already granted, just update state
-      if (existingStatus === 'granted') {
+      if (permission.granted) {
         setFormData(prev => ({ ...prev, microphonePermission: true }));
         return;
       }
 
-      // If already denied, prompt settings
-      if (existingStatus === 'denied') {
+      // If denied, prompt settings. Note: permission.status might also be helpful
+      if (!permission.granted && !permission.canAskAgain) {
         Alert.alert(
           'Microphone Access Disabled',
           'To use voice search and voice commands, please enable microphone access in settings.',
@@ -1010,12 +1031,9 @@ export default function CreateAccountScreen() {
         return;
       }
 
-      // Request new
-      const { status } = await AudioModule.requestRecordingPermissionsAsync();
-      setFormData(prev => ({ ...prev, microphonePermission: status === 'granted' }));
+      setFormData(prev => ({ ...prev, microphonePermission: permission.granted }));
 
     } catch (err) {
-      console.log('Microphone error', err);
       setFormData(prev => ({ ...prev, microphonePermission: false }));
     } finally {
       setIsRequestingMic(false);
@@ -1053,7 +1071,6 @@ export default function CreateAccountScreen() {
       setFormData(prev => ({ ...prev, cameraPermission: status === 'granted' }));
 
     } catch (err) {
-      console.log('Camera error', err);
       setFormData(prev => ({ ...prev, cameraPermission: false }));
     } finally {
       setIsRequestingCamera(false);
@@ -1102,7 +1119,7 @@ export default function CreateAccountScreen() {
 
       // 4. Sync Clerk Phone
       if (formData.phone) {
-        try { await clerkUser.createPhoneNumber({ phoneNumber: formData.phone }); } catch (e) { console.log('Clerk phone sync skipped', e); }
+        try { await clerkUser.createPhoneNumber({ phoneNumber: formData.phone }); } catch (e) { /* ignore */ }
       }
 
       // 5. Create Org & Invites
@@ -1116,7 +1133,7 @@ export default function CreateAccountScreen() {
               try { await org.inviteMember({ emailAddress: email, role: 'org:member' }); } catch (inviteErr) { console.warn(`Failed to invite ${email}`, inviteErr); }
             }
           }
-        } catch (e) { console.log('Org creation skipped', e); }
+        } catch (e) { /* ignore */ }
       }
 
       // 5.5 Update org business address (includes phone)
@@ -1154,7 +1171,7 @@ export default function CreateAccountScreen() {
               console.warn('[CreateAccount] Missing Supabase JWT; skipped org business address update');
             }
           } catch (addrErr) {
-            console.warn('[CreateAccount] Failed to update org business address', addrErr);
+            // Error handling
           }
         }
       }
@@ -1183,7 +1200,6 @@ export default function CreateAccountScreen() {
       });
 
     } catch (error: any) {
-      console.error('Onboarding Error:', error);
       Alert.alert('Error', 'Setup failed. Please try again.');
     } finally {
       setLoading(false);
@@ -1192,7 +1208,7 @@ export default function CreateAccountScreen() {
 
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       {currentStep !== 'WELCOME' && (
         <View style={styles.headerRow}>
           <TouchableOpacity onPress={() => {
@@ -1203,7 +1219,7 @@ export default function CreateAccountScreen() {
             if (currentStep === 'CONTACT') goToStep('ROLE');
             if (currentStep === 'TEAM') goToStep('CONTACT');
             if (currentStep === 'FINISH') goToStep('TEAM');
-          }} style={{ padding: 10 }}>
+          }} style={{ padding: 10 }} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
             <Icon name="arrow-left" size={24} color={ONBOARDING.title} />
           </TouchableOpacity>
 
@@ -1213,10 +1229,10 @@ export default function CreateAccountScreen() {
         </View>
       )}
 
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ minHeight: '90%' }}>
         <ScrollView
-          contentContainerStyle={{ flexGrow: 1 }}
-          keyboardShouldPersistTaps="always"
+          contentContainerStyle={{ flexGrow: 1, paddingBottom: Math.max(insets.bottom, 20) }}
+          keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
         >
           {currentStep === 'WELCOME' && (
@@ -1231,7 +1247,7 @@ export default function CreateAccountScreen() {
           {currentStep === 'BUSINESS_NAME' && (
             <BusinessNameStep
               value={formData.businessName}
-              onChange={(t) => setFormData(p => ({ ...p, businessName: t }))}
+              onChange={setBusinessName}
               onNext={handleNext}
             />
           )}
@@ -1244,12 +1260,12 @@ export default function CreateAccountScreen() {
               state={formData.state}
               postalCode={formData.postalCode}
               country={formData.country}
-              onStreet1Change={(t) => setFormData(p => ({ ...p, street1: t }))}
-              onStreet2Change={(t) => setFormData(p => ({ ...p, street2: t }))}
-              onCityChange={(t) => setFormData(p => ({ ...p, city: t }))}
-              onStateChange={(t) => setFormData(p => ({ ...p, state: t }))}
-              onPostalCodeChange={(t) => setFormData(p => ({ ...p, postalCode: t }))}
-              onCountryChange={(t) => setFormData(p => ({ ...p, country: t }))}
+              onStreet1Change={setStreet1}
+              onStreet2Change={setStreet2}
+              onCityChange={setCity}
+              onStateChange={setState}
+              onPostalCodeChange={setPostalCode}
+              onCountryChange={setCountry}
               onNext={handleNext}
               onSkip={() => goToStep('BUSINESS_TYPE')}
               onUseLocation={handleUseLocation}
@@ -1262,8 +1278,8 @@ export default function CreateAccountScreen() {
               businessName={formData.businessName}
               selectedType={formData.businessType}
               customType={formData.customBusinessType}
-              onSelect={(id) => setFormData(p => ({ ...p, businessType: id }))}
-              onCustomChange={(t) => setFormData(p => ({ ...p, customBusinessType: t }))}
+              onSelect={setBusinessType}
+              onCustomChange={setCustomBusinessType}
               onNext={handleNext}
             />
           )}
@@ -1272,8 +1288,8 @@ export default function CreateAccountScreen() {
             <RoleStep
               selectedRole={formData.role}
               customRole={formData.customRole}
-              onSelect={(id) => setFormData(p => ({ ...p, role: id }))}
-              onCustomChange={(t) => setFormData(p => ({ ...p, customRole: t }))}
+              onSelect={setRole}
+              onCustomChange={setCustomRole}
               onNext={handleNext}
             />
           )}
@@ -1343,7 +1359,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   stepDot: {
-    width: 8,
+    width: 24,
     height: 8,
     borderRadius: 4,
     backgroundColor: "#FFF",
@@ -1453,6 +1469,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     gap: 12,
+    marginBottom: 0,
   },
   primaryButtonText: {
     fontSize: 18,

@@ -1440,20 +1440,44 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }
   };
 
-  const doSaveDraft = async () => {
-    console.log('[doSaveDraft] Starting draft save...');
+  const doSaveToInventory = async () => {
+    console.log('[doSaveToInventory] Starting inventory save...');
     try {
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
       const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || first?.productId;
       const variantId = (route.params as any)?.variantId || first?.variantId;
       if (!baseUrl || !productId || !variantId || !token) {
-        console.log('[doSaveDraft] Missing required data');
+        console.log('[doSaveToInventory] Missing required data');
         return;
       }
 
       const payload = buildPlatformPayload();
-      console.log('[doSaveDraft] Saving payload:', JSON.stringify(payload, null, 2));
+
+      // SKU Enhancement: If SKU is DRAFT- or missing, generate a permanent INV- SKU
+      let finalSku = payload.platformDetails.canonical.sku;
+      if (!finalSku || finalSku.startsWith('DRAFT-')) {
+        const randomSuffix = Math.random().toString(36).substring(2, 10).toUpperCase();
+        finalSku = `INV-${randomSuffix}`;
+        console.log('[doSaveToInventory] Generated permanent SKU:', finalSku);
+
+        // Update payload with new SKU
+        payload.platformDetails.canonical.sku = finalSku;
+
+        // Also update local state immediately so UI reflects it if save fails/succeeds
+        const canonicalKey = platformKeys.includes('shopify') ? 'shopify' : platformKeys[0];
+        if (canonicalKey) {
+          updatePlatforms(prev => ({
+            ...prev,
+            [canonicalKey]: {
+              ...prev[canonicalKey],
+              sku: finalSku
+            }
+          }));
+        }
+      }
+
+      console.log('[doSaveToInventory] Saving payload:', JSON.stringify(payload, null, 2));
 
       const res = await fetch(`${baseUrl}/api/products/publish`, {
         method: 'POST',
@@ -1461,7 +1485,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         body: JSON.stringify({
           productId,
           variantId,
-          publishIntent: 'SAVE_SSSYNC_DRAFT',
+          publishIntent: 'SAVE_TO_INVENTORY', // Changed intent
           platformDetails: payload.platformDetails,
           media: payload.media,
           selectedPlatformsToPublish: [],
@@ -1469,49 +1493,34 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       });
 
       if (res.ok) {
-        console.log('[doSaveDraft] Draft saved successfully');
+        console.log('[doSaveToInventory] Saved to inventory successfully');
 
-        // Fetch the updated variant data from the database to show the saved values
-        const { data: updatedVariant, error: fetchError } = await supabase
-          .from('ProductVariants')
-          .select('*')
-          .eq('Id', variantId)
-          .single();
+        // Navigate to confirmation screen
+        // We construct the params similar to doPublish
+        const canonicalKey = platformKeys.includes('shopify') ? 'shopify' : platformKeys[0];
+        const canonical = displayedPlatforms[canonicalKey] || {};
 
-        if (!fetchError && updatedVariant) {
-          console.log('[doSaveDraft] Fetched updated variant:', updatedVariant);
+        navigation.navigate('PublishConfirmation', {
+          productId,
+          variantId,
+          title: canonical.title,
+          description: canonical.description,
+          price: canonical.price,
+          imageUrl: first?.imageUrl, // Use original image URL or from payload if available
+          platforms: [], // No external platforms
+          accountNames: [],
+          savedToInventory: true, // Flag for UI
+          origin: 'generate'
+        });
 
-          // Update the displayed platforms with the saved data
-          // This ensures the UI reflects what's actually in the database
-          const canonicalKey = platformKeys.includes('shopify') ? 'shopify' : platformKeys[0];
-          if (canonicalKey && displayedPlatforms[canonicalKey]) {
-            updatePlatforms(prev => ({
-              ...prev,
-              [canonicalKey]: {
-                ...prev[canonicalKey],
-                title: updatedVariant.Title || prev[canonicalKey]?.title,
-                sku: updatedVariant.Sku || prev[canonicalKey]?.sku,
-                price: updatedVariant.Price ?? prev[canonicalKey]?.price,
-                description: updatedVariant.Description || prev[canonicalKey]?.description,
-                barcode: updatedVariant.Barcode || prev[canonicalKey]?.barcode,
-                weight: updatedVariant.Weight ?? prev[canonicalKey]?.weight,
-                weightUnit: updatedVariant.WeightUnit || prev[canonicalKey]?.weightUnit,
-              }
-            }));
-          }
-        }
-
-        // Show success message briefly before navigating
-        alert('Draft saved successfully!');
-        navigation.goBack();
       } else {
         const errorText = await res.text();
-        console.error('[doSaveDraft] Draft save failed:', errorText);
-        alert(`Failed to save draft: ${errorText}`);
+        console.error('[doSaveToInventory] Save failed:', errorText);
+        Alert.alert('Error', `Failed to save to inventory: ${errorText}`);
       }
     } catch (err) {
-      console.error('[doSaveDraft] Error saving draft:', err);
-      alert('Failed to save draft. Please try again.');
+      console.error('[doSaveToInventory] Error saving:', err);
+      Alert.alert('Error', 'An unexpected error occurred while saving.');
     }
   };
 
@@ -2565,8 +2574,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               }
               primaryDisabled={!canPublish}
               onPrimary={doPublish}
-              secondaryLabel={'Save draft'}
-              onSecondary={doSaveDraft}
+              secondaryLabel={'Save to Inventory'}
+              onSecondary={doSaveToInventory}
               tertiaryContent={<View style={{ height: 10 }} />}
             />
           </View>

@@ -14,6 +14,7 @@ import SquareSvg from '../assets/square.svg';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { supabase } from '../lib/supabase';
+import BaseModal from './BaseModal';
 // --- Types ---
 export type PlatformId = 'shopify' | 'amazon' | 'clover' | 'square' | 'ebay' | 'facebook' | 'depop' | 'whatnot' | 'etsy';
 
@@ -188,16 +189,10 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
 
     // --- CSV Manage Logic ---
     const [manageMenuVisible, setManageMenuVisible] = React.useState(false);
-    const [manageMenuPosition, setManageMenuPosition] = React.useState({ top: 0, left: 0 });
     const [isExporting, setIsExporting] = React.useState(false);
-    const manageButtonRef = React.useRef<View>(null);
 
     const openManageMenu = () => {
-        manageButtonRef.current?.measure((x, y, width, height, pageX, pageY) => {
-            // Position above the button, aligned right
-            setManageMenuPosition({ top: pageY - 100, left: pageX + width - 180 }); // rough estimate
-            setManageMenuVisible(true);
-        });
+        setManageMenuVisible(true);
     };
 
     const handleExport = async () => {
@@ -419,7 +414,6 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                     {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.ACTIVE && (
                         <>
                             <TouchableOpacity
-                                ref={manageButtonRef as any}
                                 style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
                                 onPress={() => {
                                     if (connection.PlatformType === 'csv') {
@@ -433,48 +427,71 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                                 <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Manage</Text>
                             </TouchableOpacity>
 
-                            {/* CSV Manage Popover */}
-                            <Modal
+                            import BaseModal from './BaseModal';
+
+                            // ... inside component ...
+
+                            {/* CSV Manage Modal */}
+                            <BaseModal
                                 visible={manageMenuVisible}
-                                transparent={true}
-                                animationType="fade"
-                                onRequestClose={() => setManageMenuVisible(false)}
+                                onClose={() => setManageMenuVisible(false)}
+                                showCloseButton={true}
+                                containerStyle={{ padding: 20, borderRadius: 16, width: '85%', maxWidth: 360 }}
                             >
-                                <TouchableWithoutFeedback onPress={() => setManageMenuVisible(false)}>
-                                    <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.1)' }}>
-                                        <View style={[
-                                            styles.managePopover,
-                                            {
-                                                top: manageMenuPosition.top,
-                                                left: manageMenuPosition.left,
-                                            }
-                                        ]}>
-                                            <TouchableOpacity
-                                                style={styles.popoverItem}
-                                                onPress={handleExport}
-                                                disabled={isExporting}
-                                            >
-                                                {isExporting ? <ActivityIndicator size="small" color="#93C822" /> : <Icon name="cloud-download" size={20} color="#93C822" />}
-                                                <Text style={[styles.popoverText, { fontWeight: '600' }]}>{isExporting ? 'Exporting...' : 'Export CSV'}</Text>
-                                            </TouchableOpacity>
-                                            <View style={styles.popoverDivider} />
-                                            <TouchableOpacity
-                                                style={styles.popoverItem}
-                                                onPress={() => {
-                                                    setManageMenuVisible(false);
-                                                    navigation.navigate('MappingReview' as any, {
-                                                        connectionId: connection.Id,
-                                                        platformName: connection.DisplayName || 'CSV Connection',
-                                                    });
-                                                }}
-                                            >
-                                                <Icon name="cog" size={20} color="#666" />
-                                                <Text style={styles.popoverText}>Settings</Text>
-                                            </TouchableOpacity>
-                                        </View>
+                                <Text style={{ fontSize: 18, fontWeight: '600', marginBottom: 20, color: theme.colors.text }}>Manage Connection</Text>
+
+                                <TouchableOpacity
+                                    style={{
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        padding: 16,
+                                        backgroundColor: theme.colors.surface,
+                                        borderRadius: 12,
+                                        borderWidth: 1,
+                                        borderColor: '#E5E7EB',
+                                        marginBottom: 12,
+                                        gap: 12
+                                    }}
+                                    onPress={handleExport}
+                                    disabled={isExporting}
+                                >
+                                    <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#F0FDF4', alignItems: 'center', justifyContent: 'center' }}>
+                                        {isExporting ? <ActivityIndicator size="small" color="#93C822" /> : <Icon name="cloud-download" size={24} color="#93C822" />}
                                     </View>
-                                </TouchableWithoutFeedback>
-                            </Modal>
+                                    <View>
+                                        <Text style={{ fontSize: 16, fontWeight: '600', color: theme.colors.text }}>{isExporting ? 'Exporting...' : 'Export Inventory'}</Text>
+                                        <Text style={{ fontSize: 13, color: theme.colors.textSecondary }}>Download CSV of current products</Text>
+                                    </View>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={{
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        padding: 16,
+                                        backgroundColor: theme.colors.surface,
+                                        borderRadius: 12,
+                                        borderWidth: 1,
+                                        borderColor: '#E5E7EB',
+                                        gap: 12
+                                    }}
+                                    onPress={() => {
+                                        setManageMenuVisible(false);
+                                        navigation.navigate('MappingReview' as any, {
+                                            connectionId: connection.Id,
+                                            platformName: connection.DisplayName || 'CSV Connection',
+                                        });
+                                    }}
+                                >
+                                    <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}>
+                                        <Icon name="cog" size={24} color="#4B5563" />
+                                    </View>
+                                    <View>
+                                        <Text style={{ fontSize: 16, fontWeight: '600', color: theme.colors.text }}>Settings</Text>
+                                        <Text style={{ fontSize: 13, color: theme.colors.textSecondary }}>Configure sync rules & mapping</Text>
+                                    </View>
+                                </TouchableOpacity>
+                            </BaseModal>
                         </>
                     )}
                 </View>

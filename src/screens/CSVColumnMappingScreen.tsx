@@ -18,6 +18,7 @@ import { useAuth } from '@clerk/clerk-expo';
 import Animated, { FadeInUp, FadeIn } from 'react-native-reanimated';
 import PillTabs from '../components/ui/PillTabs';
 import { supabase } from '../../lib/supabase';
+import { useOrg } from '../context/OrgContext';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -52,6 +53,7 @@ type CSVColumnMappingScreenRouteProp = RouteProp<{ CSVColumnMapping: RouteParams
 export function CSVColumnMappingScreen() {
     const navigation = useNavigation<any>();
     const route = useRoute<CSVColumnMappingScreenRouteProp>();
+    const { currentOrg } = useOrg();
     const { getToken } = useAuth();
 
     // Default empty params if undefined to prevent crashes
@@ -80,7 +82,7 @@ export function CSVColumnMappingScreen() {
                     return;
                 }
 
-                const response = await fetch('https://api.sssync.app/api/products/csv-column-mapping', {
+                const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/api/products/csv-column-mapping`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${token}`,
@@ -166,6 +168,7 @@ export function CSVColumnMappingScreen() {
                 .from('UserPlatforms')
                 .insert({
                     UserId: user.id,
+                    OrgId: currentOrg?.id, // Add OrgId from context
                     PlatformType: 'csv',
                     DisplayName: connectionName,
                     Status: 'active',
@@ -176,13 +179,14 @@ export function CSVColumnMappingScreen() {
 
             if (insertError) {
                 console.error('[CSVColumnMapping] Failed to create CSV connection:', insertError);
-                // Fall back to old behavior if insert fails
+                // Fallback to passing just the 'csv-import' flag so we can still proceed
+                // The connection won't be saved for later, but the import will work.
                 navigation.navigate('MappingReview', {
-                    connectionId: 'csv-import',
-                    platformName: connectionName,
-                    importedProducts: transformedData,
-                    isCSVImport: true,
-                } as any);
+                    connectionId: 'csv-import', // Magic string for CSV Import mode
+                    platformName: 'CSV Import',
+                    importedProducts: transformedData, // Pass the data!
+                    isCSVImport: true, // Fix: Ensure this is passed
+                });
                 return;
             }
 

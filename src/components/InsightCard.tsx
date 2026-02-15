@@ -540,7 +540,7 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                             <View style={styles.sectionBlock}>
                                 <View style={styles.sectionHeader}>
                                     <Icon name="thought-bubble-outline" size={18} color="#4B5563" />
-                                    <Text style={styles.sectionTitleText}>AI Reasoning</Text>
+                                    <Text style={styles.sectionTitleText}>Sprout's Reasoning</Text>
                                 </View>
                                 <Text style={styles.reasoningText}>
                                     {insight.reasoning || "Based on your current inventory levels and average sales velocity over the past 30 days, we've identified slow-moving stock that is tying up capital."}
@@ -642,8 +642,7 @@ const styles = StyleSheet.create({
         padding: 16,
         borderWidth: 1,
         borderColor: 'rgba(0,0,0,0.1)', // slightly darker lime-200 for better edge definition
-        // Add shadow to separate from background
-        shadowColor: '#rgba(0,0,0,1)',
+        shadowColor: 'rgba(0,0,0,1)',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.08,
         shadowRadius: 6,

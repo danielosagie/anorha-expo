@@ -4,8 +4,10 @@ import { capture, setPostHogInstance, AnalyticsEvents } from '../lib/analytics';
 import { SessionContext } from '../context/SessionContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const POSTHOG_KEY = process.env.EXPO_PUBLIC_POSTHOG_KEY;
-const POSTHOG_HOST = process.env.EXPO_PUBLIC_POSTHOG_HOST || 'https://us.i.posthog.com';
+const POSTHOG_KEY = process.env.EXPO_PUBLIC_POSTHOG_KEY?.trim();
+const POSTHOG_HOST = (process.env.EXPO_PUBLIC_POSTHOG_HOST || 'https://us.i.posthog.com').trim();
+
+console.log('[PostHogProvider] Initializing with Host:', POSTHOG_HOST, 'Key Length:', POSTHOG_KEY?.length);
 
 /**
  * Wraps children with PostHogProvider when EXPO_PUBLIC_POSTHOG_KEY is set.
@@ -33,7 +35,7 @@ function PostHogInit({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (posthog) {
-      setPostHogInstance(posthog);
+      setPostHogInstance(posthog as any);
       return () => setPostHogInstance(null);
     }
   }, [posthog]);

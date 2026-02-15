@@ -20,3 +20,6 @@ FIX_BARCODE_INVENTORY.md
 formatting.js
 formatting.js
 formatting.js
+*.local
+.env.local
+.env.local

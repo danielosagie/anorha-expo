@@ -28,7 +28,9 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     sourcePlatform,
     importCount,
     syncRules,
+
     backRoute,
+    savedToInventory,
   } = params;
 
   const handleCreateAnother = () => {
@@ -109,7 +111,9 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
 
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 16, justifyContent: "center" }}>
           <Icon name="check-circle" size={22} color={'#93C822'} />
-          <Text style={{ color: '#000', fontWeight: '600', fontSize: 20 }}>{origin === 'import' ? 'Import Complete!' : 'Product Published!'}</Text>
+          <Text style={{ color: '#000', fontWeight: '600', fontSize: 20 }}>
+            {savedToInventory ? 'Saved to Inventory' : (origin === 'import' ? 'Import Complete!' : 'Product Published!')}
+          </Text>
         </View>
 
         {/* Details Card */}
@@ -210,7 +214,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
             </TouchableOpacity>
             <TouchableOpacity onPress={handleReviewInInventory} style={styles.secondaryBtn}>
               <Boxes size={18} color={'#71717A'} />
-              <Text style={styles.secondaryText}>Review In Inventory</Text>
+              <Text style={styles.secondaryText}>View In Inventory</Text>
             </TouchableOpacity>
           </>
         )}

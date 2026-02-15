@@ -5,7 +5,8 @@
     "owner": "anorha",
     "version": "1.0.2",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
+    "icon": "./src/assets/1024_anorha.png",
     "splash": {
       "resizeMode": "contain",
       "backgroundColor": "#FFF9EB"
@@ -16,7 +17,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "anorha.alpha",
-      "buildNumber": "3",
+      "buildNumber": "18",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSLocationWhenInUseUsageDescription": "Anorha may access your location to provide enhanced features through third-party services. Location access is optional and can be disabled in your device settings.",
@@ -42,9 +43,6 @@
           "microphonePermission": "Allow anorha to access your microphone",
           "recordAudioAndroid": true
         }
-      ],
-      [
-        "react-native-vision-camera"
       ],
       [
         "expo-font"

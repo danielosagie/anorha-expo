@@ -1798,233 +1798,253 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           </TouchableOpacity>
         </View>
 
+        {/* Condition - Global Dropdown */}
+        <View style={{ marginTop: 16 }}>
+          <Text style={styles.fieldLabel}>Condition</Text>
+          <AppDropdown
+            style={[styles.modernInputWrapper, { paddingHorizontal: 12, height: 48, borderWidth: 1 }]}
+            data={[
+              { label: 'New', value: 'new' },
+              { label: 'Like New', value: 'like_new' },
+              { label: 'Good', value: 'good' },
+              { label: 'Fair', value: 'fair' },
+              { label: 'Used', value: 'used' },
+              { label: 'Refurbished', value: 'refurbished' },
+              { label: 'For Parts', value: 'for_parts' },
+            ]}
+            placeholder="Select condition..."
+            value={activeData.condition || 'good'}
+            onChange={item => patchField('condition', item.value)}
+          />
+        </View>
 
       </View>
 
 
       {/* Variants: only for platforms that support variants */}
-      {supportsVariants && (
-        <View style={styles.card}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-            <Text style={styles.sectionTitle}>Variants</Text>
-          </View>
-
-          {Array.isArray(variantSuggestions) && variantSuggestions.length > 0 && (
-            <View style={styles.suggestionBox}>
-              <Text style={{ color: '#000', fontWeight: '600', marginBottom: 6 }}>We detected these possible options:</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                {variantSuggestions.map((opt, idx) => (
-                  <View key={`${opt.name}-${idx}`} style={styles.suggestionChip}>
-                    <Text style={{ color: '#000' }}>{opt.name}: {opt.values.join(', ')}</Text>
-                  </View>
-                ))}
-              </View>
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-                <TouchableOpacity style={styles.btnPrimary} onPress={() => {
-                  // Merge suggestions into options without duplication
-                  patchPlatform(prev => {
-                    const options = Array.isArray(prev.options) ? prev.options.slice() : [];
-                    const nextOptions = options.slice();
-                    for (const s of variantSuggestions) {
-                      const existingIndex = nextOptions.findIndex(o => (o.name || '').toLowerCase() === s.name.toLowerCase());
-                      const values = Array.from(new Set([...(nextOptions[existingIndex]?.values || []), ...s.values]));
-                      if (existingIndex >= 0) {
-                        nextOptions[existingIndex] = { name: s.name, values };
-                      } else {
-                        nextOptions.push({ name: s.name, values });
-                      }
-                    }
-                    return { ...prev, options: nextOptions, __variantSuggestions: [] } as PlatformState as any;
-                  });
-                  setTimeout(recomputeVariants, 0);
-                }}>
-                  <Text style={{ color: '#fff' }}>Add suggested options</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.btnSecondary} onPress={() => {
-                  patchPlatform(prev => ({ ...(prev as any), __variantSuggestions: [] } as any));
-                }}>
-                  <Text style={{ color: '#000' }}>Dismiss</Text>
-                </TouchableOpacity>
-              </View>
+      {
+        supportsVariants && (
+          <View style={styles.card}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <Text style={styles.sectionTitle}>Variants</Text>
             </View>
-          )}
-          {/* Inline options wizard / summary */}
-          <View style={{ marginTop: 10 }}>
-            {/* 1. Active Options List (Summary Cards) */}
-            {((activeData.options || []).filter(o => (o.values || []).length > 0)).length > 0 && (
-              <View style={{ marginBottom: 16 }}>
-                {(activeData.options || []).filter(o => (o.values || []).length > 0).map((opt, idx) => (
-                  <View key={`${opt.name}-${idx}`} style={styles.optionSummaryCard}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Text style={styles.subtle}>{opt.name}</Text>
-                      <TouchableOpacity
-                        onPress={() => {
-                          // Delete entire option
-                          Alert.alert(
-                            `Remove "${opt.name}"?`,
-                            `This will remove the "${opt.name}" option and all associated variants.`,
-                            [
-                              { text: 'Cancel', style: 'cancel' },
-                              {
-                                text: 'Delete', style: 'destructive', onPress: () => {
-                                  patchPlatform(prev => {
-                                    const options = (prev.options || []).filter(o => o.name !== opt.name);
-                                    return { ...prev, options } as PlatformState;
-                                  });
-                                  setTimeout(recomputeVariants, 0);
-                                }
-                              }
-                            ]
-                          );
-                        }}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      >
-                        <Icon name="close" size={14} color="#9CA3AF" />
-                      </TouchableOpacity>
-                    </View>
 
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
-                      {(opt.values || []).map(v => (
-                        <View key={`${opt.name}-${v}`} style={[styles.optionChip, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}>
-                          {/* Option values in summary card are read-only except for delete */}
-                          <TouchableOpacity onPress={() => {
-                            setDeleteConfirmation({ optionName: opt.name, value: v });
-                          }}>
-                            <Icon name="close" size={10} color="#6B7280" />
-                          </TouchableOpacity>
-                          <Text style={{ color: '#000' }}>{v}</Text>
-                        </View>
-                      ))}
+            {Array.isArray(variantSuggestions) && variantSuggestions.length > 0 && (
+              <View style={styles.suggestionBox}>
+                <Text style={{ color: '#000', fontWeight: '600', marginBottom: 6 }}>We detected these possible options:</Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                  {variantSuggestions.map((opt, idx) => (
+                    <View key={`${opt.name}-${idx}`} style={styles.suggestionChip}>
+                      <Text style={{ color: '#000' }}>{opt.name}: {opt.values.join(', ')}</Text>
                     </View>
-                  </View>
-                ))}
+                  ))}
+                </View>
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                  <TouchableOpacity style={styles.btnPrimary} onPress={() => {
+                    // Merge suggestions into options without duplication
+                    patchPlatform(prev => {
+                      const options = Array.isArray(prev.options) ? prev.options.slice() : [];
+                      const nextOptions = options.slice();
+                      for (const s of variantSuggestions) {
+                        const existingIndex = nextOptions.findIndex(o => (o.name || '').toLowerCase() === s.name.toLowerCase());
+                        const values = Array.from(new Set([...(nextOptions[existingIndex]?.values || []), ...s.values]));
+                        if (existingIndex >= 0) {
+                          nextOptions[existingIndex] = { name: s.name, values };
+                        } else {
+                          nextOptions.push({ name: s.name, values });
+                        }
+                      }
+                      return { ...prev, options: nextOptions, __variantSuggestions: [] } as PlatformState as any;
+                    });
+                    setTimeout(recomputeVariants, 0);
+                  }}>
+                    <Text style={{ color: '#fff' }}>Add suggested options</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.btnSecondary} onPress={() => {
+                    patchPlatform(prev => ({ ...(prev as any), __variantSuggestions: [] } as any));
+                  }}>
+                    <Text style={{ color: '#000' }}>Dismiss</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             )}
+            {/* Inline options wizard / summary */}
+            <View style={{ marginTop: 10 }}>
+              {/* 1. Active Options List (Summary Cards) */}
+              {((activeData.options || []).filter(o => (o.values || []).length > 0)).length > 0 && (
+                <View style={{ marginBottom: 16 }}>
+                  {(activeData.options || []).filter(o => (o.values || []).length > 0).map((opt, idx) => (
+                    <View key={`${opt.name}-${idx}`} style={styles.optionSummaryCard}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={styles.subtle}>{opt.name}</Text>
+                        <TouchableOpacity
+                          onPress={() => {
+                            // Delete entire option
+                            Alert.alert(
+                              `Remove "${opt.name}"?`,
+                              `This will remove the "${opt.name}" option and all associated variants.`,
+                              [
+                                { text: 'Cancel', style: 'cancel' },
+                                {
+                                  text: 'Delete', style: 'destructive', onPress: () => {
+                                    patchPlatform(prev => {
+                                      const options = (prev.options || []).filter(o => o.name !== opt.name);
+                                      return { ...prev, options } as PlatformState;
+                                    });
+                                    setTimeout(recomputeVariants, 0);
+                                  }
+                                }
+                              ]
+                            );
+                          }}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                          <Icon name="close" size={14} color="#9CA3AF" />
+                        </TouchableOpacity>
+                      </View>
 
-            {/* 2. Editor OR Add Button */}
-            {optionEditorOpen ? (
-              <View style={[styles.card, { backgroundColor: '#fff', borderColor: '#e5e7eb', borderWidth: 1, padding: 16, borderRadius: 12 }]}>
-                <Text style={styles.fieldLabel}>Option Name</Text>
-
-                {/* Autocomplete Input for Name */}
-                <View style={{ zIndex: 10 }}>
-                  <TextInput
-                    style={[styles.input, { marginBottom: 8 }]}
-                    value={newOptionName}
-                    onChangeText={(text) => {
-                      setNewOptionName(text);
-                      setVariantSearchQuery(text);
-                    }}
-                    placeholder="eg: Size"
-                    placeholderTextColor={"#999999"}
-                  />
-
-                  {/* Dropdown - only show if typing and matches exist */}
-                  {newOptionName.length > 0 && allPlatformOptions.filter(o => o.name.toLowerCase().includes(newOptionName.toLowerCase()) && o.name.toLowerCase() !== newOptionName.toLowerCase()).length > 0 && (
-                    <View style={{ position: 'absolute', top: 45, left: 0, right: 0, backgroundColor: '#fff', borderWidth: 1, borderColor: '#eee', borderRadius: 8, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 5 }}>
-                      {allPlatformOptions
-                        .filter(o => o.name.toLowerCase().includes(newOptionName.toLowerCase()))
-                        .slice(0, 3)
-                        .map((option, idx) => (
-                          <TouchableOpacity
-                            key={`ac-editor-${option.name}-${idx}`}
-                            style={{ padding: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
-                            onPress={() => {
-                              setNewOptionName(option.name);
-                              // Prefill values but let user edit/add more
-                              setNewOptionValues(option.values.length > 0 ? option.values : ['']);
-                              setVariantSearchQuery(''); // Hide dropdown
-                            }}
-                          >
-                            <Text style={{ fontWeight: '600', color: '#374151' }}>{option.name}</Text>
-                            <Text style={{ fontSize: 10, color: '#6b7280' }}>
-                              Includes: {option.values.slice(0, 2).join(', ')}...
-                            </Text>
-                          </TouchableOpacity>
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                        {(opt.values || []).map(v => (
+                          <View key={`${opt.name}-${v}`} style={[styles.optionChip, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}>
+                            {/* Option values in summary card are read-only except for delete */}
+                            <TouchableOpacity onPress={() => {
+                              setDeleteConfirmation({ optionName: opt.name, value: v });
+                            }}>
+                              <Icon name="close" size={10} color="#6B7280" />
+                            </TouchableOpacity>
+                            <Text style={{ color: '#000' }}>{v}</Text>
+                          </View>
                         ))}
+                      </View>
                     </View>
-                  )}
+                  ))}
                 </View>
+              )}
 
-                <Text style={[styles.fieldLabel, { marginTop: 10 }]}>Option Values</Text>
-                {newOptionValues.map((v, idx) => (
-                  <View key={`opt-val-row-${idx}`} style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
+              {/* 2. Editor OR Add Button */}
+              {optionEditorOpen ? (
+                <View style={[styles.card, { backgroundColor: '#fff', borderColor: '#e5e7eb', borderWidth: 1, padding: 16, borderRadius: 12 }]}>
+                  <Text style={styles.fieldLabel}>Option Name</Text>
+
+                  {/* Autocomplete Input for Name */}
+                  <View style={{ zIndex: 10 }}>
                     <TextInput
-                      style={[styles.input, { flex: 1, marginBottom: 0 }]}
-                      value={v}
-                      onChangeText={(t) => handleChangeOptionValue(idx, t)}
-                      placeholder={idx === 0 ? 'eg: Small' : 'eg: Medium'}
+                      style={[styles.input, { marginBottom: 8 }]}
+                      value={newOptionName}
+                      onChangeText={(text) => {
+                        setNewOptionName(text);
+                        setVariantSearchQuery(text);
+                      }}
+                      placeholder="eg: Size"
                       placeholderTextColor={"#999999"}
                     />
-                    {newOptionValues.length > 1 && (
-                      <TouchableOpacity
-                        onPress={() => setNewOptionValues(prev => prev.filter((_, i) => i !== idx))}
-                        style={{ padding: 10, marginLeft: 4 }}
-                      >
-                        <Icon name="close" size={20} color="#9CA3AF" />
-                      </TouchableOpacity>
+
+                    {/* Dropdown - only show if typing and matches exist */}
+                    {newOptionName.length > 0 && allPlatformOptions.filter(o => o.name.toLowerCase().includes(newOptionName.toLowerCase()) && o.name.toLowerCase() !== newOptionName.toLowerCase()).length > 0 && (
+                      <View style={{ position: 'absolute', top: 45, left: 0, right: 0, backgroundColor: '#fff', borderWidth: 1, borderColor: '#eee', borderRadius: 8, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 5 }}>
+                        {allPlatformOptions
+                          .filter(o => o.name.toLowerCase().includes(newOptionName.toLowerCase()))
+                          .slice(0, 3)
+                          .map((option, idx) => (
+                            <TouchableOpacity
+                              key={`ac-editor-${option.name}-${idx}`}
+                              style={{ padding: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
+                              onPress={() => {
+                                setNewOptionName(option.name);
+                                // Prefill values but let user edit/add more
+                                setNewOptionValues(option.values.length > 0 ? option.values : ['']);
+                                setVariantSearchQuery(''); // Hide dropdown
+                              }}
+                            >
+                              <Text style={{ fontWeight: '600', color: '#374151' }}>{option.name}</Text>
+                              <Text style={{ fontSize: 10, color: '#6b7280' }}>
+                                Includes: {option.values.slice(0, 2).join(', ')}...
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                      </View>
                     )}
                   </View>
-                ))}
-                <TouchableOpacity style={[styles.addInline, { marginTop: 12 }]} onPress={handleAddOptionValueRow}>
-                  <Icon name="plus" size={16} color="#4B5563" />
-                  <Text style={{ color: '#4B5563', marginLeft: 6 }}>Add another value</Text>
+
+                  <Text style={[styles.fieldLabel, { marginTop: 10 }]}>Option Values</Text>
+                  {newOptionValues.map((v, idx) => (
+                    <View key={`opt-val-row-${idx}`} style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
+                      <TextInput
+                        style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                        value={v}
+                        onChangeText={(t) => handleChangeOptionValue(idx, t)}
+                        placeholder={idx === 0 ? 'eg: Small' : 'eg: Medium'}
+                        placeholderTextColor={"#999999"}
+                      />
+                      {newOptionValues.length > 1 && (
+                        <TouchableOpacity
+                          onPress={() => setNewOptionValues(prev => prev.filter((_, i) => i !== idx))}
+                          style={{ padding: 10, marginLeft: 4 }}
+                        >
+                          <Icon name="close" size={20} color="#9CA3AF" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  ))}
+                  <TouchableOpacity style={[styles.addInline, { marginTop: 12 }]} onPress={handleAddOptionValueRow}>
+                    <Icon name="plus" size={16} color="#4B5563" />
+                    <Text style={{ color: '#4B5563', marginLeft: 6 }}>Add another value</Text>
+                  </TouchableOpacity>
+
+                  {/* Editor Footer */}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 24, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#f3f4f6' }}>
+                    <TouchableOpacity
+                      style={[styles.btnSecondary, { backgroundColor: '#fff', borderWidth: 1, borderColor: '#e5e7eb', paddingHorizontal: 16 }]}
+                      onPress={() => {
+                        setOptionEditorOpen(false);
+                        setNewOptionName('');
+                        setNewOptionValues(['']);
+                      }}
+                    >
+                      <Text style={{ color: '#374151', fontWeight: '500' }}>Cancel</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.btnPrimary, { backgroundColor: '#84cc16', paddingHorizontal: 24, borderRadius: 8 }]}
+                      onPress={() => {
+                        handleDoneOption();
+                        setOptionEditorOpen(false);
+                      }}
+                    >
+                      <Text style={{ color: '#fff', fontWeight: '600' }}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={{
+                    borderWidth: 1,
+                    borderColor: '#E5E7EB',
+                    borderStyle: 'dashed',
+                    borderRadius: 8,
+                    padding: 16,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: '#F9FAFB'
+                  }}
+                  onPress={() => {
+                    setNewOptionName('');
+                    setNewOptionValues(['']);
+                    setOptionEditorOpen(true);
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Icon name="plus" size={18} color="#6B7280" />
+                    <Text style={{ color: '#6B7280', fontSize: 16, fontWeight: '500' }}>Add an option</Text>
+                  </View>
                 </TouchableOpacity>
+              )}
+            </View>
 
-                {/* Editor Footer */}
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 24, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#f3f4f6' }}>
-                  <TouchableOpacity
-                    style={[styles.btnSecondary, { backgroundColor: '#fff', borderWidth: 1, borderColor: '#e5e7eb', paddingHorizontal: 16 }]}
-                    onPress={() => {
-                      setOptionEditorOpen(false);
-                      setNewOptionName('');
-                      setNewOptionValues(['']);
-                    }}
-                  >
-                    <Text style={{ color: '#374151', fontWeight: '500' }}>Cancel</Text>
-                  </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={[styles.btnPrimary, { backgroundColor: '#84cc16', paddingHorizontal: 24, borderRadius: 8 }]}
-                    onPress={() => {
-                      handleDoneOption();
-                      setOptionEditorOpen(false);
-                    }}
-                  >
-                    <Text style={{ color: '#fff', fontWeight: '600' }}>Done</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ) : (
-              <TouchableOpacity
-                style={{
-                  borderWidth: 1,
-                  borderColor: '#E5E7EB',
-                  borderStyle: 'dashed',
-                  borderRadius: 8,
-                  padding: 16,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: '#F9FAFB'
-                }}
-                onPress={() => {
-                  setNewOptionName('');
-                  setNewOptionValues(['']);
-                  setOptionEditorOpen(true);
-                }}
-              >
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <Icon name="plus" size={18} color="#6B7280" />
-                  <Text style={{ color: '#6B7280', fontSize: 16, fontWeight: '500' }}>Add an option</Text>
-                </View>
-              </TouchableOpacity>
-            )}
+
           </View>
-
-
-
-        </View>
-      )
+        )
       }
 
 
@@ -2034,24 +2054,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           <View>
 
 
-            {/* Condition - Dropdown Style */}
-            <View style={{ marginBottom: 20 }}>
-              <Text style={styles.fieldLabel}>Condition</Text>
-              <AppDropdown
-                style={[styles.modernInputWrapper, { paddingHorizontal: 12, height: 48, borderWidth: 1 }]}
-                data={[
-                  { label: 'New', value: 'new' },
-                  { label: 'Like New', value: 'like_new' },
-                  { label: 'Good', value: 'good' },
-                  { label: 'Fair', value: 'fair' },
-                  { label: 'Used', value: 'used' },
-                  { label: 'Refurbished', value: 'refurbished' },
-                ]}
-                placeholder="Select condition..."
-                value={activeData.condition}
-                onChange={item => patchField('condition', item.value)}
-              />
-            </View>
 
             {/* Delivery Method */}
             <View style={{ marginBottom: 20 }}>
@@ -2873,70 +2875,72 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
       {/* Additional fields basic toggle */}
       {/* Additional fields basic toggle - Hidden on All tab */}
-      {activeTab !== 'all' && (
-        <>
-          <TouchableOpacity style={styles.toggleRow} onPress={() => setShowAdditionalFields(v => !v)}>
-            <Icon name={showAdditionalFields ? 'chevron-down' : 'chevron-right'} size={18} color="#000" />
-            <Text style={styles.sectionTitle}>Additional Fields</Text>
-          </TouchableOpacity>
-          {
-            showAdditionalFields && (
-              <>
-                {(() => {
-                  const standardFields = new Set([
-                    'title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode',
-                    'images', 'options', 'variants', 'locations', 'locationQuantities', 'inventoryType',
-                    '__refilled', '_rawResponse', '_parseError', '_extractedJson' // Exclude internal fields
-                  ]);
+      {
+        activeTab !== 'all' && (
+          <>
+            <TouchableOpacity style={styles.toggleRow} onPress={() => setShowAdditionalFields(v => !v)}>
+              <Icon name={showAdditionalFields ? 'chevron-down' : 'chevron-right'} size={18} color="#000" />
+              <Text style={styles.sectionTitle}>Additional Fields</Text>
+            </TouchableOpacity>
+            {
+              showAdditionalFields && (
+                <>
+                  {(() => {
+                    const standardFields = new Set([
+                      'title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode',
+                      'images', 'options', 'variants', 'locations', 'locationQuantities', 'inventoryType',
+                      '__refilled', '_rawResponse', '_parseError', '_extractedJson' // Exclude internal fields
+                    ]);
 
-                  const additionalFields = Object.entries(activeData || {})
-                    .filter(([key, value]) =>
-                      !standardFields.has(key) &&
-                      value !== undefined &&
-                      value !== null &&
-                      !key.startsWith('_') // Skip internal fields
-                    );
+                    const additionalFields = Object.entries(activeData || {})
+                      .filter(([key, value]) =>
+                        !standardFields.has(key) &&
+                        value !== undefined &&
+                        value !== null &&
+                        !key.startsWith('_') // Skip internal fields
+                      );
 
-                  if (additionalFields.length === 0) {
+                    if (additionalFields.length === 0) {
+                      return (
+                        <View style={{ padding: 16, alignItems: 'center' }}>
+                          <Text style={{ color: '#aaa', fontStyle: 'italic' }}>No additional fields found.</Text>
+                        </View>
+                      );
+                    }
+
                     return (
-                      <View style={{ padding: 16, alignItems: 'center' }}>
-                        <Text style={{ color: '#aaa', fontStyle: 'italic' }}>No additional fields found.</Text>
+                      <View style={{ marginTop: 10, gap: 12 }}>
+                        {additionalFields.map(([key, value]) => {
+                          const isArray = Array.isArray(value);
+                          const isObject = typeof value === 'object' && !isArray;
+                          const displayValue = isObject ? JSON.stringify(value, null, 2) :
+                            isArray ? value.join(', ') : String(value);
+
+                          return (
+                            <View key={key}>
+                              <Field
+                                label={key}
+                                value={displayValue}
+                                onChangeText={(t) => {
+                                  // Simple string patch for generic fields
+                                  patchPlatform(prev => ({ ...prev, [key]: t } as any));
+                                }}
+                                onInfo={() => onOpenFieldPanel?.(key)}
+                                onRegenerate={enableAIRefill && onRegenerateField ? () => onRegenerateField(activePlatformKey, key) : undefined}
+                                refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes(key)}
+                              />
+                            </View>
+                          );
+                        })}
                       </View>
                     );
-                  }
-
-                  return (
-                    <View style={{ marginTop: 10, gap: 12 }}>
-                      {additionalFields.map(([key, value]) => {
-                        const isArray = Array.isArray(value);
-                        const isObject = typeof value === 'object' && !isArray;
-                        const displayValue = isObject ? JSON.stringify(value, null, 2) :
-                          isArray ? value.join(', ') : String(value);
-
-                        return (
-                          <View key={key}>
-                            <Field
-                              label={key}
-                              value={displayValue}
-                              onChangeText={(t) => {
-                                // Simple string patch for generic fields
-                                patchPlatform(prev => ({ ...prev, [key]: t } as any));
-                              }}
-                              onInfo={() => onOpenFieldPanel?.(key)}
-                              onRegenerate={enableAIRefill && onRegenerateField ? () => onRegenerateField(activePlatformKey, key) : undefined}
-                              refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes(key)}
-                            />
-                          </View>
-                        );
-                      })}
-                    </View>
-                  );
-                })()}
-              </>
-            )
-          }
-        </>
-      )}
+                  })()}
+                </>
+              )
+            }
+          </>
+        )
+      }
 
       {/* Sticky Action Footer */}
       {/* <StickyActionBar onSave={() => console.log('Save')} onPublish={() => console.log('Publish')} /> */}
