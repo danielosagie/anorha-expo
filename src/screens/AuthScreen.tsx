@@ -6,9 +6,8 @@ import AnimatedGradientBackground from '../components/AnimatedGradientBackground
 import Button from '../components/Button';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 
-import { supabase } from '../../lib/supabase';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useSignIn, useSignUp } from '@clerk/clerk-expo';
+import { useSignIn, useSignUp, useSSO } from '@clerk/clerk-expo';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import ErrorModal from '../components/ErrorModal';
 
@@ -57,6 +56,8 @@ interface FormContentProps {
   clearFieldError: (field: keyof FieldErrors) => void;
   isBiometricSupported: boolean;
   handleBiometricLogin: () => void;
+  handleGoogleSignIn?: () => Promise<void>;
+  googleLoading?: boolean;
 }
 
 // Memoize form component for better performance
@@ -81,6 +82,8 @@ const FormContent = React.memo(({
   clearFieldError,
   isBiometricSupported,
   handleBiometricLogin,
+  handleGoogleSignIn,
+  googleLoading = false,
 }: FormContentProps) => (
   <>
     <Text style={styles.headerText}>
@@ -220,6 +223,30 @@ const FormContent = React.memo(({
         icon={isLogin ? "login" : "account-plus"}
         textStyle={styles.buttonText}
       />
+
+      {handleGoogleSignIn && (
+        <>
+          <View style={styles.orDivider}>
+            <View style={styles.orLine} />
+            <Text style={styles.orText}>or</Text>
+            <View style={styles.orLine} />
+          </View>
+          <TouchableOpacity
+            onPress={handleGoogleSignIn}
+            style={[styles.googleButton, googleLoading && styles.googleButtonDisabled]}
+            disabled={googleLoading}
+          >
+            {googleLoading ? (
+              <Text style={styles.googleButtonText}>{isLogin ? 'Signing in…' : 'Signing up…'}</Text>
+            ) : (
+              <>
+                <Icon name="google" size={22} color="#1a1a1a" style={styles.googleIcon} />
+                <Text style={styles.googleButtonText}>{isLogin ? 'Sign in with Google' : 'Sign up with Google'}</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </>
+      )}
 
       {isLogin && isBiometricSupported && (
         <TouchableOpacity
@@ -413,6 +440,29 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
   // const authContext = useContext(AuthContext); // Removed legacy AuthContext
   const { signIn, isLoaded: isSignInLoaded, setActive: signInSetActive } = useSignIn();
   const { signUp, isLoaded: isSignUpLoaded, setActive: signUpSetActive } = useSignUp();
+  const { startSSOFlow } = useSSO();
+  const [googleLoading, setGoogleLoading] = useState(false);
+
+  const handleGoogleSignIn = useCallback(async () => {
+    setGoogleLoading(true);
+    try {
+      const { createdSessionId, setActive } = await startSSOFlow({
+        strategy: 'oauth_google',
+        redirectUrl: 'anorhaapp://redirect',
+      });
+      if (createdSessionId && setActive) {
+        await setActive({ session: createdSessionId });
+      }
+    } catch (err: any) {
+      showErrorModal(
+        'Google Sign-In Failed',
+        err?.errors?.[0]?.message ?? err?.message ?? 'Could not sign in with Google.',
+        'error'
+      );
+    } finally {
+      setGoogleLoading(false);
+    }
+  }, [startSSOFlow, showErrorModal]);
 
   const handleAuth = useCallback(async () => {
     // Legacy AuthContext check removed
@@ -433,7 +483,10 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
 
     try {
       if (isLogin) {
-        if (!isSignInLoaded || !signIn) return;
+        if (!isSignInLoaded || !signIn) {
+          setLoading(false);
+          return;
+        }
         console.log('[AuthScreen] Attempting signIn.create with email:', email);
         const res = await signIn.create({ identifier: email, password });
 
@@ -479,7 +532,10 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
           showErrorModal('Sign In Failed', 'Unable to complete sign-in. Please try again.', 'error');
         }
       } else {
-        if (!isSignUpLoaded || !signUp) return;
+        if (!isSignUpLoaded || !signUp) {
+          setLoading(false);
+          return;
+        }
 
         try {
           const res = await signUp.create({ emailAddress: email, password, firstName, lastName });
@@ -539,26 +595,31 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
       return;
     }
 
+    if (!isSignInLoaded || !signIn) {
+      showErrorModal('Not Ready', 'Please wait a moment and try again.', 'error');
+      return;
+    }
+
     setLoading(true);
 
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email);
-      if (error) throw error;
+      await signIn.create({
+        strategy: 'reset_password_email_code',
+        identifier: email,
+      });
       showErrorModal(
         'Check Your Email',
-        'We\'ve sent a password reset link to your email address.',
+        'We\'ve sent a password reset code to your email address. Enter it on the next screen with your new password.',
         'success'
       );
+      navigation.navigate('VerifyCode', { contactLabel: email, mode: 'reset' });
     } catch (error: any) {
-      showErrorModal(
-        'Reset Failed',
-        error.message || 'Unable to send reset email. Please try again.',
-        'error'
-      );
+      const msg = error?.errors?.[0]?.longMessage ?? error?.errors?.[0]?.message ?? error?.message ?? 'Unable to send reset code. Please try again.';
+      showErrorModal('Reset Failed', msg, 'error');
     } finally {
       setLoading(false);
     }
-  }, [email, showErrorModal]);
+  }, [email, isSignInLoaded, signIn, navigation, showErrorModal]);
 
   return (
     <KeyboardAvoidingView
@@ -631,6 +692,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
             clearFieldError={clearFieldError}
             isBiometricSupported={isBiometricSupported}
             handleBiometricLogin={handleBiometricLogin}
+            handleGoogleSignIn={handleGoogleSignIn}
+            googleLoading={googleLoading}
           />
         </View>
       ) : (
@@ -659,6 +722,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
             clearFieldError={clearFieldError}
             isBiometricSupported={isBiometricSupported}
             handleBiometricLogin={handleBiometricLogin}
+            handleGoogleSignIn={handleGoogleSignIn}
+            googleLoading={googleLoading}
           />
         </Animated.View>
       )}
@@ -847,6 +912,46 @@ const styles = StyleSheet.create({
   requirementTextMet: {
     color: '#5c9c00',
     fontWeight: '500',
+  },
+  orDivider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    marginVertical: 16,
+    gap: 12,
+  },
+  orLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E5E5E5',
+  },
+  orText: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  googleButton: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    height: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    gap: 10,
+  },
+  googleButtonDisabled: {
+    opacity: 0.7,
+  },
+  googleIcon: {
+    marginRight: 0,
+  },
+  googleButtonText: {
+    color: '#1a1a1a',
+    fontSize: 16,
+    fontWeight: '600',
   },
   biometricButton: {
     width: '100%',

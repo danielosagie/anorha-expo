@@ -216,6 +216,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const activeRegenJobsRef = useRef<Record<string, string>>({});
   const [generatingPlatformKeys, setGeneratingPlatformKeys] = useState<Set<string>>(new Set());
 
+  const [currentProductIndex, setCurrentProductIndex] = useState(0);
+
   // Listen for socket updates for ANY regeneration job we started
   const { onJobProgress } = useCollaboration();
 
@@ -345,7 +347,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         const p = displayedPlatforms[canonicalKey];
         const draftImages = filterValidImages(p.images || p.imageUris || []);
         if (draftImages.length > 0) {
-          const idx = (first?.productIndex as number) ?? 0;
+          const idx = (effectiveResult?.productIndex as number) ?? 0;
           // Merge with existing images if any, avoiding duplicates
           const existing = map[idx] || [];
           const merged = Array.from(new Set([...existing, ...draftImages]));
@@ -358,16 +360,19 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     return map;
   }, [results, dbImages, route.params, updateCounter]);
   useEffect(() => {
-    if (!first || !first.platforms) return;
+    const res = (Array.isArray(results) && results.length > 0)
+      ? ((results as GeneratedResult[]).find((r: any) => r.productIndex === currentProductIndex) || results[0])
+      : null;
+    if (!res || !res.platforms) return;
 
-    // Only hydrate if this is new data (different jobId)
-    const currentJobId = jobId || JSON.stringify(first.platforms).slice(0, 50);
+    // Only hydrate if this is new data (different jobId or product index)
+    const currentJobId = `${jobId || 'job'}-${currentProductIndex}` + (res.platforms ? JSON.stringify(res.platforms).slice(0, 50) : '');
     if (lastHydratedJobRef.current === currentJobId) {
-      console.log('[GEN-DETAILS] Skipping re-hydration - same job');
+      console.log('[GEN-DETAILS] Skipping re-hydration - same job/item');
       return;
     }
 
-    const rawPlatforms = first.platforms;
+    const rawPlatforms = res.platforms;
     console.log('[GEN-DETAILS] Hydrating new data. JobId:', currentJobId);
     console.log('[GEN-DETAILS] Raw platforms from backend:', rawPlatforms);
 
@@ -393,7 +398,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         firstPlatformData.imageUrl ||
         firstPlatformData.image_link ||
         firstPlatformData.picURL ||
-        (first.sourceImageUrl ? [first.sourceImageUrl] : []);
+        (res.sourceImageUrl ? [res.sourceImageUrl] : []);
 
       // Filter out empty strings, null, undefined values to prevent gray placeholder images
       const imageUrls = (Array.isArray(rawImageUrls) ? rawImageUrls : (rawImageUrls ? [rawImageUrls] : []))
@@ -420,12 +425,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     updatePlatforms(() => hydrated);
 
     lastHydratedJobRef.current = currentJobId;
-  }, [first, jobId]);
+  }, [results, jobId, currentProductIndex]);
 
 
   // ========== AUTO-SAVE DEBOUNCE: Save to /api/products/drafts every 2s idle ==========
   // Only run when variantId changes; only schedule save when draft content actually changed (stops spam when nothing changed)
-  const variantIdForDraft = (route.params as any)?.variantId || first?.variantId;
+  const variantIdForDraft = (route.params as any)?.variantId || (Array.isArray(results) && results.length > 0 ? ((results as any[]).find((r: any) => r.productIndex === currentProductIndex) || results[0])?.variantId : undefined);
   useEffect(() => {
     const variantId = variantIdForDraft;
     if (!variantId || !platformsRef.current || Object.keys(platformsRef.current).length === 0) {
@@ -699,12 +704,23 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }];
   }, [route.params, first, results, matchJobId]);
 
+  useEffect(() => {
+    const idx = (first?.productIndex as number) ?? items[0]?.index ?? 0;
+    setCurrentProductIndex(idx);
+  }, [first?.productIndex, items[0]?.index]);
+
   const jobMap = ((route.params as any)?.jobMap || {}) as Record<number, { jobId: string; status?: string }>;
-  // Derive quick lookups for presence of jobs
   const hasGenerateForIndex = useMemo(() => (idx: number) => Boolean(jobMap[idx]?.jobId), [jobMap]);
 
-  // Navigation state for modal integration (like MatchSelectionScreen)
-  const [currentProductIndex, setCurrentProductIndex] = useState((first?.productIndex as number) ?? (items[0]?.index || 0));
+  const hasMultipleResults = Array.isArray(results) && results.length > 1;
+  const currentResult: GeneratedResult | null = useMemo(
+    () => (Array.isArray(results) && results.length > 0
+      ? (results as GeneratedResult[]).find((r: any) => r.productIndex === currentProductIndex) || results[0]
+      : null),
+    [results, currentProductIndex]
+  );
+  const effectiveResult = hasMultipleResults ? currentResult : first;
+
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
   const [ignoredPlatforms, setIgnoredPlatforms] = useState<string[]>([]);
@@ -715,28 +731,31 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   // Get shared JobsContext for cross-screen state sync
   const jobsContext = useJobsOptional();
 
-  // Initialize from generate job to load all items from parent match job
+  // Initialize from generate job only when we didn't navigate with items/jobMap (e.g. deep link)
+  // When we have items from params (came from Match), don't call - avoids loading "most recent" match job and mixing jobs
   useEffect(() => {
     if (!jobsContext || !jobId) return;
-    // If we don't have items yet, fetch from the generate job
-    if (jobsContext.items.length === 0) {
-      jobsContext.initializeFromGenerateJob(jobId);
-    }
-  }, [jobsContext, jobId]);
+    if (jobsContext.items.length > 0) return;
+    const fromParams = (route.params as any) || {};
+    const hasItemsFromParams = Array.isArray(fromParams.items) && fromParams.items.length > 0;
+    if (hasItemsFromParams) return;
+    jobsContext.initializeFromGenerateJob(jobId);
+  }, [jobsContext, jobId, route.params]);
 
   // Ref to track which direction we're syncing to prevent infinite loops
   const syncDirectionRef = useRef<'none' | 'context-to-local' | 'local-to-context'>('none');
 
-  // Sync with JobsContext - merge context state into local state on mount
+  // Sync with JobsContext - merge context state into local only when context is for THIS match job
   useEffect(() => {
     if (!jobsContext || !matchJobId) return;
+    if (jobsContext.matchJobId !== matchJobId) return;
     // Prevent infinite loop: don't sync back if we just synced to context
     if (syncDirectionRef.current === 'local-to-context') {
       syncDirectionRef.current = 'none';
       return;
     }
 
-    // If context has generate jobs, merge into local state
+    // If context has generate jobs for this match job, merge into local state
     if (Object.keys(jobsContext.generateJobs).length > 0) {
       syncDirectionRef.current = 'context-to-local';
       setItemGenerateJobs(prev => {
@@ -753,7 +772,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         return hasChanges ? merged : prev;
       });
     }
-  }, [jobsContext?.generateJobs, matchJobId]); // Use specific property, not entire context
+  }, [jobsContext?.generateJobs, jobsContext?.matchJobId, matchJobId]); // Use specific property, not entire context
 
   // Sync local itemGenerateJobs changes to context
   useEffect(() => {
@@ -860,8 +879,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     if (!versionsSheetOpen) return;
 
     // Try to get versions from generate jobs related to this match
-    const productId = (route.params as any)?.productId || first?.productId || null;
-    const variantId = (route.params as any)?.variantId || first?.variantId || null;
+    const productId = (route.params as any)?.productId || effectiveResult?.productId || null;
+    const variantId = (route.params as any)?.variantId || effectiveResult?.variantId || null;
     const currentMatchJobId = matchJobId;
 
     (async () => {
@@ -899,7 +918,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               // Include jobs that either have the same match_job_id or contain results for the same product
               return job.match_job_id === currentMatchJobId ||
                 (Array.isArray(job.results) && job.results.some((r: any) =>
-                  r.productId === productId || r.productIndex === first?.productIndex
+                  r.productId === productId || r.productIndex === effectiveResult?.productIndex
                 ));
             })
             .map(job => ({
@@ -954,7 +973,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             // For generate jobs, we need to fetch results to map to indices
             // For now, if current jobId matches, map to current product index
             if (job.jobId === jobId) {
-              const currentIdx = (first?.productIndex as number) ?? 0;
+              const currentIdx = (effectiveResult?.productIndex as number) ?? 0;
               jobsByIndex[currentIdx] = { jobId: job.jobId, status: job.status };
             }
           });
@@ -1152,7 +1171,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       platformDetails: {
         canonical: {
           title: canonical.title || '',
-          sku: String(canonical.sku || `DRAFT-${(first?.productId || '').slice(0, 8)}`),
+          sku: String(canonical.sku || `DRAFT-${(effectiveResult?.productId || '').slice(0, 8)}`),
           price: (() => {
             const raw = (canonical as any).price;
             if (typeof raw === 'number') return raw;
@@ -1264,7 +1283,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
 
         // Add user images from computed userImagesByIndex (includes DB images!)
-        const idx = (first?.productIndex as number) ?? 0;
+        const idx = (effectiveResult?.productIndex as number) ?? 0;
         const userImages = userImagesByIndex[idx] || [];
         userImages.forEach((u: string) => {
           // Filter out empty strings
@@ -1289,8 +1308,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       setIsFilling(true);
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
       const token = await ensureSupabaseJwt();
-      const productId = (route.params as any)?.productId || first?.productId;
-      const variantId = (route.params as any)?.variantId || first?.variantId;
+      const productId = (route.params as any)?.productId || effectiveResult?.productId;
+      const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
       if (!baseUrl || !productId || !variantId || !token) return;
 
       const payload = buildPlatformPayload();
@@ -1380,8 +1399,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       setRegenSubmitting(true);
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
       const token = await ensureSupabaseJwt();
-      const productId = (route.params as any)?.productId || first?.productId;
-      const variantId = (route.params as any)?.variantId || first?.variantId;
+      const productId = (route.params as any)?.productId || effectiveResult?.productId;
+      const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
       if (!baseUrl || !productId || !variantId || !regenPlatformKey || !regenFieldKey || !token) return;
       const payload = buildPlatformPayload();
 
@@ -1445,8 +1464,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     try {
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
       const token = await ensureSupabaseJwt();
-      const productId = (route.params as any)?.productId || first?.productId;
-      const variantId = (route.params as any)?.variantId || first?.variantId;
+      const productId = (route.params as any)?.productId || effectiveResult?.productId;
+      const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
       if (!baseUrl || !productId || !variantId || !token) {
         console.log('[doSaveToInventory] Missing required data');
         return;
@@ -1506,7 +1525,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           title: canonical.title,
           description: canonical.description,
           price: canonical.price,
-          imageUrl: first?.imageUrl, // Use original image URL or from payload if available
+          imageUrl: (effectiveResult as any)?.imageUrl, // Use original image URL or from payload if available
           platforms: [], // No external platforms
           accountNames: [],
           savedToInventory: true, // Flag for UI
@@ -1678,8 +1697,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
       const token = await ensureSupabaseJwt();
-      const productId = (route.params as any)?.productId || first?.productId;
-      const variantId = (route.params as any)?.variantId || first?.variantId;
+      const productId = (route.params as any)?.productId || effectiveResult?.productId;
+      const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
       console.log('[confirmAndPublish] Got IDs:', { productId, variantId, baseUrl: !!baseUrl, token: !!token });
       if (!baseUrl || !productId || !variantId || !token) {
         console.log('[confirmAndPublish] Missing required data, aborting');
@@ -1745,7 +1764,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const imageUrl = (() => {
         const idx = typeof payload.media?.coverImageIndex === 'number' ? payload.media.coverImageIndex : 0;
         const arr = Array.isArray(payload.media?.imageUris) ? payload.media.imageUris : [];
-        return arr[idx] || first?.sourceImageUrl || '';
+        return arr[idx] || effectiveResult?.sourceImageUrl || '';
       })();
 
       const navigationParams = {
@@ -1840,8 +1859,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     try {
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
       const token = await ensureSupabaseJwt();
-      const productId = (route.params as any)?.productId || first?.productId;
-      const variantId = (route.params as any)?.variantId || first?.variantId;
+      const productId = (route.params as any)?.productId || effectiveResult?.productId;
+      const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
       if (!baseUrl || !productId || !variantId || !token) return;
 
       // Optimistic UI update - start loading
@@ -1854,7 +1873,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         body: JSON.stringify({
           generateJobId: jobId,
           products: [{
-            productIndex: (first?.productIndex as number) ?? 0,
+            productIndex: (effectiveResult?.productIndex as number) ?? 0,
             productId,
             variantId,
             regenerateType: 'entire_platform',
@@ -1904,8 +1923,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     try {
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
       const token = await ensureSupabaseJwt();
-      const productId = (route.params as any)?.productId || first?.productId;
-      const variantId = (route.params as any)?.variantId || first?.variantId;
+      const productId = (route.params as any)?.productId || effectiveResult?.productId;
+      const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
       if (!baseUrl || !productId || !variantId || !token) return;
       const payload = buildPlatformPayload();
       const submit = await fetch(`${baseUrl}/api/products/regenerate/submit`, {
@@ -1952,8 +1971,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     try {
       const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
       const token = await ensureSupabaseJwt();
-      const productId = (route.params as any)?.productId || first?.productId;
-      const variantId = (route.params as any)?.variantId || first?.variantId;
+      const productId = (route.params as any)?.productId || effectiveResult?.productId;
+      const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
       if (!baseUrl || !productId || !variantId || !token) return;
       const payload = buildPlatformPayload();
       const fieldGroups: Record<string, string[]> = {
@@ -2153,11 +2172,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const handleImagesChange = (newImages: string[]) => {
     console.log('[GEN-DETAILS] handleImagesChange:', newImages.length, newImages);
-    if (!first?.variantId) return;
+    if (!effectiveResult?.variantId) return;
 
     setDbImages(prev => ({
       ...prev,
-      [first.variantId!]: newImages
+      [effectiveResult.variantId!]: newImages
     }));
 
     // Also update the 'images' field in the canonical platform data so it saves correctly
@@ -2237,8 +2256,30 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           </TouchableOpacity>
         </View>
 
+        {hasMultipleResults && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, paddingHorizontal: 16, backgroundColor: '#f3f4f6', marginHorizontal: 16, marginTop: 8, borderRadius: 8, gap: 16 }}>
+            <TouchableOpacity
+              onPress={() => setCurrentProductIndex(i => Math.max(0, i - 1))}
+              disabled={currentProductIndex <= 0}
+              style={{ padding: 8, opacity: currentProductIndex <= 0 ? 0.5 : 1 }}
+            >
+              <Icon name="chevron-left" size={24} color="#374151" />
+            </TouchableOpacity>
+            <Text style={{ fontSize: 15, fontWeight: '600', color: '#111' }}>
+              Item {currentProductIndex + 1} of {results.length}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setCurrentProductIndex(i => Math.min((results?.length ?? 1) - 1, i + 1))}
+              disabled={currentProductIndex >= (results?.length ?? 1) - 1}
+              style={{ padding: 8, opacity: currentProductIndex >= (results?.length ?? 1) - 1 ? 0.5 : 1 }}
+            >
+              <Icon name="chevron-right" size={24} color="#374151" />
+            </TouchableOpacity>
+          </View>
+        )}
+
         <ScrollView>
-          {first ? (
+          {effectiveResult ? (
 
             <>
               {/* Image Change Handler */}
@@ -2257,7 +2298,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               <ListingEditorForm
                 platforms={displayedPlatforms}
                 updateCounter={updateCounter}
-                images={(userImagesByIndex[(first?.productIndex as number) ?? 0] || []).filter((url: string) => typeof url === 'string' && url.trim().length > 0)}
+                images={(userImagesByIndex[(effectiveResult?.productIndex as number) ?? 0] || []).filter((url: string) => typeof url === 'string' && url.trim().length > 0)}
                 onChangeImages={handleImagesChange}
                 platformLocations={platformLocations}
                 onChangePlatforms={(next) => {
@@ -2494,8 +2535,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                   setQuickFixLoading(true);
                   const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
                   const token = await ensureSupabaseJwt();
-                  const productId = (route.params as any)?.productId || first?.productId;
-                  const variantId = (route.params as any)?.variantId || first?.variantId;
+                  const productId = (route.params as any)?.productId || effectiveResult?.productId;
+                  const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
                   if (!baseUrl || !productId || !token) return;
 
                   // Determine target platform from mentions or default to first
@@ -2569,14 +2610,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               }}
               primaryLabel={
                 canPublish
-                  ? `Publish to ${readyPlatforms.length} platform${readyPlatforms.length === 1 ? '' : 's'}`
+                  ? (hasMultipleResults ? `Publish item ${currentProductIndex + 1} to ${readyPlatforms.length} platform${readyPlatforms.length === 1 ? '' : 's'}` : `Publish to ${readyPlatforms.length} platform${readyPlatforms.length === 1 ? '' : 's'}`)
                   : 'Publish listing (not ready)'
               }
               primaryDisabled={!canPublish}
               onPrimary={doPublish}
               secondaryLabel={'Save to Inventory'}
               onSecondary={doSaveToInventory}
-              tertiaryContent={<View style={{ height: 10 }} />}
+              tertiaryContent={hasMultipleResults ? (
+                <Text style={{ fontSize: 11, color: '#6b7280', textAlign: 'center', marginTop: 4 }}>Use arrows above to switch items, then Publish each</Text>
+              ) : <View style={{ height: 10 }} />}
             />
           </View>
         </View>

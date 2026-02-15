@@ -29,6 +29,10 @@ import { JobsProvider } from './src/context/JobsContext';
 import { SystemNotificationProvider } from './src/context/SystemNotificationContext';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PostHogProvider, PostHogIdentify } from './src/providers/PostHogProvider';
+import * as WebBrowser from 'expo-web-browser';
+
+// Complete any in-app browser auth session (e.g. OAuth redirect from Google Sign-In)
+WebBrowser.maybeCompleteAuthSession();
 
 // Feature flag to disable new functionality during debugging
 const ENABLE_PROCESS_FEATURES = false;

@@ -67,7 +67,7 @@ export type AuthStackParamList = {
   InitialScreen: undefined;
   OnboardingSlides: undefined;
   Auth: undefined;
-  VerifyCode: { contactLabel?: string; mode?: 'signup' | 'signin' } | undefined;
+  VerifyCode: { contactLabel?: string; mode?: 'signup' | 'signin' | 'reset' } | undefined;
   // PhoneAuthScreen: { phoneNumber: string } | undefined; // Commented out
   OnboardConnectionScreen: undefined;
   CreateAccountScreen: undefined;

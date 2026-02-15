@@ -1,13 +1,13 @@
 import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Animated } from 'react-native';
-import { useSignUp, useAuth } from '@clerk/clerk-expo';
+import { useSignUp, useSignIn, useAuth } from '@clerk/clerk-expo';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 
 type VerifyCodeRoute = {
   params?: {
     contactLabel?: string;
-    mode?: 'signup' | 'signin';
+    mode?: 'signup' | 'signin' | 'reset';
   };
 };
 
@@ -21,11 +21,14 @@ const CELL_COUNT = 6;
 const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
   const contactLabel = route?.params?.contactLabel ?? '';
   const mode = route?.params?.mode ?? 'signup';
+  const isResetMode = mode === 'reset';
   const { signUp, isLoaded: isSignUpLoaded } = useSignUp();
+  const { signIn, isLoaded: isSignInLoaded } = useSignIn();
   const auth = useAuth() as any;
   const theme = useTheme();
 
   const [digits, setDigits] = useState<string[]>(Array(CELL_COUNT).fill(''));
+  const [newPassword, setNewPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [resendTimer, setResendTimer] = useState(0);
@@ -104,45 +107,71 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
 
     try {
       if (code.length !== CELL_COUNT) return;
-      if (!isSignUpLoaded || !signUp) {
-        setErrorMessage('Please wait, we are preparing verification.');
-        return;
+      if (isResetMode) {
+        if (!isSignInLoaded || !signIn) {
+          setErrorMessage('Please wait, we are preparing.');
+          return;
+        }
+        if (newPassword.length < 8) {
+          setErrorMessage('Password must be at least 8 characters.');
+          return;
+        }
+      } else {
+        if (!isSignUpLoaded || !signUp) {
+          setErrorMessage('Please wait, we are preparing verification.');
+          return;
+        }
       }
       setSubmitting(true);
       setErrorMessage(null);
 
-      const res = await signUp.attemptEmailAddressVerification({ code });
-
-      if (res.status === 'complete' && res.createdSessionId) {
-        try { await auth.setActive?.({ session: res.createdSessionId }); } catch { }
-        navigation.reset({ index: 0, routes: [{ name: 'AppStack', params: { initialScreenName: 'CreateAccountScreen' } }] });
+      if (isResetMode) {
+        const res = await signIn!.attemptFirstFactor({
+          strategy: 'reset_password_email_code',
+          code,
+          password: newPassword,
+        });
+        if (res.status === 'complete' && res.createdSessionId) {
+          try { await auth.setActive?.({ session: res.createdSessionId }); } catch { }
+          // App will react to isSignedIn and show main app; no navigation needed
+        } else if (res.status === 'needs_second_factor') {
+          setErrorMessage('Additional verification is required. Please contact support.');
+          triggerErrorShake();
+        } else {
+          setErrorMessage('Unable to reset password. Please try again.');
+          triggerErrorShake();
+        }
       } else {
-        setErrorMessage('Unable to complete verification. Please try again.');
-        triggerErrorShake();
+        const res = await signUp.attemptEmailAddressVerification({ code });
+
+        if (res.status === 'complete' && res.createdSessionId) {
+          try { await auth.setActive?.({ session: res.createdSessionId }); } catch { }
+          navigation.reset({ index: 0, routes: [{ name: 'AppStack', params: { initialScreenName: 'CreateAccountScreen' } }] });
+        } else {
+          setErrorMessage('Unable to complete verification. Please try again.');
+          triggerErrorShake();
+        }
       }
     } catch (e: any) {
-      const message = e?.errors?.[0]?.message || e?.message || 'Invalid code. Please check and try again.';
+      const message = e?.errors?.[0]?.longMessage ?? e?.errors?.[0]?.message ?? e?.message ?? (isResetMode ? 'Invalid code or password. Please try again.' : 'Invalid code. Please check and try again.');
       setErrorMessage(message);
       triggerErrorShake();
-      // Clear digits on error so user can retry
       setDigits(Array(CELL_COUNT).fill(''));
       hasAutoSubmitted.current = false;
       setTimeout(() => inputs.current[0]?.focus(), 100);
     } finally {
       setSubmitting(false);
     }
-  }, [code, isSignUpLoaded, signUp, auth, navigation, submitting, triggerErrorShake]);
+  }, [code, newPassword, isResetMode, isSignInLoaded, signIn, isSignUpLoaded, signUp, auth, navigation, submitting, triggerErrorShake]);
 
-  // Auto-submit when all 6 digits are filled
+  // Auto-submit when all 6 digits are filled (signup only; reset mode requires password)
   useEffect(() => {
+    if (isResetMode) return;
     if (code.length === CELL_COUNT && !hasAutoSubmitted.current && !submitting) {
       hasAutoSubmitted.current = true;
-      // Small delay to let UI update
-      setTimeout(() => {
-        submit();
-      }, 150);
+      setTimeout(() => { submit(); }, 150);
     }
-  }, [code, submit, submitting]);
+  }, [code, submit, submitting, isResetMode]);
 
   // Reset auto-submit flag when code changes
   useEffect(() => {
@@ -160,19 +189,28 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
   }, [resendTimer]);
 
   const handleResend = async () => {
-    if (resendTimer > 0 || !isSignUpLoaded || !signUp) return;
+    if (resendTimer > 0) return;
 
     try {
       setSubmitting(true);
       setErrorMessage(null);
       setSuccessMessage(null);
 
-      await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
-
-      setSuccessMessage('Verification code resent successfully!');
-      setResendTimer(60); // 60 second cooldown
+      if (isResetMode) {
+        if (!isSignInLoaded || !signIn || !contactLabel) return;
+        await signIn.create({
+          strategy: 'reset_password_email_code',
+          identifier: contactLabel,
+        });
+        setSuccessMessage('Password reset code resent!');
+      } else {
+        if (!isSignUpLoaded || !signUp) return;
+        await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
+        setSuccessMessage('Verification code resent successfully!');
+      }
+      setResendTimer(60);
     } catch (e: any) {
-      const message = e?.errors?.[0]?.message || 'Failed to resend code. Please try again later.';
+      const message = e?.errors?.[0]?.longMessage ?? e?.errors?.[0]?.message ?? 'Failed to resend code. Please try again later.';
       setErrorMessage(message);
     } finally {
       setSubmitting(false);
@@ -183,11 +221,14 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.card}>
         <View style={styles.iconContainer}>
-          <Icon name="email-check-outline" size={48} color="#294306" />
+          <Icon name={isResetMode ? 'lock-reset' : 'email-check-outline'} size={48} color="#294306" />
         </View>
-        <Text style={styles.title}>Verify your email</Text>
+        <Text style={styles.title}>{isResetMode ? 'Reset your password' : 'Verify your email'}</Text>
         <Text style={styles.subtitle}>
-          Enter the 6-digit code sent to{contactLabel ? `\n${contactLabel}` : ' your email'}
+          {isResetMode
+            ? `Enter the 6-digit code sent to ${contactLabel || 'your email'} and choose a new password.`
+            : `Enter the 6-digit code sent to${contactLabel ? `\n${contactLabel}` : ' your email'}`
+          }
         </Text>
 
         <Animated.View style={[styles.row, { transform: [{ translateX: errorShakeAnim }] }]}>
@@ -213,6 +254,23 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
           ))}
         </Animated.View>
 
+        {isResetMode && (
+          <TextInput
+            style={[styles.cell, styles.passwordInput]}
+            placeholder="New password (8+ characters)"
+            placeholderTextColor="#9CA3AF"
+            value={newPassword}
+            onChangeText={(text) => {
+              setNewPassword(text);
+              if (errorMessage) setErrorMessage(null);
+            }}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            textContentType="newPassword"
+          />
+        )}
+
         {/* Status Messages */}
         {errorMessage && (
           <View style={styles.errorContainer}>
@@ -231,19 +289,19 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
         <TouchableOpacity
           style={[
             styles.button,
-            (submitting || code.length !== CELL_COUNT) && styles.buttonDisabled,
+            (submitting || code.length !== CELL_COUNT || (isResetMode && newPassword.length < 8)) && styles.buttonDisabled,
           ]}
           onPress={submit}
-          disabled={code.length !== CELL_COUNT || submitting}
+          disabled={code.length !== CELL_COUNT || submitting || (isResetMode && newPassword.length < 8)}
           activeOpacity={0.8}
         >
           {submitting ? (
             <View style={styles.buttonContent}>
               <Icon name="loading" size={20} color="white" />
-              <Text style={styles.buttonText}>Verifying...</Text>
+              <Text style={styles.buttonText}>{isResetMode ? 'Resetting...' : 'Verifying...'}</Text>
             </View>
           ) : (
-            <Text style={styles.buttonText}>Continue</Text>
+            <Text style={styles.buttonText}>{isResetMode ? 'Reset password' : 'Continue'}</Text>
           )}
         </TouchableOpacity>
 
@@ -334,6 +392,11 @@ const styles = StyleSheet.create({
   cellError: {
     borderColor: '#FCA5A5',
     backgroundColor: '#FEF2F2',
+  },
+  passwordInput: {
+    width: '100%',
+    marginBottom: 16,
+    paddingHorizontal: 16,
   },
   errorContainer: {
     flexDirection: 'row',

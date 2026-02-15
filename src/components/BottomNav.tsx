@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, StyleProp, ViewStyle } from 'react-native';
+import { View, Text, TouchableOpacity, Image, StyleSheet, StyleProp, ViewStyle } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PlatformButton from './PlatformButton';
@@ -17,6 +17,11 @@ type Props = {
   selectedPlatforms: string[];
   isConnected: (platform: string) => boolean;
   platformActiveCounts?: Record<string, number>;
+  /** When > 1, show "Platforms apply to all N items" so user knows selection is batch-level */
+  totalItemsCount?: number;
+  /** When in selection state, show this as confirmed product (expandable); tap "Change match" to reselect */
+  confirmedProduct?: { thumb?: string; title?: string; price?: string; condition?: string; source?: string } | null;
+  onChangeMatch?: () => void;
   onShowSelection: () => void;
   onShowTemplates: () => void;
   onShowPlatforms: () => void;
@@ -50,7 +55,11 @@ const BottomNav: React.FC<Props> = ({
   onGeneratePress,
   onStartConnect,
   style,
+  totalItemsCount = 1,
+  confirmedProduct = null,
+  onChangeMatch,
 }) => {
+  const [confirmedExpanded, setConfirmedExpanded] = React.useState(false);
   return (
     <LinearGradient
       colors={["rgba(255, 255, 255, 0)", "rgb(255, 255, 255)", "rgb(255, 255, 255)"]}
@@ -107,6 +116,30 @@ const BottomNav: React.FC<Props> = ({
               <Icon name="redo-variant" size={20} color="#888" style={{ marginRight: 8 }} />
               <Text style={styles.backButtonText}>Reselect Matches</Text>
             </TouchableOpacity>
+            {confirmedProduct?.title ? (
+              <View style={{flexDirection: "column", backgroundColor: 'rgba(154, 154, 154, 0.12)', gap: 6 , marginTop: 18, marginBottom: 18, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10}}>
+                <Text style={styles.platformSubheaderText}>Selected Item:</Text>
+                <TouchableOpacity
+                  onPress={() => setConfirmedExpanded(e => !e)}
+                  style={{ flexDirection: 'row', alignItems: 'center', width: '100%', paddingVertical: 8, borderRadius: 10 }}
+                >
+                  {confirmedProduct.thumb ? (
+                    <Image source={{ uri: confirmedProduct.thumb }} style={{ width: 44, height: 44, borderRadius: 6, marginRight: 10 }} resizeMode="cover" />
+                  ) : null}
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#111' }} numberOfLines={2}>{confirmedProduct.title}</Text>
+                    {confirmedExpanded && (confirmedProduct.price != null || confirmedProduct.condition != null || confirmedProduct.source != null) && (
+                      <View style={{ marginTop: 6 }}>
+                        {confirmedProduct.price != null && <Text style={{ fontSize: 12, color: '#374151' }}>Price: {confirmedProduct.price}</Text>}
+                        {confirmedProduct.condition != null && <Text style={{ fontSize: 12, color: '#374151' }}>Condition: {confirmedProduct.condition}</Text>}
+                        {confirmedProduct.source != null && <Text style={{ fontSize: 12, color: '#374151' }}>Source: {confirmedProduct.source}</Text>}
+                      </View>
+                    )}
+                  </View>
+                  <Icon name={confirmedExpanded ? 'chevron-up' : 'chevron-down'} size={20} color="#6b7280" />
+                </TouchableOpacity>
+              </View>
+            ) : null}
             <Text style={styles.platformHeaderText}>Want Specific Sources?</Text>
             <TouchableOpacity style={styles.dropdownSelect} onPress={onOpenTemplateModal}>
               <Text style={styles.dropdownSelectText}>
@@ -119,6 +152,9 @@ const BottomNav: React.FC<Props> = ({
           <View style={{ flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 12, paddingVertical: 12 }}>
             <View style={styles.platformHeader}>
               <Text style={styles.platformHeaderText}>Which Platforms?</Text>
+              {totalItemsCount > 1 && (
+                <Text style={styles.platformForAllLabel}>Apply to all {totalItemsCount} items</Text>
+              )}
             </View>
             <View style={styles.platformGrid}>
               {ENABLED_PLATFORMS.map((p) => (
@@ -224,7 +260,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     minHeight: 100,
-    maxHeight: 150,
+    maxHeight: 250,
     marginHorizontal: 30,
     backgroundColor: "rgba(255, 255, 255, 0)",
   },
@@ -243,7 +279,7 @@ const styles = StyleSheet.create({
   mainButton: {
     flexDirection: 'row',
     backgroundColor: '#93C822',
-    paddingVertical: 14,
+    paddingVertical: 18,
     paddingHorizontal: 30,
     borderRadius: 12,
     alignItems: 'center',
@@ -272,7 +308,7 @@ const styles = StyleSheet.create({
   backButton: {
     flexDirection: 'row',
     backgroundColor: '#D9D9D9',
-    paddingVertical: 14,
+    paddingVertical: 18,
     paddingHorizontal: 30,
     borderRadius: 12,
     alignItems: 'center',
@@ -310,7 +346,8 @@ const styles = StyleSheet.create({
     color: '#000000'
   },
   platformHeader: {
-    flexDirection: 'row',
+    flexDirection: 'column',
+    alignItems: 'center',
     justifyContent: 'center',
     minWidth: '100%',
     marginBottom: 12,
@@ -321,12 +358,22 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#000'
   },
+  platformForAllLabel: {
+    fontSize: 13,
+    color: '#6b7280',
+    marginTop: 4
+  },
   platformGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
     marginBottom: 16,
     gap: 8
+  },
+  platformSubheaderText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#000'
   },
   csvImportButton: {
     minWidth: '100%',

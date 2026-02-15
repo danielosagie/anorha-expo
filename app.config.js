@@ -6,6 +6,7 @@ export default {
   scheme: "anorhaapp",
   android: {
     package: "anorha.alpha",
+    versionCode: 1,
     permissions: [
       "android.permission.CAMERA",
       "android.permission.RECORD_AUDIO"

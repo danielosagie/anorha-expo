@@ -102,7 +102,14 @@ type PlatformState = {
     locationName?: string;
     deliveryMethod?: 'in_person' | 'shipping' | 'both';
   };
-  condition?: 'new' | 'used' | 'refurbished' | 'like_new' | 'good' | 'fair';
+  condition?: 'new' | 'used' | 'refurbished' | 'like_new' | 'good' | 'fair' | 'for_parts';
+  itemSpecifics?: Record<string, string>;
+  conditionID?: number;
+  estimatedDimensions?: { length: number; width: number; height: number; unit: string };
+  estimatedWeight?: { value: number; unit: string };
+  shippingTier?: string;
+  shippingTierReason?: string;
+  shippingOptions?: Record<string, string>;
 };
 
 type TaxonomyOption = {
@@ -112,6 +119,16 @@ type TaxonomyOption = {
   isLeaf?: boolean;
   score?: number;
 };
+
+const EBAY_CONDITION_TO_GENERIC: Record<string, string> = {
+  '1000': 'new', '1500': 'new', '1750': 'new',
+  '2000': 'refurbished', '2010': 'refurbished', '2020': 'refurbished', '2030': 'refurbished', '2500': 'refurbished',
+  '2750': 'like_new', '2990': 'like_new',
+  '3000': 'used', '3010': 'fair', '4000': 'good', '5000': 'good', '6000': 'fair', '7000': 'for_parts',
+};
+function mapEbayConditionIdToGeneric(conditionId: string): string {
+  return EBAY_CONDITION_TO_GENERIC[String(conditionId)] || 'good';
+}
 
 const PLATFORM_META: Record<string, { label: string; icon: string }> = {
   shopify: { label: 'Shopify', icon: 'shopping' },
@@ -366,6 +383,16 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [taxonomyResults, setTaxonomyResults] = useState<Record<string, TaxonomyOption[]>>({});
   const [taxonomyLoading, setTaxonomyLoading] = useState<Record<string, boolean>>({});
   const taxonomySearchTimeoutRef = useRef<Record<string, any>>({});
+  const [aspects, setAspects] = useState<Array<{ aspectName: string; isRequired: boolean; allowedValues: string[] }>>([]);
+  const [aspectsLoading, setAspectsLoading] = useState<boolean>(false);
+  const [ebayConditions, setEbayConditions] = useState<Array<{ conditionId: string; conditionName: string; description?: string }>>([]);
+  const [ebayConditionsLoading, setEbayConditionsLoading] = useState<boolean>(false);
+  const [pricingResearchLoading, setPricingResearchLoading] = useState<boolean>(false);
+  const [pricingResearchModalVisible, setPricingResearchModalVisible] = useState<boolean>(false);
+  const [pricingResearchResult, setPricingResearchResult] = useState<{ low?: number; median?: number; high?: number; recommended?: number; samples?: Array<{ title: string; price: number; url?: string }>; error?: string } | null>(null);
+  const [shippingEstimateResult, setShippingEstimateResult] = useState<{ estimatedMin: number; estimatedMax: number; midpoint: number; description?: string; error?: string } | null>(null);
+  const [shippingEstimateLoading, setShippingEstimateLoading] = useState<boolean>(false);
+  const shippingEstimateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const preventTaxonomyAutoFetchRef = useRef<Set<string>>(new Set());
   const [variantImagePicker, setVariantImagePicker] = useState<{ variantId: string; open: boolean } | null>(null);
   const [localGeneratingPlatforms, setGeneratingPlatforms] = useState<Set<string>>(new Set());
@@ -653,6 +680,146 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       }
     };
   }, [supportsTaxonomy, activePlatformKeyLower, activeTaxonomyQuery, fetchTaxonomyOptions]);
+
+  // Fetch eBay aspects (Item Specifics) when category selected
+  const fetchAspects = useCallback(async (categoryId: string) => {
+    if (!categoryId || activePlatformKeyLower !== 'ebay') return;
+    setAspectsLoading(true);
+    try {
+      const token = await ensureSupabaseJwt();
+      const url = `${API_BASE_URL}/api/taxonomy/ebay/${encodeURIComponent(categoryId)}/aspects`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error('Failed to fetch aspects');
+      const data = await res.json();
+      setAspects(Array.isArray(data) ? data : (data?.aspects || []));
+    } catch (e) {
+      console.error('[ListingEditorForm] Aspects fetch error:', e);
+      setAspects([]);
+    } finally {
+      setAspectsLoading(false);
+    }
+  }, [activePlatformKeyLower]);
+
+  // Fetch eBay conditions when eBay + category selected
+  const fetchEbayConditions = useCallback(async (categoryId: string | undefined) => {
+    if (activePlatformKeyLower !== 'ebay') return;
+    setEbayConditionsLoading(true);
+    try {
+      const token = await ensureSupabaseJwt();
+      const q = categoryId ? `?categoryId=${encodeURIComponent(categoryId)}` : '';
+      const url = `${API_BASE_URL}/api/ebay/conditions${q}`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error('Failed to fetch conditions');
+      const data = await res.json();
+      const conditions = data?.conditions || [];
+      setEbayConditions(conditions);
+    } catch (e) {
+      console.error('[ListingEditorForm] eBay conditions fetch error:', e);
+      setEbayConditions([]);
+    } finally {
+      setEbayConditionsLoading(false);
+    }
+  }, [activePlatformKeyLower]);
+
+  useEffect(() => {
+    if (activePlatformKeyLower !== 'ebay') return;
+    const catId = activeData.categoryId;
+    fetchEbayConditions(catId);
+  }, [activePlatformKeyLower, activeData.categoryId, fetchEbayConditions]);
+
+  useEffect(() => {
+    if (activePlatformKeyLower !== 'ebay') return;
+    const catId = activeData.categoryId;
+    if (catId) fetchAspects(catId);
+    else setAspects([]);
+  }, [activePlatformKeyLower, activeData.categoryId, fetchAspects]);
+
+  const fetchPricingResearch = useCallback(async () => {
+    const title = activeData.title?.trim();
+    if (!title || activePlatformKeyLower !== 'ebay') return;
+    setPricingResearchLoading(true);
+    setPricingResearchResult(null);
+    try {
+      const token = await ensureSupabaseJwt();
+      const res = await fetch(`${API_BASE_URL}/api/ebay/pricing-research`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          categoryId: activeData.categoryId || undefined,
+          condition: activeData.condition || undefined,
+          limit: 20,
+        }),
+      });
+      const data = await res.json();
+      setPricingResearchResult(data);
+      setPricingResearchModalVisible(true);
+    } catch (e) {
+      console.error('[ListingEditorForm] Pricing research error:', e);
+      setPricingResearchResult({ error: (e as Error)?.message || 'Failed to research pricing' });
+      setPricingResearchModalVisible(true);
+    } finally {
+      setPricingResearchLoading(false);
+    }
+  }, [activePlatformKeyLower, activeData.title, activeData.categoryId, activeData.condition]);
+
+  const fetchShippingEstimate = useCallback(async () => {
+    const w = activeData.weight;
+    const num = typeof w === 'number' ? w : parseFloat(String(w ?? ''));
+    if (!Number.isFinite(num) || num <= 0) {
+      setShippingEstimateResult(null);
+      return;
+    }
+    setShippingEstimateLoading(true);
+    setShippingEstimateResult(null);
+    try {
+      const token = await ensureSupabaseJwt();
+      const dims = (activeData as any).estimatedDimensions;
+      const params = new URLSearchParams({
+        weight: String(num),
+        weightUnit: activeData.weightUnit || 'lb',
+      });
+      if (dims?.length != null) params.set('length', String(dims.length));
+      if (dims?.width != null) params.set('width', String(dims.width));
+      if (dims?.height != null) params.set('height', String(dims.height));
+      const res = await fetch(`${API_BASE_URL}/api/shipping/estimate?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (data.error && !data.estimatedMin) {
+        setShippingEstimateResult({ estimatedMin: 0, estimatedMax: 0, midpoint: 0, error: data.error });
+      } else if (typeof data.estimatedMin === 'number') {
+        setShippingEstimateResult({
+          estimatedMin: data.estimatedMin,
+          estimatedMax: data.estimatedMax ?? data.estimatedMin,
+          midpoint: data.midpoint ?? ((data.estimatedMin + (data.estimatedMax ?? data.estimatedMin)) / 2),
+          description: data.description,
+        });
+      } else {
+        setShippingEstimateResult(null);
+      }
+    } catch (e) {
+      setShippingEstimateResult(null);
+    } finally {
+      setShippingEstimateLoading(false);
+    }
+  }, [activeData.weight, activeData.weightUnit, (activeData as any).estimatedDimensions]);
+
+  useEffect(() => {
+    if (shippingEstimateDebounceRef.current) clearTimeout(shippingEstimateDebounceRef.current);
+    const w = activeData.weight;
+    const num = typeof w === 'number' ? w : parseFloat(String(w ?? ''));
+    if (!Number.isFinite(num) || num <= 0) {
+      setShippingEstimateResult(null);
+      return;
+    }
+    shippingEstimateDebounceRef.current = setTimeout(() => {
+      fetchShippingEstimate();
+    }, 500);
+    return () => {
+      if (shippingEstimateDebounceRef.current) clearTimeout(shippingEstimateDebounceRef.current);
+    };
+  }, [activeData.weight, activeData.weightUnit, (activeData as any).estimatedDimensions, fetchShippingEstimate]);
 
   // When in 'all' tab, aggregate locations and quantities from all platforms
   const aggregatedLocations = useMemo(() => {
@@ -1669,6 +1836,49 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 </TouchableOpacity>
               </View>
             )}
+
+            {/* eBay Item Specifics - when category selected */}
+            {activePlatformKeyLower === 'ebay' && selectedCategoryId && (
+              <View style={{ marginTop: 16 }}>
+                <Text style={styles.fieldLabel}>Item Specifics</Text>
+                {aspectsLoading ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12 }}>
+                    <ActivityIndicator size="small" color="#9CA3AF" />
+                    <Text style={{ fontSize: 12, color: '#6B7280' }}>Loading required fields...</Text>
+                  </View>
+                ) : aspects.length > 0 ? (
+                  <View style={{ gap: 12 }}>
+                    {aspects.filter(a => a.isRequired).map((asp) => (
+                      <View key={asp.aspectName}>
+                        <Text style={{ fontSize: 12, color: '#374151', marginBottom: 4 }}>{asp.aspectName} *</Text>
+                        {asp.allowedValues?.length > 0 ? (
+                          <AppDropdown
+                            style={[styles.input, { height: 44, paddingHorizontal: 10 }]}
+                            data={asp.allowedValues.map(v => ({ label: v, value: v }))}
+                            placeholder={`Select ${asp.aspectName}...`}
+                            value={(activeData.itemSpecifics || {})[asp.aspectName]}
+                            onChange={(item) => patchPlatform(prev => ({
+                              ...prev,
+                              itemSpecifics: { ...(prev.itemSpecifics || {}), [asp.aspectName]: item.value },
+                            }))}
+                          />
+                        ) : (
+                          <TextInput
+                            style={[styles.input, { height: 44 }]}
+                            placeholder={`Enter ${asp.aspectName}...`}
+                            value={(activeData.itemSpecifics || {})[asp.aspectName] || ''}
+                            onChangeText={(t) => patchPlatform(prev => ({
+                              ...prev,
+                              itemSpecifics: { ...(prev.itemSpecifics || {}), [asp.aspectName]: t },
+                            }))}
+                          />
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+            )}
           </View>
         )}
 
@@ -1738,12 +1948,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           const priceError = priceRequired && ((activeData as any).price == null || String((activeData as any).price) === '' || Number((activeData as any).price) === 0);
 
           return (
-            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-end' }}>
-              <View style={{ flex: 1, flexDirection: "row", gap: 8, alignItems: "flex-end" }}>
-                <View style={{ flex: 1 }}>
+            <View>
+              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-end' }}>
+                <View style={{ flex: 1, flexDirection: "row", gap: 8, alignItems: "flex-end" }}>
+                  <View style={{ flex: 1 }}>
 
-                  <Field
-                    label={hasVariantsWithOptions ? "Base Price (optional with variants)" : "Price"}
+                    <Field
+                      label={hasVariantsWithOptions ? "Base Price (optional with variants)" : "Price"}
                     required={!hasVariantsWithOptions}
                     value={String((activeData as any).price ?? '')}
                     onChangeText={(t) => patchField('price', t)}
@@ -1753,12 +1964,27 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                     error={priceError}
                     keyboardType={"decimal-pad"}
                     externalUpdate={hasExternalUpdate('price')}
-                  />
+                    />
 
+                  </View>
                 </View>
-
-
               </View>
+              {activePlatformKeyLower === 'ebay' && activeData.title?.trim() && activeData.categoryId && (
+                <TouchableOpacity
+                  onPress={fetchPricingResearch}
+                  disabled={pricingResearchLoading}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}
+                >
+                  {pricingResearchLoading ? (
+                    <ActivityIndicator size="small" color="#93C822" />
+                  ) : (
+                    <Package size={14} color="#93C822" />
+                  )}
+                  <Text style={{ color: '#93C822', fontSize: 13, fontWeight: '600' }}>
+                    {pricingResearchLoading ? 'Researching...' : 'Research Pricing'}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
           );
         })()}
@@ -1798,28 +2024,144 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           </TouchableOpacity>
         </View>
 
-        {/* Condition - Global Dropdown */}
+        {/* Condition - eBay uses category-specific conditions; others use generic */}
         <View style={{ marginTop: 16 }}>
           <Text style={styles.fieldLabel}>Condition</Text>
-          <AppDropdown
-            style={[styles.modernInputWrapper, { paddingHorizontal: 12, height: 48, borderWidth: 1 }]}
-            data={[
-              { label: 'New', value: 'new' },
-              { label: 'Like New', value: 'like_new' },
-              { label: 'Good', value: 'good' },
-              { label: 'Fair', value: 'fair' },
-              { label: 'Used', value: 'used' },
-              { label: 'Refurbished', value: 'refurbished' },
-              { label: 'For Parts', value: 'for_parts' },
-            ]}
-            placeholder="Select condition..."
-            value={activeData.condition || 'good'}
-            onChange={item => patchField('condition', item.value)}
-          />
+          {activePlatformKeyLower === 'ebay' && ebayConditions.length > 0 ? (
+            <AppDropdown
+              style={[styles.modernInputWrapper, { paddingHorizontal: 12, height: 48, borderWidth: 1 }]}
+              data={ebayConditionsLoading ? [] : ebayConditions.map(c => ({ label: c.conditionName, value: c.conditionId }))}
+              placeholder={ebayConditionsLoading ? "Loading conditions..." : "Select condition..."}
+              value={activeData.conditionID ? String(activeData.conditionID) : (ebayConditions[0]?.conditionId ?? '')}
+              onChange={(item) => {
+                const condId = parseInt(item.value, 10);
+                const generic = mapEbayConditionIdToGeneric(item.value) as PlatformState['condition'];
+                patchPlatform(prev => ({
+                  ...prev,
+                  conditionID: Number.isFinite(condId) ? condId : undefined,
+                  condition: generic,
+                }));
+              }}
+            />
+          ) : (
+            <AppDropdown
+              style={[styles.modernInputWrapper, { paddingHorizontal: 12, height: 48, borderWidth: 1 }]}
+              data={[
+                { label: 'New', value: 'new' },
+                { label: 'Like New', value: 'like_new' },
+                { label: 'Good', value: 'good' },
+                { label: 'Fair', value: 'fair' },
+                { label: 'Used', value: 'used' },
+                { label: 'Refurbished', value: 'refurbished' },
+                { label: 'For Parts', value: 'for_parts' },
+              ]}
+              placeholder="Select condition..."
+              value={activeData.condition || 'good'}
+              onChange={item => patchField('condition', item.value)}
+            />
+          )}
         </View>
+
+        {/* Shipping estimation - when weight entered or estimatedDimensions/shippingTier present */}
+        {(((activeData as any).estimatedDimensions || (activeData as any).shippingTier) || (activeData.weight != null && Number(activeData.weight) > 0)) && (
+          <View style={{ marginTop: 16, backgroundColor: '#F0FDF4', borderRadius: 8, padding: 12, borderLeftWidth: 3, borderLeftColor: '#22c55e' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+              <Truck size={16} color="#16a34a" />
+              <Text style={{ fontSize: 12, fontWeight: '600', color: '#166534' }}>Shipping Estimate</Text>
+            </View>
+            {(activeData as any).estimatedDimensions && (
+              <Text style={{ fontSize: 12, color: '#374151', marginBottom: 4 }}>
+                Est. {(activeData as any).estimatedDimensions.length} × {(activeData as any).estimatedDimensions.width} × {(activeData as any).estimatedDimensions.height} in
+              </Text>
+            )}
+            {(activeData as any).estimatedWeight?.value && (
+              <Text style={{ fontSize: 12, color: '#374151', marginBottom: 4 }}>
+                ~{(activeData as any).estimatedWeight.value} {(activeData as any).estimatedWeight.unit || 'lb'}
+              </Text>
+            )}
+            {(activeData as any).shippingTierReason && (
+              <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>{(activeData as any).shippingTierReason}</Text>
+            )}
+            {shippingEstimateLoading ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                <ActivityIndicator size="small" color="#16a34a" />
+                <Text style={{ fontSize: 12, color: '#6B7280' }}>Estimating shipping cost...</Text>
+              </View>
+            ) : shippingEstimateResult && typeof shippingEstimateResult.estimatedMin === 'number' && !shippingEstimateResult.error ? (
+              <Text style={{ fontSize: 12, color: '#166534', fontWeight: '600', marginTop: 6 }}>
+                Est. shipping cost: ${shippingEstimateResult.estimatedMin.toFixed(2)}–${shippingEstimateResult.estimatedMax.toFixed(2)} (USPS Ground on eBay/Shopify)
+              </Text>
+            ) : !(activeData.weight != null && Number(activeData.weight) > 0) ? (
+              <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 6 }}>Enter weight to see estimated shipping cost.</Text>
+            ) : null}
+            {shippingEstimateResult && typeof shippingEstimateResult.estimatedMin === 'number' && (
+              <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 4 }}>Actual rates shown at checkout.</Text>
+            )}
+          </View>
+        )}
 
       </View>
 
+      {/* Pricing Research Modal */}
+      <Modal visible={pricingResearchModalVisible} transparent animationType="slide">
+        <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }} onPress={() => setPricingResearchModalVisible(false)}>
+          <Pressable style={{ backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 20 }} onPress={e => e.stopPropagation()}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: '#1F2937' }}>eBay Sold Prices</Text>
+              <TouchableOpacity onPress={() => setPricingResearchModalVisible(false)}>
+                <Icon name="close" size={24} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+            {pricingResearchResult?.error ? (
+              <Text style={{ fontSize: 14, color: '#ef4444', marginBottom: 12 }}>{pricingResearchResult.error}</Text>
+            ) : pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
+              <>
+                <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 12 }}>
+                  Sold prices: ${pricingResearchResult.low?.toFixed(2)} – ${pricingResearchResult.high?.toFixed(2)} (median ${pricingResearchResult.median?.toFixed(2)})
+                </Text>
+                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+                  <TouchableOpacity
+                    style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center' }}
+                    onPress={() => {
+                      patchField('price', String((pricingResearchResult?.low ?? 0).toFixed(2)));
+                      patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low: pricingResearchResult!.low!, recommended: pricingResearchResult!.recommended ?? pricingResearchResult!.median!, high: pricingResearchResult!.high! } }));
+                      setPricingResearchModalVisible(false);
+                    }}
+                  >
+                    <Text style={{ fontSize: 10, color: '#6B7280' }}>Fast sale</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '700' }}>${(pricingResearchResult?.low ?? 0).toFixed(2)}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#3B82F6', backgroundColor: '#EFF6FF', alignItems: 'center' }}
+                    onPress={() => {
+                      const rec = pricingResearchResult?.recommended ?? pricingResearchResult?.median ?? 0;
+                      patchField('price', String(rec.toFixed(2)));
+                      patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low: pricingResearchResult!.low!, recommended: rec, high: pricingResearchResult!.high! } }));
+                      setPricingResearchModalVisible(false);
+                    }}
+                  >
+                    <Text style={{ fontSize: 10, color: '#1E40AF' }}>Recommended</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#1E40AF' }}>${(pricingResearchResult?.recommended ?? pricingResearchResult?.median ?? 0).toFixed(2)}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center' }}
+                    onPress={() => {
+                      patchField('price', String((pricingResearchResult?.high ?? 0).toFixed(2)));
+                      patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low: pricingResearchResult!.low!, recommended: pricingResearchResult!.recommended ?? pricingResearchResult!.median!, high: pricingResearchResult!.high! } }));
+                      setPricingResearchModalVisible(false);
+                    }}
+                  >
+                    <Text style={{ fontSize: 10, color: '#6B7280' }}>Max profit</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '700' }}>${(pricingResearchResult?.high ?? 0).toFixed(2)}</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <Text style={{ fontSize: 14, color: '#6B7280' }}>Loading...</Text>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* Variants: only for platforms that support variants */}
       {
@@ -2056,7 +2398,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
 
             {/* Delivery Method */}
-            <View style={{ marginBottom: 20 }}>
+            <View style={{ marginBottom: 20, marginTop: 20 }}>
               <Text style={styles.fieldLabel}>Handoff Method</Text>
               <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
                 {(['in_person', 'shipping', 'both'] as const).map((method) => {

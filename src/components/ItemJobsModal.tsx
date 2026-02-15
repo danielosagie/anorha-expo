@@ -38,6 +38,9 @@ type LegacyItem = {
   title: string;
   thumb?: string;
   matchesCount: number;
+  /** Optional: when multiple flows exist, group items by this in the modal */
+  flowType?: string;
+  flowId?: string;
 };
 
 type LegacyProps = {
@@ -59,6 +62,8 @@ type LegacyProps = {
   onRescan?: (index: number) => void;
   countLabel?: string;
   getSecondaryText?: (index: number) => string | null;
+  /** Optional label for current job (e.g. "Match abc123…") so modal clearly refers to this flow */
+  jobLabel?: string;
 };
 
 // New enhanced props interface
@@ -176,22 +181,30 @@ const StepPill: React.FC<{
   );
 };
 
-// Legacy step pill for backward compatibility
+// Legacy step pill: bigger, equal width, clear done (green check) / in-progress (spinner) / pending (gray)
 const LegacyStepPill: React.FC<{
   label: string;
   color: string;
   onPress: () => void;
   icon?: string;
-}> = ({ label, color, onPress, icon }) => (
-  <TouchableOpacity onPress={onPress} style={styles.legacyPill}>
-    {icon ? (
-      <Icon name={icon} size={14} color="#000" />
-    ) : (
-      <View style={[styles.legacyDot, { backgroundColor: color }]} />
-    )}
-    <Text style={styles.legacyPillText}>{label}</Text>
-  </TouchableOpacity>
-);
+}> = ({ label, color, onPress, icon }) => {
+  const isDone = color === ANORHA_GREEN || color === '#10B981';
+  const isProcessing = color === '#FFD700' || color === '#F59E0B';
+  return (
+    <TouchableOpacity onPress={onPress} style={styles.legacyPill}>
+      {icon ? (
+        <Icon name={icon} size={18} color="#000" />
+      ) : isDone ? (
+        <Icon name="check-circle" size={18} color={ANORHA_GREEN} />
+      ) : isProcessing ? (
+        <SpinningLoader size={16} color="#F59E0B" />
+      ) : (
+        <View style={[styles.legacyDot, { backgroundColor: color || '#D1D5DB' }]} />
+      )}
+      <Text style={[styles.legacyPillText, isDone && styles.legacyPillTextDone]} numberOfLines={1}>{label}</Text>
+    </TouchableOpacity>
+  );
+};
 
 // Item card component
 const ItemCard: React.FC<{
@@ -289,26 +302,13 @@ const ItemCard: React.FC<{
             />
           ))
         ) : (
-          // Legacy mode - show scan/match/details with colors
+          // Legacy mode - only Match and Generate/Details
           <>
-            <LegacyStepPill
-              label="Scan"
-              color={props.scanColor || '#10B981'}
-              onPress={props.onPickScan || (() => { })}
-            />
             <LegacyStepPill
               label="Match"
               color={props.matchColor || '#4B5563'}
               onPress={props.onPickMatch || (() => { })}
             />
-            {props.onRescan && matchesCount === 0 && (
-              <LegacyStepPill
-                label="Rescan"
-                color="#4B5563"
-                onPress={props.onRescan}
-                icon="camera-refresh"
-              />
-            )}
             {props.detailsEnabled ? (
               <LegacyStepPill
                 label="Details"
@@ -320,12 +320,12 @@ const ItemCard: React.FC<{
                 onPress={props.onQuickGenerate}
                 style={styles.legacyPill}
               >
-                <Icon name="rocket-launch-outline" size={14} color="#000" />
+                <Icon name="rocket-launch-outline" size={18} color="#000" />
                 <Text style={styles.legacyPillText}>Generate</Text>
               </TouchableOpacity>
             ) : (
               <View style={[styles.legacyPill, { opacity: 0.5 }]}>
-                <Icon name="rocket-launch-outline" size={14} color="#888" />
+                <Icon name="rocket-launch-outline" size={18} color="#888" />
                 <Text style={styles.legacyPillText}>Generate</Text>
               </View>
             )}
@@ -372,6 +372,24 @@ export default function ItemJobsModal(props: Props) {
     return counts;
   }, [items, enhanced, props]);
 
+  // Legacy summary: only match + generate — "X matched • Y ready to review • Z generating"
+  const stepSummaryLegacy = useMemo(() => {
+    if (enhanced) return null;
+    const legacyProps = props as LegacyProps;
+    let matchDone = 0, genInProgress = 0, genDone = 0;
+    items.forEach(item => {
+      const idx = item.index;
+      const matchGreen = legacyProps.matchColor(idx) === ANORHA_GREEN || legacyProps.matchColor(idx) === '#10B981';
+      const detailsColor = legacyProps.detailsColor(idx);
+      const detailsGreen = detailsColor === ANORHA_GREEN || detailsColor === '#10B981';
+      const detailsYellow = detailsColor === '#FFD700' || detailsColor === '#F59E0B';
+      if (matchGreen) matchDone++;
+      if (detailsGreen) genDone++;
+      else if (detailsYellow) genInProgress++;
+    });
+    return { matchDone, genInProgress, genDone };
+  }, [items, enhanced, props]);
+
   // Filter items by search and status
   const filteredItems = useMemo(() => {
     let result = [...items] as typeof items;
@@ -409,6 +427,20 @@ export default function ItemJobsModal(props: Props) {
 
     return result;
   }, [items, searchQuery, statusFilter, enhanced, props]);
+
+  // Group by flowType when multiple flows exist (optional multi-flow support)
+  const flowGroups = useMemo(() => {
+    const withFlow = filteredItems as Array<{ index: number; flowType?: string; flowId?: string }>;
+    const keys = [...new Set(withFlow.map(i => i.flowType ?? 'default'))];
+    if (keys.length <= 1) return null;
+    const groups: Record<string, typeof filteredItems> = {};
+    filteredItems.forEach(item => {
+      const key = (item as LegacyItem).flowType ?? 'default';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(item);
+    });
+    return groups;
+  }, [filteredItems]);
 
   const toggleIndex = (idx: number) => {
     setSelected(prev => {
@@ -471,7 +503,10 @@ export default function ItemJobsModal(props: Props) {
               <Icon name="close" size={22} color="#000" />
             </TouchableOpacity>
 
-            <Text style={styles.headerTitle}>Current Jobs</Text>
+            <View style={styles.headerTitleBlock}>
+              <Text style={styles.headerTitle}>Current Jobs</Text>
+              <Text style={styles.headerSubtitle}>{items.length} item{items.length !== 1 ? 's' : ''}</Text>
+            </View>
 
             {enableMultiSelect && hasBatchOperations ? (
               <TouchableOpacity
@@ -510,26 +545,43 @@ export default function ItemJobsModal(props: Props) {
             </View>
           )}
 
-          {/* Queue Summary - Always show when items exist */}
+          {/* Queue Summary - Legacy: matched + ready to review + generating; Enhanced: status counts */}
           {items.length > 0 && (
             <View style={styles.queueSummary}>
               <Text style={styles.queueText}>
-                {statusCounts.processing > 0 && (
-                  <Text style={styles.queueProcessing}>{statusCounts.processing} processing</Text>
-                )}
-                {statusCounts.processing > 0 && statusCounts.pending > 0 && ' • '}
-                {statusCounts.pending > 0 && (
-                  <Text style={styles.queuePending}>{statusCounts.pending} pending</Text>
-                )}
-                {(statusCounts.processing > 0 || statusCounts.pending > 0) && statusCounts.completed > 0 && ' • '}
-                {statusCounts.completed > 0 && (
-                  <Text style={styles.queueComplete}>{statusCounts.completed} done</Text>
-                )}
-                {statusCounts.failed > 0 && ' • '}
-                {statusCounts.failed > 0 && (
-                  <Text style={styles.queueFailed}>{statusCounts.failed} failed</Text>
+                {stepSummaryLegacy ? (
+                  <>
+                    <Text>{stepSummaryLegacy.matchDone} matched</Text>
+                    {stepSummaryLegacy.genDone > 0 && (
+                      <Text style={styles.queueReadyReview}> • {stepSummaryLegacy.genDone} ready to review</Text>
+                    )}
+                    {stepSummaryLegacy.genInProgress > 0 && (
+                      <Text style={styles.queueProcessing}> • {stepSummaryLegacy.genInProgress} generating</Text>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {statusCounts.processing > 0 && (
+                      <Text style={styles.queueProcessing}>{statusCounts.processing} processing</Text>
+                    )}
+                    {statusCounts.processing > 0 && statusCounts.pending > 0 && ' • '}
+                    {statusCounts.pending > 0 && (
+                      <Text style={styles.queuePending}>{statusCounts.pending} pending</Text>
+                    )}
+                    {(statusCounts.processing > 0 || statusCounts.pending > 0) && statusCounts.completed > 0 && ' • '}
+                    {statusCounts.completed > 0 && (
+                      <Text style={styles.queueComplete}>{statusCounts.completed} done</Text>
+                    )}
+                    {statusCounts.failed > 0 && ' • '}
+                    {statusCounts.failed > 0 && (
+                      <Text style={styles.queueFailed}>{statusCounts.failed} failed</Text>
+                    )}
+                  </>
                 )}
               </Text>
+              {stepSummaryLegacy && hasBatchOperations && (
+                <Text style={styles.queueHint}>Generate uses the platforms you selected on the match screen.</Text>
+              )}
             </View>
           )}
 
@@ -567,6 +619,61 @@ export default function ItemJobsModal(props: Props) {
                   {searchQuery ? 'No items match your search' : 'No items in this job'}
                 </Text>
               </View>
+            ) : flowGroups ? (
+              Object.entries(flowGroups).map(([flowKey, groupItems]) => (
+                <View key={flowKey} style={{ marginBottom: 16 }}>
+                  <Text style={{ fontSize: 12, color: '#6b7280', marginHorizontal: 16, marginBottom: 8, fontWeight: '500' }}>
+                    {flowKey === 'default' ? 'Items' : flowKey}
+                  </Text>
+                  {groupItems.map((item) => {
+                    const idx = item.index;
+                    if (enhanced) {
+                      const enhancedItem = item as ItemJobState;
+                      return (
+                        <ItemCard
+                          key={`item-${idx}`}
+                          item={enhancedItem}
+                          isSelected={selected.has(idx)}
+                          isCurrent={idx === currentIndex}
+                          isEnhanced={true}
+                          onSelect={() => (props as EnhancedProps).onItemSelect(idx)}
+                          onStepPress={(step) => (props as EnhancedProps).onStepPress(idx, step)}
+                          getStepStatus={(step) => getStepStatus(enhancedItem, step)}
+                          getProgressText={(step) => getProgressText(enhancedItem, step)}
+                          selectMode={selectMode}
+                          onToggleSelect={() => toggleIndex(idx)}
+                        />
+                      );
+                    } else {
+                      const legacyItem = item as LegacyItem;
+                      const legacyProps = props as LegacyProps;
+                      return (
+                        <ItemCard
+                          key={`item-${idx}`}
+                          item={legacyItem}
+                          isSelected={selected.has(idx)}
+                          isCurrent={idx === currentIndex}
+                          isEnhanced={false}
+                          onSelect={() => legacyProps.onPickScan(idx)}
+                          scanColor={legacyProps.scanColor(idx)}
+                          matchColor={legacyProps.matchColor(idx)}
+                          detailsColor={legacyProps.detailsColor(idx)}
+                          detailsEnabled={legacyProps.detailsEnabled(idx)}
+                          onPickScan={() => legacyProps.onPickScan(idx)}
+                          onPickMatch={() => legacyProps.onPickMatch(idx)}
+                          onPickDetails={() => legacyProps.onPickDetails(idx)}
+                          onQuickGenerate={legacyProps.onQuickGenerate ? () => legacyProps.onQuickGenerate!(idx) : undefined}
+                          onRescan={legacyProps.onRescan ? () => legacyProps.onRescan!(idx) : undefined}
+                          countLabel={legacyProps.countLabel}
+                          secondaryText={legacyProps.getSecondaryText?.(idx)}
+                          selectMode={selectMode}
+                          onToggleSelect={() => toggleIndex(idx)}
+                        />
+                      );
+                    }
+                  })}
+                </View>
+              ))
             ) : (
               filteredItems.map((item) => {
                 const idx = item.index;
@@ -731,11 +838,20 @@ const styles = StyleSheet.create({
     color: '#000',
     fontWeight: '600',
   },
+  headerTitleBlock: {
+    flex: 1,
+    marginLeft: 8,
+    justifyContent: 'center',
+  },
   headerTitle: {
     fontSize: 18,
     fontWeight: '700',
     color: '#000',
-    marginLeft: 8,
+  },
+  headerSubtitle: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
   },
   scrollArea: {
     flex: 1,
@@ -807,6 +923,8 @@ const styles = StyleSheet.create({
   // Steps row
   stepsRow: {
     flexDirection: 'row',
+    gap: 6,
+    flexWrap: 'nowrap',
     marginTop: 10,
     gap: 6,
     flexWrap: 'wrap',
@@ -855,25 +973,32 @@ const styles = StyleSheet.create({
     backgroundColor: '#D1D5DB',
   },
 
-  // Legacy step pill
+  // Legacy step pill - bigger, equal width (parent uses flex: 1)
   legacyPill: {
+    flex: 1,
+    minWidth: 0,
     borderWidth: 1,
     borderColor: '#E5E5E5',
     borderRadius: 12,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
   },
   legacyDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4
+    width: 10,
+    height: 10,
+    borderRadius: 5,
   },
   legacyPillText: {
     color: '#000',
-    fontSize: 13,
+    fontSize: 14,
+    flex: 1,
+  },
+  legacyPillTextDone: {
+    color: '#166534',
+    fontWeight: '600',
   },
 
   // Footer
@@ -954,12 +1079,21 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#6B7280',
   },
+  queueHint: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    marginTop: 4,
+  },
   queueProcessing: {
     color: '#F59E0B',
     fontWeight: '500',
   },
   queuePending: {
     color: '#6B7280',
+  },
+  queueReadyReview: {
+    color: '#374151',
+    fontWeight: '500',
   },
   queueComplete: {
     color: '#10B981',

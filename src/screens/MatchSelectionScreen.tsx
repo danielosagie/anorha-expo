@@ -241,7 +241,8 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
     const [genResponse, setGenResponse] = useState<JobResponse | null>(null);
     // Global jobs modal
     const [jobsModalVisible, setJobsModalVisible] = useState(false);
-    const [itemGenerateJobs, setItemGenerateJobs] = useState<Record<number, { jobId: string; status?: string }>>(initialJobMap || {});
+    // Start empty; we only fill from params.jobMap when it's for THIS match job (see effect below)
+    const [itemGenerateJobs, setItemGenerateJobs] = useState<Record<number, { jobId: string; status?: string }>>({});
     const [externalItems, setExternalItems] = useState<Array<{ index: number; title?: string; thumb?: string; matchesCount?: number }>>(initialItems || []);
     const [userImagesByIndex, setUserImagesByIndex] = useState<Record<number, string[]>>(() => {
         const fromParams = (route.params as any)?.userImagesByIndex;
@@ -285,6 +286,8 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
     const lastFeedbackKeyRef = React.useRef<string>('');
     // Track per-item whether we've already auto-selected (so each item can get auto-match when switching)
     const hasAutoSelectedByIndexRef = React.useRef<Set<number>>(new Set());
+    // Track if we've run auto-match-all for this job (one-time per jobId)
+    const hasAutoMatchedAllRef = React.useRef<string | null>(null);
     // Track when current selection was auto-matched (for "Auto matched" badge)
     const [wasAutoMatched, setWasAutoMatched] = useState(false);
     // Polling timer ref so we can clear it on completed/failed and in cleanup (stop hitting backend)
@@ -296,6 +299,11 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         const ctx = jobsContextRef.current;
         if (!ctx || !jobId) return;
         if (isSyncingRef.current) return;
+
+        // When switching to a different match job, allow merging from context again for that job
+        if (lastInitializedJobIdRef.current !== null && lastInitializedJobIdRef.current !== jobId) {
+            hasInitializedFromContextRef.current = false;
+        }
 
         // Initialize context with this match job's items when modalItems are ready (once per jobId)
         if (modalItems.length > 0 && ctx.matchJobId !== jobId && lastInitializedJobIdRef.current !== jobId) {
@@ -311,8 +319,8 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
             setTimeout(() => { isSyncingRef.current = false; }, 0);
         }
 
-        // Only merge context → local ONCE on initial load
-        if (!hasInitializedFromContextRef.current && Object.keys(ctx.generateJobs).length > 0) {
+        // Only merge context → local when context belongs to THIS match job (avoid wrong-job on match stage)
+        if (!hasInitializedFromContextRef.current && ctx.matchJobId === jobId && Object.keys(ctx.generateJobs).length > 0) {
             hasInitializedFromContextRef.current = true;
             setItemGenerateJobs(prev => {
                 const merged = { ...prev };
@@ -328,6 +336,19 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
             });
         }
     }, [jobId, modalItems]);
+
+    // Apply params.jobMap only when it's for THIS match job (e.g. coming back from GenerateDetailsScreen)
+    // Avoids showing "Generated" / wrong job when params carried stale jobMap from another flow
+    const appliedJobMapForJobIdRef = React.useRef<string | null>(null);
+    useEffect(() => {
+        const currentMatchJobId = analysisData?.jobId;
+        const paramsJobId = (route.params as any)?.response?.jobId ?? (route.params as any)?.jobId;
+        const paramsJobMap = (route.params as any)?.jobMap as Record<number, { jobId: string; status?: string }> | undefined;
+        if (!currentMatchJobId || currentMatchJobId !== paramsJobId || !paramsJobMap || Object.keys(paramsJobMap).length === 0) return;
+        if (appliedJobMapForJobIdRef.current === currentMatchJobId) return;
+        appliedJobMapForJobIdRef.current = currentMatchJobId;
+        setItemGenerateJobs(prev => ({ ...paramsJobMap, ...prev }));
+    }, [analysisData?.jobId, route.params]);
 
     // Sync local itemGenerateJobs changes to context - only for NEW jobs we create locally
     // Deps: only itemGenerateJobs so we don't re-run on every context update (avoids infinite loop)
@@ -570,10 +591,6 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         if (Array.isArray(initialItems) && initialItems.length > 0) {
             setExternalItems(initialItems);
         }
-        if (initialJobMap && Object.keys(initialJobMap).length > 0) {
-            setItemGenerateJobs(prev => ({ ...initialJobMap, ...prev }));
-        }
-
         return () => {
             cancelled = true;
             if (pollingTimerRef.current) {
@@ -937,6 +954,14 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
 
     const selectedCount = selectedIndices.length;
 
+    // Indices where confidence is not high (user may want to correct match)
+    const needsReviewIndices = useMemo(() => {
+        if (!analysisData?.results?.length) return [];
+        return analysisData.results
+            .map((r: any, i: number) => (r?.confidence === 'high' ? null : i))
+            .filter((x: number | null): x is number => x !== null);
+    }, [analysisData?.results]);
+
     // Find best reranked index for current item in the RENDERED LIST
     const bestIndex = useMemo(() => {
         if (!analysisData || !analysisData.results || analysisData.results.length === 0) return null;
@@ -952,6 +977,28 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         idx = serpApiData.findIndex(x => (best?.title && x.title === best.title));
         return idx >= 0 ? idx : null;
     }, [analysisData, currentProductIndex, serpApiData]);
+
+    // Auto-match all: when we have results for this job, set best guess for every item once (confidence internal; user can correct)
+    useEffect(() => {
+        if (!jobId || !analysisData?.results?.length) return;
+        if (hasAutoMatchedAllRef.current === jobId) return;
+        hasAutoMatchedAllRef.current = jobId;
+        const results = analysisData.results;
+        setSelectedMatchesByIndex(prev => {
+            const next = { ...prev };
+            results.forEach((res: any, idx: number) => {
+                const rr = Array.isArray(res?.rerankedResults) ? res.rerankedResults : [];
+                const bestSerpIndex = rr.length > 0 && typeof rr[0]?.serpApiIndex === 'number' ? rr[0].serpApiIndex : 0;
+                const serp = res?.serpApiData || [];
+                const safeBest = bestSerpIndex >= 0 && bestSerpIndex < serp.length ? bestSerpIndex : 0;
+                next[idx] = [safeBest];
+                hasAutoSelectedByIndexRef.current.add(idx);
+            });
+            return next;
+        });
+        setBottomNavState('selection');
+        setWasAutoMatched(true);
+    }, [jobId, analysisData?.results]);
 
     // Auto-select best only if rerankedResults exist and nothing selected (ONE TIME per item)
     useEffect(() => {
@@ -1087,8 +1134,26 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 ListHeaderComponent={
                     <View style={{ paddingHorizontal: GRID_PADDING, paddingBottom: 12 }}>
                         <Text style={{ fontSize: 16, fontWeight: 500, color: 'rgb(57, 57, 57)', lineHeight: 22, textAlign: "center"}}>
-                            Select the best match(es) for the item 
+                            Select the best match(es) for the item
                         </Text>
+                        {modalItems.length > 1 && needsReviewIndices.length > 0 && (
+                            <TouchableOpacity
+                                onPress={() => {
+                                    const first = needsReviewIndices[0];
+                                    if (typeof first === 'number') {
+                                        setCurrentProductIndex(first);
+                                        setBottomNavState('selection');
+                                    }
+                                }}
+                                style={{ marginTop: 10, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: 'rgba(255,193,7,0.15)', borderRadius: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                            >
+                                <Icon name="alert-circle-outline" size={18} color="#b45309" />
+                                <Text style={{ fontSize: 13, color: '#b45309', fontWeight: '500' }}>
+                                    {needsReviewIndices.length} item{needsReviewIndices.length !== 1 ? 's' : ''} may need review
+                                </Text>
+                                <Text style={{ fontSize: 13, color: '#b45309' }}>• Tap to go to first</Text>
+                            </TouchableOpacity>
+                        )}
                     </View>
                 }
                 // Use a more stable key if possible to prevent recreation
@@ -1130,6 +1195,15 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                     selectedCount={selectedCount}
                     selectedTemplate={selectedTemplate}
                     selectedPlatforms={selectedPlatforms}
+                    totalItemsCount={modalItems.length}
+                    confirmedProduct={selectedCount > 0 && serpApiData[selectedIndices[0]] ? {
+                        thumb: serpApiData[selectedIndices[0]].thumbnail || serpApiData[selectedIndices[0]].image,
+                        title: serpApiData[selectedIndices[0]].title,
+                        price: serpApiData[selectedIndices[0]].price?.value,
+                        condition: serpApiData[selectedIndices[0]].condition,
+                        source: serpApiData[selectedIndices[0]].source,
+                    } : null}
+                    onChangeMatch={handleBackToEmpty}
                     isConnected={isConnected}
                     onShowSelection={handleShowSelection}
                     onShowTemplates={handleShowTemplates}
@@ -1697,6 +1771,10 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 }}
                 enableMultiSelect
                 onBatchGenerateSelected={async (indices) => {
+                    if (indices.length > 1 && selectedPlatforms.length === 0) {
+                        Alert.alert('Select platforms first', 'Platforms apply to all items. Please select at least one platform before generating.');
+                        return;
+                    }
                     try {
                         // Generate for each selected index using per-item match selection
                         for (const idx of indices) {
@@ -1743,7 +1821,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                     try {
                         setCurrentProductIndex(idx);
                         setJobsModalVisible(false);
-                        const submitResult: JobResponse = await handleGenerate();
+                        const submitResult: JobResponse = await handleGenerateForItem(idx, selectedMatchesByIndex[idx] ?? []);
                         const jid = submitResult?.jobId;
                         if (jid) {
                             setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: jid } }));

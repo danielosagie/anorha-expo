@@ -179,6 +179,10 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
           
           // Early navigate: as soon as we have initial results, go to selection screen (non-blocking rerank/embeddings continue server-side)
           if (!navigatedEarly && Array.isArray(status.results) && status.results.length > 0) {
+            const expectedCount = Array.isArray(payload?.bulkItems) ? payload.bulkItems.length : (Array.isArray(payload?.firstPhotos) ? payload.firstPhotos.length : 0);
+            if (expectedCount > 0 && status.results.length !== expectedCount) {
+              console.warn(`[LOADING] Match job returned ${status.results.length} results but payload had ${expectedCount} product(s). Backend may only be processing first item.`);
+            }
             if (pollingIntervalRef.current) {
               clearInterval(pollingIntervalRef.current);
               pollingIntervalRef.current = null;
@@ -271,6 +275,26 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
     return () => clearTimeout(stageTimer);
   }, [currentStageIndex, activeStages.length, jobStatus]);
 
+  // Build ItemJobsModal items from bulkItems or firstPhotos so N items show during loading (fix: was hardcoded to 1)
+  const loadingModalItems = React.useMemo(() => {
+    const bulk = Array.isArray(bulkItems) ? bulkItems : [];
+    const photos = Array.isArray(firstPhotos) ? firstPhotos : [];
+    if (bulk.length > 0) {
+      return bulk.map((item: any, i: number) => {
+        const firstPhoto = item?.photos?.[0];
+        const thumb = typeof firstPhoto === 'string' ? firstPhoto : firstPhoto?.uri || firstPhoto?.url || '';
+        return { index: i, title: `Item ${i + 1}`, thumb, matchesCount: 0 };
+      });
+    }
+    if (photos.length > 0) {
+      return photos.map((p: any, i: number) => {
+        const thumb = typeof p === 'string' ? p : p?.uri || p?.url || '';
+        return { index: i, title: `Item ${i + 1}`, thumb, matchesCount: 0 };
+      });
+    }
+    return [{ index: 0, title: 'Item 1', thumb: firstPhotos?.[0], matchesCount: 0 }];
+  }, [bulkItems, firstPhotos]);
+
   console.log(`[LOADING] Starting process: "${processType}"`);
   console.log('[LOADING] Payload photos:', firstPhotos);
 
@@ -306,7 +330,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
       <ItemJobsModal
         visible={jobsModalVisible}
         onClose={() => setJobsModalVisible(false)}
-        items={[{ index: 0, title: 'Item 1', thumb: firstPhotos?.[0], matchesCount: 0 }]}
+        items={loadingModalItems}
         currentIndex={0}
         scanColor={() => (jobStatus === 'failed' ? '#EF4444' : '#10B981')}
         matchColor={() => '#4B5563'}

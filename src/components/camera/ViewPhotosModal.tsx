@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   ScrollView,
   Alert,
   Dimensions,
+  Animated,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import DraggableFlatList, { RenderItemParams, ScaleDecorator } from 'react-native-draggable-flatlist';
@@ -55,6 +56,15 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
   items,
 }) => {
   const [localPhotos, setLocalPhotos] = useState<CapturedPhoto[]>(photos);
+  const overlayOpacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.timing(overlayOpacity, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+    } else {
+      Animated.timing(overlayOpacity, { toValue: 0, duration: 150, useNativeDriver: true }).start();
+    }
+  }, [visible, overlayOpacity]);
 
   // Sync local state when photos prop changes (e.g. when switching items)
   React.useEffect(() => {
@@ -104,7 +114,7 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
       transparent
       onRequestClose={onClose}
     >
-      <View style={styles.overlay}>
+      <Animated.View style={[styles.overlay, { opacity: overlayOpacity }]} pointerEvents="box-none">
         <View style={styles.sheet}>
           {/* Header: X | Manage Images | Back | Counter | Go */}
           <View style={styles.header}>
@@ -196,7 +206,7 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
             />
           </View>
         </View>
-      </View>
+      </Animated.View>
     </Modal>
   );
 };

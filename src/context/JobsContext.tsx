@@ -115,71 +115,13 @@ export function JobsProvider({ children }: { children: ReactNode }) {
         return null;
     }, []);
 
-    // Initialize from a match job - fetches existing generate jobs from DB
+    // Initialize from a match job - only use AsyncStorage for this matchJobId (no DB fetch)
+    // Fetching "recent generate jobs" from DB and matching by productIndex caused wrong-job: we showed
+    // "Generated" and navigated to another flow's job. Generate state for this flow comes from
+    // starting jobs in-session and from AsyncStorage keyed by this matchJobId.
     const initializeFromMatchJob = useCallback(async (matchJobId: string, items: JobItem[]) => {
-        // Try to load existing state from AsyncStorage first
         const existing = await loadState(matchJobId);
-
-        // Also fetch from database to get generate jobs for this user
-        // Since there's no match_job_id FK, we fetch recent completed jobs and match by productIndex
-        let dbGenerateJobs: Record<number, GenerateJobInfo> = {};
-        try {
-            // Get current user
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) {
-                console.warn('[JobsContext] No user for DB fetch');
-            } else {
-                const { data: generateJobsData, error } = await supabase
-                    .from('generate_jobs')
-                    .select('job_id, status, created_at, results')
-                    .eq('user_id', user.id)
-                    .order('created_at', { ascending: false })
-                    .limit(20); // Get recent jobs
-
-                if (!error && generateJobsData && generateJobsData.length > 0) {
-                    // Get the productIndices from the items we're tracking
-                    const itemIndices = new Set(items.map(i => i.index));
-
-                    // Process generate jobs - check if results match our item indices
-                    generateJobsData.forEach((job) => {
-                        const results = Array.isArray(job.results) ? job.results : [];
-                        results.forEach((result: any) => {
-                            const productIndex = result?.productIndex;
-                            if (typeof productIndex === 'number' && itemIndices.has(productIndex)) {
-                                // Only set if we don't already have a newer job for this index
-                                if (!dbGenerateJobs[productIndex]) {
-                                    dbGenerateJobs[productIndex] = {
-                                        jobId: job.job_id,
-                                        status: job.status === 'completed' ? 'completed' :
-                                            job.status === 'failed' ? 'failed' :
-                                                job.status === 'processing' ? 'processing' : 'pending',
-                                        startedAt: new Date(job.created_at).getTime(),
-                                        completedAt: job.status === 'completed' ? new Date(job.created_at).getTime() : undefined,
-                                    };
-                                }
-                            }
-                        });
-                    });
-                    console.log(`[JobsContext] Loaded ${Object.keys(dbGenerateJobs).length} generate jobs from DB for ${items.length} items`);
-                }
-            }
-        } catch (e) {
-            console.warn('[JobsContext] Failed to fetch generate jobs from DB:', e);
-        }
-
-        // Merge: DB takes precedence over AsyncStorage, but processing jobs from AsyncStorage are kept
-        const mergedGenerateJobs = { ...dbGenerateJobs };
-        if (existing?.generateJobs) {
-            Object.entries(existing.generateJobs).forEach(([indexStr, job]) => {
-                const idx = parseInt(indexStr, 10);
-                // Keep AsyncStorage version if it's processing and DB doesn't show complete
-                if (job.status === 'processing' || job.status === 'queued') {
-                    if (!mergedGenerateJobs[idx] || mergedGenerateJobs[idx].status !== 'completed') {
-                        mergedGenerateJobs[idx] = job;
-                    }
-                }
-            });
-        }
+        const mergedGenerateJobs: Record<number, GenerateJobInfo> = existing?.generateJobs ? { ...existing.generateJobs } : {};
 
         if (existing && existing.items.length > 0) {
             // Merge with new items (keep existing generate job status)
@@ -258,41 +200,9 @@ export function JobsProvider({ children }: { children: ReactNode }) {
                 return;
             }
 
-            // Try to find recent match jobs for this user to build items list
-            const { data: matchJobs, error: matchError } = await supabase
-                .from('match_jobs')
-                .select('job_id, status, results')
-                .eq('user_id', generateJob.user_id)
-                .eq('status', 'completed')
-                .order('created_at', { ascending: false })
-                .limit(5);
-
-            if (matchError || !matchJobs || matchJobs.length === 0) {
-                console.warn('[JobsContext] No match jobs found for user');
-                return;
-            }
-
-            // Use the most recent match job
-            const matchJob = matchJobs[0];
-            const matchJobId = matchJob.job_id;
-
-            // Build items from match job results
-            const matchResults = Array.isArray(matchJob.results) ? matchJob.results : [];
-            const items: JobItem[] = matchResults.map((result: any, idx: number) => {
-                const firstMatch = result?.serpApiData?.[0];
-                return {
-                    index: idx,
-                    title: firstMatch?.title || `Item ${idx + 1}`,
-                    thumb: firstMatch?.image || firstMatch?.thumbnail || '',
-                    matchesCount: result?.serpApiData?.length || 0,
-                    matchJobId: matchJobId,
-                };
-            });
-
-            // Now use the standard initializeFromMatchJob to complete setup
-            await initializeFromMatchJob(matchJobId, items);
-
-            console.log(`[JobsContext] Initialized from generate job ${generateJobId}, found ${items.length} items from match ${matchJobId}`);
+            // Do not fall back to "most recent match job" - that would mix jobs from different flows.
+            // The screen should have been opened with items/jobMap from the current flow (Match) or we stay empty.
+            console.log(`[JobsContext] No current match job in context; skipping init from generate job ${generateJobId} to avoid wrong-job mix`);
         } catch (e) {
             console.error('[JobsContext] Error in initializeFromGenerateJob:', e);
         }
