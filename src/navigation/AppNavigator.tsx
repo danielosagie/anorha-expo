@@ -59,6 +59,7 @@ import PendingOrgInvitesScreen from '../screens/PendingOrgInvitesScreen';
 import LiquidationCampaignScreen from '../screens/LiquidationCampaignScreen';
 import BackupsScreen from '../screens/BackupsScreen';
 import BillingScreen from '../screens/BillingScreen';
+import DeleteAccountInfoScreen from '../screens/DeleteAccountInfoScreen';
 import { isFeatureEnabled } from '../config/features';
 import { SessionContext } from '../context/SessionContext';
 
@@ -95,11 +96,15 @@ export type AppStackParamList = {
     };
   };
   LoadingScreen: {
-    processType: 'match' | 'generate';
+    processType: 'match' | 'generate' | 'match-and-generate';
     payload: {
       jobId?: string;
       firstPhotos: any[];
       bulkItems?: any[];
+      // When true, LoadingScreen will NOT early-navigate to MatchSelectionScreen.
+      // It will wait for the job to complete so it can respect skipToGenerate/autoGenerateJobId.
+      skipMatchSelection?: boolean;
+      autoGenerateAllPlatforms?: boolean;
     };
     onCompleteRoute: {
       screen: keyof AppStackParamList;
@@ -110,7 +115,8 @@ export type AppStackParamList = {
   PastScans: undefined;
   MappingReview: { connectionId: string; platformName: string; jobId?: string; importedProducts?: any[]; isCSVImport?: boolean; isScanning?: boolean; scanStartTime?: number; };
   SyncRules: { connectionId: string };
-  Profile: { refresh?: number }; // Add Profile screen with optional refresh param
+  Profile: { refresh?: number };
+  DeleteAccountInfo: undefined;
   NotificationSettings: undefined;
   Team: undefined;
   Billing: undefined;
@@ -424,6 +430,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="MappingReview" component={MappingReviewScreen} />
     <AppStackNav.Screen name="SyncRules" component={SyncRulesScreen} />
     <AppStackNav.Screen name="Profile" component={ProfileScreen} />
+    <AppStackNav.Screen name="DeleteAccountInfo" component={DeleteAccountInfoScreen} />
     <AppStackNav.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
     <AppStackNav.Screen name="Team" component={TeamScreen} />
     <AppStackNav.Screen name="Billing" component={BillingScreen} />
@@ -455,7 +462,7 @@ const AppNavigator = () => {
   const [initialAppScreen, setInitialAppScreen] = useState<'CreateAccountScreen' | 'TabNavigator' | null>(null);
 
   // Dev tools to test onboarding flow
-  const [devForceOnboarding] = useState(false); // Set this to true only when testing onboarding - FTUX
+  const [devForceOnboarding] = useState(true); // Set this to true only when testing onboarding - FTUX
   const [devExpireSession, setDevExpireSession] = useState(false); // Set true to make you have to login new each time you leave/after session expires
 
   const [fontsLoaded] = useFonts({

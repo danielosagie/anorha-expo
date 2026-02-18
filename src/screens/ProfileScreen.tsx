@@ -1511,7 +1511,7 @@ const ProfileScreen = () => {
 
       // Build the auth URL with orgId so backend can associate connection with organization
       const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
-      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/facebook/login?userId=${user.id}&finalRedirectUri=${encodedFinalRedirectUri}${orgIdParam}`;
+      const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/facebook/login?userId=${user.id}&finalRedirectUri=${encodedFinalRedirectUri}${orgIdParam}&mode=personal_marketplace`;
 
       console.log(`[ProfileScreen] Facebook Connect: Opening in ${USE_EXTERNAL_BROWSER_FOR_FACEBOOK ? 'External' : 'Internal'} browser...`);
 
@@ -2448,9 +2448,12 @@ const ProfileScreen = () => {
             Delete Account
           </Text>
 
-          <Text style={{ fontSize: 14, color: '#666', textAlign: 'center', marginBottom: 20 }}>
+          <Text style={{ fontSize: 14, color: '#666', textAlign: 'center', marginBottom: 8 }}>
             This action is permanent and cannot be undone. All your data will be lost.
           </Text>
+          <TouchableOpacity onPress={() => navigation.getParent()?.navigate('DeleteAccountInfo')} style={{ marginBottom: 20 }}>
+            <Text style={{ fontSize: 14, color: '#93C822', fontWeight: '500' }}>Learn more about account and data deletion</Text>
+          </TouchableOpacity>
 
           {/* Reason Dropdown */}
           <View style={{ minWidth: '100%', marginBottom: 16 }}>

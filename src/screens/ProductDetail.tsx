@@ -1613,12 +1613,18 @@ const ProductDetailScreen = observer(
 
     // Publish product to a new platform
     const [isPublishing, setIsPublishing] = useState<string | null>(null);
+    const [facebookSyncMeta, setFacebookSyncMeta] = useState<{
+      status: 'idle' | 'pending' | 'syncing' | 'success' | 'error';
+      lastSyncAt: string | null;
+      lastError: string | null;
+    }>({ status: 'idle', lastSyncAt: null, lastError: null });
 
     const handlePublishToPlatform = useCallback(async (platformKey: string) => {
       if (!detailedItem?.Id || isPublishing) return;
 
       console.log(`[ProductDetail] Publishing to platform: ${platformKey}`);
       setIsPublishing(platformKey);
+      let targetConnection: any = null;
 
       try {
         // 1. Auto-save first to ensure DB matches UI
@@ -1635,7 +1641,7 @@ const ProductDetailScreen = observer(
         }
 
         // Find the connection for this platform
-        const targetConnection = connections.find(c =>
+        targetConnection = connections.find(c =>
           c.PlatformType.toLowerCase() === platformKey.toLowerCase()
         );
 
@@ -1759,6 +1765,10 @@ const ProductDetailScreen = observer(
           },
         };
 
+        if (platformKey.toLowerCase() === 'facebook') {
+          setFacebookSyncMeta({ status: 'syncing', lastSyncAt: null, lastError: null });
+        }
+
         const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/publish`, {
           method: 'POST',
           headers: {
@@ -1772,6 +1782,45 @@ const ProductDetailScreen = observer(
 
         if (!response.ok) {
           throw new Error(responseData.message || `Publish failed: ${response.status}`);
+        }
+
+        if (platformKey.toLowerCase() === 'facebook') {
+          const deadline = Date.now() + 10_000;
+          let lastPending = 0;
+
+          while (Date.now() < deadline) {
+            const reconcileResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/products/facebook-personal/reconcile`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ variantId: detailedItem.Id }),
+            });
+
+            if (reconcileResponse.ok) {
+              const reconcile = await reconcileResponse.json().catch(() => ({}));
+              const updated = Number(reconcile?.updated || 0);
+              const failed = Number(reconcile?.failed || 0);
+              lastPending = Number(reconcile?.pending || 0);
+
+              if (failed > 0) {
+                setFacebookSyncMeta({ status: 'error', lastSyncAt: null, lastError: 'Facebook Marketplace publish failed.' });
+                throw new Error('Facebook Marketplace publish failed. Please retry.');
+              }
+              if (updated > 0 || lastPending === 0) {
+                setFacebookSyncMeta({ status: 'success', lastSyncAt: new Date().toISOString(), lastError: null });
+                break;
+              }
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 1200));
+          }
+
+          if (lastPending > 0) {
+            setFacebookSyncMeta({ status: 'pending', lastSyncAt: null, lastError: null });
+            showBanner('Facebook publish is still finishing. We will keep syncing in background.');
+          }
         }
 
         // Check if any platforms need reauth
@@ -1808,6 +1857,13 @@ const ProductDetailScreen = observer(
 
       } catch (error: any) {
         console.error('[ProductDetail] Publish failed:', error);
+        if (platformKey.toLowerCase() === 'facebook') {
+          setFacebookSyncMeta({
+            status: 'error',
+            lastSyncAt: facebookSyncMeta.lastSyncAt,
+            lastError: error?.message || 'Facebook publish failed',
+          });
+        }
 
         // Check for reauth error in exception message
         const errorMessage = error.message?.toLowerCase() || '';
@@ -1830,12 +1886,56 @@ const ProductDetailScreen = observer(
             ]
           );
         } else {
-          Alert.alert('Publish Failed', error.message || 'Could not publish to platform');
+          if (platformKey.toLowerCase() === 'facebook' && targetConnection?.Id && detailedItem?.Id) {
+            Alert.alert(
+              'Publish Failed',
+              error.message || 'Could not publish to platform',
+              [
+                {
+                  text: 'Sync Now',
+                  onPress: async () => {
+                    try {
+                      const token = await ensureSupabaseJwt();
+                      if (!token) return;
+                      setFacebookSyncMeta({ status: 'syncing', lastSyncAt: facebookSyncMeta.lastSyncAt, lastError: null });
+                      await fetch(`${SSSYNC_API_BASE_URL}/api/products/facebook-personal/sync-now`, {
+                        method: 'POST',
+                        headers: {
+                          'Authorization': `Bearer ${token}`,
+                          'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ connectionId: targetConnection.Id, variantId: detailedItem.Id }),
+                      });
+                      await fetch(`${SSSYNC_API_BASE_URL}/api/products/facebook-personal/reconcile`, {
+                        method: 'POST',
+                        headers: {
+                          'Authorization': `Bearer ${token}`,
+                          'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ variantId: detailedItem.Id }),
+                      });
+                      setFacebookSyncMeta({ status: 'success', lastSyncAt: new Date().toISOString(), lastError: null });
+                      showBanner('Facebook sync requested.');
+                    } catch (syncErr: any) {
+                      setFacebookSyncMeta({ status: 'error', lastSyncAt: facebookSyncMeta.lastSyncAt, lastError: syncErr?.message || 'Sync failed' });
+                    }
+                  }
+                },
+                {
+                  text: 'Retry Publish',
+                  onPress: () => handlePublishToPlatform(platformKey),
+                },
+                { text: 'Close', style: 'cancel' },
+              ]
+            );
+          } else {
+            Alert.alert('Publish Failed', error.message || 'Could not publish to platform');
+          }
         }
       } finally {
         setIsPublishing(null);
       }
-    }, [detailedItem, connections, displayedPlatforms, isPublishing, showBanner, loadPlatformData, hasUnsavedChanges, performAutoSave]);
+    }, [detailedItem, connections, displayedPlatforms, isPublishing, showBanner, loadPlatformData, hasUnsavedChanges, performAutoSave, navigation, facebookSyncMeta.lastSyncAt]);
     // Handle Delist / Remove Mapping
     const handleDelist = useCallback(async (mappingId: string, platformName: string) => {
       Alert.alert('Delist', `Remove listing from ${platformName}?`, [

@@ -44,7 +44,7 @@ type GeneratedResult = {
 
 // Platform field schema for hierarchical structure
 // Platform field schema extracted to separate file for maintainability
-// import { PLATFORM_FIELD_SCHEMA } from '../utils/platformSchemas';
+import { PLATFORM_FIELD_SCHEMA } from '../utils/platformSchemas';
 // NOTE: Schema currently not used in this file - UI uses ListingEditorForm which has its own logic
 
 // Helper function to group versions by match job ID, showing latest as primary
@@ -543,11 +543,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [publishModalOpen, setPublishModalOpen] = useState(false);
   const [allConnections, setAllConnections] = useState<any[]>([]);
   const [selectedConnectionIds, setSelectedConnectionIds] = useState<Record<string, string>>({});
-  const [platformLocations, setPlatformLocations] = useState<Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>>>({});
+  const [platformLocations, setPlatformLocations] = useState<Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string; platformType: string }>>>({});
   const [mediaGallery, setMediaGallery] = useState<string[]>([]);
   const [mediaModalVisible, setMediaModalVisible] = useState(false);
   const [selectedVariantForMedia, setSelectedVariantForMedia] = useState<string | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [facebookSyncMeta, setFacebookSyncMeta] = useState<{
+    status: 'idle' | 'pending' | 'syncing' | 'success' | 'error';
+    lastSyncAt: string | null;
+    lastError: string | null;
+  }>({ status: 'idle', lastSyncAt: null, lastError: null });
 
   // Fetch connections and locations on mount
   useEffect(() => {
@@ -600,7 +605,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
 
         // Extract locations by platform type
-        const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>> = {};
+        const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string; platformType: string }>> = {};
         for (const conn of connections) {
           const platform = conn.PlatformType?.toLowerCase();
           if (!platform || !conn.IsEnabled) continue;
@@ -612,7 +617,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             locsByPlatform[platform].push({
               ...loc,
               connectionId: conn.Id,
-              connectionName: conn.DisplayName || conn.PlatformType
+              connectionName: conn.DisplayName || conn.PlatformType,
+              platformType: platform
             });
           }
         }
@@ -1527,10 +1533,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           price: canonical.price,
           imageUrl: (effectiveResult as any)?.imageUrl, // Use original image URL or from payload if available
           platforms: [], // No external platforms
-          accountNames: [],
           savedToInventory: true, // Flag for UI
           origin: 'generate'
-        });
+        } as any);
 
       } else {
         const errorText = await res.text();
@@ -1604,7 +1609,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       }
 
       // Extract locations from connections (no longer needed for modal, but keep for compatibility)
-      const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string }>> = {};
+      const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string; platformType: string }>> = {};
       for (const conn of connectionsToUse) {
         const platform = conn.PlatformType?.toLowerCase();
         if (!platform || !conn.IsEnabled) continue;
@@ -1619,7 +1624,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             id: loc.id || loc.gid || '',
             name: loc.name || 'Unnamed Location',
             connectionId: conn.Id,
-            connectionName: conn.DisplayName || conn.PlatformType
+            connectionName: conn.DisplayName || conn.PlatformType,
+            platformType: platform
           });
         }
       }
@@ -1690,6 +1696,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   };
 
   const confirmAndPublish = async () => {
+    let facebookRequested = false;
     try {
       console.log('[confirmAndPublish] Starting publish...');
       setPublishModalOpen(false);
@@ -1727,7 +1734,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       // Expand "ALL" selections to actual connection IDs
       const actualConnectionIds: Record<string, string[]> = {};
       const accountNamesList: string[] = [];
-
       for (const [platform, selection] of Object.entries(selectedConnectionIds)) {
         const platformConns = allConnections.filter((c: any) =>
           c.PlatformType?.toLowerCase() === platform.toLowerCase() && c.IsEnabled
@@ -1744,6 +1750,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       }
 
       const platformsToPublish = Object.keys(actualConnectionIds);
+      facebookRequested = platformsToPublish.map(p => p.toLowerCase()).includes('facebook');
 
       const publishPayload = {
         productId,
@@ -1809,7 +1816,47 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
 
         // Don't clear data on error - user can fix and retry
+        if (facebookRequested) {
+          setFacebookSyncMeta({ status: 'error', lastSyncAt: facebookSyncMeta.lastSyncAt, lastError: errorText });
+        }
         return;
+      }
+
+      if (facebookRequested) {
+        setFacebookSyncMeta({ status: 'syncing', lastSyncAt: null, lastError: null });
+        const deadline = Date.now() + 10_000;
+        let lastPending = 0;
+
+        while (Date.now() < deadline) {
+          const reconcileRes = await fetch(`${baseUrl}/api/products/facebook-personal/reconcile`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ variantId }),
+          });
+
+          if (reconcileRes.ok) {
+            const reconcileData = await reconcileRes.json().catch(() => ({}));
+            const updated = Number(reconcileData?.updated || 0);
+            const failed = Number(reconcileData?.failed || 0);
+            lastPending = Number(reconcileData?.pending || 0);
+
+            if (failed > 0) {
+              setFacebookSyncMeta({ status: 'error', lastSyncAt: null, lastError: 'Facebook Marketplace publish failed.' });
+              throw new Error('Facebook Marketplace publish failed. Please retry.');
+            }
+            if (updated > 0 || lastPending === 0) {
+              setFacebookSyncMeta({ status: 'success', lastSyncAt: new Date().toISOString(), lastError: null });
+              break;
+            }
+          }
+
+          await new Promise(res => setTimeout(res, 1200));
+        }
+
+        if (lastPending > 0) {
+          setFacebookSyncMeta({ status: 'pending', lastSyncAt: null, lastError: null });
+          console.log('[confirmAndPublish] Facebook publish still pending after 10s; background sync will continue.');
+        }
       }
 
       // Success! Navigate to confirmation screen
@@ -1829,6 +1876,13 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     } catch (err) {
       console.error('Error in confirmAndPublish:', err);
       setIsPublishing(false);
+      if (facebookRequested) {
+        setFacebookSyncMeta({
+          status: 'error',
+          lastSyncAt: facebookSyncMeta.lastSyncAt,
+          lastError: (err as any)?.message || 'Facebook publish failed',
+        });
+      }
       alert('Failed to publish. Please try again.');
     }
   };

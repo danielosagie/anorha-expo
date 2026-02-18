@@ -30,9 +30,12 @@ type LoadingScreenProps = StackScreenProps<AppStackParamList, 'LoadingScreen'>;
 const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
   const theme = useTheme();
 
-  // Destructure the new, more flexible params
   const { processType, payload, onCompleteRoute } = route.params;
   const { jobId, firstPhotos, bulkItems } = payload;
+  // @ts-ignore - confirmedQuickMatchByItemId is optional and may be passed dynamically
+  const confirmedQuickMatchByItemId = payload?.confirmedQuickMatchByItemId || {};
+  const preferWaitForCompletion =
+    payload?.skipMatchSelection === true || payload?.autoGenerateAllPlatforms === true;
 
   const [currentStageIndex, setCurrentStageIndex] = useState(0);
   const [jobStatus, setJobStatus] = useState('queued');
@@ -57,6 +60,14 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
       'Creating view',
       'Ready to review',
     ],
+    'match-and-generate': [
+      'Describing product...',
+      'Searching eBay...',
+      'Selecting best match...',
+      'Generating listings...',
+      'Creating view',
+      'Ready',
+    ],
   };
 
   // Select the correct list of stages based on the processType
@@ -71,6 +82,11 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
     'Generating details': 'Generating listing',
     'Saving drafts': 'Creating view',
     'Ready': 'Ready to review',
+    // Fast track stages
+    'Describing product...': 'Describing product...',
+    'Searching eBay...': 'Searching eBay...',
+    'Selecting best match...': 'Selecting best match...',
+    'Generating listings...': 'Generating listings...',
   };
 
   
@@ -80,11 +96,20 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
   const [navigatedEarly, setNavigatedEarly] = useState(false);
   const BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
   const pollingIntervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+  const isPollingRef = React.useRef(false);
+  const consecutivePollFailuresRef = React.useRef(0);
+  const notFoundCountRef = React.useRef(0);
+  const firstNotFoundAtRef = React.useRef<number | null>(null);
+
+  const NOT_FOUND_CONSECUTIVE_THRESHOLD = 7;
+  const NOT_FOUND_WINDOW_MS = 18000;
 
   useEffect(() => {
     if (!jobId) return;
 
     const pollJobStatus = async () => {
+      if (isPollingRef.current) return;
+      isPollingRef.current = true;
       try {
 
         
@@ -93,19 +118,48 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
         async function getToken() { return await ensureSupabaseJwt(); }
 
         
-        // Get auth token
-        const { data: { session } } = await supabase.auth.getSession();
         const token = await getToken();
+        if (!token) {
+          throw new Error('Missing auth token for job status polling');
+        }
 
-        if (processType === 'generate') {
-
-          const response = await fetch(`https://api.sssync.app/api/products/generate/jobs/${jobId}/status`, {
+        const fetchStatus = async (endpoint: string) => {
+          const response = await fetch(endpoint, {
             headers: {
               'Authorization': `Bearer ${token}`,
               'Content-Type': 'application/json',
             },
           });
+
+          if (!response.ok) {
+            let body = '';
+            try {
+              body = await response.text();
+            } catch {
+              body = '';
+            }
+            throw new Error(`Status poll failed (${response.status}) ${response.statusText}${body ? `: ${body.slice(0, 200)}` : ''}`);
+          }
+
           const status = await response.json();
+          if (!status || typeof status.status !== 'string') {
+            throw new Error('Status poll returned invalid payload');
+          }
+          return status;
+        };
+
+        if (processType === 'generate' || processType === 'match-and-generate') {
+          // For match-and-generate, we start by polling the match job
+          // After match completes with skipToGenerate, we'll switch to polling generate job
+          const isMatchAndGenerate = processType === 'match-and-generate';
+          const endpoint = isMatchAndGenerate 
+            ? `${BASE_URL}/api/products/match/jobs/${jobId}/status`
+            : `${BASE_URL}/api/products/generate/jobs/${jobId}/status`;
+          
+          const status = await fetchStatus(endpoint);
+          consecutivePollFailuresRef.current = 0;
+          notFoundCountRef.current = 0;
+          firstNotFoundAtRef.current = null;
           
           console.log('[POLLING] Job status:', status.status, 'Stage:', status.currentStage);
           
@@ -121,6 +175,38 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
             setCurrentStageIndex(stageIndex);
           } else if (mappedStage === lastStage) {
             console.log('[ANIMATION] Stage unchanged:', mappedStage, '- skipping animation');
+          }
+          
+          // For match-and-generate: check if match completed and should skip to generate
+          if (isMatchAndGenerate && status.status === 'completed') {
+            const firstResult = Array.isArray(status.results) && status.results.length > 0 ? status.results[0] : null;
+            const shouldSkipToGenerate = firstResult?.skipToGenerate === true && firstResult?.autoGenerateJobId;
+            
+            if (shouldSkipToGenerate) {
+              if (pollingIntervalRef.current) {
+                clearInterval(pollingIntervalRef.current);
+                pollingIntervalRef.current = null;
+              }
+              console.log(`[LOADING] Match-and-generate: Match completed, switching to generate job ${firstResult.autoGenerateJobId}`);
+              // Switch to polling generate job
+              setTimeout(() => {
+                navigation.replace('LoadingScreen' as never, {
+                  processType: 'generate',
+                  payload: { jobId: firstResult.autoGenerateJobId, firstPhotos: [] },
+                  onCompleteRoute: {
+                    screen: 'GenerateDetailsScreen',
+                    params: {
+                      jobId: firstResult.autoGenerateJobId,
+                      matchJobId: jobId,
+                      items: [],
+                      jobMap: {},
+                      userImagesByIndex: {},
+                    },
+                  },
+                } as never);
+              }, 500);
+              return;
+            }
           }
           
           // If completed, stop polling and navigate to next screen
@@ -154,13 +240,10 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
           
         } else {
 
-          const response = await fetch(`${BASE_URL}/api/products/match/jobs/${jobId}/status`, {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-          });
-          const status = await response.json();
+          const status = await fetchStatus(`${BASE_URL}/api/products/match/jobs/${jobId}/status`);
+          consecutivePollFailuresRef.current = 0;
+          notFoundCountRef.current = 0;
+          firstNotFoundAtRef.current = null;
           
           console.log('[POLLING] Job status:', status.status, 'Stage:', status.currentStage);
           
@@ -177,8 +260,45 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
             console.log('[ANIMATION] Stage unchanged:', status.currentStage, '- skipping animation');
           }
           
+          // Check if fast track completed with auto-generate
+          const firstResult = Array.isArray(status.results) && status.results.length > 0 ? status.results[0] : null;
+          const shouldSkipToGenerate = firstResult?.skipToGenerate === true && firstResult?.autoGenerateJobId;
+
+          // If fast track with auto-generate, wait for match job to complete then navigate to generate job
+          if (shouldSkipToGenerate && status.status === 'completed') {
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
+            console.log(`[LOADING] Fast track completed, navigating to generate job ${firstResult.autoGenerateJobId}`);
+            setTimeout(() => {
+              navigation.replace('LoadingScreen' as never, {
+                processType: 'generate',
+                payload: { jobId: firstResult.autoGenerateJobId, firstPhotos: [] },
+                onCompleteRoute: {
+                  screen: 'GenerateDetailsScreen',
+                  params: {
+                    jobId: firstResult.autoGenerateJobId,
+                    matchJobId: jobId,
+                    items: [],
+                    jobMap: {},
+                    userImagesByIndex: {},
+                  },
+                },
+              } as never);
+            }, 500);
+            return;
+          }
+
           // Early navigate: as soon as we have initial results, go to selection screen (non-blocking rerank/embeddings continue server-side)
-          if (!navigatedEarly && Array.isArray(status.results) && status.results.length > 0) {
+          // BUT if user requested skipMatchSelection/autoGenerateAllPlatforms, we must wait for completion to respect skipToGenerate.
+          if (
+            !preferWaitForCompletion &&
+            !navigatedEarly &&
+            Array.isArray(status.results) &&
+            status.results.length > 0 &&
+            !shouldSkipToGenerate
+          ) {
             const expectedCount = Array.isArray(payload?.bulkItems) ? payload.bulkItems.length : (Array.isArray(payload?.firstPhotos) ? payload.firstPhotos.length : 0);
             if (expectedCount > 0 && status.results.length !== expectedCount) {
               console.warn(`[LOADING] Match job returned ${status.results.length} results but payload had ${expectedCount} product(s). Backend may only be processing first item.`);
@@ -188,7 +308,26 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
               pollingIntervalRef.current = null;
             }
             setNavigatedEarly(true);
-            const itemsForModal = (status.results || []).map((res: any, idx: number) => {
+            const sourceBulk = Array.isArray(payload?.bulkItems) ? payload.bulkItems : [];
+            const confirmed = confirmedQuickMatchByItemId && typeof confirmedQuickMatchByItemId === 'object' ? confirmedQuickMatchByItemId : {};
+            const n = sourceBulk.length > 0 ? sourceBulk.length : (status.results?.length ?? 0);
+            const mergedResults: Array<{ productIndex: number; serpApiData: any[] }> = [];
+            const preSelectedByProductIndex: Record<number, number[]> = {};
+            for (let i = 0; i < n; i++) {
+              const itemId = sourceBulk[i]?.id;
+              const confirmedMatch = itemId ? confirmed[itemId] : undefined;
+              if (confirmedMatch && Array.isArray(confirmedMatch.serpApiData)) {
+                mergedResults.push({ productIndex: i, serpApiData: confirmedMatch.serpApiData });
+                if (Array.isArray(confirmedMatch.preSelectedIndices)) {
+                  preSelectedByProductIndex[i] = confirmedMatch.preSelectedIndices;
+                }
+              } else {
+                const jobResult = status.results?.[i];
+                const serpApiData = jobResult?.serpApiData ?? [];
+                mergedResults.push({ productIndex: i, serpApiData });
+              }
+            }
+            const itemsForModal = mergedResults.map((res: any, idx: number) => {
               const first = res?.serpApiData?.[0];
               return {
                 index: idx,
@@ -197,9 +336,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
                 matchesCount: Array.isArray(res?.serpApiData) ? res.serpApiData.length : 0,
               };
             });
-            // Build userImagesByIndex if bulkItems were provided
             const prevResponse = ((onCompleteRoute?.params as any)?.response) || {};
-            const sourceBulk = prevResponse?.bulkItems || (payload?.bulkItems);
             const userImagesByIndex: Record<number, string[]> = {};
             if (Array.isArray(sourceBulk)) {
               sourceBulk.forEach((item: any, i: number) => {
@@ -214,14 +351,45 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
               ...onCompleteRoute.params,
               jobId: status.jobId,
               response: { ...(onCompleteRoute?.params as any)?.response, jobId: status.jobId },
+              overrideResults: mergedResults.length > 0 ? mergedResults : undefined,
+              preSelectedByProductIndex: Object.keys(preSelectedByProductIndex).length > 0 ? preSelectedByProductIndex : undefined,
               items: itemsForModal,
               userImagesByIndex: (onCompleteRoute?.params as any)?.userImagesByIndex || (Object.keys(userImagesByIndex).length ? userImagesByIndex : undefined),
             });
-            return; // stop further handling in this tick
+            return;
           }
 
           // If completed, stop polling and navigate (redundant if we already navigated early)
-          if (status.status === 'completed' && !navigatedEarly) {
+          // Check if we should skip to generate (backend set skipToGenerate with autoGenerateJobId)
+          const firstResultMatch = Array.isArray(status.results) && status.results.length > 0 ? status.results[0] : null;
+          const shouldSkipToGenerateMatch = firstResultMatch?.skipToGenerate === true && firstResultMatch?.autoGenerateJobId;
+
+          if (shouldSkipToGenerateMatch && status.status === 'completed') {
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
+            console.log(`[LOADING] Match completed with skipToGenerate, navigating to generate job ${firstResultMatch.autoGenerateJobId}`);
+            setTimeout(() => {
+              navigation.replace('LoadingScreen' as never, {
+                processType: 'generate',
+                payload: { jobId: firstResultMatch.autoGenerateJobId, firstPhotos: [] },
+                onCompleteRoute: {
+                  screen: 'GenerateDetailsScreen',
+                  params: {
+                    jobId: firstResultMatch.autoGenerateJobId,
+                    matchJobId: jobId,
+                    items: [],
+                    jobMap: {},
+                    userImagesByIndex: {},
+                  },
+                },
+              } as never);
+            }, 500);
+            return;
+          }
+
+          if (status.status === 'completed' && !navigatedEarly && !shouldSkipToGenerateMatch) {
             if (pollingIntervalRef.current) {
               clearInterval(pollingIntervalRef.current);
               pollingIntervalRef.current = null;
@@ -247,13 +415,61 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
         
         
       } catch (error) {
-        console.error('[POLLING] Error polling status:', error);
+        const message = error instanceof Error ? error.message : String(error);
+        const is404 = message.includes('(404)') && message.toLowerCase().includes('not found');
+
+        if (is404) {
+          notFoundCountRef.current += 1;
+          if (firstNotFoundAtRef.current === null) {
+            firstNotFoundAtRef.current = Date.now();
+          }
+          const elapsed = firstNotFoundAtRef.current ? Date.now() - firstNotFoundAtRef.current : 0;
+          console.warn(
+            `[POLLING] 404 not found (jobId=${jobId}, processType=${processType}) notFoundCount=${notFoundCountRef.current} elapsed=${elapsed}ms`
+          );
+          const overThreshold = notFoundCountRef.current >= NOT_FOUND_CONSECUTIVE_THRESHOLD;
+          const overWindow = elapsed >= NOT_FOUND_WINDOW_MS;
+          if (overThreshold || overWindow) {
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
+            setJobStatus('failed');
+            Alert.alert(
+              'Scan not found',
+              'This scan job is no longer available. Please run the scan again.',
+              [
+                {
+                  text: 'OK',
+                  onPress: () =>
+                    navigation.replace('AddProduct' as never, {
+                      firstPhotos: firstPhotos || [],
+                      bulkItems: bulkItems || [],
+                    } as never),
+                },
+              ]
+            );
+            return;
+          }
+          // Transient 404: keep polling, do not increment generic failure count
+        } else {
+          consecutivePollFailuresRef.current += 1;
+          console.warn('[POLLING] Error polling status:', message);
+          if (consecutivePollFailuresRef.current === 4) {
+            Alert.alert(
+              'Connection issue',
+              'Having trouble checking scan progress. We will keep retrying in the background.'
+            );
+          }
+        }
+      } finally {
+        isPollingRef.current = false;
       }
     };
 
-    // Start polling immediately, then every 2 seconds
+    // Poll immediately, then every 1s so we catch job status as soon as backend persists (avoids false 404)
     pollJobStatus();
-    pollingIntervalRef.current = setInterval(pollJobStatus, 2000);
+    pollingIntervalRef.current = setInterval(pollJobStatus, 1000);
 
     return () => {
       if (pollingIntervalRef.current) {

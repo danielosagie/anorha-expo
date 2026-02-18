@@ -253,6 +253,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Quick scan storage per item and current sheet context
   const [quickScanStore, setQuickScanStore] = useState<Record<string, { matchData: MatchResponse; serpApiData: any[] }>>({});
   const [currentMatchItemId, setCurrentMatchItemId] = useState<string | null>(null);
+  // Confirmed quick-match per item: when user taps "List Product" we store it so bulk Continue uses it instead of re-searching
+  const [confirmedQuickMatchByItemId, setConfirmedQuickMatchByItemId] = useState<Record<string, { serpApiData: any[]; preSelectedIndices: number[] }>>({});
 
   // Loading state tracking per item
   const [itemLoadingStates, setItemLoadingStates] = useState<Record<string, { isLoading: boolean; stage: string; }>>({});
@@ -1145,7 +1147,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               height: photo.height
             }
           }],
-          targetSites: ['general'],
+          // Query general index + eBay explicitly to speed up price-relevant results.
+          targetSites: ['general', 'ebay.com'],
 
           reranker: "llama4-groq", //"reranker": "llama4-groq"  // or "jina-modal" or "fast-text" or "none" 
           mode: "ocr-vlm-search"
@@ -1194,9 +1197,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             id: match.ProductVariantId || match.productId || `match-${Date.now()}`,
             title: match.title || 'Unknown Product',
             description: match.description || '',
-            price: match.price || 0,
+            price: typeof match.price === 'number'
+              ? match.price
+              : Number(match.price?.extracted_value || match.price?.value || 0),
             imageUrl: match.imageUrl || '',
-            sourceUrl: match.productUrl || match.link || '',
+            sourceUrl: (() => {
+              const preferred = match.productUrl || match.link || '';
+              if (typeof preferred === 'string' && /sssync\.app/i.test(preferred)) {
+                return '';
+              }
+              return preferred;
+            })(),
           }))
         };
 
@@ -1224,6 +1235,44 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         setMatchData(nextMatchData);
         // Update instruction to show match count in center box
         setCurrentInstruction('matches_found');
+
+        // Price safety: fetch eBay pricing research in background for the top candidate
+        // so users get faster and more realistic price guidance during quick scan.
+        const topTitle = nextMatchData.rankedCandidates?.[0]?.title;
+        if (topTitle) {
+          const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+          (async () => {
+            try {
+              const priceRes = await fetch(`${API_BASE}/api/ebay/pricing-research`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: topTitle.trim(), condition: 'new', limit: 20 }),
+              });
+              if (!priceRes.ok) return;
+              const priceData = await priceRes.json();
+              const recommended = Number(priceData?.recommended ?? priceData?.median ?? priceData?.low);
+              if (!Number.isFinite(recommended) || recommended <= 0) return;
+
+              setQuickScanStore(prev => {
+                const current = prev[itemId];
+                if (!current?.matchData?.rankedCandidates?.length) return prev;
+                const first = current.matchData.rankedCandidates[0];
+                if (typeof first?.price === 'number' && first.price > 0) return prev;
+                const updatedCandidates = [...current.matchData.rankedCandidates];
+                updatedCandidates[0] = { ...first, price: recommended };
+                return {
+                  ...prev,
+                  [itemId]: {
+                    ...current,
+                    matchData: { ...current.matchData, rankedCandidates: updatedCandidates },
+                  },
+                };
+              });
+            } catch {
+              // non-blocking enrichment
+            }
+          })();
+        }
 
       } else {
         console.log('[QUICK SCAN] No matches found');
@@ -1309,6 +1358,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         options: {
           useReranking: true,
           vectorSearchLimit: 10,
+          autoGenerateAllPlatforms: true,
+          skipMatchSelection: true,
         }
       };
 
@@ -1942,10 +1993,31 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             matchData={matchData}
             onClose={closeMatchSheet}
             onUseForSelection={() => openMatchSelectionForItem(currentMatchItemId)}
+            onConfirmMatch={currentMatchItemId ? (serpApiData, preSelectedIndices) => {
+              setConfirmedQuickMatchByItemId(prev => ({
+                ...prev,
+                [currentMatchItemId]: { serpApiData, preSelectedIndices },
+              }));
+            } : undefined}
+            currentMatchItemId={currentMatchItemId}
+            fetchPricingResearch={async (title: string) => {
+              try {
+                const token = await getToken();
+                const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+                const res = await fetch(`${API_BASE}/api/ebay/pricing-research`, {
+                  method: 'POST',
+                  headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ title: title.trim(), condition: 'new', limit: 20 }),
+                });
+                const data = await res.json();
+                return data?.error ? null : data;
+              } catch {
+                return null;
+              }
+            }}
             sheetStyle={matchSheetAnimatedStyle}
             navigation={navigation}
             onStartBroadSearch={() => {
-              // Close match sheet and open bulk items sheet
               setShowMatchSheet(false);
               matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
               setShowDeepSearchSheet(true);
@@ -2017,6 +2089,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               }}
               itemLoadingStates={itemLoadingStates}
               setItemLoadingStates={setItemLoadingStates}
+              confirmedQuickMatchByItemId={confirmedQuickMatchByItemId}
             />
           );
         })()}
@@ -2688,10 +2761,29 @@ const MatchResultsSheet: React.FC<{
   sheetStyle: any;
   onUseForSelection?: () => void;
   onStartBroadSearch?: () => void;
+  onConfirmMatch?: (serpApiData: any[], preSelectedIndices: number[]) => void;
+  currentMatchItemId?: string | null;
+  fetchPricingResearch?: (title: string) => Promise<{ low?: number; median?: number; high?: number; recommended?: number; error?: string } | null>;
   navigation?: any;
-}> = ({ matchData, onClose, sheetStyle, onUseForSelection, onStartBroadSearch, navigation }) => {
+}> = ({ matchData, onClose, sheetStyle, onUseForSelection, onStartBroadSearch, onConfirmMatch, currentMatchItemId, fetchPricingResearch, navigation }) => {
   // Use index-based selection to avoid duplicate id issues
   const [selectedMatchIndices, setSelectedMatchIndices] = React.useState<Set<number>>(new Set());
+  const [pricingResearch, setPricingResearch] = React.useState<{ low?: number; median?: number; high?: number; recommended?: number } | null>(null);
+  const [pricingResearchLoading, setPricingResearchLoading] = React.useState(false);
+  const [manualOverrideInput, setManualOverrideInput] = React.useState('');
+
+  const firstTitle = matchData.rankedCandidates[0]?.title;
+  React.useEffect(() => {
+    if (!firstTitle || !fetchPricingResearch) return;
+    setPricingResearchLoading(true);
+    setPricingResearch(null);
+    fetchPricingResearch(firstTitle)
+      .then((res) => {
+        if (res && typeof (res as any).low === 'number') setPricingResearch(res as any);
+      })
+      .catch(() => {})
+      .finally(() => setPricingResearchLoading(false));
+  }, [firstTitle, fetchPricingResearch]);
 
   const toggleMatchSelection = (index: number) => {
     setSelectedMatchIndices(prev => {
@@ -2718,19 +2810,56 @@ const MatchResultsSheet: React.FC<{
         image: c.imageUrl || '',
         price: typeof c.price === 'number' ? { value: `$${c.price}`, extracted_value: c.price, currency: 'USD' } : undefined,
       }));
-
-      // Navigate with pre-selected indices
+      const preSelected = Array.from(selectedMatchIndices);
+      if (currentMatchItemId && onConfirmMatch) {
+        onConfirmMatch(serpApiData, preSelected);
+      }
       navigation.navigate('MatchSelectionScreen', {
         overrideResults: [{ productIndex: 0, serpApiData }],
         overrideFocusIndex: 0,
-        preSelectedIndices: Array.from(selectedMatchIndices),
+        preSelectedIndices: preSelected,
         isNewScan: true
       });
       onClose();
     } else if (selectedMatchIndices.size > 0) {
-      // Fallback to old behavior if no navigation
       onUseForSelection?.();
     }
+  };
+
+  const handleManualOverride = () => {
+    const raw = manualOverrideInput.trim();
+    if (!raw || !navigation) return;
+    const isUrl = /^https?:\/\//i.test(raw);
+    let inferredTitle = raw;
+    if (isUrl) {
+      try {
+        inferredTitle = new URL(raw).hostname.replace('www.', '');
+      } catch {
+        inferredTitle = raw;
+      }
+    }
+    const manualCandidate = {
+      position: 1,
+      title: inferredTitle,
+      link: isUrl ? raw : '',
+      source: 'manual',
+      source_icon: '',
+      thumbnail: matchData.rankedCandidates?.[0]?.imageUrl || '',
+      image: matchData.rankedCandidates?.[0]?.imageUrl || '',
+      price: typeof pricingResearch?.recommended === 'number'
+        ? { value: `$${pricingResearch.recommended}`, extracted_value: pricingResearch.recommended, currency: 'USD' }
+        : undefined,
+    };
+    if (currentMatchItemId && onConfirmMatch) {
+      onConfirmMatch([manualCandidate], [0]);
+    }
+    navigation.navigate('MatchSelectionScreen', {
+      overrideResults: [{ productIndex: 0, serpApiData: [manualCandidate] }],
+      overrideFocusIndex: 0,
+      preSelectedIndices: [0],
+      isNewScan: true,
+    });
+    onClose();
   };
 
   return (
@@ -2766,6 +2895,15 @@ const MatchResultsSheet: React.FC<{
         <View style={styles.matchResults}>
           {matchData.rankedCandidates.map((candidate, index) => {
             const isSelected = selectedMatchIndices.has(index);
+            const hasPrice = typeof candidate.price === 'number' && candidate.price > 0;
+            const usePricingResearch = !hasPrice && index === 0 && pricingResearch && typeof pricingResearch.low === 'number';
+            const priceText = hasPrice
+              ? `$${candidate.price}`
+              : usePricingResearch
+                ? `$${pricingResearch.low} – $${pricingResearch.high ?? pricingResearch.median ?? pricingResearch.low}${pricingResearch.median != null ? ` (avg $${pricingResearch.median})` : ''}`
+                : pricingResearchLoading && index === 0
+                  ? '…'
+                  : '—';
 
             return (
               <TouchableOpacity
@@ -2780,19 +2918,18 @@ const MatchResultsSheet: React.FC<{
                 <Image source={{ uri: candidate.imageUrl }} style={styles.matchImage} />
                 <View style={styles.matchInfo}>
                   <Text style={styles.matchTitle} numberOfLines={2}>{cleanMatchText(candidate.title) || 'Unknown Product'}</Text>
-                  {/*
-                  <Text style={styles.matchDescription} numberOfLines={2}>
-                    {cleanMatchText(candidate.description)}
-                  </Text>
-                  */}
-                  <Text style={styles.matchPrice}>${candidate.price}</Text>
-                  {/*
-                  {candidate.sourceUrl && (
-                    <Text style={styles.matchSource} numberOfLines={1}>
-                      {new URL(candidate.sourceUrl).hostname.replace('www.', '')}
-                    </Text>
-                  )}
-                    */}
+                  <Text style={styles.matchPrice}>{priceText}</Text>
+                  {candidate.sourceUrl && (() => {
+                    try {
+                      return (
+                        <Text style={styles.matchSource} numberOfLines={1}>
+                          {new URL(candidate.sourceUrl).hostname.replace('www.', '')}
+                        </Text>
+                      );
+                    } catch {
+                      return null;
+                    }
+                  })()}
                 </View>
 
                 {/* Selection indicator overlay */}
@@ -2809,7 +2946,27 @@ const MatchResultsSheet: React.FC<{
         </View>
 
         <View style={styles.sheetActions}>
-          {/* Side by side buttons like the design */}
+          <Text style={styles.reviewItemsHint}>Review Items returns to your bulk items list.</Text>
+          <View style={styles.manualSafetyWrap}>
+            <Text style={styles.manualSafetyLabel}>Safety override: paste a product URL or type the product name</Text>
+            <View style={styles.manualSafetyRow}>
+              <TextInput
+                value={manualOverrideInput}
+                onChangeText={setManualOverrideInput}
+                placeholder="https://example.com/item or Logitech G502 HERO"
+                placeholderTextColor="#999"
+                style={styles.manualSafetyInput}
+                autoCapitalize="none"
+              />
+              <TouchableOpacity
+                style={[styles.manualSafetyButton, manualOverrideInput.trim().length === 0 && styles.listProductButtonDisabled]}
+                disabled={manualOverrideInput.trim().length === 0}
+                onPress={handleManualOverride}
+              >
+                <Text style={styles.manualSafetyButtonText}>Use</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
           <View style={styles.matchActionsRow}>
             <TouchableOpacity
               style={styles.reviewDetailsButton}
@@ -2866,7 +3023,8 @@ const BulkItemsSheet: React.FC<{
   onOpenPhotoModal?: (itemId: string) => void;
   itemLoadingStates: Record<string, { isLoading: boolean; stage: string; }>;
   setItemLoadingStates: React.Dispatch<React.SetStateAction<Record<string, { isLoading: boolean; stage: string; }>>>;
-}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates }) => {
+  confirmedQuickMatchByItemId?: Record<string, { serpApiData: any[]; preSelectedIndices: number[] }>;
+}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, confirmedQuickMatchByItemId = {} }) => {
 
   console.log('[SHEET RENDER] ==================');
   console.log('[SHEET RENDER] BulkItemsSheet RE-RENDERED at:', new Date().toISOString());
@@ -3254,13 +3412,18 @@ const BulkItemsSheet: React.FC<{
                 console.log('[SEARCH] Job ID:', jobId);
 
                 if (jobId) {
-                  // Navigate to loading screen with job ID for polling
+                  // With skipMatchSelection + autoGenerateAllPlatforms, intended path is:
+                  // LoadingScreen (match) -> LoadingScreen (generate) -> GenerateDetailsScreen.
+                  // We only fall back to MatchSelectionScreen if match returns no results.
                   navigation.navigate("LoadingScreen", {
                     processType: 'match',
                     payload: {
                       jobId: jobId,
                       bulkItems: bulkItems,
                       firstPhotos: firstPhotos,
+                      confirmedQuickMatchByItemId: confirmedQuickMatchByItemId,
+                      skipMatchSelection: true,
+                      autoGenerateAllPlatforms: true,
                     },
                     onCompleteRoute: {
                       screen: 'MatchSelectionScreen',
@@ -3270,6 +3433,7 @@ const BulkItemsSheet: React.FC<{
                           jobId: jobId,
                           bulkItems: bulkItems,
                           firstPhotos: firstPhotos,
+                          confirmedQuickMatchByItemId: confirmedQuickMatchByItemId,
                         }
                       },
                     }
@@ -3767,8 +3931,8 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingTop: 20,
-    paddingBottom: 60,
-    marginBottom: 30,
+    paddingBottom: 20,
+    marginBottom: 20,
     minHeight: SCREEN_HEIGHT * 0.9,
     maxHeight: SCREEN_HEIGHT * 0.9,
   },
@@ -3783,7 +3947,7 @@ const styles = StyleSheet.create({
     paddingTop: 20,
     paddingBottom: 120, // Increased bottom padding
     marginBottom: 0, // Added bottom margin
-    height: SCREEN_HEIGHT * 0.7,
+    height: SCREEN_HEIGHT * 0.9,
   },
   sheetHeader: {
     flexDirection: 'row',
@@ -3804,6 +3968,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(147, 200, 34, 0.15)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  reviewItemsHint: {
+    fontSize: 12,
+    color: '#888',
+    marginBottom: 8,
+    paddingHorizontal: 4,
   },
   matchActionsRow: {
     flexDirection: 'row',
@@ -3892,7 +4062,7 @@ const styles = StyleSheet.create({
   matchPrice: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#93C822',
+    color: '#333',
     marginBottom: 4,
   },
   matchSource: {
@@ -3925,6 +4095,41 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 16,
     paddingHorizontal: 20,
+  },
+  manualSafetyWrap: {
+    marginBottom: 10,
+  },
+  manualSafetyLabel: {
+    color: '#666',
+    fontSize: 12,
+    marginBottom: 6,
+  },
+  manualSafetyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  manualSafetyInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    color: '#111',
+    backgroundColor: '#FFF',
+    fontSize: 13,
+  },
+  manualSafetyButton: {
+    backgroundColor: '#111',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  manualSafetyButtonText: {
+    color: '#FFF',
+    fontWeight: '600',
+    fontSize: 13,
   },
   primaryButtonDisabled: {
     backgroundColor: '#ccc',

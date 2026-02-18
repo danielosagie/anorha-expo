@@ -130,6 +130,18 @@ async function getToken() {
     return jwt;
 }
 
+function sanitizeSourceLabel(item: { source?: string; link?: string }) {
+    const raw = (item?.source || '').trim();
+    if (raw && !/sssync/i.test(raw)) return raw;
+    try {
+        const host = item?.link ? new URL(item.link).hostname.replace('www.', '') : '';
+        if (!host || /sssync\.app/i.test(host)) return 'web';
+        return host;
+    } catch {
+        return raw && !/sssync/i.test(raw) ? raw : 'web';
+    }
+}
+
 // --- Reusable Components ---
 
 // Optimized ProductGridItem with instant feedback
@@ -159,7 +171,7 @@ const ProductGridItem = React.memo(({ item, index, isSelected, onSelect, isBest,
             <Image
                 source={{ uri: item.thumbnail || item.image }}
                 style={styles.itemImage}
-                resizeMode="cover"
+                resizeMode="contain"
             />
             {badgeLabel ? (
                 <View style={{ position: 'absolute', top: 6, left: 6, backgroundColor: 'rgba(147,200,34,0.95)', borderRadius: 10, paddingVertical: 2, paddingHorizontal: 6 }}>
@@ -175,7 +187,7 @@ const ProductGridItem = React.memo(({ item, index, isSelected, onSelect, isBest,
                 <Text style={styles.itemTitle} numberOfLines={2}>{item.title}</Text>
                 <Text style={styles.itemPrice}>{item.price?.value}</Text>
                 <Text style={styles.itemCondition}>{item.condition}</Text>
-                <Text style={styles.itemSource}>{item.source}</Text>
+                <Text style={styles.itemSource}>{sanitizeSourceLabel(item)}</Text>
             </View>
         </Pressable>
     );
@@ -194,9 +206,9 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
     const { isConnected } = usePlatformConnections();
     const isNewScan = Boolean((route.params as any)?.isNewScan === true);
 
-    // Quick scan override params - when passing data directly instead of polling a job
     const overrideResults: Array<{ productIndex: number; serpApiData: any[] }> | undefined = (route.params as any)?.overrideResults;
     const preSelectedIndices: number[] = (route.params as any)?.preSelectedIndices || [];
+    const preSelectedByProductIndex: Record<number, number[]> = (route.params as any)?.preSelectedByProductIndex ?? {};
 
     // Get shared JobsContext for cross-screen state sync
     const jobsContext = useJobsOptional();
@@ -251,6 +263,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
 
     // Track failed items from server for retry/rescan buttons
     const [failedItems, setFailedItems] = useState<Array<{ index: number; error: string }>>([]);
+    const [manualSafetyInput, setManualSafetyInput] = useState('');
 
     // Memoized items for ItemJobsModal - avoids recalculating on every render
     // IMPORTANT: Must be declared BEFORE useEffects that reference it
@@ -454,20 +467,36 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
     }, [selectedTemplateIds]);
 
     // --- Data Fetching ---
+    // Ref to prevent infinite loop: route.params (overrideResults, preSelectedByProductIndex) can get
+    // new object refs each render, causing useEffect to re-run. We only need to process override once.
+    const hasProcessedOverrideRef = React.useRef(false);
+
     useEffect(() => {
         navigation.setOptions({ headerShown: false });
 
         let cancelled = false;
 
-        // If override results are provided, use them directly instead of polling
         if (overrideResults && Array.isArray(overrideResults) && overrideResults.length > 0) {
+            if (hasProcessedOverrideRef.current) return;
+            hasProcessedOverrideRef.current = true;
+
             console.log('[MatchSelectionScreen] Using override results:', overrideResults.length, 'products');
             setAnalysisData({ jobId: 'quick-scan-override', results: overrideResults as any });
             setJobStatus('completed');
             setIsLoading(false);
 
-            // Apply pre-selected indices if provided (for first product in override)
-            if (preSelectedIndices.length > 0) {
+            const hasPreSelectedByProduct = preSelectedByProductIndex && Object.keys(preSelectedByProductIndex).length > 0;
+            if (hasPreSelectedByProduct) {
+                setSelectedMatchesByIndex(prev => {
+                    const next = { ...prev };
+                    Object.entries(preSelectedByProductIndex).forEach(([idxStr, indices]) => {
+                        const idx = parseInt(idxStr, 10);
+                        if (Number.isFinite(idx) && Array.isArray(indices)) next[idx] = indices;
+                    });
+                    return next;
+                });
+                setBottomNavState('selection');
+            } else if (preSelectedIndices.length > 0) {
                 console.log('[MatchSelectionScreen] Pre-selecting indices:', preSelectedIndices);
                 setSelectedMatchesByIndex(prev => ({ ...prev, [0]: preSelectedIndices }));
                 setBottomNavState('selection');
@@ -598,7 +627,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 pollingTimerRef.current = null;
             }
         };
-    }, [jobId, overrideResults, preSelectedIndices]);
+    }, [jobId, overrideResults, preSelectedIndices, preSelectedByProductIndex]);
 
     const fetchTemplatesPage = useCallback(async (offset: number, replace: boolean = false) => {
         try {
@@ -978,6 +1007,25 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         return idx >= 0 ? idx : null;
     }, [analysisData, currentProductIndex, serpApiData]);
 
+    const autoMatchReasonText = useMemo(() => {
+        const resAny: any = analysisData?.results?.[currentProductIndex] as any;
+        if (!resAny) return '';
+        const best = Array.isArray(resAny?.rerankedResults) ? resAny.rerankedResults[0] : null;
+        if (!best) return '';
+        const bits: string[] = [];
+        if (typeof best?.score === 'number') {
+            bits.push(`score ${(best.score * 100).toFixed(0)}%`);
+        }
+        if (resAny?.enrichedFrom === 'ebay') {
+            bits.push('eBay title confirmed');
+        }
+        if (resAny?.matchSource) {
+            bits.push(`${resAny.matchSource} identity`);
+        }
+        if (!bits.length) return '';
+        return `Auto-match reason: ${bits.join(' • ')}`;
+    }, [analysisData, currentProductIndex]);
+
     // Auto-match all: when we have results for this job, set best guess for every item once (confidence internal; user can correct)
     useEffect(() => {
         if (!jobId || !analysisData?.results?.length) return;
@@ -1089,6 +1137,48 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
         }
     }, [clientRerankedSerp, selectedIndices, currentProductIndex, serpApiData, jobId]);
 
+    const applyManualSafetyOverride = useCallback(() => {
+        const raw = manualSafetyInput.trim();
+        if (!raw || !analysisData?.results?.[currentProductIndex]) return;
+        const isUrl = /^https?:\/\//i.test(raw);
+        let title = raw;
+        if (isUrl) {
+            try {
+                title = new URL(raw).hostname.replace('www.', '');
+            } catch {
+                title = raw;
+            }
+        }
+        const fallbackImage =
+            userImagesByIndex?.[currentProductIndex]?.[0] ||
+            serpApiData?.[0]?.thumbnail ||
+            serpApiData?.[0]?.image ||
+            '';
+        const manualCandidate: SerpApiData = {
+            position: (serpApiData?.length || 0) + 1,
+            title,
+            link: isUrl ? raw : '',
+            source: 'manual',
+            source_icon: '',
+            thumbnail: fallbackImage,
+            image: fallbackImage,
+        };
+        const insertIndex = serpApiData.length;
+        setAnalysisData(prev => {
+            if (!prev?.results?.[currentProductIndex]) return prev;
+            const nextResults = [...prev.results];
+            const current = nextResults[currentProductIndex];
+            nextResults[currentProductIndex] = {
+                ...current,
+                serpApiData: [...(current.serpApiData || []), manualCandidate],
+            };
+            return { ...prev, results: nextResults };
+        });
+        setSelectedMatchesByIndex(prev => ({ ...prev, [currentProductIndex]: [insertIndex] }));
+        setBottomNavState('selection');
+        setManualSafetyInput('');
+    }, [manualSafetyInput, analysisData, currentProductIndex, serpApiData, userImagesByIndex]);
+
     // --- Render Logic ---
     if (isLoading) return <View style={styles.centerContainer}><ActivityIndicator size="large" color="#93C822" /><Text style={styles.infoText}>Finding matches…</Text></View>;
     if (error) return <View style={styles.centerContainer}><Text style={styles.errorText}>Error: {error}</Text></View>;
@@ -1136,6 +1226,11 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                         <Text style={{ fontSize: 16, fontWeight: 500, color: 'rgb(57, 57, 57)', lineHeight: 22, textAlign: "center"}}>
                             Select the best match(es) for the item
                         </Text>
+                        {autoMatchReasonText ? (
+                            <Text style={{ fontSize: 12, color: '#4B5563', marginTop: 6, textAlign: 'center' }}>
+                                {autoMatchReasonText}
+                            </Text>
+                        ) : null}
                         {modalItems.length > 1 && needsReviewIndices.length > 0 && (
                             <TouchableOpacity
                                 onPress={() => {
@@ -1171,6 +1266,27 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 removeClippedSubviews={true} // Re-enable for performance
             />
 
+            <View style={styles.manualSafetyBar}>
+                <Text style={styles.manualSafetyTitle}>Safety override: paste product URL or type product name</Text>
+                <View style={styles.manualSafetyRow}>
+                    <TextInput
+                        value={manualSafetyInput}
+                        onChangeText={setManualSafetyInput}
+                        placeholder="https://example.com/item or Logitech G502 HERO"
+                        placeholderTextColor="#9CA3AF"
+                        style={styles.manualSafetyInput}
+                        autoCapitalize="none"
+                    />
+                    <TouchableOpacity
+                        style={[styles.manualSafetyApply, manualSafetyInput.trim().length === 0 && styles.manualSafetyApplyDisabled]}
+                        disabled={manualSafetyInput.trim().length === 0}
+                        onPress={applyManualSafetyOverride}
+                    >
+                        <Text style={styles.manualSafetyApplyText}>Use</Text>
+                    </TouchableOpacity>
+                </View>
+            </View>
+
             {/* Dark Overlay for platform/platformPicker states */}
             {(bottomNavState === 'platform' || bottomNavState === 'template') && (
                 <TouchableOpacity
@@ -1201,7 +1317,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                         title: serpApiData[selectedIndices[0]].title,
                         price: serpApiData[selectedIndices[0]].price?.value,
                         condition: serpApiData[selectedIndices[0]].condition,
-                        source: serpApiData[selectedIndices[0]].source,
+                        source: sanitizeSourceLabel(serpApiData[selectedIndices[0]]),
                     } : null}
                     onChangeMatch={handleBackToEmpty}
                     isConnected={isConnected}
@@ -1931,6 +2047,54 @@ const styles = StyleSheet.create({
     itemPrice: { fontSize: 13, color: '#000000', marginTop: 2 },
     itemCondition: { fontSize: 12, color: '#666666', marginTop: 2 },
     itemSource: { fontSize: 12, color: '#000000', marginTop: 4 },
+    manualSafetyBar: {
+        position: 'absolute',
+        left: 14,
+        right: 14,
+        bottom: 118,
+        zIndex: 1001,
+        backgroundColor: 'rgba(255,255,255,0.98)',
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        borderRadius: 12,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+    },
+    manualSafetyTitle: {
+        fontSize: 12,
+        color: '#4B5563',
+        marginBottom: 6,
+    },
+    manualSafetyRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    manualSafetyInput: {
+        flex: 1,
+        borderWidth: 1,
+        borderColor: '#D1D5DB',
+        borderRadius: 10,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        fontSize: 13,
+        color: '#111827',
+        backgroundColor: '#FFFFFF',
+    },
+    manualSafetyApply: {
+        backgroundColor: '#111827',
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+    },
+    manualSafetyApplyDisabled: {
+        opacity: 0.45,
+    },
+    manualSafetyApplyText: {
+        color: '#FFFFFF',
+        fontWeight: '600',
+        fontSize: 13,
+    },
     bottomNavContainer: {
         padding: 20,
         backgroundColor: 'transparent',

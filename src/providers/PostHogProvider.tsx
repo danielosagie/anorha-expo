@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useContext } from 'react';
 import { PostHogProvider as PHProvider, usePostHog } from 'posthog-react-native';
+import Constants from 'expo-constants';
 import { capture, setPostHogInstance, AnalyticsEvents } from '../lib/analytics';
 import { SessionContext } from '../context/SessionContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -7,11 +8,21 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const POSTHOG_KEY = process.env.EXPO_PUBLIC_POSTHOG_KEY?.trim();
 const POSTHOG_HOST = (process.env.EXPO_PUBLIC_POSTHOG_HOST || 'https://us.i.posthog.com').trim();
 
-console.log('[PostHogProvider] Initializing with Host:', POSTHOG_HOST, 'Key Length:', POSTHOG_KEY?.length);
+// Expo Go uses a different runtime; outbound fetch to PostHog often fails with "Network error" there.
+// Disable PostHog in Expo Go so we don't spam errors. It works in dev builds and production.
+const isExpoGo =
+  Constants.appOwnership === 'expo' ||
+  Constants.executionEnvironment === 'storeClient';
+
+if (POSTHOG_KEY && !isExpoGo) {
+  console.log('[PostHogProvider] Initializing with Host:', POSTHOG_HOST, 'Key Length:', POSTHOG_KEY?.length);
+} else if (POSTHOG_KEY && isExpoGo) {
+  console.log('[PostHogProvider] Expo Go detected — PostHog disabled (use a dev/production build to test analytics).');
+}
 
 /**
  * Wraps children with PostHogProvider when EXPO_PUBLIC_POSTHOG_KEY is set.
- * No-ops when key is missing (e.g. dev without analytics).
+ * No-ops when key is missing or when running in Expo Go (avoids flush network errors there).
  */
 export function PostHogProvider({ children }: { children: React.ReactNode }) {
   if (!POSTHOG_KEY) {
@@ -19,7 +30,17 @@ export function PostHogProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <PHProvider apiKey={POSTHOG_KEY} options={{ host: POSTHOG_HOST }}>
+    <PHProvider
+      apiKey={POSTHOG_KEY}
+      options={{
+        host: POSTHOG_HOST,
+        // Disable in Expo Go so we never attempt flush (avoids "Network error while fetching PostHog")
+        disabled: isExpoGo,
+        requestTimeout: 30000,
+        fetchRetryCount: 4,
+        fetchRetryDelay: 2000,
+      }}
+    >
       <PostHogInit>{children}</PostHogInit>
     </PHProvider>
   );

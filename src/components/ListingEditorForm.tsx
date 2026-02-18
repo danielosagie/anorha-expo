@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Modal, Pressable, FlatList, SectionList, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Modal, Pressable, FlatList, SectionList, Alert, ActivityIndicator, Dimensions, Linking } from 'react-native';
 import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
 import { Paths, Directory, File } from 'expo-file-system/next';
 import * as ImagePicker from 'expo-image-picker';
@@ -20,6 +20,8 @@ import { black, grey400 } from 'react-native-paper/lib/typescript/styles/themes/
 import { overlay } from 'react-native-paper';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
+import { LineChart, BarChart } from 'react-native-chart-kit';
+import { logger } from 'react-native-reanimated/lib/typescript/common';
 
 export type PlatformsData = Record<string, any>;
 
@@ -389,7 +391,19 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [ebayConditionsLoading, setEbayConditionsLoading] = useState<boolean>(false);
   const [pricingResearchLoading, setPricingResearchLoading] = useState<boolean>(false);
   const [pricingResearchModalVisible, setPricingResearchModalVisible] = useState<boolean>(false);
-  const [pricingResearchResult, setPricingResearchResult] = useState<{ low?: number; median?: number; high?: number; recommended?: number; samples?: Array<{ title: string; price: number; url?: string }>; error?: string } | null>(null);
+  const [pricingSourcesSheetVisible, setPricingSourcesSheetVisible] = useState<boolean>(false);
+  const [pricingHistoryRange, setPricingHistoryRange] = useState<'1W' | '1M' | '3M'>('1M');
+  const [selectedPricingPointIdx, setSelectedPricingPointIdx] = useState<number | null>(null);
+  const [pricingResearchResult, setPricingResearchResult] = useState<{
+    low?: number; median?: number; high?: number; recommended?: number;
+    samples?: Array<{ title: string; price: number; url?: string; quantitySold?: number; watchers?: number; estimatedDaysToSell?: number }>;
+    timeToSell?: { fastSaleAvgDays?: number; recommendedAvgDays?: number; maxProfitAvgDays?: number; basis?: string };
+    sampleCount?: number;
+    sources?: Array<{ type: string; title?: string; url?: string }>;
+    history?: { dataPoints: Array<{ date: string; median: number; low?: number; high?: number; sampleCount?: number }> };
+    cachedAt?: string;
+    error?: string;
+  } | null>(null);
   const [shippingEstimateResult, setShippingEstimateResult] = useState<{ estimatedMin: number; estimatedMax: number; midpoint: number; description?: string; error?: string } | null>(null);
   const [shippingEstimateLoading, setShippingEstimateLoading] = useState<boolean>(false);
   const shippingEstimateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -753,10 +767,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       });
       const data = await res.json();
       setPricingResearchResult(data);
+      setPricingSourcesSheetVisible(false);
+      setSelectedPricingPointIdx(null);
       setPricingResearchModalVisible(true);
     } catch (e) {
       console.error('[ListingEditorForm] Pricing research error:', e);
       setPricingResearchResult({ error: (e as Error)?.message || 'Failed to research pricing' });
+      setPricingSourcesSheetVisible(false);
+      setSelectedPricingPointIdx(null);
       setPricingResearchModalVisible(true);
     } finally {
       setPricingResearchLoading(false);
@@ -1938,7 +1956,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           );
         })()}
 
-        {/* Price field - if variants with options exist and have prices, don't require main price */}
+        {/* Price field - custom row so Research Pricing sits on same line as label + (i) */}
         {(() => {
           const hasVariantsWithOptions = (activeData.options || []).length > 0 && (activeData.variants || []).length > 0;
           const allVariantsHavePrice = hasVariantsWithOptions && (activeData.variants || []).every((v: any) =>
@@ -1946,45 +1964,49 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           );
           const priceRequired = requiredFields?.includes?.('price') && !allVariantsHavePrice;
           const priceError = priceRequired && ((activeData as any).price == null || String((activeData as any).price) === '' || Number((activeData as any).price) === 0);
+          const priceLabel = hasVariantsWithOptions ? 'Base Price (optional with variants)' : 'Price';
+          const showResearchPricing = activePlatformKeyLower === 'ebay' && activeData.title?.trim() && activeData.categoryId;
 
           return (
-            <View>
-              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-end' }}>
-                <View style={{ flex: 1, flexDirection: "row", gap: 8, alignItems: "flex-end" }}>
-                  <View style={{ flex: 1 }}>
-
-                    <Field
-                      label={hasVariantsWithOptions ? "Base Price (optional with variants)" : "Price"}
-                    required={!hasVariantsWithOptions}
-                    value={String((activeData as any).price ?? '')}
-                    onChangeText={(t) => patchField('price', t)}
-                    onInfo={() => onOpenFieldPanel?.('price')}
-                    onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'price') : undefined}
-                    refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('price')}
-                    error={priceError}
-                    keyboardType={"decimal-pad"}
-                    externalUpdate={hasExternalUpdate('price')}
-                    />
-
-                  </View>
+            <View style={{ marginBottom: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 0 }}>
+                  <Text style={styles.fieldLabel}>{priceLabel}{priceRequired ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
+                  {hasExternalUpdate('price') ? (
+                    <View style={{ backgroundColor: 'rgba(52,199,89,0.15)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
+                      <Text style={{ color: '#059669', fontSize: 10, fontWeight: '600' }}>Updated</Text>
+                    </View>
+                  ) : Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('price') ? (
+                    <View style={{ backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
+                      <Text style={{ color: '#3f6212', fontSize: 10 }}>Refilled</Text>
+                    </View>
+                  ) : null}
+                  {enableAIRefill && activeTab !== 'all' && (
+                    <TouchableOpacity onPress={() => onRegenerateField?.(activePlatformKey, 'price')} style={{ borderWidth: 1, borderColor: '#E5E5E5', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: '#fff' }}>
+                      <Sparkles size={14} color={'#000'} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  {showResearchPricing && (
+                    <TouchableOpacity onPress={fetchPricingResearch} disabled={pricingResearchLoading} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      {pricingResearchLoading ? <ActivityIndicator size="small" color="#93C822" /> : <Package size={14} color="#93C822" />}
+                      <Text style={{ color: '#93C822', fontSize: 13, fontWeight: '600' }}>{pricingResearchLoading ? 'Researching...' : 'Research Pricing'}</Text>
+                    </TouchableOpacity>
+                  )}
+                  {onOpenFieldPanel && (
+                    <TouchableOpacity onPress={() => onOpenFieldPanel('price')}><Icon name="information-outline" size={18} color="#999999" /></TouchableOpacity>
+                  )}
                 </View>
               </View>
-              {activePlatformKeyLower === 'ebay' && activeData.title?.trim() && activeData.categoryId && (
-                <TouchableOpacity
-                  onPress={fetchPricingResearch}
-                  disabled={pricingResearchLoading}
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}
-                >
-                  {pricingResearchLoading ? (
-                    <ActivityIndicator size="small" color="#93C822" />
-                  ) : (
-                    <Package size={14} color="#93C822" />
-                  )}
-                  <Text style={{ color: '#93C822', fontSize: 13, fontWeight: '600' }}>
-                    {pricingResearchLoading ? 'Researching...' : 'Research Pricing'}
-                  </Text>
-                </TouchableOpacity>
-              )}
+              <TextInput
+                style={[styles.input, priceError ? { borderColor: '#ef4444' } : null, hasExternalUpdate('price') ? { borderColor: '#93C822', borderWidth: 2 } : null]}
+                value={String((activeData as any).price ?? '')}
+                onChangeText={(t) => patchField('price', t)}
+                placeholder=""
+                placeholderTextColor="#999999"
+                keyboardType="decimal-pad"
+              />
             </View>
           );
         })()}
@@ -2025,7 +2047,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         </View>
 
         {/* Condition - eBay uses category-specific conditions; others use generic */}
-        <View style={{ marginTop: 16 }}>
+        <View style={{ marginBottom: 16 }}>
           <Text style={styles.fieldLabel}>Condition</Text>
           {activePlatformKeyLower === 'ebay' && ebayConditions.length > 0 ? (
             <AppDropdown
@@ -2102,67 +2124,263 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
       </View>
 
-      {/* Pricing Research Modal */}
+      {/* Pricing Research Modal - stocks-style with chart, sources, accuracy */}
       <Modal visible={pricingResearchModalVisible} transparent animationType="slide">
         <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }} onPress={() => setPricingResearchModalVisible(false)}>
-          <Pressable style={{ backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 20 }} onPress={e => e.stopPropagation()}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <Pressable style={{ backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '90%' }} onPress={e => e.stopPropagation()}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 20, paddingBottom: 12 }}>
               <Text style={{ fontSize: 18, fontWeight: '700', color: '#1F2937' }}>eBay Sold Prices</Text>
               <TouchableOpacity onPress={() => setPricingResearchModalVisible(false)}>
                 <Icon name="close" size={24} color="#6B7280" />
               </TouchableOpacity>
             </View>
             {pricingResearchResult?.error ? (
-              <Text style={{ fontSize: 14, color: '#ef4444', marginBottom: 12 }}>{pricingResearchResult.error}</Text>
+              <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>
+                <Text style={{ fontSize: 14, color: '#ef4444' }}>{pricingResearchResult.error}</Text>
+              </View>
             ) : pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
-              <>
-                <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 12 }}>
-                  Sold prices: ${pricingResearchResult.low?.toFixed(2)} – ${pricingResearchResult.high?.toFixed(2)} (median ${pricingResearchResult.median?.toFixed(2)})
-                </Text>
-                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+              <ScrollView style={{ maxHeight: 580 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24 }}>
+                {/* Accuracy / recency + Sources toggle (expands section below) */}
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+                  <Text style={{ fontSize: 13, color: '#6B7280' }}>
+                    Based on {(pricingResearchResult.sampleCount ?? pricingResearchResult.samples?.length ?? 0)} sold listings
+                    {pricingResearchResult.cachedAt
+                      ? ` · Cached ${(() => {
+                          const d = new Date(pricingResearchResult.cachedAt);
+                          const mins = Math.round((Date.now() - d.getTime()) / 60000);
+                          if (mins < 60) return `${mins}m ago`;
+                          const h = Math.floor(mins / 60);
+                          return `${h}h ago`;
+                        })()}`
+                      : ''}
+                  </Text>
                   <TouchableOpacity
-                    style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center' }}
-                    onPress={() => {
-                      patchField('price', String((pricingResearchResult?.low ?? 0).toFixed(2)));
-                      patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low: pricingResearchResult!.low!, recommended: pricingResearchResult!.recommended ?? pricingResearchResult!.median!, high: pricingResearchResult!.high! } }));
-                      setPricingResearchModalVisible(false);
-                    }}
+                    activeOpacity={0.7}
+                    style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#F3F4F6', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 12 }}
+                    onPress={() => setPricingSourcesSheetVisible((v) => !v)}
                   >
-                    <Text style={{ fontSize: 10, color: '#6B7280' }}>Fast sale</Text>
-                    <Text style={{ fontSize: 14, fontWeight: '700' }}>${(pricingResearchResult?.low ?? 0).toFixed(2)}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#3B82F6', backgroundColor: '#EFF6FF', alignItems: 'center' }}
-                    onPress={() => {
-                      const rec = pricingResearchResult?.recommended ?? pricingResearchResult?.median ?? 0;
-                      patchField('price', String(rec.toFixed(2)));
-                      patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low: pricingResearchResult!.low!, recommended: rec, high: pricingResearchResult!.high! } }));
-                      setPricingResearchModalVisible(false);
-                    }}
-                  >
-                    <Text style={{ fontSize: 10, color: '#1E40AF' }}>Recommended</Text>
-                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#1E40AF' }}>${(pricingResearchResult?.recommended ?? pricingResearchResult?.median ?? 0).toFixed(2)}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center' }}
-                    onPress={() => {
-                      patchField('price', String((pricingResearchResult?.high ?? 0).toFixed(2)));
-                      patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low: pricingResearchResult!.low!, recommended: pricingResearchResult!.recommended ?? pricingResearchResult!.median!, high: pricingResearchResult!.high! } }));
-                      setPricingResearchModalVisible(false);
-                    }}
-                  >
-                    <Text style={{ fontSize: 10, color: '#6B7280' }}>Max profit</Text>
-                    <Text style={{ fontSize: 14, fontWeight: '700' }}>${(pricingResearchResult?.high ?? 0).toFixed(2)}</Text>
+                    <Icon name="web" size={14} color="#4B5563" />
+                    <Text style={{ fontSize: 12, fontWeight: '600', color: '#4B5563', marginLeft: 4 }}>{pricingSourcesSheetVisible ? 'Hide sources' : 'Sources'}</Text>
                   </TouchableOpacity>
                 </View>
-              </>
+                {/* Expandable Sources section (toggled by button above) */}
+                {pricingSourcesSheetVisible && (
+                  <View style={{ marginBottom: 16, paddingVertical: 10, paddingHorizontal: 12, backgroundColor: '#F9FAFB', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' }}>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#1F2937', marginBottom: 8 }}>Sources</Text>
+                    {Array.isArray(pricingResearchResult?.samples) && pricingResearchResult.samples.length > 0 && (
+                      <View style={{ marginTop: 4 }}>
+                        {pricingResearchResult.samples.slice(0, 8).map((sample, idx) => (
+                          <View key={`inline-sample-${idx}`} style={{ marginBottom: 8 }}>
+                            <Text style={{ fontSize: 12, color: '#111827' }} numberOfLines={1}>
+                              {sample.title || 'Listing'} • ${typeof sample.price === 'number' ? sample.price.toFixed(2) : sample.price}
+                              {typeof sample.estimatedDaysToSell === 'number' ? ` • ~${Math.round(sample.estimatedDaysToSell)}d` : ''}
+                            </Text>
+                            {sample.url ? (
+                              <TouchableOpacity onPress={() => Linking.openURL(sample.url!)}>
+                                <Text style={{ fontSize: 12, color: '#2563EB', marginTop: 1 }}>View listing</Text>
+                              </TouchableOpacity>
+                            ) : null}
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                )}
+
+                {/* Three options */}
+                {(() => {
+                  // Calculate timeToSell from samples to match chart data (same logic as backend)
+                  const averageDaysNearTarget = (
+                    targetPrice: number,
+                    samples: Array<{ price: number; estimatedDaysToSell?: number }>,
+                  ): number | undefined => {
+                    const withDays = samples.filter((s) => typeof s.estimatedDaysToSell === 'number' && Number.isFinite(s.estimatedDaysToSell));
+                    if (!withDays.length) return undefined;
+                    const sorted = withDays
+                      .map((s) => ({ ...s, dist: Math.abs(Number(s.price) - targetPrice) }))
+                      .sort((a, b) => a.dist - b.dist)
+                      .slice(0, Math.min(5, withDays.length));
+                    if (!sorted.length) return undefined;
+                    console.log("Sorted: " + sorted)
+                    const avg = sorted.reduce((sum, s) => sum + Number(s.estimatedDaysToSell || 0), 0) / sorted.length;
+                    return Math.round(avg);
+                  };
+                  const samples = pricingResearchResult?.samples || [];
+                  const low = pricingResearchResult?.low ?? 0;
+                  const median = pricingResearchResult?.median ?? 0;
+                  const recommended = pricingResearchResult?.recommended ?? median;
+                  const high = pricingResearchResult?.high ?? 0;
+                  const fastSaleDays = averageDaysNearTarget(low, samples);
+                  const recommendedDays = averageDaysNearTarget(recommended, samples);
+                  const maxProfitDays = averageDaysNearTarget(high, samples);
+                  return (
+                    <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+                      <TouchableOpacity
+                        style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center' }}
+                        onPress={() => {
+                          patchField('price', String(low.toFixed(2)));
+                          patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low, recommended, high } }));
+                          setPricingResearchModalVisible(false);
+                        }}
+                      >
+                        <Text style={{ fontSize: 10, color: '#6B7280' }}>Fast sale</Text>
+                        <Text style={{ fontSize: 14, fontWeight: '700' }}>${low.toFixed(2)}</Text>
+                        <Text style={{ fontSize: 10, color: '#6B7280', marginTop: 2 }}>
+                          ~{fastSaleDays ?? '—'}d avg
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#3B82F6', backgroundColor: '#EFF6FF', alignItems: 'center' }}
+                        onPress={() => {
+                          patchField('price', String(recommended.toFixed(2)));
+                          patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low, recommended, high } }));
+                          setPricingResearchModalVisible(false);
+                        }}
+                      >
+                        <Text style={{ fontSize: 10, color: '#1E40AF' }}>Recommended</Text>
+                        <Text style={{ fontSize: 14, fontWeight: '700', color: '#1E40AF' }}>${recommended.toFixed(2)}</Text>
+                        <Text style={{ fontSize: 10, color: '#1E40AF', marginTop: 2 }}>
+                          ~{recommendedDays ?? '—'}d avg
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center' }}
+                        onPress={() => {
+                          patchField('price', String(high.toFixed(2)));
+                          patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low, recommended, high } }));
+                          setPricingResearchModalVisible(false);
+                        }}
+                      >
+                        <Text style={{ fontSize: 10, color: '#6B7280' }}>Max profit</Text>
+                        <Text style={{ fontSize: 14, fontWeight: '700' }}>${high.toFixed(2)}</Text>
+                        <Text style={{ fontSize: 10, color: '#6B7280', marginTop: 2 }}>
+                          ~{maxProfitDays ?? '—'}d avg
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })()}
+
+                {/* Interactive chart: Sold price vs estimated time on market */}
+                {(() => {
+                  const marketPoints = (pricingResearchResult.samples || [])
+                    .filter((s) => typeof s.estimatedDaysToSell === 'number' && Number.isFinite(s.estimatedDaysToSell) && typeof s.price === 'number')
+                    .sort((a, b) => Number(a.price) - Number(b.price));
+                  const chartWidth = Math.max(Dimensions.get('window').width - 80, 260);
+                  if (marketPoints.length >= 2) {
+                    const maxLabels = 10;
+                    const step = Math.max(1, Math.floor(marketPoints.length / maxLabels));
+                    const labels = marketPoints.map((p, i) =>
+                      (i % step === 0 || i === marketPoints.length - 1) ? `$${Number(p.price).toFixed(1)}` : ''
+                    );
+                    const data = marketPoints.map((p) => Math.round(Number(p.estimatedDaysToSell)));
+                    const selected = selectedPricingPointIdx != null && selectedPricingPointIdx < marketPoints.length ? marketPoints[selectedPricingPointIdx] : null;
+                    return (
+                      <View style={{ marginBottom: 16 }}>
+                        <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 4 }}>Time to sell at each price</Text>
+                        <Text style={{ fontSize: 12, color: '#6B7280', marginBottom: 6 }}>Y: Time (days to sell) · X: Price ($)</Text>
+                        <BarChart
+                          data={{
+                            labels,
+                            datasets: [{ data }],
+                          }}
+                          width={chartWidth}
+                          height={200}
+                          yAxisLabel=""
+                          yAxisSuffix="d"
+                          chartConfig={{
+                            backgroundColor: '#fff',
+                            backgroundGradientFrom: '#fff',
+                            backgroundGradientTo: '#fff',
+                            decimalPlaces: 0,
+                            color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`,
+                            labelColor: () => '#6B7280',
+                            style: { borderRadius: 12 },
+                          }}
+                          style={{ borderRadius: 12 }}
+                          withInnerLines={true}
+                          fromZero
+                        />
+                        <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 4, textAlign: 'center' }}>Price ($) →</Text>
+                        {selected != null && (
+                          <View style={{ marginTop: 8, padding: 10, borderRadius: 10, backgroundColor: '#F9FAFB' }}>
+                            <Text style={{ fontSize: 13, fontWeight: '600', color: '#111827' }} numberOfLines={1}>{selected.title || 'Listing'}</Text>
+                            <Text style={{ fontSize: 12, color: '#4B5563', marginTop: 2 }}>
+                              ${Number(selected.price).toFixed(2)} • ~{Math.round(Number(selected.estimatedDaysToSell))}d to sell
+                            </Text>
+                            {selected.url ? (
+                              <TouchableOpacity onPress={() => Linking.openURL(selected.url!)}>
+                                <Text style={{ fontSize: 12, color: '#2563EB', marginTop: 4, fontWeight: '600' }}>View listing</Text>
+                              </TouchableOpacity>
+                            ) : null}
+                          </View>
+                        )}
+                      </View>
+                    );
+                  }
+
+                  const points = pricingResearchResult.history?.dataPoints ?? [];
+                  const rangeMs = pricingHistoryRange === '1W' ? 7 * 24 * 60 * 60 * 1000 : pricingHistoryRange === '1M' ? 30 * 24 * 60 * 60 * 1000 : 90 * 24 * 60 * 60 * 1000;
+                  const cutoff = Date.now() - rangeMs;
+                  const filtered = points.filter(p => new Date(p.date).getTime() >= cutoff);
+                  if (filtered.length < 2) {
+                    return (
+                      <View style={{ marginBottom: 16, paddingVertical: 12, paddingHorizontal: 12, backgroundColor: '#F9FAFB', borderRadius: 12 }}>
+                        <Text style={{ fontSize: 13, color: '#6B7280' }}>Not enough points yet for trend. Tap Sources to inspect sold listing links.</Text>
+                      </View>
+                    );
+                  }
+                  const labels = filtered.map(p => {
+                    const d = new Date(p.date);
+                    return `${d.getMonth() + 1}/${d.getDate()}`;
+                  });
+                  const data = filtered.map(p => p.median);
+                  return (
+                    <View style={{ marginBottom: 16 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151' }}>Price trend (cached runs)</Text>
+                        <View style={{ flexDirection: 'row', gap: 6 }}>
+                          {(['1W', '1M', '3M'] as const).map(r => (
+                            <TouchableOpacity
+                              key={r}
+                              onPress={() => setPricingHistoryRange(r)}
+                              style={{ paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: pricingHistoryRange === r ? '#EFF6FF' : '#F3F4F6' }}
+                            >
+                              <Text style={{ fontSize: 12, fontWeight: '600', color: pricingHistoryRange === r ? '#1E40AF' : '#6B7280' }}>{r}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      </View>
+                      <LineChart
+                        data={{ labels, datasets: [{ data: data.length ? data : [0] }] }}
+                        width={chartWidth}
+                        height={160}
+                        chartConfig={{
+                          backgroundColor: '#fff',
+                          backgroundGradientFrom: '#fff',
+                          backgroundGradientTo: '#fff',
+                          decimalPlaces: 0,
+                          color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`,
+                          labelColor: () => '#6B7280',
+                          style: { borderRadius: 12 },
+                        }}
+                        style={{ borderRadius: 12 }}
+                        withInnerLines={false}
+                        withOuterLines={true}
+                      />
+                    </View>
+                  );
+                })()}
+                
+              </ScrollView>
             ) : (
-              <Text style={{ fontSize: 14, color: '#6B7280' }}>Loading...</Text>
+              <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>
+                <Text style={{ fontSize: 14, color: '#6B7280' }}>Loading...</Text>
+              </View>
             )}
           </Pressable>
         </Pressable>
       </Modal>
-
       {/* Variants: only for platforms that support variants */}
       {
         supportsVariants && (

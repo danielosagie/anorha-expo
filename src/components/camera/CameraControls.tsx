@@ -4,6 +4,7 @@ import {
   StyleSheet, 
   TouchableOpacity, 
   SafeAreaView,
+  Text,
 } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -32,13 +33,19 @@ const CameraControls: React.FC<CameraControlsProps> = ({
   return (
     <SafeAreaView style={styles.cameraControlsContainer}>
       <Animated.View entering={FadeIn.delay(300)} style={styles.cameraControlsContent}>
-        <TouchableOpacity style={styles.controlButton} onPress={onToggleFlash}>
-          <Icon name={getFlashIcon()} size={22} color="white" />
-        </TouchableOpacity>
+        <View style={styles.controlGroup}>
+          <TouchableOpacity style={styles.controlButton} onPress={onToggleFlash}>
+            <Icon name={getFlashIcon()} size={22} color="white" />
+          </TouchableOpacity>
+          <Text style={styles.controlLabel}>Flash</Text>
+        </View>
         
-        <TouchableOpacity style={styles.controlButton} onPress={onPastScans}>
-          <Icon name="history" size={22} color="white" />
-        </TouchableOpacity>
+        <View style={styles.controlGroup}>
+          <TouchableOpacity style={styles.controlButton} onPress={onPastScans}>
+            <Icon name="history" size={22} color="white" />
+          </TouchableOpacity>
+          <Text style={styles.controlLabel}>Past Scans</Text>
+        </View>
       </Animated.View>
     </SafeAreaView>
   );
@@ -54,7 +61,11 @@ const styles = StyleSheet.create({
   cameraControlsContent: {
     paddingHorizontal: 20,
     paddingTop: 10,
-    gap: 12,
+    gap: 8,
+  },
+  controlGroup: {
+    alignItems: 'center',
+    gap: 4,
   },
   controlButton: {
     width: 44,
@@ -67,6 +78,12 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderColor: "rgba(255,255,255,0.3)",
     borderWidth: 2
+  },
+  controlLabel: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 10,
+    fontWeight: '500',
+    textAlign: 'center',
   },
 });
 
