@@ -81,6 +81,8 @@ const groupVersionsByMatchId = (versions: Array<{ id: string; jobId: string; cre
 // REMOVED - Now using unified hydration utilities from platformDataHydration.ts
 
 function GenerateDetailsScreen({ route, navigation }: Props) {
+  const mainScrollRef = useRef<ScrollView>(null);
+  const [listingEditorY, setListingEditorY] = useState(0);
   // Support both direct props and nested { response: {...} }
   const params: any = (route.params || {}) as any;
   const jobId = params.jobId ?? params.response?.jobId;
@@ -325,15 +327,17 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }
 
     // Priority 1: ProductImages from database (actual user photos)
+    // DB images are the canonical uploaded versions of local camera photos.
+    // REPLACE (don't merge) to avoid duplicates: local file:/// + https://supabase of same photo.
     if (Object.keys(dbImages).length > 0 && Array.isArray(results)) {
       results.forEach((r, idx) => {
         if (r.variantId && dbImages[r.variantId]) {
-          // Merge with params images, avoiding duplicates
-          const existing = map[idx] || [];
           const dbImgs = filterValidImages(dbImages[r.variantId]);
-          const merged = Array.from(new Set([...existing, ...dbImgs]));
-          map[idx] = merged;
-          console.log(`[userImagesByIndex] P1: Merged DB images for index ${idx}:`, dbImgs.length, 'Total:', merged.length);
+          if (dbImgs.length > 0) {
+            // DB images replace local params images since they are the same photos uploaded
+            map[idx] = dbImgs;
+            console.log(`[userImagesByIndex] P1: Replaced with DB images for index ${idx}:`, dbImgs.length);
+          }
         }
       });
     }
@@ -1003,6 +1007,28 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const canPublish = useMemo(() => readyPlatforms.length > 0, [readyPlatforms]);
 
+  // Readiness step-through: compute all missing required fields across all non-ignored platforms
+  const [missingFieldNavIndex, setMissingFieldNavIndex] = useState(0);
+  const allMissingRequiredFields = useMemo(() => {
+    const missing: Array<{ platform: string; field: string; label: string }> = [];
+    const seenLabels = new Set<string>();
+    for (const pk of platformKeys) {
+      if (ignoredPlatforms.includes(pk)) continue;
+      const platformData = (displayedPlatforms as any)?.[pk] || {};
+      const fields = getMissingPlatformFields(platformData, pk);
+      for (const f of fields) {
+        // Clean up field names for display
+        const label = f.replace(/ \(either flat or all variants\)/, '');
+        const displayLabel = label.charAt(0).toUpperCase() + label.slice(1);
+        if (!seenLabels.has(displayLabel)) {
+          seenLabels.add(displayLabel);
+          missing.push({ platform: pk, field: f, label: displayLabel });
+        }
+      }
+    }
+    return missing;
+  }, [displayedPlatforms, platformKeys, ignoredPlatforms]);
+
   // Helper: get missing fields for a platform
   const getMissingFields = (platformKey: string) => {
     const schema = PLATFORM_FIELD_SCHEMA[platformKey] || {};
@@ -1337,7 +1363,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (!res.ok) return;
       const data = await res.json();
       const gen = (data?.generatedDetails || data || {}) as any;
-      const genPlatforms = (gen.platforms || {}) as Record<string, any>;
+      const genPlatforms = (gen || {}) as Record<string, any>;
+      console.log('[GEN-DETAILS] fillTheRest generated platform keys:', Object.keys(genPlatforms));
 
       const mergeFields = ['title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode', 'images', 'options', 'seoTitle', 'seoDescription'];
       const next = { ...displayedPlatforms } as any;
@@ -2332,7 +2359,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           </View>
         )}
 
-        <ScrollView>
+        <ScrollView ref={mainScrollRef}>
           {effectiveResult ? (
 
             <>
@@ -2349,94 +2376,101 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
 
               {/* Editor form that matches the product page design */}
-              <ListingEditorForm
-                platforms={displayedPlatforms}
-                updateCounter={updateCounter}
-                images={(userImagesByIndex[(effectiveResult?.productIndex as number) ?? 0] || []).filter((url: string) => typeof url === 'string' && url.trim().length > 0)}
-                onChangeImages={handleImagesChange}
-                platformLocations={platformLocations}
-                onChangePlatforms={(next) => {
-                  console.log('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
-                  // DEEP merge: preserve all existing fields while updating changed ones
-                  // This preserves user edits AND keeps all loaded backend data
-                  updatePlatforms(prev => {
-                    const merged = { ...prev };
-                    for (const [platformKey, platformData] of Object.entries(next)) {
-                      const prevPlatform = prev[platformKey] || {};
+              <View onLayout={(e) => setListingEditorY(e.nativeEvent.layout.y)}>
+                <ListingEditorForm
+                  highlightedField={allMissingRequiredFields[missingFieldNavIndex]?.field}
+                  highlightedPlatform={allMissingRequiredFields[missingFieldNavIndex]?.platform}
+                  onScrollToOffset={(y) => {
+                    mainScrollRef.current?.scrollTo({ y: Math.max(0, listingEditorY + y - 80), animated: true });
+                  }}
+                  platforms={displayedPlatforms}
+                  updateCounter={updateCounter}
+                  images={(userImagesByIndex[(effectiveResult?.productIndex as number) ?? 0] || []).filter((url: string) => typeof url === 'string' && url.trim().length > 0)}
+                  onChangeImages={handleImagesChange}
+                  platformLocations={platformLocations}
+                  onChangePlatforms={(next) => {
+                    console.log('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
+                    // DEEP merge: preserve all existing fields while updating changed ones
+                    // This preserves user edits AND keeps all loaded backend data
+                    updatePlatforms(prev => {
+                      const merged = { ...prev };
+                      for (const [platformKey, platformData] of Object.entries(next)) {
+                        const prevPlatform = prev[platformKey] || {};
 
-                      // Deep merge platform data
-                      merged[platformKey] = {
-                        ...prevPlatform,
-                        ...platformData
-                      };
+                        // Deep merge platform data
+                        merged[platformKey] = {
+                          ...prevPlatform,
+                          ...platformData
+                        };
 
-                      // CRITICAL: Preserve variant inventoryByLocation when merging variants array
-                      if (Array.isArray(platformData?.variants) && Array.isArray(prevPlatform.variants)) {
-                        merged[platformKey].variants = platformData.variants.map((newVariant: any) => {
-                          const prevVariant = prevPlatform.variants?.find((v: any) => v.id === newVariant.id);
-                          if (prevVariant?.inventoryByLocation) {
-                            return {
-                              ...newVariant,
-                              inventoryByLocation: {
-                                ...prevVariant.inventoryByLocation,
-                                ...(newVariant.inventoryByLocation || {})
-                              }
-                            };
-                          }
-                          return newVariant;
-                        });
+                        // CRITICAL: Preserve variant inventoryByLocation when merging variants array
+                        if (Array.isArray(platformData?.variants) && Array.isArray(prevPlatform.variants)) {
+                          merged[platformKey].variants = platformData.variants.map((newVariant: any) => {
+                            const prevVariant = prevPlatform.variants?.find((v: any) => v.id === newVariant.id);
+                            if (prevVariant?.inventoryByLocation) {
+                              return {
+                                ...newVariant,
+                                inventoryByLocation: {
+                                  ...prevVariant.inventoryByLocation,
+                                  ...(newVariant.inventoryByLocation || {})
+                                }
+                              };
+                            }
+                            return newVariant;
+                          });
+                        }
                       }
-                    }
-                    console.log('[GEN-DETAILS] Deep merged platforms, keys:', Object.keys(merged));
-                    return merged;
-                  });
-                }}
-                onOpenFieldPanel={handleOpenFieldPanel}
-                onRegenerateField={ENABLE_AI_REFILL_FEATURES ? regenerateField : undefined}
-                onOpenBarcodeScanner={(onResult) => {
-                  setScannerOpen(true);
-                  // handler stored on closure
-                  (GenerateDetailsScreen as any)._scannerResultHandler = onResult;
-                }}
-                onOpenImageCapture={async (onResult) => {
-                  try {
-                    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-                    if (status !== 'granted') {
-                      Alert.alert('Permission Required', 'Please grant photo library access to add images.');
-                      return;
-                    }
-                    const result = await ImagePicker.launchImageLibraryAsync({
-                      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-                      allowsMultipleSelection: true,
-                      quality: 0.8,
+                      console.log('[GEN-DETAILS] Deep merged platforms, keys:', Object.keys(merged));
+                      return merged;
                     });
-                    if (!result.canceled && result.assets) {
-                      // Upload the selected images to Supabase
-                      const uploadedUrls = await uploadLocalImagesToSupabase(
-                        result.assets.map(asset => asset.uri)
-                      );
-                      if (uploadedUrls.length > 0) {
-                        onResult(uploadedUrls);
+                  }}
+                  onOpenFieldPanel={handleOpenFieldPanel}
+                  onRegenerateField={ENABLE_AI_REFILL_FEATURES ? regenerateField : undefined}
+                  onOpenBarcodeScanner={(onResult) => {
+                    setScannerOpen(true);
+                    // handler stored on closure
+                    (GenerateDetailsScreen as any)._scannerResultHandler = onResult;
+                  }}
+                  onOpenImageCapture={async (onResult) => {
+                    try {
+                      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                      if (status !== 'granted') {
+                        Alert.alert('Permission Required', 'Please grant photo library access to add images.');
+                        return;
                       }
+                      const result = await ImagePicker.launchImageLibraryAsync({
+                        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                        allowsMultipleSelection: true,
+                        quality: 0.8,
+                      });
+                      if (!result.canceled && result.assets) {
+                        // Upload the selected images to Supabase
+                        const uploadedUrls = await uploadLocalImagesToSupabase(
+                          result.assets.map(asset => asset.uri)
+                        );
+                        if (uploadedUrls.length > 0) {
+                          onResult(uploadedUrls);
+                        }
+                      }
+                    } catch (error) {
+                      console.error('Error picking images:', error);
+                      Alert.alert('Error', 'Failed to pick images. Please try again.');
                     }
-                  } catch (error) {
-                    console.error('Error picking images:', error);
-                    Alert.alert('Error', 'Failed to pick images. Please try again.');
-                  }
-                }}
-                onAddMissingField={(platformKey: string) => {
-                  setSelectedMissingPlatform(platformKey);
-                  setFieldSearchQuery('');
-                  setMissingFieldsModalOpen(true);
-                }}
-                getMissingFieldsCount={(platformKey: string) => getMissingFields(platformKey).length}
-                onGeneratePlatform={generatePlatform}
-                generatingPlatformKeys={generatingPlatformKeys}
-                enableAIRefill={ENABLE_AI_REFILL_FEATURES}
-                onSuggestVariants={suggestVariants}
-                onBoostListing={boostListing}
-                isGenerationMode={true}
-              />
+                  }}
+                  onAddMissingField={(platformKey: string) => {
+                    setSelectedMissingPlatform(platformKey);
+                    setFieldSearchQuery('');
+                    setMissingFieldsModalOpen(true);
+                  }}
+                  getMissingFieldsCount={(platformKey: string) => getMissingFields(platformKey).length}
+                  onGeneratePlatform={generatePlatform}
+                  generatingPlatformKeys={generatingPlatformKeys}
+                  enableAIRefill={ENABLE_AI_REFILL_FEATURES}
+                  onSuggestVariants={suggestVariants}
+                  onBoostListing={boostListing}
+                  isGenerationMode={true}
+                />
+              </View>
             </>
           ) : (
             <Text style={styles.meta}>No results</Text>
@@ -2665,10 +2699,25 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               primaryLabel={
                 canPublish
                   ? (hasMultipleResults ? `Publish item ${currentProductIndex + 1} to ${readyPlatforms.length} platform${readyPlatforms.length === 1 ? '' : 's'}` : `Publish to ${readyPlatforms.length} platform${readyPlatforms.length === 1 ? '' : 's'}`)
-                  : 'Publish listing (not ready)'
+                  : 'Publish listing'
               }
               primaryDisabled={!canPublish}
               onPrimary={doPublish}
+              stepNav={!canPublish && allMissingRequiredFields.length > 0 ? {
+                currentLabel: allMissingRequiredFields[missingFieldNavIndex % allMissingRequiredFields.length]?.label || 'Field',
+                currentIndex: (missingFieldNavIndex % allMissingRequiredFields.length) + 1,
+                totalCount: allMissingRequiredFields.length,
+                onPrev: () => setMissingFieldNavIndex(i => i <= 0 ? allMissingRequiredFields.length - 1 : i - 1),
+                onNext: () => setMissingFieldNavIndex(i => (i + 1) % allMissingRequiredFields.length),
+                onTapField: () => {
+                  // Trigger scroll to the current missing field
+                  const currentField = allMissingRequiredFields[missingFieldNavIndex % allMissingRequiredFields.length];
+                  if (currentField) {
+                    // The highlightedField/highlightedPlatform props will auto-switch tab and scroll
+                    setMissingFieldNavIndex(i => i); // Force re-render to trigger useEffect
+                  }
+                },
+              } : undefined}
               secondaryLabel={'Save to Inventory'}
               onSecondary={doSaveToInventory}
               tertiaryContent={hasMultipleResults ? (

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, Image, StyleSheet, StyleProp, ViewStyle } from 'react-native';
+import { View, Text, TouchableOpacity, Image, StyleSheet, StyleProp, ViewStyle, TextInput } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PlatformButton from './PlatformButton';
@@ -34,6 +34,9 @@ type Props = {
   onGeneratePress: () => void;
   onStartConnect?: (platform: string) => void;
   style?: StyleProp<ViewStyle>;
+  manualOverrideInput?: string;
+  onManualOverrideChange?: (text: string) => void;
+  onManualOverrideApply?: () => void;
 };
 
 const BottomNav: React.FC<Props> = ({
@@ -58,6 +61,9 @@ const BottomNav: React.FC<Props> = ({
   totalItemsCount = 1,
   confirmedProduct = null,
   onChangeMatch,
+  manualOverrideInput = '',
+  onManualOverrideChange,
+  onManualOverrideApply,
 }) => {
   const [confirmedExpanded, setConfirmedExpanded] = React.useState(false);
   return (
@@ -117,7 +123,7 @@ const BottomNav: React.FC<Props> = ({
               <Text style={styles.backButtonText}>Reselect Matches</Text>
             </TouchableOpacity>
             {confirmedProduct?.title ? (
-              <View style={{flexDirection: "column", backgroundColor: 'rgba(154, 154, 154, 0.12)', gap: 6 , marginTop: 18, marginBottom: 18, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10}}>
+              <View style={{ flexDirection: "column", backgroundColor: 'rgba(154, 154, 154, 0.12)', gap: 6, marginTop: 18, marginBottom: 18, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10 }}>
                 <Text style={styles.platformSubheaderText}>Selected Item:</Text>
                 <TouchableOpacity
                   onPress={() => setConfirmedExpanded(e => !e)}
@@ -140,6 +146,31 @@ const BottomNav: React.FC<Props> = ({
                 </TouchableOpacity>
               </View>
             ) : null}
+
+            {/* Manual Override UI */}
+            {onManualOverrideChange && onManualOverrideApply && (
+              <View style={styles.manualSafetyWrap}>
+                <Text style={styles.manualSafetyLabel}>Safety override: paste a product URL or type the product name</Text>
+                <View style={styles.manualSafetyRow}>
+                  <TextInput
+                    value={manualOverrideInput}
+                    onChangeText={onManualOverrideChange}
+                    placeholder="https://example.com/item or Logitech G502"
+                    placeholderTextColor="#999"
+                    style={styles.manualSafetyInput}
+                    autoCapitalize="none"
+                  />
+                  <TouchableOpacity
+                    style={[styles.manualSafetyButton, manualOverrideInput.trim().length === 0 && { opacity: 0.5 }]}
+                    disabled={manualOverrideInput.trim().length === 0}
+                    onPress={onManualOverrideApply}
+                  >
+                    <Text style={styles.manualSafetyButtonText}>Override</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
             <Text style={styles.platformHeaderText}>Want Specific Sources?</Text>
             <TouchableOpacity style={styles.dropdownSelect} onPress={onOpenTemplateModal}>
               <Text style={styles.dropdownSelectText}>
@@ -392,6 +423,50 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '500',
     color: '#374151',
+  },
+  manualSafetyWrap: {
+    width: '100%',
+    marginBottom: 20,
+    backgroundColor: '#f9fafb',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  manualSafetyLabel: {
+    color: '#4b5563',
+    fontSize: 12,
+    marginBottom: 8,
+    fontWeight: '500',
+  },
+  manualSafetyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  manualSafetyInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: '#111827',
+    backgroundColor: '#FFF',
+    fontSize: 14,
+  },
+  manualSafetyButton: {
+    backgroundColor: '#111827',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  manualSafetyButtonText: {
+    color: '#FFF',
+    fontWeight: '600',
+    fontSize: 14,
   },
 });
 

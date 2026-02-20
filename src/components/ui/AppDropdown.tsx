@@ -18,7 +18,8 @@ interface AppDropdownProps {
     search?: boolean;
     searchPlaceholder?: string;
     onChangeText?: (text: string) => void;
-    renderItem?: (item: any) => React.ReactNode;
+    renderItem?: (item: any, selected?: boolean) => React.ReactElement | null;
+    maxHeight?: number;
 }
 
 export const AppDropdown: React.FC<AppDropdownProps> = ({
@@ -45,7 +46,7 @@ export const AppDropdown: React.FC<AppDropdownProps> = ({
             itemTextStyle={styles.itemText}
             iconStyle={[styles.icon, iconStyle]}
             data={data}
-            maxHeight={300}
+            maxHeight={props.maxHeight || 300}
             labelField={labelField}
             valueField={valueField}
             placeholder={placeholder}

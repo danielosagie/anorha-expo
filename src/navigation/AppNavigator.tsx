@@ -6,7 +6,7 @@ import TabBar from '../components/TabBar';
 import styles from '../styles/styles';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 // import { Camera } from 'lucide-react-native';
-import { AppState, AppStateStatus } from 'react-native';
+import { AppState, AppStateStatus, Platform } from 'react-native';
 import { CommonActions } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import { NavigationContainer, useNavigation } from '@react-navigation/native';
@@ -319,11 +319,18 @@ const TabNavigator = () => {
     backgroundColor: '#ffffff',
     borderColor: "rgba(0, 0, 0, 0.07)",
     borderWidth: 2,
-    elevation: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 10 },
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOpacity: 0.15,
+        shadowRadius: 20,
+        shadowOffset: { width: 0, height: 10 },
+      },
+      android: {
+        elevation: 4,
+      },
+      default: {},
+    }),
     position: 'absolute' as const,
     left: 12,
     right: 12,

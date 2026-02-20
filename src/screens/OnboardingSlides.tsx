@@ -1,5 +1,5 @@
 import React, { useState, useRef, memo } from 'react';
-import { View, Text, StyleSheet, FlatList, Image, Dimensions, TouchableOpacity, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Image, Dimensions, TouchableOpacity, SafeAreaView, Platform } from 'react-native';
 import Animated, { FadeInUp, FadeIn } from 'react-native-reanimated';
 import Button from '../components/Button';
 
@@ -138,11 +138,18 @@ const styles = StyleSheet.create({
     height: height * 0.35,
     maxHeight: height * 0.35,
     borderRadius: 32,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.05,
-    shadowRadius: 20,
-    elevation: 5,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.05,
+        shadowRadius: 20,
+      },
+      android: {
+        elevation: 2,
+      },
+      default: {},
+    }),
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 10,

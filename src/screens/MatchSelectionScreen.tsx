@@ -1223,7 +1223,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 contentContainerStyle={{ padding: GRID_PADDING, marginTop: 90, paddingBottom: 140 }}
                 ListHeaderComponent={
                     <View style={{ paddingHorizontal: GRID_PADDING, paddingBottom: 12 }}>
-                        <Text style={{ fontSize: 16, fontWeight: 500, color: 'rgb(57, 57, 57)', lineHeight: 22, textAlign: "center"}}>
+                        <Text style={{ fontSize: 16, fontWeight: 500, color: 'rgb(57, 57, 57)', lineHeight: 22, textAlign: "center" }}>
                             Select the best match(es) for the item
                         </Text>
                         {autoMatchReasonText ? (
@@ -1266,27 +1266,6 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 removeClippedSubviews={true} // Re-enable for performance
             />
 
-            <View style={styles.manualSafetyBar}>
-                <Text style={styles.manualSafetyTitle}>Safety override: paste product URL or type product name</Text>
-                <View style={styles.manualSafetyRow}>
-                    <TextInput
-                        value={manualSafetyInput}
-                        onChangeText={setManualSafetyInput}
-                        placeholder="https://example.com/item or Logitech G502 HERO"
-                        placeholderTextColor="#9CA3AF"
-                        style={styles.manualSafetyInput}
-                        autoCapitalize="none"
-                    />
-                    <TouchableOpacity
-                        style={[styles.manualSafetyApply, manualSafetyInput.trim().length === 0 && styles.manualSafetyApplyDisabled]}
-                        disabled={manualSafetyInput.trim().length === 0}
-                        onPress={applyManualSafetyOverride}
-                    >
-                        <Text style={styles.manualSafetyApplyText}>Use</Text>
-                    </TouchableOpacity>
-                </View>
-            </View>
-
             {/* Dark Overlay for platform/platformPicker states */}
             {(bottomNavState === 'platform' || bottomNavState === 'template') && (
                 <TouchableOpacity
@@ -1321,6 +1300,9 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                     } : null}
                     onChangeMatch={handleBackToEmpty}
                     isConnected={isConnected}
+                    manualOverrideInput={manualSafetyInput}
+                    onManualOverrideChange={setManualSafetyInput}
+                    onManualOverrideApply={applyManualSafetyOverride}
                     onShowSelection={handleShowSelection}
                     onShowTemplates={handleShowTemplates}
                     onShowPlatforms={handleShowPlatforms}
@@ -1332,37 +1314,24 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                     onBack={() => navigation.goBack()}
                     onGeneratePress={async () => {
                         try {
-                            const submitResult: JobResponse = await handleGenerate();
-                            const jobId = submitResult?.jobId;
-                            if (jobId) {
-                                setItemGenerateJobs(prev => ({ ...prev, [currentProductIndex]: { jobId } }));
-                                const jobMap = { ...itemGenerateJobs, [currentProductIndex]: { jobId } };
-                                const selectedMatches = selectedIndices.map(i => serpApiData[i]).filter(Boolean);
-                                const firstPhotos = selectedMatches.map(item => item.image || item.thumbnail || '').filter(Boolean);
-                                navigation.navigate('LoadingScreen' as never, {
-                                    processType: 'generate',
-                                    payload: {
-                                        jobId,
-                                        firstPhotos,
-                                    },
-                                    onCompleteRoute: {
-                                        screen: 'GenerateDetailsScreen',
-                                        params: {
-                                            jobResponse: submitResult,
-                                            jobId: jobId,
-                                            matchJobId: analysisData?.jobId,
-                                            items: modalItems,
-                                            jobMap,
-                                            userImagesByIndex,
-                                        },
-                                    },
-                                });
-                            } else {
-                                Alert.alert('Error', 'Failed to get valid jobId, try again later');
-                            }
+                            setItemGenerateJobs(prev => ({ ...prev, [currentProductIndex]: { ...(prev[currentProductIndex] || {}), status: 'processing' } }));
+                            setJobsModalVisible(true);
+
+                            (async () => {
+                                try {
+                                    const submitResult: JobResponse = await handleGenerate();
+                                    const jobId = submitResult?.jobId;
+                                    if (jobId) {
+                                        setItemGenerateJobs(prev => ({ ...prev, [currentProductIndex]: { jobId, status: 'processing' } }));
+                                    } else {
+                                        setItemGenerateJobs(prev => ({ ...prev, [currentProductIndex]: { jobId: prev[currentProductIndex]?.jobId || "", status: 'failed' } }));
+                                    }
+                                } catch (error) {
+                                    setItemGenerateJobs(prev => ({ ...prev, [currentProductIndex]: { jobId: prev[currentProductIndex]?.jobId || "", status: 'failed' } }));
+                                }
+                            })();
                         } catch (error) {
-                            console.log('Error starting generation');
-                            Alert.alert('Error starting generation');
+                            Alert.alert('Error starting generation', 'Please try again');
                         }
                     }}
                 />
@@ -1872,16 +1841,16 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 }}
                 matchColor={(idx) => ((selectedMatchesByIndex[idx]?.length ?? 0) > 0 ? '#93C822' : '#FFD700')}
                 detailsColor={(idx) => {
-                    const s = itemGenerateJobs[idx]?.status;
+                    const s = jobsContext?.generateJobs[idx]?.status || itemGenerateJobs[idx]?.status;
                     if (s === 'completed') return '#93C822';
                     if (s === 'failed') return '#e11d48';
                     if (s) return '#FFD700';
                     return '#4B5563';
                 }}
-                detailsEnabled={(idx) => !!itemGenerateJobs[idx]?.jobId}
+                detailsEnabled={(idx) => !!(jobsContext?.generateJobs[idx]?.jobId || itemGenerateJobs[idx]?.jobId)}
                 countLabel={'Matches'}
                 getSecondaryText={(idx) => {
-                    const s = itemGenerateJobs[idx]?.status;
+                    const s = jobsContext?.generateJobs[idx]?.status || itemGenerateJobs[idx]?.status;
                     if (!s) return null;
                     return s === 'completed' ? 'Generated' : s === 'failed' ? 'Generation failed' : 'Generating…';
                 }}
@@ -1892,14 +1861,28 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                         return;
                     }
                     try {
-                        // Generate for each selected index using per-item match selection
-                        for (const idx of indices) {
-                            const matchIndices = selectedMatchesByIndex[idx] ?? [];
-                            const submit: JobResponse = await handleGenerateForItem(idx, matchIndices);
-                            const jid = submit?.jobId;
-                            if (jid) setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: jid } }));
-                        }
-                        setJobsModalVisible(false);
+                        setItemGenerateJobs(prev => {
+                            const next = { ...prev };
+                            indices.forEach(idx => {
+                                next[idx] = { ...(next[idx] || {}), status: 'processing' };
+                            });
+                            return next;
+                        });
+
+                        Promise.all(indices.map(async (idx) => {
+                            try {
+                                const matchIndices = selectedMatchesByIndex[idx] ?? [];
+                                const submit: JobResponse = await handleGenerateForItem(idx, matchIndices);
+                                const jid = submit?.jobId;
+                                if (jid) {
+                                    setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: jid, status: 'processing' } }));
+                                } else {
+                                    setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: prev[idx]?.jobId || "", status: 'failed' } }));
+                                }
+                            } catch {
+                                setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: prev[idx]?.jobId || "", status: 'failed' } }));
+                            }
+                        }));
                     } catch {
                         Alert.alert('Batch generate failed', 'Please try again');
                     }
@@ -1936,18 +1919,21 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                 onQuickGenerate={async (idx) => {
                     try {
                         setCurrentProductIndex(idx);
-                        setJobsModalVisible(false);
-                        const submitResult: JobResponse = await handleGenerateForItem(idx, selectedMatchesByIndex[idx] ?? []);
-                        const jid = submitResult?.jobId;
-                        if (jid) {
-                            setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: jid } }));
-                            const jobMap = { ...itemGenerateJobs, [idx]: { jobId: jid } };
-                            navigation.navigate('LoadingScreen' as never, {
-                                processType: 'generate',
-                                payload: { jobId: jid, firstPhotos: [] },
-                                onCompleteRoute: { screen: 'GenerateDetailsScreen', params: { jobId: jid, matchJobId: analysisData?.jobId, items: modalItems, jobMap, userImagesByIndex } }
-                            } as never);
-                        }
+                        setItemGenerateJobs(prev => ({ ...prev, [idx]: { ...(prev[idx] || {}), status: 'processing' } }));
+
+                        (async () => {
+                            try {
+                                const submitResult: JobResponse = await handleGenerateForItem(idx, selectedMatchesByIndex[idx] ?? []);
+                                const jid = submitResult?.jobId;
+                                if (jid) {
+                                    setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: jid, status: 'processing' } }));
+                                } else {
+                                    setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: prev[idx]?.jobId || "", status: 'failed' } }));
+                                }
+                            } catch {
+                                setItemGenerateJobs(prev => ({ ...prev, [idx]: { jobId: prev[idx]?.jobId || "", status: 'failed' } }));
+                            }
+                        })();
                     } catch (e) {
                         Alert.alert('Generate failed', 'Please try again');
                     }
@@ -1966,7 +1952,7 @@ function MatchSelectionScreen({ route }: { route: RouteProp<AppStackParamList, '
                     setBottomNavState('selection');
                 }}
                 onPickDetails={(idx) => {
-                    const jobId = itemGenerateJobs[idx]?.jobId;
+                    const jobId = jobsContext?.generateJobs[idx]?.jobId || itemGenerateJobs[idx]?.jobId;
                     if (jobId) {
                         const jobMap = { ...itemGenerateJobs };
                         navigation.navigate('LoadingScreen' as never, {
@@ -2047,54 +2033,6 @@ const styles = StyleSheet.create({
     itemPrice: { fontSize: 13, color: '#000000', marginTop: 2 },
     itemCondition: { fontSize: 12, color: '#666666', marginTop: 2 },
     itemSource: { fontSize: 12, color: '#000000', marginTop: 4 },
-    manualSafetyBar: {
-        position: 'absolute',
-        left: 14,
-        right: 14,
-        bottom: 118,
-        zIndex: 1001,
-        backgroundColor: 'rgba(255,255,255,0.98)',
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-        borderRadius: 12,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-    },
-    manualSafetyTitle: {
-        fontSize: 12,
-        color: '#4B5563',
-        marginBottom: 6,
-    },
-    manualSafetyRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    manualSafetyInput: {
-        flex: 1,
-        borderWidth: 1,
-        borderColor: '#D1D5DB',
-        borderRadius: 10,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        fontSize: 13,
-        color: '#111827',
-        backgroundColor: '#FFFFFF',
-    },
-    manualSafetyApply: {
-        backgroundColor: '#111827',
-        borderRadius: 10,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-    },
-    manualSafetyApplyDisabled: {
-        opacity: 0.45,
-    },
-    manualSafetyApplyText: {
-        color: '#FFFFFF',
-        fontWeight: '600',
-        fontSize: 13,
-    },
     bottomNavContainer: {
         padding: 20,
         backgroundColor: 'transparent',

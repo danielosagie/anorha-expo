@@ -12,7 +12,7 @@ import EbaySvg from '../assets/ebay.svg';
 import CloverSvg from '../assets/clover.svg';
 import SquareSvg from '../assets/square.svg';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { Boxes, X, Sparkles, Car, Package, MapPin, Truck } from 'lucide-react-native';
+import { Boxes, X, Sparkles, Car, Package, MapPin, Truck, Scale, RefreshCw } from 'lucide-react-native';
 import { Dropdown as ElementDropdown } from 'react-native-element-dropdown';
 import { AppDropdown } from './ui/AppDropdown';
 import InteractiveMapModal from './InteractiveMapModal';
@@ -53,6 +53,9 @@ type Props = {
   onAdoptExternalUpdate?: (key: string, value: any) => void;
   pendingImages?: string[];
   generatingPlatformKeys?: Set<string>;
+  highlightedField?: string;
+  highlightedPlatform?: string;
+  onScrollToOffset?: (y: number) => void;
 };
 
 export type ListingEditorFormRef = { openPlatformPicker: () => void };
@@ -354,7 +357,8 @@ const SectionHeader = ({ title, icon, rightAction }: { title: string, icon?: any
   );
 };
 
-function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys }: Props, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset }: Props, ref: React.Ref<ListingEditorFormRef>) {
+  const fieldYOffsets = useRef<Record<string, number>>({});
   const platformKeys = useMemo(() => {
     const keys = Object.keys(platforms || {}).filter((k) => typeof k === 'string' && k.trim().length > 0);
     console.log('[ListingEditorForm] platformKeys:', keys);
@@ -377,6 +381,27 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [optionEditorOpen, setOptionEditorOpen] = useState<boolean>(false);
   const [newOptionName, setNewOptionName] = useState<string>('');
   const [newOptionValues, setNewOptionValues] = useState<string[]>(['']);
+
+  useEffect(() => {
+    // Auto-scroll to highlighted field
+    if (highlightedField && fieldYOffsets.current[highlightedField] !== undefined) {
+      setTimeout(() => {
+        onScrollToOffset?.(fieldYOffsets.current[highlightedField]);
+      }, 300);
+    }
+  }, [highlightedField, activeTab]);
+
+  // Auto-switch to the platform tab when the navigator targets a specific platform
+  useEffect(() => {
+    if (highlightedPlatform && highlightedPlatform !== activeTab) {
+      setActiveTab(highlightedPlatform);
+    }
+  }, [highlightedPlatform]);
+
+  const recordFieldLayout = (field: string) => (event: any) => {
+    fieldYOffsets.current[field] = event.nativeEvent.layout.y;
+  };
+
   const [allPlatformOptions, setAllPlatformOptions] = useState<Array<{ name: string; values: string[]; sources: string[] }>>([]);
   const [optionPresets, setOptionPresets] = useState<Array<{ name: string; values: string[] }>>([]);
   const [loadingPlatformOptions, setLoadingPlatformOptions] = useState<boolean>(false);
@@ -407,6 +432,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [shippingEstimateResult, setShippingEstimateResult] = useState<{ estimatedMin: number; estimatedMax: number; midpoint: number; description?: string; error?: string } | null>(null);
   const [shippingEstimateLoading, setShippingEstimateLoading] = useState<boolean>(false);
   const shippingEstimateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [shippingDetailModalVisible, setShippingDetailModalVisible] = useState(false);
+  const [editableDimensions, setEditableDimensions] = useState<{ length: string; width: string; height: string }>({ length: '', width: '', height: '' });
+  const [editableWeight, setEditableWeight] = useState('');
+  const [editableWeightUnit, setEditableWeightUnit] = useState('lb');
   const preventTaxonomyAutoFetchRef = useRef<Set<string>>(new Set());
   const [variantImagePicker, setVariantImagePicker] = useState<{ variantId: string; open: boolean } | null>(null);
   const [localGeneratingPlatforms, setGeneratingPlatforms] = useState<Set<string>>(new Set());
@@ -1705,18 +1734,20 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       )}
       {/* Core fields (optimized for conversion) */}
       <View style={{ paddingTop: 18, gap: 9 }}>
-        <Field
-          label="Title"
-          required
-          value={activeData.title}
-          multiline
-          onChangeText={(t) => patchField('title', t)}
-          onInfo={() => onOpenFieldPanel?.('title')}
-          onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'title') : undefined}
-          refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('title')}
-          error={requiredFields?.includes?.('title') && !activeData.title}
-          externalUpdate={hasExternalUpdate('title')}
-        />
+        <View onLayout={recordFieldLayout('title')} style={highlightedField === 'title' ? { borderRadius: 8, borderWidth: 2, borderColor: '#ef4444', backgroundColor: '#FEF2F2', padding: 2 } : undefined}>
+          <Field
+            label="Title"
+            required
+            value={activeData.title}
+            multiline
+            onChangeText={(t) => patchField('title', t)}
+            onInfo={() => onOpenFieldPanel?.('title')}
+            onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'title') : undefined}
+            refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('title')}
+            error={requiredFields?.includes?.('title') && !activeData.title}
+            externalUpdate={hasExternalUpdate('title')}
+          />
+        </View>
 
         <Field
           label="Description"
@@ -1739,13 +1770,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         />
 
         {supportsTaxonomy && (
-          <View style={{ marginBottom: 12 }}>
+          <View style={{ marginBottom: 12 }} onLayout={recordFieldLayout('category')}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <Text style={styles.fieldLabel}>Category{categoryRequired ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
-                {typeof activeData.taxonomyConfidence === 'number' && (
-                  <View style={{ backgroundColor: activeData.taxonomyConfidence > 0.8 ? 'rgba(22, 163, 74, 0.12)' : 'rgba(234, 179, 8, 0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-                    <Text style={{ color: activeData.taxonomyConfidence > 0.8 ? '#16a34a' : '#ca8a04', fontSize: 10, fontWeight: '600' }}>
+                {typeof activeData.taxonomyConfidence === 'number' && activeData.taxonomyConfidence >= 0.5 && (
+                  <View style={{ backgroundColor: activeData.taxonomyConfidence > 0.8 ? 'rgba(147, 200, 34, 0.12)' : 'rgba(234, 179, 8, 0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
+                    <Text style={{ color: activeData.taxonomyConfidence > 0.8 ? '#93C822' : '#ca8a04', fontSize: 10, fontWeight: '600' }}>
                       {['llm', 'groq'].includes(activeData.taxonomySource || '') ? '✨ AI Match' : 'Suggested'} {Math.round(activeData.taxonomyConfidence * 100)}%
                     </Text>
                   </View>
@@ -1772,7 +1803,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
             <AppDropdown
               style={[styles.input, { height: 50, paddingHorizontal: 12, borderColor: categoryMissing ? '#ef4444' : '#E5E7EB', borderWidth: 1 }]}
-              data={taxonomyDropdownData}
+              data={taxonomyDropdownData.slice(0, 12)}
+              maxHeight={280}
               value={selectedCategoryId}
               placeholder={`Search ${activePlatformKeyLower === 'shopify' ? 'Shopify' : 'eBay'} categories`}
               search
@@ -1837,10 +1869,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
             {!!selectedCategoryLabel && (
               <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, backgroundColor: '#F9FAFB', padding: 8, borderRadius: 8 }}>
-                <Icon name="check-circle-outline" size={16} color="#16a34a" />
+                <Icon name="check-circle-outline" size={16} color="#93C822" />
                 <View style={{ flex: 1 }}>
                   <Text style={{ fontSize: 12, color: '#374151', fontWeight: '500' }}>Selected Category:</Text>
-                  <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>{selectedCategoryLabel.replace(/ > /g, ' › ')}</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 2 }}>
+                    <Text style={{ fontSize: 12, color: '#6B7280' }}>{selectedCategoryLabel.replace(/ > /g, ' › ')}</Text>
+                  </ScrollView>
                 </View>
                 <TouchableOpacity onPress={() => {
                   // Clear category
@@ -1968,7 +2002,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           const showResearchPricing = activePlatformKeyLower === 'ebay' && activeData.title?.trim() && activeData.categoryId;
 
           return (
-            <View style={{ marginBottom: 12 }}>
+            <View style={{ marginBottom: 12 }} onLayout={recordFieldLayout('price (either flat or all variants)')}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 0 }}>
                   <Text style={styles.fieldLabel}>{priceLabel}{priceRequired ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
@@ -2000,7 +2034,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 </View>
               </View>
               <TextInput
-                style={[styles.input, priceError ? { borderColor: '#ef4444' } : null, hasExternalUpdate('price') ? { borderColor: '#93C822', borderWidth: 2 } : null]}
+                style={[
+                  styles.input,
+                  priceError ? { borderColor: '#ef4444' } : null,
+                  hasExternalUpdate('price') ? { borderColor: '#93C822', borderWidth: 2 } : null,
+                  highlightedField === 'price (either flat or all variants)' ? { borderColor: '#ef4444', borderWidth: 2, backgroundColor: '#FEF2F2' } : null
+                ]}
                 value={String((activeData as any).price ?? '')}
                 onChangeText={(t) => patchField('price', t)}
                 placeholder=""
@@ -2026,17 +2065,19 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           </View>
         </View>
 
-        <Field
-          label="SKU"
-          required
-          value={activeData.sku}
-          onChangeText={(t) => patchField('sku', t)}
-          onInfo={() => onOpenFieldPanel?.('sku')}
-          onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'sku') : undefined}
-          refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('sku')}
-          error={requiredFields?.includes?.('sku') && !activeData.sku}
-          externalUpdate={hasExternalUpdate('sku')}
-        />
+        <View onLayout={recordFieldLayout('sku')} style={highlightedField === 'sku' ? { borderRadius: 8, borderWidth: 2, borderColor: '#ef4444', backgroundColor: '#FEF2F2', padding: 2 } : undefined}>
+          <Field
+            label="SKU"
+            required
+            value={activeData.sku}
+            onChangeText={(t) => patchField('sku', t)}
+            onInfo={() => onOpenFieldPanel?.('sku')}
+            onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'sku') : undefined}
+            refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('sku')}
+            error={requiredFields?.includes?.('sku') && !activeData.sku}
+            externalUpdate={hasExternalUpdate('sku')}
+          />
+        </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <View style={{ flex: 1 }}>
             <Field label="Barcode" value={activeData.barcode} onChangeText={(t) => patchField('barcode', t)} onInfo={() => onOpenFieldPanel?.('barcode')} externalUpdate={hasExternalUpdate('barcode')} />
@@ -2084,41 +2125,232 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           )}
         </View>
 
-        {/* Shipping estimation - when weight entered or estimatedDimensions/shippingTier present */}
+        {/* Shipping estimation - suggested pill + expandable bottom modal */}
         {(((activeData as any).estimatedDimensions || (activeData as any).shippingTier) || (activeData.weight != null && Number(activeData.weight) > 0)) && (
-          <View style={{ marginTop: 16, backgroundColor: '#F0FDF4', borderRadius: 8, padding: 12, borderLeftWidth: 3, borderLeftColor: '#22c55e' }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-              <Truck size={16} color="#16a34a" />
-              <Text style={{ fontSize: 12, fontWeight: '600', color: '#166534' }}>Shipping Estimate</Text>
-            </View>
-            {(activeData as any).estimatedDimensions && (
-              <Text style={{ fontSize: 12, color: '#374151', marginBottom: 4 }}>
-                Est. {(activeData as any).estimatedDimensions.length} × {(activeData as any).estimatedDimensions.width} × {(activeData as any).estimatedDimensions.height} in
-              </Text>
-            )}
-            {(activeData as any).estimatedWeight?.value && (
-              <Text style={{ fontSize: 12, color: '#374151', marginBottom: 4 }}>
-                ~{(activeData as any).estimatedWeight.value} {(activeData as any).estimatedWeight.unit || 'lb'}
-              </Text>
-            )}
-            {(activeData as any).shippingTierReason && (
-              <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>{(activeData as any).shippingTierReason}</Text>
-            )}
-            {shippingEstimateLoading ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 }}>
-                <ActivityIndicator size="small" color="#16a34a" />
-                <Text style={{ fontSize: 12, color: '#6B7280' }}>Estimating shipping cost...</Text>
+          <View style={{ marginTop: 12 }}>
+            {/* Collapsed pill summary - tappable */}
+            <TouchableOpacity
+              activeOpacity={0.75}
+              onPress={() => {
+                const dims = (activeData as any).estimatedDimensions;
+                setEditableDimensions({
+                  length: dims?.length != null ? String(dims.length) : '',
+                  width: dims?.width != null ? String(dims.width) : '',
+                  height: dims?.height != null ? String(dims.height) : '',
+                });
+                setEditableWeight(String(activeData.weight ?? ''));
+                setEditableWeightUnit(activeData.weightUnit || 'lb');
+                setShippingDetailModalVisible(true);
+              }}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                backgroundColor: '#fff',
+                borderWidth: 1,
+                borderColor: shippingEstimateResult && !shippingEstimateResult.error ? '#93C822' : '#E5E7EB',
+                borderRadius: 12,
+                padding: 14,
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                <View style={{
+                  width: 36, height: 36, borderRadius: 10,
+                  backgroundColor: shippingEstimateResult && !shippingEstimateResult.error ? 'rgba(147,200,34,0.12)' : '#F3F4F6',
+                  alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <Package size={18} color={shippingEstimateResult && !shippingEstimateResult.error ? '#93C822' : '#6B7280'} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  {shippingEstimateLoading ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <ActivityIndicator size="small" color="#93C822" />
+                      <Text style={{ fontSize: 13, color: '#6B7280' }}>Estimating...</Text>
+                    </View>
+                  ) : shippingEstimateResult && typeof shippingEstimateResult.estimatedMin === 'number' && !shippingEstimateResult.error ? (
+                    <>
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: '#111827' }}>
+                        USPS Ground · ${shippingEstimateResult.estimatedMin.toFixed(2)}–${shippingEstimateResult.estimatedMax.toFixed(2)}
+                      </Text>
+                      <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
+                        {(activeData as any).estimatedDimensions
+                          ? `${(activeData as any).estimatedDimensions.length}×${(activeData as any).estimatedDimensions.width}×${(activeData as any).estimatedDimensions.height} in`
+                          : ''
+                        }
+                        {(activeData as any).estimatedDimensions && activeData.weight ? ' · ' : ''}
+                        {activeData.weight ? `${activeData.weight} ${activeData.weightUnit || 'lb'}` : ''}
+                      </Text>
+                    </>
+                  ) : (
+                    <Text style={{ fontSize: 13, color: '#6B7280' }}>
+                      {!(activeData.weight != null && Number(activeData.weight) > 0)
+                        ? 'Enter weight to estimate shipping'
+                        : (activeData as any).shippingTierReason || 'Tap to configure shipping'}
+                    </Text>
+                  )}
+                </View>
               </View>
-            ) : shippingEstimateResult && typeof shippingEstimateResult.estimatedMin === 'number' && !shippingEstimateResult.error ? (
-              <Text style={{ fontSize: 12, color: '#166534', fontWeight: '600', marginTop: 6 }}>
-                Est. shipping cost: ${shippingEstimateResult.estimatedMin.toFixed(2)}–${shippingEstimateResult.estimatedMax.toFixed(2)} (USPS Ground on eBay/Shopify)
-              </Text>
-            ) : !(activeData.weight != null && Number(activeData.weight) > 0) ? (
-              <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 6 }}>Enter weight to see estimated shipping cost.</Text>
-            ) : null}
-            {shippingEstimateResult && typeof shippingEstimateResult.estimatedMin === 'number' && (
-              <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 4 }}>Actual rates shown at checkout.</Text>
-            )}
+              <Icon name="chevron-right" size={18} color="#9CA3AF" />
+            </TouchableOpacity>
+
+            {/* Shipping Detail Bottom Sheet */}
+            <Modal visible={shippingDetailModalVisible} transparent animationType="slide">
+              <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }} onPress={() => setShippingDetailModalVisible(false)}>
+                <Pressable style={{ backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 34 }} onPress={e => e.stopPropagation()}>
+                  {/* Handle bar */}
+                  <View style={{ alignItems: 'center', paddingTop: 10, paddingBottom: 6 }}>
+                    <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: '#D1D5DB' }} />
+                  </View>
+
+                  <ScrollView contentContainerStyle={{ padding: 20 }} keyboardShouldPersistTaps="handled">
+                    {/* Header */}
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                      <Text style={{ fontSize: 18, fontWeight: '700', color: '#111827' }}>Shipping Details</Text>
+                      <TouchableOpacity onPress={() => setShippingDetailModalVisible(false)}>
+                        <X size={22} color="#6B7280" />
+                      </TouchableOpacity>
+                    </View>
+
+                    {/* Tier info */}
+                    {(activeData as any).shippingTierReason && (
+                      <View style={{ backgroundColor: '#F9FAFB', borderRadius: 10, padding: 12, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <Scale size={16} color="#6B7280" />
+                        <Text style={{ fontSize: 13, color: '#374151', flex: 1 }}>{(activeData as any).shippingTierReason}</Text>
+                      </View>
+                    )}
+
+                    {/* Editable Dimensions */}
+                    <Text style={[styles.fieldLabel, { marginBottom: 8 }]}>Package Dimensions (in)</Text>
+                    <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
+                      {(['length', 'width', 'height'] as const).map((dim) => (
+                        <View key={dim} style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 10, color: '#6B7280', marginBottom: 4, textTransform: 'uppercase' }}>{dim.charAt(0).toUpperCase()}</Text>
+                          <TextInput
+                            style={[styles.input, { textAlign: 'center', height: 44 }]}
+                            value={editableDimensions[dim]}
+                            onChangeText={(t) => setEditableDimensions(prev => ({ ...prev, [dim]: t }))}
+                            keyboardType="decimal-pad"
+                            placeholder="0"
+                            placeholderTextColor="#C0C0C0"
+                          />
+                        </View>
+                      ))}
+                    </View>
+
+                    {/* Editable Weight */}
+                    <Text style={[styles.fieldLabel, { marginBottom: 8 }]}>Weight</Text>
+                    <View style={{ flexDirection: 'row', gap: 8, marginBottom: 20 }}>
+                      <TextInput
+                        style={[styles.input, { flex: 1, height: 44 }]}
+                        value={editableWeight}
+                        onChangeText={setEditableWeight}
+                        keyboardType="decimal-pad"
+                        placeholder="0.0"
+                        placeholderTextColor="#C0C0C0"
+                      />
+                      <View style={{ width: 80 }}>
+                        <AppDropdown
+                          style={[styles.input, { height: 44, paddingHorizontal: 10 }]}
+                          data={["oz", "lb", "g", "kg"].map(u => ({ label: u, value: u }))}
+                          placeholder="lb"
+                          value={editableWeightUnit}
+                          onChange={(item) => setEditableWeightUnit(item.value)}
+                        />
+                      </View>
+                    </View>
+
+                    {/* Cost estimate display */}
+                    {shippingEstimateLoading ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 16 }}>
+                        <ActivityIndicator size="small" color="#93C822" />
+                        <Text style={{ fontSize: 13, color: '#6B7280' }}>Calculating rates...</Text>
+                      </View>
+                    ) : shippingEstimateResult && typeof shippingEstimateResult.estimatedMin === 'number' && !shippingEstimateResult.error ? (
+                      <View style={{ backgroundColor: 'rgba(147,200,34,0.08)', borderRadius: 12, padding: 16, marginBottom: 16 }}>
+                        <Text style={{ fontSize: 12, fontWeight: '600', color: '#374151', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>Estimated Rates</Text>
+                        {/* USPS Ground pill */}
+                        <View style={{
+                          flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                          backgroundColor: '#fff', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#93C822',
+                        }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                            <Truck size={18} color="#93C822" />
+                            <View>
+                              <Text style={{ fontSize: 14, fontWeight: '600', color: '#111827' }}>USPS Ground</Text>
+                              <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 1 }}>3–7 business days</Text>
+                            </View>
+                          </View>
+                          <Text style={{ fontSize: 16, fontWeight: '700', color: '#111827' }}>
+                            ${shippingEstimateResult.estimatedMin.toFixed(2)}–${shippingEstimateResult.estimatedMax.toFixed(2)}
+                          </Text>
+                        </View>
+                        {/* Placeholder for other carriers */}
+                        <View style={{
+                          flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                          backgroundColor: '#fff', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#E5E7EB', marginTop: 8, opacity: 0.6,
+                        }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                            <Package size={18} color="#6B7280" />
+                            <View>
+                              <Text style={{ fontSize: 14, fontWeight: '600', color: '#111827' }}>USPS Priority</Text>
+                              <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 1 }}>1–3 business days</Text>
+                            </View>
+                          </View>
+                          <Text style={{ fontSize: 13, color: '#9CA3AF' }}>Coming soon</Text>
+                        </View>
+                      </View>
+                    ) : null}
+
+                    {/* Apply & Recalculate */}
+                    <View style={{ flexDirection: 'row', gap: 10 }}>
+                      <TouchableOpacity
+                        style={{
+                          flex: 1,
+                          backgroundColor: '#F3F4F6',
+                          borderRadius: 12,
+                          paddingVertical: 14,
+                          alignItems: 'center',
+                          flexDirection: 'row',
+                          justifyContent: 'center',
+                          gap: 6,
+                        }}
+                        onPress={() => {
+                          const w = parseFloat(editableWeight);
+                          if (Number.isFinite(w) && w > 0) {
+                            patchField('weight', editableWeight);
+                            patchField('weightUnit', editableWeightUnit);
+                          }
+                          const l = parseFloat(editableDimensions.length);
+                          const wd = parseFloat(editableDimensions.width);
+                          const h = parseFloat(editableDimensions.height);
+                          if (Number.isFinite(l) && Number.isFinite(wd) && Number.isFinite(h)) {
+                            patchPlatform(prev => ({
+                              ...prev,
+                              estimatedDimensions: { length: l, width: wd, height: h, unit: 'in' },
+                            } as any));
+                          }
+                        }}
+                      >
+                        <RefreshCw size={16} color="#374151" />
+                        <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151' }}>Recalculate</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={{
+                          flex: 1,
+                          backgroundColor: '#93C822',
+                          borderRadius: 12,
+                          paddingVertical: 14,
+                          alignItems: 'center',
+                        }}
+                        onPress={() => setShippingDetailModalVisible(false)}
+                      >
+                        <Text style={{ fontSize: 14, fontWeight: '700', color: '#fff' }}>Done</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </ScrollView>
+                </Pressable>
+              </Pressable>
+            </Modal>
           </View>
         )}
 
@@ -2146,12 +2378,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                     Based on {(pricingResearchResult.sampleCount ?? pricingResearchResult.samples?.length ?? 0)} sold listings
                     {pricingResearchResult.cachedAt
                       ? ` · Cached ${(() => {
-                          const d = new Date(pricingResearchResult.cachedAt);
-                          const mins = Math.round((Date.now() - d.getTime()) / 60000);
-                          if (mins < 60) return `${mins}m ago`;
-                          const h = Math.floor(mins / 60);
-                          return `${h}h ago`;
-                        })()}`
+                        const d = new Date(pricingResearchResult.cachedAt);
+                        const mins = Math.round((Date.now() - d.getTime()) / 60000);
+                        if (mins < 60) return `${mins}m ago`;
+                        const h = Math.floor(mins / 60);
+                        return `${h}h ago`;
+                      })()}`
                       : ''}
                   </Text>
                   <TouchableOpacity
@@ -2266,7 +2498,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   const marketPoints = (pricingResearchResult.samples || [])
                     .filter((s) => typeof s.estimatedDaysToSell === 'number' && Number.isFinite(s.estimatedDaysToSell) && typeof s.price === 'number')
                     .sort((a, b) => Number(a.price) - Number(b.price));
-                  const chartWidth = Math.max(Dimensions.get('window').width - 80, 260);
+                  const chartWidth = Math.max(Dimensions.get('window').width - 40, 280);
                   if (marketPoints.length >= 2) {
                     const maxLabels = 10;
                     const step = Math.max(1, Math.floor(marketPoints.length / maxLabels));
@@ -2289,15 +2521,16 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                           yAxisLabel=""
                           yAxisSuffix="d"
                           chartConfig={{
-                            backgroundColor: '#fff',
-                            backgroundGradientFrom: '#fff',
-                            backgroundGradientTo: '#fff',
+                            backgroundColor: '#ffffff',
+                            backgroundGradientFrom: '#ffffff',
+                            backgroundGradientTo: '#ffffff',
                             decimalPlaces: 0,
-                            color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`,
+                            color: (opacity = 1) => `rgba(234, 179, 8, ${opacity})`,
                             labelColor: () => '#6B7280',
                             style: { borderRadius: 12 },
+                            barPercentage: 0.6,
                           }}
-                          style={{ borderRadius: 12 }}
+                          style={{ borderRadius: 12, backgroundColor: '#ffffff' }}
                           withInnerLines={true}
                           fromZero
                         />
@@ -2356,22 +2589,22 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                         width={chartWidth}
                         height={160}
                         chartConfig={{
-                          backgroundColor: '#fff',
-                          backgroundGradientFrom: '#fff',
-                          backgroundGradientTo: '#fff',
+                          backgroundColor: '#ffffff',
+                          backgroundGradientFrom: '#ffffff',
+                          backgroundGradientTo: '#ffffff',
                           decimalPlaces: 0,
-                          color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`,
+                          color: (opacity = 1) => `rgba(234, 179, 8, ${opacity})`,
                           labelColor: () => '#6B7280',
                           style: { borderRadius: 12 },
                         }}
-                        style={{ borderRadius: 12 }}
+                        style={{ borderRadius: 12, backgroundColor: '#ffffff' }}
                         withInnerLines={false}
                         withOuterLines={true}
                       />
                     </View>
                   );
                 })()}
-                
+
               </ScrollView>
             ) : (
               <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>
@@ -2600,27 +2833,62 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 </TouchableOpacity>
               )}
             </View>
-
-
-
           </View>
         )
       }
 
 
-      {/* Facebook Marketplace Settings */}
-      {
-        activePlatformKey === 'facebook' && (
-          <View>
+      {/* Fulfillment Options Trigger & Modal (Facebook / eBay) */}
+      {(activePlatformKeyLower === 'facebook' || activePlatformKeyLower === 'ebay') && (
+        <View style={{ marginTop: 16 }}>
+          <Text style={styles.fieldLabel}>Listing Options</Text>
+          <TouchableOpacity
+            activeOpacity={0.8}
+            style={{
+              marginTop: 8,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: 16,
+              backgroundColor: '#fff',
+              borderWidth: 1,
+              borderColor: '#E5E7EB',
+              borderRadius: 12,
+            }}
+            onPress={() => setFulfillmentModalVisible(true)}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}>
+                <Truck size={20} color="#4B5563" />
+              </View>
+              <View>
+                <Text style={{ fontSize: 15, fontWeight: '600', color: '#111827' }}>Delivery & Shipping</Text>
+                <Text style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }}>
+                  {activePlatformKeyLower === 'facebook'
+                    ? `Handoff: ${activeData.pickupLocation?.deliveryMethod === 'both' ? 'Pickup & Shipping' : activeData.pickupLocation?.deliveryMethod === 'in_person' ? 'Local pickup' : activeData.pickupLocation?.deliveryMethod === 'shipping' ? 'Shipping' : 'Not set'}`
+                    : `Fulfillment: ${activeData.deliveryMethod === 'both' ? 'Pickup & Shipping' : activeData.deliveryMethod === 'in_person' ? 'Local pickup' : activeData.deliveryMethod === 'shipping' ? 'Shipping' : 'Not set'}`
+                  }
+                </Text>
+              </View>
+            </View>
+            <Icon name="chevron-right" size={20} color="#9CA3AF" />
+          </TouchableOpacity>
 
+          <BaseModal
+            visible={fulfillmentModalVisible}
+            onClose={() => setFulfillmentModalVisible(false)}
+            showCloseButton
+            containerStyle={{ width: '90%', maxWidth: 400, padding: 24 }}
+          >
+            <Text style={{ fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 20 }}>Listing Options</Text>
 
-
-            {/* Delivery Method */}
-            <View style={{ marginBottom: 20, marginTop: 20 }}>
-              <Text style={styles.fieldLabel}>Handoff Method</Text>
+            {/* Delivery Method Selector (Generic for both) */}
+            <View style={{ marginBottom: 24 }}>
+              <Text style={styles.fieldLabel}>{activePlatformKeyLower === 'facebook' ? 'Handoff Method' : 'Fulfillment Method'}</Text>
               <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
                 {(['in_person', 'shipping', 'both'] as const).map((method) => {
-                  const isActive = activeData.pickupLocation?.deliveryMethod === method;
+                  const currentValue = activePlatformKeyLower === 'facebook' ? activeData.pickupLocation?.deliveryMethod : activeData.deliveryMethod;
+                  const isActive = currentValue === method;
                   const config = {
                     in_person: { label: 'Pickup', icon: Car },
                     shipping: { label: 'Shipping', icon: Package },
@@ -2642,10 +2910,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                         borderWidth: 1.5,
                         borderColor: isActive ? '#93C822' : '#E5E7EB',
                       }}
-                      onPress={() => patchField('pickupLocation', {
-                        ...activeData.pickupLocation,
-                        deliveryMethod: method
-                      })}
+                      onPress={() => {
+                        if (activePlatformKeyLower === 'facebook') {
+                          patchField('pickupLocation', { ...activeData.pickupLocation, deliveryMethod: method });
+                        } else {
+                          patchField('deliveryMethod', method);
+                        }
+                      }}
                     >
                       <IconComp size={24} color={isActive ? '#93C822' : '#6B7280'} strokeWidth={2} />
                       <Text style={{
@@ -2662,9 +2933,9 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               </View>
             </View>
 
-            {/* Location - Map Interaction */}
-            {(activeData.pickupLocation?.deliveryMethod === 'in_person' || activeData.pickupLocation?.deliveryMethod === 'both') && (
-              <View>
+            {/* Platform Specific Settings */}
+            {activePlatformKeyLower === 'facebook' && (activeData.pickupLocation?.deliveryMethod === 'in_person' || activeData.pickupLocation?.deliveryMethod === 'both') && (
+              <View style={{ marginBottom: 24 }}>
                 <Text style={styles.fieldLabel}>Pickup Location</Text>
 
                 <TouchableOpacity
@@ -2704,64 +2975,87 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                     <Icon name="chevron-right" size={20} color="#9CA3AF" />
                   </View>
                 </TouchableOpacity>
-
-                <InteractiveMapModal
-                  visible={locationPickerVisible}
-                  onClose={() => setLocationPickerVisible(false)}
-                  onSelect={(loc) => {
-                    patchField('pickupLocation', {
-                      ...activeData.pickupLocation,
-                      locationName: loc.name,
-                      latitude: loc.lat,
-                      longitude: loc.lng
-                    });
-                    setLocationPickerVisible(false);
-                  }}
-                  initialLat={activeData.pickupLocation?.latitude}
-                  initialLng={activeData.pickupLocation?.longitude}
-                />
-
-                {/* Delete Option Value Confirmation Modal */}
-                <BaseModal
-                  visible={!!deleteConfirmation}
-                  onClose={() => setDeleteConfirmation(null)}
-                  showCloseButton={true}
-                  containerStyle={{ width: '85%', maxWidth: 340 }}
-                >
-                  <Text style={{ fontSize: 18, fontWeight: '600', marginBottom: 8, textAlign: 'center' }}>
-                    Remove "{deleteConfirmation?.value}"?
-                  </Text>
-                  <Text style={{ color: '#666', textAlign: 'center', marginBottom: 20 }}>
-                    This will remove the option and associated variants.
-                  </Text>
-                  <View style={{ gap: 12, width: '100%' }}>
-                    <TouchableOpacity
-                      style={{ backgroundColor: '#F3F4F6', borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
-                      onPress={() => {
-                        if (deleteConfirmation) {
-                          handleDeleteOptionValue(deleteConfirmation.optionName, deleteConfirmation.value, false);
-                        }
-                      }}
-                    >
-                      <Text style={{ fontWeight: '500' }}>This Platform Only</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={{ backgroundColor: '#EF4444', borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
-                      onPress={() => {
-                        if (deleteConfirmation) {
-                          handleDeleteOptionValue(deleteConfirmation.optionName, deleteConfirmation.value, true);
-                        }
-                      }}
-                    >
-                      <Text style={{ color: '#fff', fontWeight: '600' }}>All Platforms</Text>
-                    </TouchableOpacity>
-                  </View>
-                </BaseModal>
               </View>
             )}
-          </View>
-        )
-      }
+
+            {activePlatformKeyLower === 'ebay' && (activeData.deliveryMethod === 'shipping' || activeData.deliveryMethod === 'both') && (
+              <View style={{ marginBottom: 24 }}>
+                <Text style={styles.fieldLabel}>Flat Rate Shipping Cost ($)</Text>
+                <TextInput
+                  style={[styles.input, { marginTop: 8 }]}
+                  value={String(activeData.shippingCost ?? '')}
+                  onChangeText={(t) => patchField('shippingCost', t)}
+                  placeholder="e.g. 5.99"
+                  placeholderTextColor="#999"
+                  keyboardType="decimal-pad"
+                />
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={[styles.btnPrimary, { backgroundColor: '#84cc16', borderRadius: 12, paddingVertical: 16 }]}
+              onPress={() => setFulfillmentModalVisible(false)}
+            >
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>Save</Text>
+            </TouchableOpacity>
+          </BaseModal>
+
+          <InteractiveMapModal
+            visible={locationPickerVisible}
+            onClose={() => setLocationPickerVisible(false)}
+            onSelect={(loc) => {
+              if (activePlatformKeyLower === 'facebook') {
+                patchField('pickupLocation', {
+                  ...activeData.pickupLocation,
+                  locationName: loc.name,
+                  latitude: loc.lat,
+                  longitude: loc.lng
+                });
+              }
+              setLocationPickerVisible(false);
+            }}
+            initialLat={activePlatformKeyLower === 'facebook' ? activeData.pickupLocation?.latitude : undefined}
+            initialLng={activePlatformKeyLower === 'facebook' ? activeData.pickupLocation?.longitude : undefined}
+          />
+        </View>
+      )}
+
+      {/* Delete Option Value Confirmation Modal */}
+      <BaseModal
+        visible={!!deleteConfirmation}
+        onClose={() => setDeleteConfirmation(null)}
+        showCloseButton={true}
+        containerStyle={{ width: '85%', maxWidth: 340 }}
+      >
+        <Text style={{ fontSize: 18, fontWeight: '600', marginBottom: 8, textAlign: 'center' }}>
+          Remove "{deleteConfirmation?.value}"?
+        </Text>
+        <Text style={{ color: '#666', textAlign: 'center', marginBottom: 20 }}>
+          This will remove the option and associated variants.
+        </Text>
+        <View style={{ gap: 12, width: '100%' }}>
+          <TouchableOpacity
+            style={{ backgroundColor: '#F3F4F6', borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
+            onPress={() => {
+              if (deleteConfirmation) {
+                handleDeleteOptionValue(deleteConfirmation.optionName, deleteConfirmation.value, false);
+              }
+            }}
+          >
+            <Text style={{ fontWeight: '500' }}>This Platform Only</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={{ backgroundColor: '#EF4444', borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
+            onPress={() => {
+              if (deleteConfirmation) {
+                handleDeleteOptionValue(deleteConfirmation.optionName, deleteConfirmation.value, true);
+              }
+            }}
+          >
+            <Text style={{ color: '#fff', fontWeight: '600' }}>All Platforms</Text>
+          </TouchableOpacity>
+        </View>
+      </BaseModal>
 
       {/* Inventory summary (auto-decided per platform) */}
       <View style={styles.darkerCard}>
@@ -3429,478 +3723,475 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           })()
         )}
 
-      </View>
+        {/* Additional fields basic toggle */}
+        {/* Additional fields basic toggle - Hidden on All tab */}
+        {
+          activeTab !== 'all' && (
+            <>
+              <TouchableOpacity style={styles.toggleRow} onPress={() => setShowAdditionalFields(v => !v)}>
+                <Icon name={showAdditionalFields ? 'chevron-down' : 'chevron-right'} size={18} color="#000" />
+                <Text style={styles.sectionTitle}>Additional Fields</Text>
+              </TouchableOpacity>
+              {
+                showAdditionalFields && (
+                  <>
+                    {(() => {
+                      const standardFields = new Set([
+                        'title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode',
+                        'images', 'options', 'variants', 'locations', 'locationQuantities', 'inventoryType',
+                        '__refilled', '_rawResponse', '_parseError', '_extractedJson' // Exclude internal fields
+                      ]);
 
+                      const additionalFields = Object.entries(activeData || {})
+                        .filter(([key, value]) =>
+                          !standardFields.has(key) &&
+                          value !== undefined &&
+                          value !== null &&
+                          !key.startsWith('_') // Skip internal fields
+                        );
 
+                      if (additionalFields.length === 0) {
+                        return (
+                          <View style={{ padding: 16, alignItems: 'center' }}>
+                            <Text style={{ color: '#aaa', fontStyle: 'italic' }}>No additional fields found.</Text>
+                          </View>
+                        );
+                      }
 
-      {/* Additional fields basic toggle */}
-      {/* Additional fields basic toggle - Hidden on All tab */}
-      {
-        activeTab !== 'all' && (
-          <>
-            <TouchableOpacity style={styles.toggleRow} onPress={() => setShowAdditionalFields(v => !v)}>
-              <Icon name={showAdditionalFields ? 'chevron-down' : 'chevron-right'} size={18} color="#000" />
-              <Text style={styles.sectionTitle}>Additional Fields</Text>
-            </TouchableOpacity>
-            {
-              showAdditionalFields && (
-                <>
-                  {(() => {
-                    const standardFields = new Set([
-                      'title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode',
-                      'images', 'options', 'variants', 'locations', 'locationQuantities', 'inventoryType',
-                      '__refilled', '_rawResponse', '_parseError', '_extractedJson' // Exclude internal fields
-                    ]);
-
-                    const additionalFields = Object.entries(activeData || {})
-                      .filter(([key, value]) =>
-                        !standardFields.has(key) &&
-                        value !== undefined &&
-                        value !== null &&
-                        !key.startsWith('_') // Skip internal fields
-                      );
-
-                    if (additionalFields.length === 0) {
                       return (
-                        <View style={{ padding: 16, alignItems: 'center' }}>
-                          <Text style={{ color: '#aaa', fontStyle: 'italic' }}>No additional fields found.</Text>
+                        <View style={{ marginTop: 10, gap: 12 }}>
+                          {additionalFields.map(([key, value]) => {
+                            const isArray = Array.isArray(value);
+                            const isObject = typeof value === 'object' && !isArray;
+                            const displayValue = isObject ? JSON.stringify(value, null, 2) :
+                              isArray ? value.join(', ') : String(value);
+
+                            return (
+                              <View key={key}>
+                                <Field
+                                  label={key}
+                                  value={displayValue}
+                                  onChangeText={(t) => {
+                                    // Simple string patch for generic fields
+                                    patchPlatform(prev => ({ ...prev, [key]: t } as any));
+                                  }}
+                                  onInfo={() => onOpenFieldPanel?.(key)}
+                                  onRegenerate={enableAIRefill && onRegenerateField ? () => onRegenerateField(activePlatformKey, key) : undefined}
+                                  refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes(key)}
+                                />
+                              </View>
+                            );
+                          })}
                         </View>
                       );
-                    }
+                    })()}
+                  </>
+                )
+              }
 
-                    return (
-                      <View style={{ marginTop: 10, gap: 12 }}>
-                        {additionalFields.map(([key, value]) => {
-                          const isArray = Array.isArray(value);
-                          const isObject = typeof value === 'object' && !isArray;
-                          const displayValue = isObject ? JSON.stringify(value, null, 2) :
-                            isArray ? value.join(', ') : String(value);
 
-                          return (
-                            <View key={key}>
-                              <Field
-                                label={key}
-                                value={displayValue}
-                                onChangeText={(t) => {
-                                  // Simple string patch for generic fields
-                                  patchPlatform(prev => ({ ...prev, [key]: t } as any));
-                                }}
-                                onInfo={() => onOpenFieldPanel?.(key)}
-                                onRegenerate={enableAIRefill && onRegenerateField ? () => onRegenerateField(activePlatformKey, key) : undefined}
-                                refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes(key)}
-                              />
-                            </View>
-                          );
-                        })}
-                      </View>
-                    );
-                  })()}
-                </>
-              )
-            }
-          </>
-        )
-      }
+            </>
+          )
+        }
 
-      {/* Sticky Action Footer */}
-      {/* <StickyActionBar onSave={() => console.log('Save')} onPublish={() => console.log('Publish')} /> */}
+        {/* Sticky Action Footer */}
+        {/* <StickyActionBar onSave={() => console.log('Save')} onPublish={() => console.log('Publish')} /> */}
 
-    </View >
-  );
+      </View>
+      );
 }
 
-export default forwardRef<ListingEditorFormRef, Props>(ListingEditorFormInner);
+      export default forwardRef<ListingEditorFormRef, Props>(ListingEditorFormInner);
 
-function SimpleQuantityInput({ quantity, onChangeQuantity }: { quantity: number; onChangeQuantity: (qty: number) => void }) {
+      function SimpleQuantityInput({quantity, onChangeQuantity}: {quantity: number; onChangeQuantity: (qty: number) => void }) {
   const [localQty, setLocalQty] = useState(String(quantity));
-  const timeoutRef = React.useRef<any>(null);
-  const isEditingRef = React.useRef(false);
+      const timeoutRef = React.useRef<any>(null);
+        const isEditingRef = React.useRef(false);
 
   useEffect(() => {
     // Only sync from prop if user is NOT actively editing
     if (!isEditingRef.current) {
-      console.log('[SimpleQuantityInput] Syncing from prop:', quantity);
-      setLocalQty(String(quantity));
+          console.log('[SimpleQuantityInput] Syncing from prop:', quantity);
+        setLocalQty(String(quantity));
     } else {
-      console.log('[SimpleQuantityInput] User is editing, not syncing from prop:', quantity);
+          console.log('[SimpleQuantityInput] User is editing, not syncing from prop:', quantity);
     }
   }, [quantity]);
 
   const handleChange = (text: string) => {
-    console.log('[SimpleQuantityInput] handleChange:', text);
-    isEditingRef.current = true;
-    const num = text.replace(/[^0-9]/g, '');
-    setLocalQty(num);
+          console.log('[SimpleQuantityInput] handleChange:', text);
+        isEditingRef.current = true;
+        const num = text.replace(/[^0-9]/g, '');
+        setLocalQty(num);
 
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
-      console.log('[SimpleQuantityInput] Calling onChangeQuantity with:', Number(num || '0'));
-      onChangeQuantity(Number(num || '0'));
-      isEditingRef.current = false;
+          console.log('[SimpleQuantityInput] Calling onChangeQuantity with:', Number(num || '0'));
+        onChangeQuantity(Number(num || '0'));
+        isEditingRef.current = false;
     }, 300);
   };
 
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-      <Text style={{ color: '#000' }}>Quantity:</Text>
-      <TextInput
-        style={styles.qtyInput}
-        value={localQty}
-        onChangeText={handleChange}
-        onBlur={() => {
-          isEditingRef.current = false;
-          // Sync to prop value on blur to ensure consistency
-          setLocalQty(String(quantity));
-        }}
-        placeholder="0"
-        keyboardType="numeric"
-      />
-    </View>
-  );
+        return (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Text style={{ color: '#000' }}>Quantity:</Text>
+          <TextInput
+            style={styles.qtyInput}
+            value={localQty}
+            onChangeText={handleChange}
+            onBlur={() => {
+              isEditingRef.current = false;
+              // Sync to prop value on blur to ensure consistency
+              setLocalQty(String(quantity));
+            }}
+            placeholder="0"
+            keyboardType="numeric"
+          />
+        </View>
+        );
 }
 
 
 
-function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, required, onRegenerate, refilled, error, externalUpdate }: { label: string; value?: string; onChangeText?: (t: string) => void; multiline?: boolean; keyboardType?: any; onInfo?: () => void; required?: boolean; onRegenerate?: () => void; refilled?: boolean; error?: boolean; externalUpdate?: boolean }) {
+        function Field({label, value, onChangeText, multiline, keyboardType, onInfo, required, onRegenerate, refilled, error, externalUpdate}: {label: string; value?: string; onChangeText?: (t: string) => void; multiline?: boolean; keyboardType?: any; onInfo?: () => void; required?: boolean; onRegenerate?: () => void; refilled?: boolean; error?: boolean; externalUpdate?: boolean }) {
   // Use local state with uncontrolled input to prevent re-render issues
   const [localValue, setLocalValue] = useState(value ?? '');
-  const timeoutRef = React.useRef<any>(null);
+        const timeoutRef = React.useRef<any>(null);
 
 
-  const externalUpdateStyle = externalUpdate ? {
-    borderColor: '#93C822', // iOS green
-    borderWidth: 2,
+          const externalUpdateStyle = externalUpdate ? {
+            borderColor: '#93C822', // iOS green
+          borderWidth: 2,
   } : null;
 
   // Sync from parent when value changes externally (but not from our own typing)
   useEffect(() => {
     if (value !== localValue && value !== undefined) {
-      setLocalValue(value);
+            setLocalValue(value);
     }
   }, [value]);
 
   const handleChange = (text: string) => {
-    setLocalValue(text);
+            setLocalValue(text);
 
-    // Debounce the callback to parent
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+          // Debounce the callback to parent
+          if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
-      onChangeText?.(text);
+            onChangeText?.(text);
     }, 300);
   };
 
-  return (
-    <View style={{ marginBottom: 12 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 0 }}>
-          <Text style={styles.fieldLabel}>{label}{required ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
-          {externalUpdate ? (
-            <View style={{ backgroundColor: 'rgba(52,199,89,0.15)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-              <Text style={{ color: '#059669', fontSize: 10, fontWeight: '600' }}>Updated</Text>
+          return (
+          <View style={{ marginBottom: 12 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 0 }}>
+                <Text style={styles.fieldLabel}>{label}{required ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
+                {externalUpdate ? (
+                  <View style={{ backgroundColor: 'rgba(52,199,89,0.15)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
+                    <Text style={{ color: '#059669', fontSize: 10, fontWeight: '600' }}>Updated</Text>
+                  </View>
+                ) : refilled ? (
+                  <View style={{ backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
+                    <Text style={{ color: '#3f6212', fontSize: 10 }}>Refilled</Text>
+                  </View>
+                ) : null}
+                {!!onRegenerate && (
+                  <TouchableOpacity onPress={onRegenerate} style={{ borderWidth: 1, borderColor: '#E5E5E5', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: '#fff' }}>
+                    <Sparkles size={14} color={'#000'} />
+                  </TouchableOpacity>
+                )}
+              </View>
+              {!!onInfo && (
+                <TouchableOpacity onPress={onInfo}><Icon name="information-outline" size={18} color="#999999" /></TouchableOpacity>
+              )}
             </View>
-          ) : refilled ? (
-            <View style={{ backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-              <Text style={{ color: '#3f6212', fontSize: 10 }}>Refilled</Text>
-            </View>
-          ) : null}
-          {!!onRegenerate && (
-            <TouchableOpacity onPress={onRegenerate} style={{ borderWidth: 1, borderColor: '#E5E5E5', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: '#fff' }}>
-              <Sparkles size={14} color={'#000'} />
-            </TouchableOpacity>
-          )}
-        </View>
-        {!!onInfo && (
-          <TouchableOpacity onPress={onInfo}><Icon name="information-outline" size={18} color="#999999" /></TouchableOpacity>
-        )}
-      </View>
-      <TextInput
-        style={[
-          styles.input,
-          multiline && { minHeight: 100, textAlignVertical: 'top' },
-          error ? { borderColor: '#ef4444' } : null,
-          externalUpdateStyle, // 🟢 Green border for external updates (overrides error if both present)
-        ]}
-        value={localValue}
-        onChangeText={handleChange}
-        placeholder=''
-        placeholderTextColor={"#999999"}
-        multiline={multiline}
-        keyboardType={keyboardType}
-      />
-    </View>
-  );
-}
-
-function ChipsField({ label, valueArray, onChangeArray, onInfo, onRegenerate, refilled }: { label: string; valueArray?: string[]; onChangeArray: (arr: string[]) => void; onInfo?: () => void; onRegenerate?: () => void; refilled?: boolean }) {
-  const [text, setText] = useState('');
-  const arr = Array.isArray(valueArray) ? valueArray : [];
-  return (
-    <View style={{ marginBottom: 12 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, }}>
-          <Text style={styles.fieldLabel}>{label}</Text>
-          {refilled ? (
-            <View style={{ backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-              <Text style={{ color: '#3f6212', fontSize: 10 }}>Refilled</Text>
-            </View>
-          ) : null}
-          {!!onRegenerate && (
-
-            <TouchableOpacity onPress={onRegenerate} style={{ borderWidth: 1, borderColor: '#E5E5E5', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: '#fff' }}>
-              <Sparkles size={14} color={'#000'} />
-            </TouchableOpacity>
-
-
-          )}
-        </View>
-        {!!onInfo && (
-          <TouchableOpacity onPress={onInfo}><Icon name="information-outline" size={18} color="#999999" /></TouchableOpacity>
-        )}
-      </View>
-
-      <View style={{ flexDirection: 'row', gap: 10, }}>
-        <TextInput style={{ flex: 1, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, color: '#000' }} value={text} onChangeText={setText} placeholder="Add tag and press + Add" placeholderTextColor={"#999999"} />
-        <TouchableOpacity style={styles.addTagBtn} onPress={() => { if (text.trim().length) { onChangeArray([...arr, text.trim()]); setText(''); } }}>
-          <Icon name="plus" size={16} color="#000" /><Text style={{ color: '#000', marginLeft: 6 }}>Add</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginVertical: 6 }}>
-        {arr.map((t, i) => (
-          <View key={`${t}-${i}`} style={[styles.tagChip, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}>
-            <TouchableOpacity onPress={() => onChangeArray(arr.filter((_, idx) => idx !== i))}>
-              <Icon name="close" size={10} color="#6B7280" />
-            </TouchableOpacity>
-            {/* Small platform logo placeholder space for tags (if needed in future) */}
-            <Text style={{ color: '#000' }}>{t}</Text>
+            <TextInput
+              style={[
+                styles.input,
+                multiline && { minHeight: 100, textAlignVertical: 'top' },
+                error ? { borderColor: '#ef4444' } : null,
+                externalUpdateStyle, // 🟢 Green border for external updates (overrides error if both present)
+              ]}
+              value={localValue}
+              onChangeText={handleChange}
+              placeholder=''
+              placeholderTextColor={"#999999"}
+              multiline={multiline}
+              keyboardType={keyboardType}
+            />
           </View>
-        ))}
-      </View>
-
-    </View>
-  );
+          );
 }
 
-// Logo map for platform types
-const platformLogoMap: Record<string, any> = {
-  shopify: ShopifySvg,
-  amazon: AmazonSvg,
-  facebook: FacebookSvg,
-  ebay: EbaySvg,
-  clover: CloverSvg,
-  square: SquareSvg
+          function ChipsField({label, valueArray, onChangeArray, onInfo, onRegenerate, refilled}: {label: string; valueArray?: string[]; onChangeArray: (arr: string[]) => void; onInfo?: () => void; onRegenerate?: () => void; refilled?: boolean }) {
+  const [text, setText] = useState('');
+          const arr = Array.isArray(valueArray) ? valueArray : [];
+          return (
+          <View style={{ marginBottom: 12 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, }}>
+                <Text style={styles.fieldLabel}>{label}</Text>
+                {refilled ? (
+                  <View style={{ backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
+                    <Text style={{ color: '#3f6212', fontSize: 10 }}>Refilled</Text>
+                  </View>
+                ) : null}
+                {!!onRegenerate && (
+
+                  <TouchableOpacity onPress={onRegenerate} style={{ borderWidth: 1, borderColor: '#E5E5E5', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: '#fff' }}>
+                    <Sparkles size={14} color={'#000'} />
+                  </TouchableOpacity>
+
+
+                )}
+              </View>
+              {!!onInfo && (
+                <TouchableOpacity onPress={onInfo}><Icon name="information-outline" size={18} color="#999999" /></TouchableOpacity>
+              )}
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 10, }}>
+              <TextInput style={{ flex: 1, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, color: '#000' }} value={text} onChangeText={setText} placeholder="Add tag and press + Add" placeholderTextColor={"#999999"} />
+              <TouchableOpacity style={styles.addTagBtn} onPress={() => { if (text.trim().length) { onChangeArray([...arr, text.trim()]); setText(''); } }}>
+                <Icon name="plus" size={16} color="#000" /><Text style={{ color: '#000', marginLeft: 6 }}>Add</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginVertical: 6 }}>
+              {arr.map((t, i) => (
+                <View key={`${t}-${i}`} style={[styles.tagChip, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}>
+                  <TouchableOpacity onPress={() => onChangeArray(arr.filter((_, idx) => idx !== i))}>
+                    <Icon name="close" size={10} color="#6B7280" />
+                  </TouchableOpacity>
+                  {/* Small platform logo placeholder space for tags (if needed in future) */}
+                  <Text style={{ color: '#000' }}>{t}</Text>
+                </View>
+              ))}
+            </View>
+
+          </View>
+          );
+}
+
+          // Logo map for platform types
+          const platformLogoMap: Record<string, any> = {
+            shopify: ShopifySvg,
+          amazon: AmazonSvg,
+          facebook: FacebookSvg,
+          ebay: EbaySvg,
+          clover: CloverSvg,
+          square: SquareSvg
 };
 
-// Enhanced dropdown with platform logos for locations
-function LocationDropdown({
-  locations,
-  selectedId,
-  onChange
-}: {
-  locations: Array<{ id: string; name: string; platformType: string }>;
-  selectedId: string;
+          // Enhanced dropdown with platform logos for locations
+          function LocationDropdown({
+            locations,
+            selectedId,
+            onChange
+          }: {
+            locations: Array<{ id: string; name: string; platformType: string }>;
+          selectedId: string;
   onChange: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const selected = locations.find(l => l.id === selectedId) || locations[0];
-  const Logo = selected ? platformLogoMap[selected.platformType] : null;
+          const Logo = selected ? platformLogoMap[selected.platformType] : null;
 
-  console.log(`[LocationDropdown RENDER] selectedId=${selectedId}, selected=${selected?.name}, locCount=${locations.length}, hasLogo=${!!Logo}, items=${locations.map(l => l.name).join(', ')}`);
+          console.log(`[LocationDropdown RENDER] selectedId=${selectedId}, selected=${selected?.name}, locCount=${locations.length}, hasLogo=${!!Logo}, items=${locations.map(l => l.name).join(', ')}`);
 
-  return (
-    <View style={{ position: 'relative', zIndex: open ? 1000 : 1, minWidth: 160 }}>
-      <TouchableOpacity
-        style={[styles.dropdown, { minWidth: 150, maxWidth: 200 }]}
-        onPress={() => setOpen(o => !o)}
-      >
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
-          {Logo && <Logo width={16} height={16} />}
-          <Text style={{ color: '#000', fontSize: 13, flexShrink: 1 }} numberOfLines={1} ellipsizeMode="tail">
-            {selected?.name || 'Select Location'}
-          </Text>
-        </View>
-        <Icon name="chevron-down" size={18} color="#000" style={{ marginLeft: 4 }} />
-      </TouchableOpacity>
-      {open && (
-        <View style={[styles.dropdownMenu, { position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 1000, marginTop: 0, maxHeight: 200 }]}>
-          <ScrollView nestedScrollEnabled>
-            {locations.map(loc => {
-              const LocLogo = platformLogoMap[loc.platformType];
-              return (
-                <TouchableOpacity
-                  key={loc.id}
-                  style={[styles.dropdownItem, { flexDirection: 'row', alignItems: 'center', gap: 8 }]}
-                  onPress={() => { onChange(loc.id); setOpen(false); }}
-                >
-                  {LocLogo && <LocLogo width={16} height={16} />}
-                  <Text style={{ color: '#000', flex: 1 }} numberOfLines={1}>{loc.name}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-      )}
-    </View>
-  );
+          return (
+          <View style={{ position: 'relative', zIndex: open ? 1000 : 1, minWidth: 160 }}>
+            <TouchableOpacity
+              style={[styles.dropdown, { minWidth: 150, maxWidth: 200 }]}
+              onPress={() => setOpen(o => !o)}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
+                {Logo && <Logo width={16} height={16} />}
+                <Text style={{ color: '#000', fontSize: 13, flexShrink: 1 }} numberOfLines={1} ellipsizeMode="tail">
+                  {selected?.name || 'Select Location'}
+                </Text>
+              </View>
+              <Icon name="chevron-down" size={18} color="#000" style={{ marginLeft: 4 }} />
+            </TouchableOpacity>
+            {open && (
+              <View style={[styles.dropdownMenu, { position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 1000, marginTop: 0, maxHeight: 200 }]}>
+                <ScrollView nestedScrollEnabled>
+                  {locations.map(loc => {
+                    const LocLogo = platformLogoMap[loc.platformType];
+                    return (
+                      <TouchableOpacity
+                        key={loc.id}
+                        style={[styles.dropdownItem, { flexDirection: 'row', alignItems: 'center', gap: 8 }]}
+                        onPress={() => { onChange(loc.id); setOpen(false); }}
+                      >
+                        {LocLogo && <LocLogo width={16} height={16} />}
+                        <Text style={{ color: '#000', flex: 1 }} numberOfLines={1}>{loc.name}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
+          </View>
+          );
 }
 
+          const styles = StyleSheet.create({
+            mediaRow: {paddingVertical: 10, borderBottomColor: '#E5E5E5', borderBottomWidth: 1, paddingBottom: 10, marginBottom: 10, gap: 8 },
+          thumbWrap: {width: 86, height: 86, borderRadius: 8, overflow: 'hidden', marginRight: 8, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: '#F5F5F5', alignItems: 'center', justifyContent: 'center' },
+          thumb: {width: '100%', height: '100%' },
+          addThumb: {borderStyle: 'dashed' },
+          thumbCover: {borderColor: '#93C822', borderWidth: 2 },
+          coverBadge: {position: 'absolute', bottom: 6, left: 6, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2, flexDirection: 'row', alignItems: 'center' },
+          mediaHint: {textAlign: 'center', color: '#71717A', marginTop: 6 },
+          pill: {paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, borderColor: '#E5E5E5', marginRight: 8 },
+          pillActive: {backgroundColor: 'rgba(147,200,34,0.12)', borderColor: '#93C822' },
+          pillText: {color: '#000' },
+          pillTextActive: {fontWeight: '700' },
+          pillDashed: {paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: '#E5E5E5' },
+          card: {borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 12 },
+          darkerCard: {borderWidth: 1, backgroundColor: '#F8F9FB', borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 12 },
+          // --- STYLES REFACTOR ---
+          fieldLabel: {
+            fontSize: 12,
+            fontWeight: '600',
+            color: '#374151',
+            marginBottom: 6,
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+          },
+          modernInputWrapper: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: '#ffffffff',
+            borderWidth: 1,
+            borderColor: '#E5E7EB',
+            borderRadius: 12,
+            paddingHorizontal: 12,
+            minHeight: 48,
+          },
+          modernInputFocused: {
+            borderColor: '#93C822',
+            backgroundColor: '#FFFFFF',
+            shadowColor: '#93C822',
+            shadowOffset: {width: 0, height: 2 },
+            shadowOpacity: 0.1,
+            shadowRadius: 4,
+            elevation: 2,
+          },
+          modernInputDisabled: {
+            backgroundColor: '#F3F4F6',
+            borderColor: '#E5E7EB',
+          },
+          modernTextInput: {
+            flex: 1,
+            fontSize: 15,
+            color: '#111827',
+            paddingVertical: 12, // Ensure good touch target
+            height: '100%',
+          },
+          sectionHeaderContainer: {
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: 16,
+            marginTop: 8,
+          },
+          sectionIconBg: {
+            width: 28,
+            height: 28,
+            borderRadius: 8,
+            backgroundColor: '#E5E7EB',
+            alignItems: 'center',
+            justifyContent: 'center',
+          },
+          sectionHeaderTitle: {
+            fontSize: 16,
+            fontWeight: '700',
+            color: '#111827',
+          },
+          // Keep existing styles but update where needed
+          input: {
+            // Deprecated in favor of modernInputWrapper but keeping for legacy
+            borderWidth: 1,
+            borderColor: '#ddd',
+            padding: 12,
+            borderRadius: 8,
+            fontSize: 14,
+            backgroundColor: '#fff',
+            color: '#000',
+          },
+          addTagBtn: {alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center' },
+          tagChip: {borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
+          optionChip: {backgroundColor: '#E5E5E5', borderRadius: 6, paddingVertical: 6, paddingHorizontal: 10 },
+          dropdown: {backgroundColor: 'white', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+          dropdownMenu: {backgroundColor: 'white', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, marginTop: 6, shadowColor: '#000', shadowOffset: {width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 3 },
+          dropdownItem: {padding: 10, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+          scanBtn: {backgroundColor: '#93C822', width: 38, height: 38, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: -18 },
+          sectionTitle: {color: '#000', fontWeight: '700' },
+          toggleRow: {flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14 },
+          subtle: {color: '#71717A', marginTop: 4 },
+          addOption: {borderWidth: 1, borderColor: '#E5E5E5', borderStyle: 'dashed', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 12, alignSelf: 'stretch', marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+          addInline: {borderWidth: 1, borderColor: '#E5E5E5', borderStyle: 'dashed', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, alignSelf: 'stretch', marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+          locationPill: {alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 20, paddingVertical: 6, paddingHorizontal: 12, marginVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
+          dotOnline: {width: 10, height: 10, borderRadius: 5, backgroundColor: '#FACC15', marginRight: 6 },
+          inventoryRow: {justifyContent: 'space-between', backgroundColor: 'white', flexDirection: 'row', gap: 24, paddingVertical: 12, paddingHorizontal: 20, alignItems: 'flex-end', borderWidth: 1, borderRadius: 6, marginBottom: 12, borderColor: '#D9D9D9' },
+          qtyInput: {borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, width: 100, color: '#000' },
+          variantImgSlot: {width: 120, height: 120, borderWidth: 2, borderStyle: 'dashed', borderColor: '#E5E5E5', borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+          btnSecondary: {borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
+          btnPrimary: {backgroundColor: '#93C822', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
+          optionCard: {marginTop: 10, backgroundColor: '#fff' },
+          optionSummaryCard: {borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, padding: 12, marginTop: 10, backgroundColor: '#fff' },
+          platformPill: {borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 8, paddingHorizontal: 12, margin: 6, flexDirection: 'row', alignItems: 'center' },
+          platformSquare: {
+            justifyContent: 'center',
+            alignItems: 'center',
+            paddingVertical: 10,
+            paddingHorizontal: 10,
+            borderRadius: 8,
+            backgroundColor: '#FFF',
+            margin: 4,
+            width: 125,
+            height: 125,
+            borderWidth: 2,
+            borderColor: 'rgba(153, 153, 153, 0.3)',
+            flexDirection: 'column',
+            gap: 6,
+          },
 
-const styles = StyleSheet.create({
-  mediaRow: { paddingVertical: 10, borderBottomColor: '#E5E5E5', borderBottomWidth: 1, paddingBottom: 10, marginBottom: 10, gap: 8 },
-  thumbWrap: { width: 86, height: 86, borderRadius: 8, overflow: 'hidden', marginRight: 8, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: '#F5F5F5', alignItems: 'center', justifyContent: 'center' },
-  thumb: { width: '100%', height: '100%' },
-  addThumb: { borderStyle: 'dashed' },
-  thumbCover: { borderColor: '#93C822', borderWidth: 2 },
-  coverBadge: { position: 'absolute', bottom: 6, left: 6, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2, flexDirection: 'row', alignItems: 'center' },
-  mediaHint: { textAlign: 'center', color: '#71717A', marginTop: 6 },
-  pill: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, borderColor: '#E5E5E5', marginRight: 8 },
-  pillActive: { backgroundColor: 'rgba(147,200,34,0.12)', borderColor: '#93C822' },
-  pillText: { color: '#000' },
-  pillTextActive: { fontWeight: '700' },
-  pillDashed: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: '#E5E5E5' },
-  card: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 12 },
-  darkerCard: { borderWidth: 1, backgroundColor: '#F8F9FB', borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 12 },
-  // --- STYLES REFACTOR ---
-  fieldLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 6,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  modernInputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#ffffffff',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    minHeight: 48,
-  },
-  modernInputFocused: {
-    borderColor: '#93C822',
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#93C822',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  modernInputDisabled: {
-    backgroundColor: '#F3F4F6',
-    borderColor: '#E5E7EB',
-  },
-  modernTextInput: {
-    flex: 1,
-    fontSize: 15,
-    color: '#111827',
-    paddingVertical: 12, // Ensure good touch target
-    height: '100%',
-  },
-  sectionHeaderContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-    marginTop: 8,
-  },
-  sectionIconBg: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    backgroundColor: '#E5E7EB',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sectionHeaderTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
-  },
-  // Keep existing styles but update where needed
-  input: {
-    // Deprecated in favor of modernInputWrapper but keeping for legacy
-    borderWidth: 1,
-    borderColor: '#ddd',
-    padding: 12,
-    borderRadius: 8,
-    fontSize: 14,
-    backgroundColor: '#fff',
-    color: '#000',
-  },
-  addTagBtn: { alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center' },
-  tagChip: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
-  optionChip: { backgroundColor: '#E5E5E5', borderRadius: 6, paddingVertical: 6, paddingHorizontal: 10 },
-  dropdown: { backgroundColor: 'white', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  dropdownMenu: { backgroundColor: 'white', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, marginTop: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 3 },
-  dropdownItem: { padding: 10, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
-  scanBtn: { backgroundColor: '#93C822', width: 38, height: 38, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: -18 },
-  sectionTitle: { color: '#000', fontWeight: '700' },
-  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14 },
-  subtle: { color: '#71717A', marginTop: 4 },
-  addOption: { borderWidth: 1, borderColor: '#E5E5E5', borderStyle: 'dashed', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 12, alignSelf: 'stretch', marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
-  addInline: { borderWidth: 1, borderColor: '#E5E5E5', borderStyle: 'dashed', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, alignSelf: 'stretch', marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
-  locationPill: { alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 20, paddingVertical: 6, paddingHorizontal: 12, marginVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  dotOnline: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#FACC15', marginRight: 6 },
-  inventoryRow: { justifyContent: 'space-between', backgroundColor: 'white', flexDirection: 'row', gap: 24, paddingVertical: 12, paddingHorizontal: 20, alignItems: 'flex-end', borderWidth: 1, borderRadius: 6, marginBottom: 12, borderColor: '#D9D9D9' },
-  qtyInput: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, width: 100, color: '#000' },
-  variantImgSlot: { width: 120, height: 120, borderWidth: 2, borderStyle: 'dashed', borderColor: '#E5E5E5', borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  btnSecondary: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
-  btnPrimary: { backgroundColor: '#93C822', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
-  optionCard: { marginTop: 10, backgroundColor: '#fff' },
-  optionSummaryCard: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, padding: 12, marginTop: 10, backgroundColor: '#fff' },
-  platformPill: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 8, paddingHorizontal: 12, margin: 6, flexDirection: 'row', alignItems: 'center' },
-  platformSquare: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    backgroundColor: '#FFF',
-    margin: 4,
-    width: 125,
-    height: 125,
-    borderWidth: 2,
-    borderColor: 'rgba(153, 153, 153, 0.3)',
-    flexDirection: 'column',
-    gap: 6,
-  },
-
-  // Add Missing Field Button
-  addMissingFieldButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: '#71717A',
-    marginTop: 16,
-    gap: 8
-  },
-  addMissingFieldText: {
-    color: '#71717A',
-    fontSize: 14,
-    fontWeight: '600'
-  },
-  // Platform generation styles
-  pillGenerating: {
-    opacity: 0.7,
-    backgroundColor: '#F3F4F6',
-  },
-  pillTextGenerating: {
-    color: '#6B7280',
-  },
-  generatePlatformPill: {
-    borderColor: '#93C822',
-    backgroundColor: 'rgba(147,200,34,0.05)',
-    marginTop: 4,
-  },
-  suggestionBox: { borderWidth: 1, borderColor: '#E5E5E5', borderStyle: 'dashed', borderRadius: 10, padding: 12, marginTop: 10, backgroundColor: '#FAFAFA' },
-  suggestionChip: { borderWidth: 1, borderColor: '#E5E5E5', borderStyle: 'dashed', borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
-  modalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)' },
+          // Add Missing Field Button
+          addMissingFieldButton: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingVertical: 12,
+            paddingHorizontal: 16,
+            borderRadius: 12,
+            borderWidth: 1,
+            borderStyle: 'dashed',
+            borderColor: '#71717A',
+            marginTop: 16,
+            gap: 8,
+          },
+          addMissingFieldText: {
+            color: '#71717A',
+            fontSize: 14,
+            fontWeight: '600',
+          },
+          // Platform generation styles
+          pillGenerating: {
+            opacity: 0.7,
+            backgroundColor: '#F3F4F6',
+          },
+          pillTextGenerating: {
+            color: '#6B7280',
+          },
+          generatePlatformPill: {
+            borderColor: '#93C822',
+            backgroundColor: 'rgba(147,200,34,0.05)',
+            marginTop: 4,
+          },
+          suggestionBox: {borderWidth: 1, borderColor: '#E5E5E5', borderStyle: 'dashed', borderRadius: 10, padding: 12, marginTop: 10, backgroundColor: '#FAFAFA' },
+          suggestionChip: {borderWidth: 1, borderColor: '#E5E5E5', borderStyle: 'dashed', borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
+          modalBackdrop: {position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)' },
 });

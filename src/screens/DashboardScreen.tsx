@@ -820,7 +820,7 @@ const DashboardScreen = () => {
         style={styles.container}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshData} tintColor="#333" />}
-        contentContainerStyle={{ paddingBottom: 10 }}
+        contentContainerStyle={styles.scrollContentContainer}
       >
 
         {/* Search Bar - Works across Activities & Inventory */}
@@ -1153,7 +1153,11 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 32,
     borderTopLeftRadius: 32,
     backgroundColor: 'rgba(255, 255, 255, 1)',
+  },
+  scrollContentContainer: {
+    flexGrow: 1,
     paddingBottom: 100,
+    minHeight: '100%',
   },
   loadingContainer: {
     justifyContent: 'center',

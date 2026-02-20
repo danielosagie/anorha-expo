@@ -10,7 +10,10 @@ import {
     Dimensions,
     Linking,
     Alert,
+    Image,
+    SafeAreaView,
 } from 'react-native';
+import { WebView } from 'react-native-webview';
 import { X, CheckCircle2, Users } from 'lucide-react-native';
 import { useTheme } from '../context/ThemeContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
@@ -75,8 +78,17 @@ interface TierSelectorModalProps {
     hasSubscription?: boolean;
 }
 
-const ANORHA_GREEN = '#647653';
-const ANORHA_CREAM = '#FEF4DD';
+const ANORHA_GREEN = '#93C822';
+const WHITE_BG = '#FFFFFF';
+
+// Mapping features for the tabular view
+const TABULAR_FEATURES = [
+    { label: 'Platform integrations', free: '1 Platform', growth: 'Unlimited', teams: 'Unlimited' },
+    { label: 'Real-time syncings', free: 'Limited', growth: 'Unlimited', teams: 'Unlimited' },
+    { label: 'Included AI scans', free: '10 / mo', growth: '40 / mo', teams: '120 / mo' },
+    { label: 'Team members', free: '1 User', growth: '2 Users', teams: '5 Users' },
+    { label: 'Priority Support', free: '-', growth: '-', teams: '✓' },
+];
 
 const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
     visible,
@@ -86,8 +98,10 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
     hasSubscription = false,
 }) => {
     const theme = useTheme();
-    const [selectedTierId, setSelectedTierId] = useState<'growth' | 'teams' | null>(null);
+    // Default selected tier is growth
+    const [selectedTierId, setSelectedTierId] = useState<'growth' | 'teams'>(TIERS[0].id);
     const [isLoading, setIsLoading] = useState(false);
+    const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
 
     const handleCheckout = async () => {
         if (!selectedTierId) return;
@@ -104,11 +118,9 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
                 return;
             }
 
-            // Use proper redirect URLs that show success/cancel message
             const successUrl = 'https://app.anorha.app/billing?success=true';
             const cancelUrl = 'https://app.anorha.app/billing?canceled=true';
 
-            // Call backend to create checkout session
             const response = await fetch(`${API_BASE_URL}/billing/checkout`, {
                 method: 'POST',
                 headers: {
@@ -129,16 +141,7 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
 
             const { url } = await response.json();
             if (url) {
-                // Close modal first
-                onClose();
-                // Open in system browser (non-blocking)
-                const supported = await Linking.canOpenURL(url);
-                if (supported) {
-                    await Linking.openURL(url);
-                    onSuccess?.();
-                } else {
-                    Alert.alert('Error', 'Cannot open checkout URL');
-                }
+                setCheckoutUrl(url);
             }
         } catch (error: any) {
             console.error('[TierSelector] Checkout error:', error);
@@ -188,6 +191,8 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
         }
     };
 
+    const selectedTier = TIERS.find(t => t.id === selectedTierId) || TIERS[0];
+
     return (
         <Modal
             visible={visible}
@@ -196,14 +201,18 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
             onRequestClose={onClose}
         >
             <View style={styles.overlay}>
-                <View style={styles.container}>
+                <View style={[styles.container, { paddingBottom: 34 + 20 }]}>
+                    <TouchableOpacity style={styles.closeButton} onPress={onClose}>
+                        <View style={styles.closeButtonInner}>
+                            <X size={20} color="#999" />
+                        </View>
+                    </TouchableOpacity>
+
                     {/* Header */}
                     <View style={styles.header}>
-                        <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-                            <X size={24} color="#666" />
-                        </TouchableOpacity>
-                        <Text style={styles.title}>Choose Your Plan</Text>
-                        <Text style={styles.subtitle}>Scale as you grow</Text>
+                        <Image source={require('../assets/anorha_logo.png')} style={{ width: 140, height: 40, resizeMode: 'contain', marginBottom: 16 }} />
+                        <Text style={styles.title}>Upgrade Plan</Text>
+                        <Text style={styles.subtitle}>Unlock full potential with premium</Text>
 
                         {/* Usage indicator */}
                         {usageInfo && usageInfo.remaining === 0 && (
@@ -215,65 +224,39 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
                         )}
                     </View>
 
-                    {/* Tier Cards */}
-                    <ScrollView
-                        style={styles.tiersContainer}
-                        contentContainerStyle={styles.tiersContent}
-                        showsVerticalScrollIndicator={false}
-                    >
-                        {TIERS.map((tier) => (
+                    {/* Plan Tabs */}
+                    <View style={styles.tabContainer}>
+                        {TIERS.map(tier => (
                             <TouchableOpacity
                                 key={tier.id}
-                                style={[
-                                    styles.tierCard,
-                                    selectedTierId === tier.id && styles.tierCardSelected,
-                                ]}
+                                style={[styles.tabButton, selectedTierId === tier.id && styles.tabButtonActive]}
                                 onPress={() => setSelectedTierId(tier.id)}
-                                activeOpacity={0.8}
                             >
-                                {/* Popular badge */}
-                                {tier.highlighted && (
-                                    <View style={styles.popularBadge}>
-                                        <Text style={styles.popularBadgeText}>Most Popular</Text>
-                                    </View>
-                                )}
-
-                                <Text style={styles.tierName}>{tier.name}</Text>
-                                <Text style={styles.tierDescription}>{tier.description}</Text>
-
-                                {/* Price */}
-                                <View style={styles.priceRow}>
-                                    <Text style={styles.priceAmount}>${tier.price}</Text>
-                                    <Text style={styles.pricePeriod}>/ {tier.billingPeriod}</Text>
-                                </View>
-
-                                {/* Team size */}
-                                <View style={styles.teamRow}>
-                                    <Users size={16} color="#666" />
-                                    <Text style={styles.teamText}>
-                                        {tier.users} included users (+${tier.additionalUserPrice} per additional)
-                                    </Text>
-                                </View>
-
-                                {/* Features */}
-                                <View style={styles.featuresContainer}>
-                                    {tier.features.map((feature, idx) => (
-                                        <View key={idx} style={styles.featureRow}>
-                                            <CheckCircle2 size={18} color={ANORHA_GREEN} />
-                                            <Text style={styles.featureText}>{feature}</Text>
-                                        </View>
-                                    ))}
-                                </View>
-
-                                {/* Selection indicator */}
-                                {selectedTierId === tier.id && (
-                                    <View style={styles.selectedIndicator}>
-                                        <Text style={styles.selectedText}>✓ Selected</Text>
-                                    </View>
-                                )}
+                                <Text style={[styles.tabButtonText, selectedTierId === tier.id && styles.tabButtonTextActive]}>
+                                    {tier.name}
+                                </Text>
                             </TouchableOpacity>
                         ))}
-                    </ScrollView>
+                    </View>
+
+                    {/* Feature Matrix */}
+                    <View style={styles.matrixContainer}>
+                        <View style={styles.matrixHeaderRow}>
+                            <Text style={styles.matrixHeaderLabel}>Features</Text>
+                            <Text style={styles.matrixHeaderValueCol}>Free</Text>
+                            <Text style={[styles.matrixHeaderValueCol, { color: ANORHA_GREEN }]}>{selectedTier.name}</Text>
+                        </View>
+
+                        {TABULAR_FEATURES.map((feat, idx) => (
+                            <View key={idx} style={styles.matrixRow}>
+                                <Text style={styles.matrixRowLabel}>{feat.label}</Text>
+                                <Text style={styles.matrixRowFree}>{feat.free}</Text>
+                                <Text style={[styles.matrixRowActive, { color: ANORHA_GREEN }]}>
+                                    {selectedTierId === 'growth' ? feat.growth : feat.teams}
+                                </Text>
+                            </View>
+                        ))}
+                    </View>
 
                     {/* Action buttons */}
                     <View style={styles.actionsContainer}>
@@ -288,67 +271,105 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
                             {isLoading ? (
                                 <ActivityIndicator color="#fff" />
                             ) : (
-                                <Text style={styles.checkoutButtonText}>Continue to checkout</Text>
+                                <Text style={styles.checkoutButtonText}>Upgrade for ${selectedTier.price}/{selectedTier.billingPeriod}</Text>
                             )}
                         </TouchableOpacity>
 
-                        {/* Manage subscription for existing subscribers */}
-                        {hasSubscription && (
+                        {hasSubscription ? (
                             <TouchableOpacity
                                 style={styles.manageButton}
                                 onPress={handleManageAccount}
                                 disabled={isLoading}
                             >
-                                <Text style={styles.manageButtonText}>Manage current subscription</Text>
+                                <Text style={styles.manageButtonText}>Manage subscription</Text>
                             </TouchableOpacity>
+                        ) : (
+                            <View style={{ alignItems: 'center', marginTop: 12 }}>
+                                <Text style={styles.footerNote}>Auto-renews monthly. Cancel anytime.</Text>
+                            </View>
                         )}
-
-                        <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
-                            <Text style={styles.cancelButtonText}>Maybe later</Text>
-                        </TouchableOpacity>
                     </View>
                 </View>
             </View>
+
+            {/* Checkout WebView Modal scoped to TierSelectorModal */}
+            <Modal visible={!!checkoutUrl} animationType="slide" presentationStyle="pageSheet">
+                <View style={{ flex: 1, backgroundColor: '#fff', paddingTop: 16 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#E5E5EA' }}>
+                        <TouchableOpacity onPress={() => setCheckoutUrl(null)} style={{ padding: 4 }}>
+                            <Text style={{ fontSize: 17, color: '#007AFF', fontWeight: '500' }}>Cancel</Text>
+                        </TouchableOpacity>
+                        <Text style={{ fontSize: 17, fontWeight: '600', color: '#000' }}>Checkout</Text>
+                        <View style={{ width: 60 }} />
+                    </View>
+                    {checkoutUrl && (
+                        <WebView
+                            source={{ uri: checkoutUrl }}
+                            style={{ flex: 1 }}
+                            onNavigationStateChange={(state) => {
+                                if (state.url.includes('success=true')) {
+                                    setCheckoutUrl(null);
+                                    onSuccess?.(); // This closes TierSelectorModal in BillingScreen and refreshes
+                                } else if (state.url.includes('canceled=true')) {
+                                    setCheckoutUrl(null);
+                                }
+                            }}
+                        />
+                    )}
+                </View>
+            </Modal>
         </Modal>
     );
 };
 
+// Assuming Icon is already imported at top from MaterialCommunityIcons
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+
 const styles = StyleSheet.create({
     overlay: {
         flex: 1,
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        backgroundColor: 'rgba(0, 0, 0, 0.4)',
         justifyContent: 'flex-end',
     },
     container: {
-        backgroundColor: ANORHA_CREAM,
+        backgroundColor: WHITE_BG,
         borderTopLeftRadius: 24,
         borderTopRightRadius: 24,
         paddingHorizontal: 20,
-        paddingTop: 16,
-        paddingBottom: 34,
-        maxHeight: SCREEN_HEIGHT * 0.9,
+        paddingTop: 24,
+        maxHeight: SCREEN_HEIGHT * 0.95,
     },
     header: {
         alignItems: 'center',
-        marginBottom: 16,
+        marginBottom: 24,
+    },
+    iconContainer: {
+        marginBottom: 8,
     },
     closeButton: {
         position: 'absolute',
-        top: 0,
-        right: 0,
-        padding: 8,
-        zIndex: 1,
+        top: 16,
+        right: 16,
+        zIndex: 10,
+    },
+    closeButtonInner: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        backgroundColor: '#F2F2F7',
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     title: {
-        fontSize: 24,
+        fontSize: 28,
         fontWeight: '700',
-        color: '#333',
-        marginTop: 8,
+        color: '#111',
+        marginTop: 4,
     },
     subtitle: {
-        fontSize: 14,
+        fontSize: 15,
         color: '#666',
-        marginTop: 4,
+        marginTop: 6,
     },
     usageBadge: {
         marginTop: 12,
@@ -362,99 +383,85 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         color: '#DC2626',
     },
-    tiersContainer: {
-        flexGrow: 0,
-        flexShrink: 1,
-        maxHeight: SCREEN_HEIGHT * 0.55,
-    },
-    tiersContent: {
-        paddingBottom: 16,
-    },
-    tierCard: {
-        backgroundColor: '#fff',
+    tabContainer: {
+        flexDirection: 'row',
+        backgroundColor: '#F2F2F7',
         borderRadius: 16,
-        padding: 20,
-        marginBottom: 16,
+        padding: 4,
+        marginBottom: 20,
+    },
+    tabButton: {
+        flex: 1,
+        paddingVertical: 10,
+        alignItems: 'center',
+        borderRadius: 12,
+    },
+    tabButtonActive: {
+        backgroundColor: WHITE_BG,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1,
+        shadowRadius: 2,
+        elevation: 2,
+    },
+    tabButtonText: {
+        fontSize: 15,
+        fontWeight: '500',
+        color: '#666',
+    },
+    tabButtonTextActive: {
+        color: '#111',
+        fontWeight: '600',
+    },
+    matrixContainer: {
         borderWidth: 1,
         borderColor: '#E5E7EB',
+        borderRadius: 16,
+        padding: 16,
+        marginBottom: 24,
     },
-    tierCardSelected: {
-        borderColor: ANORHA_GREEN,
-        borderWidth: 2,
-    },
-    popularBadge: {
-        position: 'absolute',
-        top: -10,
-        right: 16,
-        paddingHorizontal: 12,
-        paddingVertical: 4,
-        borderRadius: 12,
-        backgroundColor: ANORHA_GREEN,
-    },
-    popularBadgeText: {
-        color: '#fff',
-        fontSize: 11,
-        fontWeight: '700',
-    },
-    tierName: {
-        fontSize: 22,
-        fontWeight: '700',
-        color: '#333',
-    },
-    tierDescription: {
-        fontSize: 14,
-        color: '#666',
-        marginTop: 2,
-    },
-    priceRow: {
+    matrixHeaderRow: {
         flexDirection: 'row',
-        alignItems: 'baseline',
-        marginTop: 12,
+        paddingBottom: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: '#E5E7EB',
+        marginBottom: 12,
     },
-    priceAmount: {
-        fontSize: 36,
-        fontWeight: '700',
-        color: '#333',
-    },
-    pricePeriod: {
+    matrixHeaderLabel: {
+        flex: 2,
         fontSize: 14,
-        color: '#666',
-        marginLeft: 4,
-    },
-    teamRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginTop: 12,
-        gap: 8,
-    },
-    teamText: {
-        fontSize: 13,
+        fontWeight: '500',
         color: '#666',
     },
-    featuresContainer: {
-        marginTop: 16,
-        gap: 10,
-    },
-    featureRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-    },
-    featureText: {
-        fontSize: 14,
-        color: '#333',
-    },
-    selectedIndicator: {
-        marginTop: 16,
-        paddingVertical: 8,
-        borderRadius: 8,
-        alignItems: 'center',
-        backgroundColor: '#64765315',
-    },
-    selectedText: {
+    matrixHeaderValueCol: {
+        flex: 1,
         fontSize: 14,
         fontWeight: '600',
-        color: ANORHA_GREEN,
+        color: '#666',
+        textAlign: 'center',
+    },
+    matrixRow: {
+        flexDirection: 'row',
+        paddingVertical: 10,
+        alignItems: 'center',
+    },
+    matrixRowLabel: {
+        flex: 2,
+        fontSize: 14,
+        color: '#111',
+        fontWeight: '500',
+    },
+    matrixRowFree: {
+        flex: 1,
+        fontSize: 14,
+        color: '#666',
+        textAlign: 'center',
+    },
+    matrixRowActive: {
+        flex: 1,
+        fontSize: 14,
+        fontWeight: '600',
+        textAlign: 'center',
     },
     actionsContainer: {
         gap: 12,
@@ -462,7 +469,7 @@ const styles = StyleSheet.create({
     },
     checkoutButton: {
         paddingVertical: 16,
-        borderRadius: 12,
+        borderRadius: 14,
         alignItems: 'center',
         backgroundColor: ANORHA_GREEN,
     },
@@ -474,26 +481,19 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: '600',
     },
-    cancelButton: {
-        alignItems: 'center',
-        paddingVertical: 12,
-    },
-    cancelButtonText: {
-        color: '#666',
-        fontSize: 14,
-    },
     manageButton: {
         alignItems: 'center',
         paddingVertical: 14,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: ANORHA_GREEN,
-        backgroundColor: 'transparent',
     },
     manageButtonText: {
-        color: ANORHA_GREEN,
+        color: '#666',
         fontSize: 15,
-        fontWeight: '600',
+        fontWeight: '500',
+        textDecorationLine: 'underline',
+    },
+    footerNote: {
+        fontSize: 13,
+        color: '#999',
     },
 });
 

@@ -352,19 +352,20 @@ export default function ItemJobsModal(props: Props) {
 
   // Calculate status counts for queue summary
   const statusCounts = useMemo(() => {
-    const counts = { pending: 0, processing: 0, completed: 0, failed: 0 };
+    const counts = { pending: 0, processing: 0, completed: 0, failed: 0, activeItems: [] as string[] };
     items.forEach(item => {
+      const title = (item as LegacyItem).title || `Item ${item.index + 1}`;
       if (enhanced) {
         const genStatus = (item as ItemJobState).generate?.status;
         if (genStatus === 'completed') counts.completed++;
-        else if (genStatus === 'processing' || genStatus === 'queued') counts.processing++;
+        else if (genStatus === 'processing' || genStatus === 'queued') { counts.processing++; if (counts.activeItems.length < 2) counts.activeItems.push(title); }
         else if (genStatus === 'failed') counts.failed++;
         else counts.pending++;
       } else {
         const legacyProps = props as LegacyProps;
         const detailsColor = legacyProps.detailsColor(item.index);
         if (detailsColor === ANORHA_GREEN) counts.completed++;
-        else if (detailsColor === '#FFD700') counts.processing++;
+        else if (detailsColor === '#FFD700') { counts.processing++; if (counts.activeItems.length < 2) counts.activeItems.push(title); }
         else if (detailsColor === '#e11d48' || detailsColor === '#EF4444') counts.failed++;
         else counts.pending++;
       }
@@ -376,18 +377,25 @@ export default function ItemJobsModal(props: Props) {
   const stepSummaryLegacy = useMemo(() => {
     if (enhanced) return null;
     const legacyProps = props as LegacyProps;
-    let matchDone = 0, genInProgress = 0, genDone = 0;
+    let matchDone = 0, genInProgress = 0, genDone = 0, genFailed = 0;
+    const activeItems: string[] = [];
     items.forEach(item => {
       const idx = item.index;
+      const title = (item as LegacyItem).title || `Item ${idx + 1}`;
       const matchGreen = legacyProps.matchColor(idx) === ANORHA_GREEN || legacyProps.matchColor(idx) === '#10B981';
       const detailsColor = legacyProps.detailsColor(idx);
       const detailsGreen = detailsColor === ANORHA_GREEN || detailsColor === '#10B981';
       const detailsYellow = detailsColor === '#FFD700' || detailsColor === '#F59E0B';
+      const detailsRed = detailsColor === '#e11d48' || detailsColor === '#EF4444';
       if (matchGreen) matchDone++;
       if (detailsGreen) genDone++;
-      else if (detailsYellow) genInProgress++;
+      else if (detailsRed) genFailed++;
+      else if (detailsYellow) {
+        genInProgress++;
+        if (activeItems.length < 2) activeItems.push(title);
+      }
     });
-    return { matchDone, genInProgress, genDone };
+    return { matchDone, genInProgress, genDone, genFailed, activeItems };
   }, [items, enhanced, props]);
 
   // Filter items by search and status
@@ -551,18 +559,21 @@ export default function ItemJobsModal(props: Props) {
               <Text style={styles.queueText}>
                 {stepSummaryLegacy ? (
                   <>
-                    <Text>{stepSummaryLegacy.matchDone} matched</Text>
+                    <Text style={{ fontWeight: '600' }}>{stepSummaryLegacy.matchDone}/{items.length} matched</Text>
                     {stepSummaryLegacy.genDone > 0 && (
-                      <Text style={styles.queueReadyReview}> • {stepSummaryLegacy.genDone} ready to review</Text>
+                      <Text style={styles.queueReadyReview}> • {stepSummaryLegacy.genDone} ready</Text>
+                    )}
+                    {stepSummaryLegacy.genFailed > 0 && (
+                      <Text style={styles.queueFailed}> • {stepSummaryLegacy.genFailed} failed</Text>
                     )}
                     {stepSummaryLegacy.genInProgress > 0 && (
-                      <Text style={styles.queueProcessing}> • {stepSummaryLegacy.genInProgress} generating</Text>
+                      <Text style={[styles.queueProcessing, { fontWeight: '600' }]}> • {stepSummaryLegacy.genInProgress} generating</Text>
                     )}
                   </>
                 ) : (
                   <>
                     {statusCounts.processing > 0 && (
-                      <Text style={styles.queueProcessing}>{statusCounts.processing} processing</Text>
+                      <Text style={[styles.queueProcessing, { fontWeight: '600' }]}>{statusCounts.processing} processing</Text>
                     )}
                     {statusCounts.processing > 0 && statusCounts.pending > 0 && ' • '}
                     {statusCounts.pending > 0 && (
@@ -579,7 +590,24 @@ export default function ItemJobsModal(props: Props) {
                   </>
                 )}
               </Text>
-              {stepSummaryLegacy && hasBatchOperations && (
+
+              {/* Active Items Progress UI */}
+              {((stepSummaryLegacy?.genInProgress || 0) > 0 || statusCounts.processing > 0) && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, backgroundColor: '#f9fafb', padding: 10, borderRadius: 8 }}>
+                  <SpinningLoader size={16} color="#F59E0B" />
+                  <View style={{ marginLeft: 10, flex: 1 }}>
+                    <Text style={{ fontSize: 13, color: '#111827', fontWeight: '500' }} numberOfLines={1}>
+                      {stepSummaryLegacy ? stepSummaryLegacy.activeItems.join(', ') : statusCounts.activeItems.join(', ')}
+                      {(stepSummaryLegacy ? stepSummaryLegacy.genInProgress : statusCounts.processing) > 2 ? ` + ${(stepSummaryLegacy ? stepSummaryLegacy.genInProgress : statusCounts.processing) - 2} more` : ''}
+                    </Text>
+                    <Text style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+                      Estimated time: ~{Math.ceil((stepSummaryLegacy ? stepSummaryLegacy.genInProgress : statusCounts.processing) * 10)}s
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {stepSummaryLegacy && hasBatchOperations && (stepSummaryLegacy.genInProgress === 0) && (
                 <Text style={styles.queueHint}>Generate uses the platforms you selected on the match screen.</Text>
               )}
             </View>

@@ -30,9 +30,13 @@ import { SystemNotificationProvider } from './src/context/SystemNotificationCont
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PostHogProvider, PostHogIdentify } from './src/providers/PostHogProvider';
 import * as WebBrowser from 'expo-web-browser';
+import { init as initFlowLogger } from './src/lib/mobileFlowLogger';
 
 // Complete any in-app browser auth session (e.g. OAuth redirect from Google Sign-In)
 WebBrowser.maybeCompleteAuthSession();
+
+// Initialize mobile flow logger (sessionId) early
+initFlowLogger().catch(() => {});
 
 // Feature flag to disable new functionality during debugging
 const ENABLE_PROCESS_FEATURES = false;

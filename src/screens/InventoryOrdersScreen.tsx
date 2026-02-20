@@ -42,6 +42,7 @@ import { CameraView } from 'expo-camera';
 import { useProductVariantRealtime, useInventoryLevelsRealtime } from '../hooks/useProductVariantRealtime';
 import { useOrg } from '../context/OrgContext';
 import { parseFilterQuery } from '../utils/parseFilterQuery';
+import { logFlowEvent, FlowEvents, startTrace, getTraceHeaders } from '../lib/mobileFlowLogger';
 
 type InventoryOrdersScreenNavigationProp = StackNavigationProp<AppStackParamList, 'TabNavigator'>;
 
@@ -105,6 +106,12 @@ const InventoryOrdersScreen = observer(() => {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [locationPickerOpen, setLocationPickerOpen] = useState(false);
   const scannerResultHandlerRef = useRef<((code: string) => void) | null>(null);
+  const closeScanner = useCallback(() => {
+    logFlowEvent(FlowEvents.BARCODE_SCANNER_CLOSED, {});
+    scannerResultHandlerRef.current = null;
+    // Small delay helps Android camera teardown before unmount.
+    setTimeout(() => setScannerOpen(false), 120);
+  }, []);
 
   // Handle route params
   useEffect(() => {
@@ -122,11 +129,11 @@ const InventoryOrdersScreen = observer(() => {
 
       if (p.openScannerOnMount) {
         setTimeout(() => {
+          logFlowEvent(FlowEvents.BARCODE_SCANNER_OPENED, { source: 'deep_link' });
           setScannerOpen(true);
           scannerResultHandlerRef.current = (code: string) => {
             handleBarcodeScan(code);
-            setScannerOpen(false);
-            scannerResultHandlerRef.current = null;
+            closeScanner();
           };
         }, 100);
       }
@@ -135,7 +142,7 @@ const InventoryOrdersScreen = observer(() => {
         setLocationPickerOpen(true);
       }
     }
-  }, [route.params]);
+  }, [route.params, closeScanner]);
 
   // Loading & Data State
   const [platformConnections, setPlatformConnections] = useState<PlatformConnection[]>([]);
@@ -1184,25 +1191,31 @@ const InventoryOrdersScreen = observer(() => {
   };
 
   const searchBarcodeOnBackend = async (barcode: string) => {
+    startTrace();
     try {
       setBarcodeSearchError(null);
       console.log(`[InventoryOrdersScreen] Searching backend for barcode: ${barcode}`);
 
       const token = await ensureSupabaseJwt();
       if (!token) {
+        logFlowEvent(FlowEvents.BARCODE_SCAN_FAILED, { barcode, error: 'no_auth_token' });
         setBarcodeSearchError('Authentication required. Please log in again.');
         return;
       }
 
+      const traceHeaders = await getTraceHeaders();
       const response = await fetch(`https://api.sssync.app/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
+          ...traceHeaders,
         },
       });
 
       if (!response.ok) {
+        const errMsg = response.status === 404 ? `Product not found with barcode: ${barcode}` : `Search failed: ${response.statusText}`;
+        logFlowEvent(FlowEvents.BARCODE_SCAN_FAILED, { barcode, status: response.status, error: errMsg });
         if (response.status === 404) {
           setBarcodeSearchError(`Product not found with barcode: ${barcode}`);
         } else {
@@ -1215,17 +1228,23 @@ const InventoryOrdersScreen = observer(() => {
       const data = await response.json();
 
       if (data.error) {
+        logFlowEvent(FlowEvents.BARCODE_SCAN_FAILED, { barcode, error: data.error });
         setBarcodeSearchError(data.error);
         setScannedBarcode(null);
         return;
       }
 
+      logFlowEvent(FlowEvents.BARCODE_SCAN_COMPLETED, {
+        barcode,
+        variantId: data.variant?.Id ?? data.variant?.id ?? null,
+      });
       console.log(`[InventoryOrdersScreen] Backend found variant:`, data.variant);
       // Result will be used in filteredInventory below
       // Don't clear the scannedBarcode - it's already set and will filter the list
     } catch (error) {
       console.error(`[InventoryOrdersScreen] Barcode search error:`, error);
       const errorMessage = error instanceof Error ? error.message : String(error);
+      logFlowEvent(FlowEvents.BARCODE_SCAN_FAILED, { barcode, error: errorMessage });
       setBarcodeSearchError(`Error searching for barcode: ${errorMessage}`);
       setScannedBarcode(null);
     }
@@ -1371,11 +1390,11 @@ const InventoryOrdersScreen = observer(() => {
                   onScan={handleBarcodeScan}
                   onScannerOpen={() => {
                     console.log('[InventoryOrdersScreen] Scanner button pressed, opening scanner');
+                    logFlowEvent(FlowEvents.BARCODE_SCANNER_OPENED, {});
                     setScannerOpen(true);
                     scannerResultHandlerRef.current = (code: string) => {
                       handleBarcodeScan(code);
-                      setScannerOpen(false);
-                      scannerResultHandlerRef.current = null;
+                      closeScanner();
                     };
                   }}
                   onClear={handleSearchClear}
@@ -1588,7 +1607,7 @@ const InventoryOrdersScreen = observer(() => {
               <TouchableOpacity
                 onPress={() => {
                   console.log('[InventoryOrdersScreen] Scanner close button pressed');
-                  setScannerOpen(false);
+                  closeScanner();
                 }}
                 style={styles.scannerCloseButton}
               >
@@ -2503,8 +2522,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     zIndex: 5000,
-    height: 240,
-    width: "100%",
+    width: '100%',
   },
   scannerFullBleed: {
     flex: 1,

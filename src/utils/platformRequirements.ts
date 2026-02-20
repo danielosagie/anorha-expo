@@ -21,23 +21,24 @@ export function getPlatformRequirements(overrides?: RequirementMap): Requirement
  */
 export function hasPlatformPrice(platformData: any): boolean {
   if (!platformData) return false;
-  
-  // If variants exist, they can provide pricing (no flat price needed)
+
+  // 1. Strictly honor explicit flat price
+  const parsedPrice = Number(platformData.price);
+  if (platformData.price != null && platformData.price !== '' && !isNaN(parsedPrice) && parsedPrice > 0) {
+    return true;
+  }
+
+  // 2. If no flat price, check if variants exist and provide pricing
   if (Array.isArray(platformData.variants) && platformData.variants.length > 0) {
     // All variants must have prices
-    const allVariantsHavePrices = platformData.variants.every((v: any) => 
+    const allVariantsHavePrices = platformData.variants.every((v: any) =>
       v.price && Number(v.price) > 0
     );
     if (allVariantsHavePrices) {
       return true;
     }
   }
-  
-  // Otherwise, require flat price
-  if (platformData.price && Number(platformData.price) > 0) {
-    return true;
-  }
-  
+
   return false;
 }
 
@@ -49,13 +50,13 @@ export function isPlatformReady(platformData: any, platformKey: string, ignoredP
   if (!platformData || ignoredPlatforms.includes(platformKey)) {
     return false;
   }
-  
+
   const hasTitle = platformData.title?.toString().trim().length > 0;
   const hasSku = platformData.sku?.toString().trim().length > 0;
   const hasPrice = hasPlatformPrice(platformData);
   const needsCategory = ['shopify', 'ebay'].includes(platformKey?.toLowerCase?.() || '');
   const hasCategory = !!(platformData.productCategoryId || platformData.categoryId);
-  
+
   return hasTitle && hasSku && hasPrice && (!needsCategory || hasCategory);
 }
 
@@ -64,15 +65,15 @@ export function isPlatformReady(platformData: any, platformKey: string, ignoredP
  */
 export function getMissingPlatformFields(platformData: any, platformKey: string): string[] {
   const missing: string[] = [];
-  
+
   if (!platformData.title?.toString().trim()) {
     missing.push('title');
   }
-  
+
   if (!platformData.sku?.toString().trim()) {
     missing.push('sku');
   }
-  
+
   if (!hasPlatformPrice(platformData)) {
     missing.push('price (either flat or all variants)');
   }
@@ -80,7 +81,7 @@ export function getMissingPlatformFields(platformData: any, platformKey: string)
   if (['shopify', 'ebay'].includes(platformKey?.toLowerCase?.() || '') && !platformData.productCategoryId && !platformData.categoryId) {
     missing.push('category');
   }
-  
+
   return missing;
 }
 

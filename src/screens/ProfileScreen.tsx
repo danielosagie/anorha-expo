@@ -1770,8 +1770,8 @@ const ProfileScreen = () => {
       </View>
 
       {item.badge ? (
-        <View style={[styles.menuBadge, { backgroundColor: theme.colors.primary + '20' }]}>
-          <Text style={[styles.menuBadgeText, { color: theme.colors.primary }]}>{item.badge}</Text>
+        <View style={[styles.menuBadge, { backgroundColor: '#93C82220' }]}>
+          <Text style={[styles.menuBadgeText, { color: '#93C822' }]}>{item.badge}</Text>
         </View>
       ) : !item.customComponent && (
         <Icon name="chevron-right" size={20} color="#999" />
@@ -1939,7 +1939,7 @@ const ProfileScreen = () => {
                   }}
                   style={{ marginTop: 8 }}
                 >
-                  <Text style={{ fontSize: 12, color: theme.colors.primary, fontWeight: 'bold', textDecorationLine: 'underline' }}>
+                  <Text style={{ fontSize: 12, color: '#93C822', fontWeight: 'bold', textDecorationLine: 'underline' }}>
                     Switch to {availableOrgs.find(o => !o.name.includes('Workspace'))?.name || 'Real Org'}
                   </Text>
                 </TouchableOpacity>
@@ -2017,7 +2017,7 @@ const ProfileScreen = () => {
           </View>
 
           {isLoadingConnections ? (
-            <ActivityIndicator size="large" color={theme.colors.primary} style={{ marginVertical: 20 }} />
+            <ActivityIndicator size="large" color={'#93C822'} style={{ marginVertical: 20 }} />
           ) : (
             <View style={styles.integrationsContainer}>
               {(() => {
@@ -2258,7 +2258,7 @@ const ProfileScreen = () => {
               {/* Option 1: Guided Setup */}
               <View style={styles.shopifyOption}>
                 <View style={styles.shopifyOptionHeader}>
-                  <View style={[styles.stepNumber, { backgroundColor: theme.colors.primary }]}>
+                  <View style={[styles.stepNumber, { backgroundColor: '#93C822' }]}>
                     <Text style={styles.stepNumberText}>1</Text>
                   </View>
                   <Text style={styles.shopifyOptionTitle}>Guided Setup (Recommended)</Text>
@@ -2292,7 +2292,7 @@ const ProfileScreen = () => {
                     onPress={handlePasteFromClipboard}
                     style={styles.shopifyPasteButton}
                   >
-                    <Icon name="content-paste" size={20} color={theme.colors.primary} />
+                    <Icon name="content-paste" size={20} color={'#93C822'} />
                   </TouchableOpacity>
                 </View>
               </View>
@@ -2617,7 +2617,7 @@ const formatSyncDate = (dateString: string): string => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8F9FB',
+    backgroundColor: '#FFFFFF',
   },
   scrollViewContent: {
     padding: 16,
@@ -2625,7 +2625,14 @@ const styles = StyleSheet.create({
     paddingBottom: 50,
   },
   card: {
-    marginBottom: 16,
+    marginBottom: 24,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 0,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#F2F2F7',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
   },
   title: {
     fontSize: 28,
@@ -2785,7 +2792,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    borderBottomColor: '#F2F2F7',
   },
   settingInfo: {
     flexDirection: 'row',
@@ -2805,7 +2812,7 @@ const styles = StyleSheet.create({
   },
   menuItemBorder: {
     borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    borderBottomColor: '#F2F2F7',
   },
   menuItemLeft: {
     flexDirection: 'row',

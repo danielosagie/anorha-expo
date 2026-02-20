@@ -8,9 +8,8 @@ interface UsageCounterProps {
     onUpgradePress: () => void;
     isSubscriber?: boolean;
 }
-
-const ANORHA_GREEN = '#647653';
-const ANORHA_CREAM = '#FEF4DD';
+const ANORHA_GREEN = '#93C822';
+const ANORHA_CREAM = '#ffffffe4';
 
 const UsageCounter: React.FC<UsageCounterProps> = ({
     usageCount,
@@ -30,7 +29,7 @@ const UsageCounter: React.FC<UsageCounterProps> = ({
             { backgroundColor: isExhausted ? '#FEE2E2' : ANORHA_CREAM }
         ]}>
             <View style={styles.leftSection}>
-                <Camera size={16} color={isExhausted ? '#DC2626' : ANORHA_GREEN} />
+                <Camera size={20} color={isExhausted ? '#DC2626' : ANORHA_GREEN} />
                 <Text style={[
                     styles.countText,
                     { color: isExhausted ? '#DC2626' : '#333' }
@@ -66,6 +65,8 @@ const styles = StyleSheet.create({
         borderRadius: 8,
         marginHorizontal: 16,
         marginBottom: 8,
+        borderColor: "rgba(0, 0, 0, 0.18)",
+        borderWidth: 2,
     },
     leftSection: {
         flexDirection: 'row',

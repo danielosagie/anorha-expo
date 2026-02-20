@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Platform } from 'react-native';
 import Animated, { FadeIn, SlideInUp } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { BlurView } from 'expo-blur';
@@ -151,11 +151,18 @@ const styles = StyleSheet.create({
         borderRadius: 28,
         overflow: 'hidden',
         zIndex: 100,
-        elevation: 6,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.35,
-        shadowRadius: 10,
+        ...Platform.select({
+            ios: {
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.35,
+                shadowRadius: 10,
+            },
+            android: {
+                elevation: 3,
+            },
+            default: {},
+        }),
     },
     blurContainer: {
         backgroundColor: 'rgba(0,0,0,0.5)',
@@ -181,7 +188,7 @@ const styles = StyleSheet.create({
         opacity: 0.4,
     },
     newItemButton: {
-        backgroundColor: '#93C822',
+        backgroundColor: '#9CA3AF',
         flexDirection: 'row',
         gap: 6,
         paddingHorizontal: 10,

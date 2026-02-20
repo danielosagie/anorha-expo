@@ -1,11 +1,11 @@
 import { useNavigation, useTheme } from '@react-navigation/native';
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TouchableOpacity, 
-  Image, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Image,
   SafeAreaView,
   Dimensions,
   Platform,
@@ -61,35 +61,48 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
       'Ready to review',
     ],
     'match-and-generate': [
-      'Describing product...',
-      'Searching eBay...',
-      'Selecting best match...',
-      'Generating listings...',
-      'Creating view',
-      'Ready',
+      'Analyzing item',
+      'Searching for product',
+      'Ranking results',
+      'Building details',
+      'Assembling listing',
+      'Ready to review',
     ],
   };
 
   // Select the correct list of stages based on the processType
-  const activeStages = stages[processType];
+  // Track the original processType to maintain unified stages during match→generate transitions
+  const originalProcessTypeRef = React.useRef(processType);
+  const activeStages = stages[originalProcessTypeRef.current] || stages[processType];
 
   // Map backend stage names to UI stage labels (keeps progress bar accurate)
   const stageNameMap: Record<string, string> = {
-    // Backend => UI
-    'Preparing': 'Indexing web pages',
-    'Fetching sources': 'Finding product data',
-    'Scraping sources': 'Cleaning data',
-    'Generating details': 'Generating listing',
-    'Saving drafts': 'Creating view',
+    // Generate backend stages → UI
+    'Preparing': 'Gathering data...',
+    'Fetching sources': 'Analyzing sources...',
+    'Scraping sources': 'Building details...',
+    'Generating details': 'Assembling listing...',
+    'Saving drafts': 'Finalizing...',
     'Ready': 'Ready to review',
-    // Fast track stages
-    'Describing product...': 'Describing product...',
-    'Searching eBay...': 'Searching eBay...',
-    'Selecting best match...': 'Selecting best match...',
-    'Generating listings...': 'Generating listings...',
+    // Match-and-generate mapped stages (from match phase)
+    'Analyzing...': 'Analyzing...',
+    'Searching...': 'Searching...',
+    'Ranking results...': 'Ranking results...',
+    'Building details...': 'Building details...',
+    'Assembling listing...': 'Assembling listing...',
   };
 
-  
+  // Mapping for generate backend stages when inside a match-and-generate flow
+  const matchAndGenerateStageMap: Record<string, string> = {
+    'Preparing': 'Building details...',
+    'Fetching sources': 'Building details...',
+    'Scraping sources': 'Building details...',
+    'Generating details': 'Assembling listing...',
+    'Saving drafts': 'Ready',
+    'Ready': 'Ready',
+  };
+
+
 
 
   // Poll job status using the jobId
@@ -104,6 +117,62 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
   const NOT_FOUND_CONSECUTIVE_THRESHOLD = 7;
   const NOT_FOUND_WINDOW_MS = 18000;
 
+  const toPhotoUri = useCallback((photo: any): string => {
+    if (typeof photo === 'string') return photo;
+    return photo?.uri || photo?.url || '';
+  }, []);
+
+  const buildGenerateItems = useCallback((results: any[]): Array<{ index: number; title: string; thumb: string; matchesCount: number }> => {
+    const existingItems = ((onCompleteRoute?.params as any)?.items || []);
+    if (Array.isArray(existingItems) && existingItems.length > 0) return existingItems;
+    if (!Array.isArray(results) || results.length === 0) return [];
+    return results.map((res: any, idx: number) => {
+      const first = res?.serpApiData?.[0] || res?.rerankedResults?.[0] || null;
+      return {
+        index: idx,
+        title: first?.title || `Item ${idx + 1}`,
+        thumb: first?.image || first?.thumbnail || res?.originalTargetImage || '',
+        matchesCount: Array.isArray(res?.serpApiData) ? res.serpApiData.length : 0,
+      };
+    });
+  }, [onCompleteRoute]);
+
+  const buildUserImagesByIndexForGenerate = useCallback((): Record<number, string[]> => {
+    const existing = (onCompleteRoute?.params as any)?.userImagesByIndex;
+    if (existing && typeof existing === 'object' && Object.keys(existing).length > 0) {
+      return existing;
+    }
+
+    const imagesByIndex: Record<number, string[]> = {};
+    const sourceBulk = Array.isArray(bulkItems) ? bulkItems : [];
+    sourceBulk.forEach((item: any, i: number) => {
+      const photos = Array.isArray(item?.photos) ? item.photos : [];
+      const uris = photos
+        .map((p: any) => toPhotoUri(p))
+        .filter((u: string) => typeof u === 'string' && u.length > 0);
+      if (uris.length > 0) {
+        imagesByIndex[i] = Array.from(new Set(uris));
+      }
+    });
+
+    return imagesByIndex;
+  }, [bulkItems, onCompleteRoute, toPhotoUri]);
+
+  const buildGenerateFirstPhotos = useCallback((firstResult: any): any[] => {
+    const existingFirstPhotos = Array.isArray(firstPhotos) ? firstPhotos : [];
+    if (existingFirstPhotos.length > 0) return existingFirstPhotos;
+
+    const fallbackUris = [
+      firstResult?.originalTargetImage,
+      firstResult?.serpApiData?.[0]?.image,
+      firstResult?.serpApiData?.[0]?.thumbnail,
+      firstResult?.rerankedResults?.[0]?.image,
+      firstResult?.rerankedResults?.[0]?.thumbnail,
+    ].filter((u: any) => typeof u === 'string' && u.length > 0);
+
+    return Array.from(new Set(fallbackUris));
+  }, [firstPhotos]);
+
   useEffect(() => {
     if (!jobId) return;
 
@@ -112,12 +181,12 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
       isPollingRef.current = true;
       try {
 
-        
+
 
         // Get current user
         async function getToken() { return await ensureSupabaseJwt(); }
 
-        
+
         const token = await getToken();
         if (!token) {
           throw new Error('Missing auth token for job status polling');
@@ -152,22 +221,25 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
           // For match-and-generate, we start by polling the match job
           // After match completes with skipToGenerate, we'll switch to polling generate job
           const isMatchAndGenerate = processType === 'match-and-generate';
-          const endpoint = isMatchAndGenerate 
+          const endpoint = isMatchAndGenerate
             ? `${BASE_URL}/api/products/match/jobs/${jobId}/status`
             : `${BASE_URL}/api/products/generate/jobs/${jobId}/status`;
-          
+
           const status = await fetchStatus(endpoint);
           consecutivePollFailuresRef.current = 0;
           notFoundCountRef.current = 0;
           firstNotFoundAtRef.current = null;
-          
+
           console.log('[POLLING] Job status:', status.status, 'Stage:', status.currentStage);
-          
+
           // Update job status and stage
           setJobStatus(status.status);
-          
+
           // Map backend stages to frontend stage index
-          const mappedStage = stageNameMap[status.currentStage] || status.currentStage;
+          // Use match-and-generate mapping if we're in the generate phase of a unified flow
+          const isUnifiedGenPhase = originalProcessTypeRef.current === 'match-and-generate' && processType === 'generate';
+          const effectiveMap = isUnifiedGenPhase ? matchAndGenerateStageMap : stageNameMap;
+          const mappedStage = effectiveMap[status.currentStage] || stageNameMap[status.currentStage] || status.currentStage;
           const stageIndex = activeStages.indexOf(mappedStage);
           if (stageIndex >= 0 && mappedStage !== lastStage) {
             console.log('[ANIMATION] Stage changed from', lastStage, 'to', mappedStage, '- triggering animation');
@@ -176,31 +248,45 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
           } else if (mappedStage === lastStage) {
             console.log('[ANIMATION] Stage unchanged:', mappedStage, '- skipping animation');
           }
-          
+
           // For match-and-generate: check if match completed and should skip to generate
           if (isMatchAndGenerate && status.status === 'completed') {
             const firstResult = Array.isArray(status.results) && status.results.length > 0 ? status.results[0] : null;
             const shouldSkipToGenerate = firstResult?.skipToGenerate === true && firstResult?.autoGenerateJobId;
-            
+
             if (shouldSkipToGenerate) {
+              const generateFirstPhotos = buildGenerateFirstPhotos(firstResult);
+              const generateItems = buildGenerateItems(status.results || []);
+              const userImagesByIndex = buildUserImagesByIndexForGenerate();
+              console.log('[LOADING] Match-and-generate transition payload', {
+                generateFirstPhotosCount: generateFirstPhotos.length,
+                itemsCount: generateItems.length,
+                userImageGroups: Object.keys(userImagesByIndex).length,
+              });
               if (pollingIntervalRef.current) {
                 clearInterval(pollingIntervalRef.current);
                 pollingIntervalRef.current = null;
               }
               console.log(`[LOADING] Match-and-generate: Match completed, switching to generate job ${firstResult.autoGenerateJobId}`);
               // Switch to polling generate job
+              // Update params in-place to avoid remounting and replaying entrance animations
+              // Advance to the generate portion of unified stages (index 3 = 'Building details...')
+              setCurrentStageIndex(3);
+              setLastStage('Ranking results...');
+              setNavigatedEarly(false);
+              setJobStatus('queued');
               setTimeout(() => {
-                navigation.replace('LoadingScreen' as never, {
+                navigation.setParams({
                   processType: 'generate',
-                  payload: { jobId: firstResult.autoGenerateJobId, firstPhotos: [] },
+                  payload: { jobId: firstResult.autoGenerateJobId, firstPhotos: generateFirstPhotos },
                   onCompleteRoute: {
                     screen: 'GenerateDetailsScreen',
                     params: {
                       jobId: firstResult.autoGenerateJobId,
                       matchJobId: jobId,
-                      items: [],
+                      items: generateItems,
                       jobMap: {},
-                      userImagesByIndex: {},
+                      userImagesByIndex,
                     },
                   },
                 } as never);
@@ -208,7 +294,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
               return;
             }
           }
-          
+
           // If completed, stop polling and navigate to next screen
           if (status.status === 'completed') {
             if (pollingIntervalRef.current) {
@@ -237,19 +323,19 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
             console.error('Job failed:', status.error);
             // Handle error - maybe go back or show error screen
           }
-          
+
         } else {
 
           const status = await fetchStatus(`${BASE_URL}/api/products/match/jobs/${jobId}/status`);
           consecutivePollFailuresRef.current = 0;
           notFoundCountRef.current = 0;
           firstNotFoundAtRef.current = null;
-          
+
           console.log('[POLLING] Job status:', status.status, 'Stage:', status.currentStage);
-          
+
           // Update job status and stage
           setJobStatus(status.status);
-          
+
           // Map backend stages to frontend stage index
           const stageIndex = activeStages.indexOf(status.currentStage);
           if (stageIndex >= 0 && status.currentStage !== lastStage) {
@@ -259,30 +345,44 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
           } else if (status.currentStage === lastStage) {
             console.log('[ANIMATION] Stage unchanged:', status.currentStage, '- skipping animation');
           }
-          
+
           // Check if fast track completed with auto-generate
           const firstResult = Array.isArray(status.results) && status.results.length > 0 ? status.results[0] : null;
           const shouldSkipToGenerate = firstResult?.skipToGenerate === true && firstResult?.autoGenerateJobId;
 
           // If fast track with auto-generate, wait for match job to complete then navigate to generate job
           if (shouldSkipToGenerate && status.status === 'completed') {
+            const generateFirstPhotos = buildGenerateFirstPhotos(firstResult);
+            const generateItems = buildGenerateItems(status.results || []);
+            const userImagesByIndex = buildUserImagesByIndexForGenerate();
+            console.log('[LOADING] Fast-track transition payload', {
+              generateFirstPhotosCount: generateFirstPhotos.length,
+              itemsCount: generateItems.length,
+              userImageGroups: Object.keys(userImagesByIndex).length,
+            });
             if (pollingIntervalRef.current) {
               clearInterval(pollingIntervalRef.current);
               pollingIntervalRef.current = null;
             }
             console.log(`[LOADING] Fast track completed, navigating to generate job ${firstResult.autoGenerateJobId}`);
+            // Update params in-place to avoid remounting and replaying entrance animations
+            // Advance to the generate portion of unified stages (index 3 = 'Building details...')
+            setCurrentStageIndex(3);
+            setLastStage('Ranking results...');
+            setNavigatedEarly(false);
+            setJobStatus('queued');
             setTimeout(() => {
-              navigation.replace('LoadingScreen' as never, {
+              navigation.setParams({
                 processType: 'generate',
-                payload: { jobId: firstResult.autoGenerateJobId, firstPhotos: [] },
+                payload: { jobId: firstResult.autoGenerateJobId, firstPhotos: generateFirstPhotos },
                 onCompleteRoute: {
                   screen: 'GenerateDetailsScreen',
                   params: {
                     jobId: firstResult.autoGenerateJobId,
                     matchJobId: jobId,
-                    items: [],
+                    items: generateItems,
                     jobMap: {},
-                    userImagesByIndex: {},
+                    userImagesByIndex,
                   },
                 },
               } as never);
@@ -365,23 +465,37 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
           const shouldSkipToGenerateMatch = firstResultMatch?.skipToGenerate === true && firstResultMatch?.autoGenerateJobId;
 
           if (shouldSkipToGenerateMatch && status.status === 'completed') {
+            const generateFirstPhotos = buildGenerateFirstPhotos(firstResultMatch);
+            const generateItems = buildGenerateItems(status.results || []);
+            const userImagesByIndex = buildUserImagesByIndexForGenerate();
+            console.log('[LOADING] Match-complete transition payload', {
+              generateFirstPhotosCount: generateFirstPhotos.length,
+              itemsCount: generateItems.length,
+              userImageGroups: Object.keys(userImagesByIndex).length,
+            });
             if (pollingIntervalRef.current) {
               clearInterval(pollingIntervalRef.current);
               pollingIntervalRef.current = null;
             }
             console.log(`[LOADING] Match completed with skipToGenerate, navigating to generate job ${firstResultMatch.autoGenerateJobId}`);
+            // Update params in-place to avoid remounting and replaying entrance animations
+            // Advance to the generate portion of unified stages (index 3 = 'Building details...')
+            setCurrentStageIndex(3);
+            setLastStage('Ranking results...');
+            setNavigatedEarly(false);
+            setJobStatus('queued');
             setTimeout(() => {
-              navigation.replace('LoadingScreen' as never, {
+              navigation.setParams({
                 processType: 'generate',
-                payload: { jobId: firstResultMatch.autoGenerateJobId, firstPhotos: [] },
+                payload: { jobId: firstResultMatch.autoGenerateJobId, firstPhotos: generateFirstPhotos },
                 onCompleteRoute: {
                   screen: 'GenerateDetailsScreen',
                   params: {
                     jobId: firstResultMatch.autoGenerateJobId,
                     matchJobId: jobId,
-                    items: [],
+                    items: generateItems,
                     jobMap: {},
-                    userImagesByIndex: {},
+                    userImagesByIndex,
                   },
                 },
               } as never);
@@ -412,8 +526,8 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
 
 
         }
-        
-        
+
+
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const is404 = message.includes('(404)') && message.toLowerCase().includes('not found');
@@ -477,7 +591,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
         pollingIntervalRef.current = null;
       }
     };
-  }, [jobId, processType, navigation, onCompleteRoute, activeStages]);
+  }, [jobId, processType, navigation, onCompleteRoute, activeStages, bulkItems, firstPhotos, buildGenerateFirstPhotos, buildGenerateItems, buildUserImagesByIndexForGenerate]);
 
   // Fallback timer for advancing stages if polling fails
   useEffect(() => {
@@ -515,29 +629,29 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
   console.log('[LOADING] Payload photos:', firstPhotos);
 
   return (
-    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'white', width: '100%', height: '100%'  }}>
+    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'white', width: '100%', height: '100%' }}>
       <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ position: 'absolute', top: 48, left: 24, zIndex: 4000, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}>
         <Boxes size={18} color={'#000'} />
         <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Current Jobs</Text>
       </TouchableOpacity>
       <View style={styles.container}>
-        <PyramidGrid 
+        <PyramidGrid
           items={(firstPhotos || []).map((photo, i) => {
             // Handle different photo formats - could be URI string or photo object
             const uri = typeof photo === 'string' ? photo : photo?.uri || photo?.url || String(photo);
             console.log(`[PYRAMID] Photo ${i}:`, typeof photo, uri?.substring(0, 50));
-            return { id: `img-${i}-${Date.now()}`, uri };
-          })} 
-          style={{ 
-            justifyContent: 'center', 
-            alignItems: 'center', 
+            return { id: `img-${i}-${uri?.slice(-20) || 'empty'}`, uri };
+          })}
+          style={{
+            justifyContent: 'center',
+            alignItems: 'center',
             minHeight: '40%',
             maxHeight: '55%',
             width: '90%' // Give it more width
-          }} 
+          }}
         />
-        <StepLoader 
-          stages={activeStages} 
+        <StepLoader
+          stages={activeStages}
           currentStageIndex={currentStageIndex}
           style={{ paddingTop: 40, marginBottom: 10, maxHeight: '25%', minHeight: '15%' }}
         />

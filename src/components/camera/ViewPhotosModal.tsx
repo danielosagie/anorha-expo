@@ -161,7 +161,7 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
                       onPress={onImageUpload}
                     >
                       <Icon name="camera-plus-outline" size={28} color="#999" />
-                      <Text style={styles.addPhotoText}>Add</Text>
+                      <Text style={styles.addPhotoText}>Add to item</Text>
                     </TouchableOpacity>
                   );
                 }
@@ -181,7 +181,7 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
                         onLongPress={drag}
                         disabled={isActive}
                       >
-                        <Image source={{ uri: photo.uri }} style={styles.photoImage} />
+                        <Image key={photo.id} source={{ uri: photo.uri }} style={styles.photoImage} />
                         <View style={[styles.numberBadge, photo.isCover ? styles.numberBadgeCover : styles.numberBadgeDefault]}>
                           {photo.isCover ? (
                             <Text style={styles.numberBadgeText} numberOfLines={1}>
@@ -288,7 +288,7 @@ const styles = StyleSheet.create({
   photoSlot: {
     borderRadius: 12,
     overflow: 'hidden',
-    backgroundColor: '#f0f0f0',
+    backgroundColor: '#fff',
   },
   coverPhotoSlot: {
     borderWidth: 2,
@@ -353,6 +353,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 12,
     color: '#999',
+    textAlign: 'center',
   },
 });
 

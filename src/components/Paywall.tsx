@@ -6,6 +6,7 @@ import {
   Modal,
   TouchableOpacity,
   ScrollView,
+  Image,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
@@ -29,9 +30,12 @@ const Paywall: React.FC<PaywallProps> = ({
 }) => {
   const theme = useTheme();
 
+  const ANORHA_GREEN = '#93C822';
+  const WHITE_BG = '#FFFFFF';
+
   const getTitle = () => {
     if (!entitlements) return 'Start Your Free Trial';
-    
+
     if (entitlements.subscriptionStatus === 'expired') {
       return 'Your Subscription Has Expired';
     }
@@ -49,12 +53,12 @@ const Paywall: React.FC<PaywallProps> = ({
     if (entitlements.subscriptionStatus === 'trialing') {
       return `You have ${entitlements.trialDaysLeft} day${entitlements.trialDaysLeft !== 1 ? 's' : ''} left in your trial. Upgrade now to continue using all features.`;
     }
-    
+
     if (entitlements.subscriptionStatus === 'expired') {
       return 'Reactivate your subscription to continue syncing inventory across platforms.';
     }
 
-    return feature 
+    return feature
       ? `Upgrade your plan to access ${feature}.`
       : 'Upgrade to unlock premium features.';
   };
@@ -74,19 +78,19 @@ const Paywall: React.FC<PaywallProps> = ({
       onRequestClose={onClose}
     >
       <View style={styles.overlay}>
-        <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+        <View style={[styles.container, { backgroundColor: WHITE_BG }]}>
           {/* Close button */}
           <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-            <Icon name="close" size={24} color="#666" />
+            <View style={styles.closeButtonInner}>
+              <Icon name="close" size={20} color="#999" />
+            </View>
           </TouchableOpacity>
 
           {/* Header */}
           <View style={styles.header}>
-            <View style={[styles.iconContainer, { backgroundColor: theme.colors.primary + '20' }]}>
-              <Icon name="crown" size={40} color={theme.colors.primary} />
-            </View>
+            <Image source={require('../assets/anorha_logo.png')} style={{ width: 140, height: 40, resizeMode: 'contain', marginBottom: 16 }} />
             <Text style={[styles.title, { color: theme.colors.text }]}>{getTitle()}</Text>
-            <Text style={[styles.subtitle, { color: theme.colors.subtext }]}>{getSubtitle()}</Text>
+            <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>{getSubtitle()}</Text>
           </View>
 
           {/* Trial badge */}
@@ -103,34 +107,34 @@ const Paywall: React.FC<PaywallProps> = ({
           <ScrollView style={styles.featuresContainer} showsVerticalScrollIndicator={false}>
             {features.map((item, index) => (
               <View key={index} style={styles.featureRow}>
-                <View style={[styles.featureIcon, { backgroundColor: theme.colors.primary + '15' }]}>
-                  <Icon name={item.icon} size={20} color={theme.colors.primary} />
+                <View style={[styles.featureIcon, { backgroundColor: ANORHA_GREEN + '15' }]}>
+                  <Icon name={item.icon} size={20} color={ANORHA_GREEN} />
                 </View>
                 <View style={styles.featureText}>
                   <Text style={[styles.featureTitle, { color: theme.colors.text }]}>{item.title}</Text>
-                  <Text style={[styles.featureDescription, { color: theme.colors.subtext }]}>
+                  <Text style={[styles.featureDescription, { color: theme.colors.textSecondary }]}>
                     {item.description}
                   </Text>
                 </View>
-                <Icon name="check-circle" size={20} color={theme.colors.primary} />
+                <Icon name="check-circle" size={20} color={ANORHA_GREEN} />
               </View>
             ))}
           </ScrollView>
 
           {/* Pricing options */}
           <View style={styles.pricingContainer}>
-            <TouchableOpacity 
-              style={[styles.pricingCard, styles.pricingCardSelected, { borderColor: theme.colors.primary }]}
+            <TouchableOpacity
+              style={[styles.pricingCard, styles.pricingCardSelected, { borderColor: ANORHA_GREEN }]}
               onPress={onUpgrade}
             >
               <View style={styles.pricingHeader}>
                 <Text style={[styles.pricingName, { color: theme.colors.text }]}>Growth</Text>
-                <View style={[styles.popularBadge, { backgroundColor: theme.colors.primary }]}>
+                <View style={[styles.popularBadge, { backgroundColor: ANORHA_GREEN }]}>
                   <Text style={styles.popularBadgeText}>POPULAR</Text>
                 </View>
               </View>
               <Text style={[styles.pricingPrice, { color: theme.colors.text }]}>$20<Text style={styles.pricingPeriod}>/month</Text></Text>
-              <Text style={[styles.pricingFeatures, { color: theme.colors.subtext }]}>
+              <Text style={[styles.pricingFeatures, { color: theme.colors.textSecondary }]}>
                 2 platforms • 40 AI scans/mo • 2 team members
               </Text>
             </TouchableOpacity>
@@ -138,18 +142,18 @@ const Paywall: React.FC<PaywallProps> = ({
 
           {/* CTA buttons */}
           <View style={styles.ctaContainer}>
-            <Button 
-              title="Upgrade Now" 
-              onPress={onUpgrade} 
+            <Button
+              title="Upgrade Now"
+              onPress={onUpgrade}
               style={styles.upgradeButton}
             />
             <TouchableOpacity onPress={onClose} style={styles.maybeLaterButton}>
-              <Text style={[styles.maybeLaterText, { color: theme.colors.subtext }]}>Maybe Later</Text>
+              <Text style={[styles.maybeLaterText, { color: theme.colors.textSecondary }]}>Maybe Later</Text>
             </TouchableOpacity>
           </View>
 
           {/* Footer note */}
-          <Text style={[styles.footerNote, { color: theme.colors.subtext }]}>
+          <Text style={[styles.footerNote, { color: theme.colors.textSecondary }]}>
             Cancel anytime. Secure payment via Polar.
           </Text>
         </View>
@@ -176,8 +180,15 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 16,
     right: 16,
-    zIndex: 1,
-    padding: 8,
+    zIndex: 10,
+  },
+  closeButtonInner: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F2F2F7',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   header: {
     alignItems: 'center',
@@ -297,7 +308,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   upgradeButton: {
-    backgroundColor: '#8BC34A',
+    backgroundColor: '#93C822',
   },
   maybeLaterButton: {
     alignItems: 'center',
