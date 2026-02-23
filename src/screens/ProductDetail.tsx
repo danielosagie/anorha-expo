@@ -586,8 +586,12 @@ const ProductDetailScreen = observer(
             sharedLinks.forEach((link: any) => {
               const linkQty = link.AvailableQuantity || 0;
               const existingPoolQty = poolQtyByVariant.get(link.TargetVariantId) || 0;
+              const hasRealPlatformLevelForVariant = mergedInventory.some(
+                (level: InventoryLevel) => level.ProductVariantId === link.TargetVariantId && !!level.PlatformConnectionId
+              );
 
-              if (linkQty > 0 && existingPoolQty <= 0) {
+              // Keep pool/synthetic rows as fallback only. If real platform rows exist, platform rows are authoritative.
+              if (linkQty > 0 && existingPoolQty <= 0 && !hasRealPlatformLevelForVariant) {
                 mergedInventory.push({
                   Id: `shared-${link.TargetVariantId}-${link.TargetPoolId || 'pool'}`,
                   ProductVariantId: link.TargetVariantId,

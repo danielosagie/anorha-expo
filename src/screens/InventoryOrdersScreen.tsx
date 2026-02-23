@@ -790,9 +790,15 @@ const InventoryOrdersScreen = observer(() => {
         return 0;
       }
 
+      const hasRealPlatformLevels = variantLevels.some(level => !!level.PlatformConnectionId);
+
       // Group by platform (or 'pool' for levels without connection)
+      // IMPORTANT: if real platform levels exist, ignore pool/synthetic rows so list matches editor/platform truth.
       const byPlatform: Record<string, number> = {};
       variantLevels.forEach(level => {
+        if (hasRealPlatformLevels && !level.PlatformConnectionId) {
+          return;
+        }
         // For pool-based inventory (partner shares), use 'pool' as platform
         const platform = level.PlatformConnectionId
           ? (connectionToPlatform.get(level.PlatformConnectionId) || 'unknown')
