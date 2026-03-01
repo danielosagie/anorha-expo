@@ -1,5 +1,5 @@
 import React, { useState, useContext, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput, Image, Linking, InteractionManager } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput, Image, Linking, InteractionManager, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -49,8 +49,10 @@ import ConnectedPlatformList from '../components/ConnectedPlatformList';
 import BaseModal from '../components/BaseModal';
 import ConnectedPlatformItem from '../components/ConnectedPlatformItem';
 import { AppDropdown } from '../components/ui/AppDropdown';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-
+const TAB_BAR_HEIGHT = 84;
+const TAB_BAR_BOTTOM_OFFSET = 18;
 
 
 
@@ -368,6 +370,8 @@ const ProfileScreen = () => {
   // Use switchOrg from OrgContext for switching orgs
   const { currentOrg, switchOrg, availableOrgs } = useOrg();
   const { showAlert, showToast, showWelcome } = useSystemNotifications();
+  const insets = useSafeAreaInsets();
+  const bottomSafePadding = TAB_BAR_HEIGHT + TAB_BAR_BOTTOM_OFFSET + insets.bottom + 16;
 
   // For refresh trigger from route params
   const routeRefreshParam = route.params?.refresh || 0;
@@ -667,7 +671,7 @@ const ProfileScreen = () => {
 
       const { data, error } = await supabase
         .from('PlatformConnections')
-        .select('*')
+        .select('Id, UserId, OrgId, PlatformType, DisplayName, Status, IsEnabled, LastSyncAttemptAt, LastSyncSuccessAt, CreatedAt, UpdatedAt')
         .eq('UserId', user.id)
         .order('CreatedAt', { ascending: false });
 
@@ -820,6 +824,7 @@ const ProfileScreen = () => {
   handleStartConnectRef.current = handleStartConnectPlatform;
 
   useEffect(() => {
+    if (!isFocused) return;
     console.log('[ProfileScreen] Setting up overlay for screen');
     // Use a stable wrapper that calls the ref
     const stableHandler = (platform: string) => handleStartConnectRef.current(platform);
@@ -828,7 +833,7 @@ const ProfileScreen = () => {
       console.log('[ProfileScreen] Cleaning up overlay for screen');
       overlay.disableForScreen();
     };
-  }, []); // Empty deps - only run once on mount
+  }, [isFocused, overlay.enableForScreen, overlay.disableForScreen]); // Enable only while this screen is focused
 
   // Auto-open overlay if coming from onboarding
   useEffect(() => {
@@ -1713,6 +1718,11 @@ const ProfileScreen = () => {
       onPress: () => navigation.navigate('NotificationSettings' as any),
     },
     {
+      icon: 'clipboard-clock-outline',
+      title: 'Activity Logs',
+      onPress: () => navigation.navigate('ActivityFeed' as any),
+    },
+    {
       icon: 'database-export',
       title: 'Backups & Export',
       onPress: () => navigation.navigate('Backups' as any),
@@ -1883,7 +1893,7 @@ const ProfileScreen = () => {
   return (
     <ScrollView
       style={styles.container}
-      contentContainerStyle={styles.scrollViewContent}
+      contentContainerStyle={[styles.scrollViewContent, { paddingBottom: bottomSafePadding }]}
       showsVerticalScrollIndicator={false}
     >
 
@@ -2622,7 +2632,6 @@ const styles = StyleSheet.create({
   scrollViewContent: {
     padding: 16,
     paddingTop: 60,
-    paddingBottom: 50,
   },
   card: {
     marginBottom: 24,
@@ -2893,11 +2902,10 @@ const styles = StyleSheet.create({
     maxHeight: '80%',
     minHeight: '70%',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4 },
+      android: { elevation: 5 },
+    }),
 
   },
   modalTitle: {
@@ -3289,11 +3297,10 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 16,
     marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
+      android: { elevation: 3 },
+    }),
   },
   poolHeader: {
     flexDirection: 'row',
@@ -3372,11 +3379,10 @@ const styles = StyleSheet.create({
     width: '88%',
     maxHeight: '85%',
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 16,
-    elevation: 12,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.3, shadowRadius: 16 },
+      android: { elevation: 12 },
+    }),
   },
   shopifyModalHeader: {
     flexDirection: 'row',
@@ -3534,11 +3540,10 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: '#ffffff68',
-    shadowColor: '#8cc63f',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
+    ...Platform.select({
+      ios: { shadowColor: '#8cc63f', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
+      android: { elevation: 2 },
+    }),
   },
   optimizeHeader: {
     flexDirection: 'row',
@@ -3590,4 +3595,3 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 });
-

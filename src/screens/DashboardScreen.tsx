@@ -1,10 +1,10 @@
-import React, { useMemo, useState, useEffect, useContext, useCallback } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, Dimensions, Image, Modal, Pressable } from 'react-native';
+import React, { useMemo, useState, useEffect, useContext, useCallback, useRef } from 'react';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, Dimensions, Image, Modal, Pressable, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import PagerView from 'react-native-pager-view';
+import AppPagerView from '../components/AppPagerView';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Card from '../components/Card';
 import InsightCard from '../components/InsightCard';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -24,6 +24,7 @@ import ShopifySvg from '../assets/shopify.svg';
 import SquareSvg from '../assets/square.svg';
 import CloverSvg from '../assets/clover.svg';
 import { PartnerWelcomeModal } from '../components/PartnerWelcomeModal';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 
 // User-relevant event types for activity display (excludes system/webhook events)
@@ -134,12 +135,17 @@ const PoolPerformanceHeatmap: React.FC<{
   );
 };
 
+const TAB_BAR_HEIGHT = 84;
+const TAB_BAR_BOTTOM_OFFSET = 18;
+
 const DashboardScreen = () => {
   const theme = useTheme();
   const navigation = useNavigation<any>();
   const legendCtx = useContext(LegendStateContext);
   const { currentOrg, isLoading: isOrgLoading } = useOrg();
   const { connections } = usePlatformConnections();
+  const insets = useSafeAreaInsets();
+  const bottomSafePadding = TAB_BAR_HEIGHT + TAB_BAR_BOTTOM_OFFSET + insets.bottom + 16;
 
 
   // Subscribe to real-time product variant changes
@@ -168,6 +174,34 @@ const DashboardScreen = () => {
   // Fallback state for when Legend observables are empty
   const [directFetchVariants, setDirectFetchVariants] = useState<Record<string, any>>({});
   const [directFetchLevels, setDirectFetchLevels] = useState<Record<string, any>>({});
+
+  const PRODUCT_VARIANT_SELECT = 'Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, Tags, PrimaryImageUrl, CreatedAt, UpdatedAt';
+
+  const fetchAllProductVariants = useCallback(async (userId: string) => {
+    const pageSize = 200;
+    const allRows: any[] = [];
+    let from = 0;
+
+    while (true) {
+      const to = from + pageSize - 1;
+      const { data, error } = await supabase
+        .from('ProductVariants')
+        .select(PRODUCT_VARIANT_SELECT)
+        .eq('UserId', userId)
+        .not('Sku', 'like', 'DRAFT-%')
+        .range(from, to);
+
+      if (error) throw error;
+
+      const rows = data || [];
+      allRows.push(...rows);
+
+      if (rows.length < pageSize) break;
+      from += pageSize;
+    }
+
+    return allRows;
+  }, []);
 
   // Partner FTUX modal - shows for partners with forked products but no platforms
   const [showPartnerWelcome, setShowPartnerWelcome] = useState(false);
@@ -225,24 +259,62 @@ const DashboardScreen = () => {
     }
   }, []);
 
-  // Fetch data directly from Supabase when Legend is empty
+  // Fetch data directly from Supabase (paginated, no cap) - used for low stock and when Legend is underfilled
   useEffect(() => {
     const fetchDirectData = async () => {
-      const legendVariants = legendCtx?.productVariants$?.get?.() ?? {};
-      const legendLevels = legendCtx?.inventoryLevels$?.get?.() ?? {};
+      try {
+        const { data: userData } = await supabase.auth.getUser();
+        if (!userData?.user?.id) return;
 
-      // Only fetch if Legend is empty and we have a user
-      if (Object.keys(legendVariants).length === 0 || Object.keys(legendLevels).length <= 1) {
+        const variants = await fetchAllProductVariants(userData.user.id);
+
+        if (variants && variants.length > 0) {
+          const variantMap: Record<string, any> = {};
+          const variantIds: string[] = [];
+          variants.forEach((v: any) => {
+            variantMap[v.Id] = v;
+            variantIds.push(v.Id);
+          });
+          setDirectFetchVariants(variantMap);
+          console.log(`[Dashboard] Direct fetch: ${variants.length} variants`);
+
+          const { data: levels, error: levelErr } = await supabase
+            .from('InventoryLevels')
+            .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt')
+            .in('ProductVariantId', variantIds);
+
+          if (!levelErr && levels) {
+            const levelMap: Record<string, any> = {};
+            levels.forEach((l: any) => { levelMap[l.Id] = l; });
+            setDirectFetchLevels(levelMap);
+            console.log(`[Dashboard] Direct fetch: ${levels.length} inventory levels`);
+          }
+        }
+      } catch (e) {
+        console.error('[Dashboard] Direct fetch error:', e);
+      }
+    };
+
+    fetchDirectData();
+  }, [fetchAllProductVariants]);
+
+  // Refresh products on focus (e.g. after editing product or CSV import)
+  const isFirstRender = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (isFirstRender.current) {
+        isFirstRender.current = false;
+        return;
+      }
+
+      const refreshOnFocus = async () => {
         try {
           const { data: userData } = await supabase.auth.getUser();
           if (!userData?.user?.id) return;
 
-          const { data: variants, error: variantErr } = await supabase
-            .from('ProductVariants')
-            .select('*')
-            .eq('UserId', userData.user.id);
+          const variants = await fetchAllProductVariants(userData.user.id);
 
-          if (!variantErr && variants) {
+          if (variants) {
             const variantMap: Record<string, any> = {};
             const variantIds: string[] = [];
             variants.forEach((v: any) => {
@@ -250,31 +322,29 @@ const DashboardScreen = () => {
               variantIds.push(v.Id);
             });
             setDirectFetchVariants(variantMap);
-            console.log(`[Dashboard] Direct fetch: ${variants.length} variants`);
 
-            // Also fetch levels
             if (variantIds.length > 0) {
-              const { data: levels, error: levelErr } = await supabase
+              const { data: levels } = await supabase
                 .from('InventoryLevels')
-                .select('*')
+                .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt')
                 .in('ProductVariantId', variantIds);
 
-              if (!levelErr && levels) {
+              if (levels && levels.length > 0) {
                 const levelMap: Record<string, any> = {};
                 levels.forEach((l: any) => { levelMap[l.Id] = l; });
                 setDirectFetchLevels(levelMap);
-                console.log(`[Dashboard] Direct fetch: ${levels.length} inventory levels`);
               }
             }
+            console.log(`[Dashboard] Focus refresh complete: ${variants.length} products`);
           }
         } catch (e) {
-          console.error('[Dashboard] Direct fetch error:', e);
+          console.error('[Dashboard] Focus refresh error:', e);
         }
-      }
-    };
+      };
 
-    fetchDirectData();
-  }, [legendCtx?.productVariants$, legendCtx?.inventoryLevels$]);
+      refreshOnFocus();
+    }, [fetchAllProductVariants])
+  );
 
   // AI-generated insights
   const { insight, loading: loadingInsight, error: insightError, cacheExpiresAt: insightCacheExpiresAt, refetch: refetchInsight, forceRefresh: forceRefreshInsight } = useOrgNudges(currentOrg?.id);
@@ -495,14 +565,18 @@ const DashboardScreen = () => {
       };
     }
 
-    // Get data from Legend, with fallback to direct fetch
+    // Get data from Legend and direct fetch - pick whichever has MORE rows (fixes underfilled Legend)
     const legendPv = legendCtx?.productVariants$?.get?.() ?? {};
     const legendLevels = legendCtx?.inventoryLevels$?.get?.() ?? {};
     const images = legendCtx?.productImages$?.get?.() ?? {};
 
-    // Use Legend data if available, otherwise fallback to direct fetch
-    const pv = Object.keys(legendPv).length > 0 ? legendPv : directFetchVariants;
-    const levels = Object.keys(legendLevels).length > 1 ? legendLevels : directFetchLevels;
+    const legendVariantCount = Object.keys(legendPv).length;
+    const directVariantCount = Object.keys(directFetchVariants).length;
+    const pv = legendVariantCount >= directVariantCount ? legendPv : directFetchVariants;
+
+    const legendLevelCount = Object.keys(legendLevels).length;
+    const directLevelCount = Object.keys(directFetchLevels).length;
+    const levels = legendLevelCount >= directLevelCount ? legendLevels : directFetchLevels;
 
     // Guard against no data at all
     if (Object.keys(pv).length === 0 && Object.keys(levels).length === 0) {
@@ -820,7 +894,7 @@ const DashboardScreen = () => {
         style={styles.container}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshData} tintColor="#333" />}
-        contentContainerStyle={styles.scrollContentContainer}
+        contentContainerStyle={[styles.scrollContentContainer, { paddingBottom: bottomSafePadding }]}
       >
 
         {/* Search Bar - Works across Activities & Inventory */}
@@ -850,7 +924,7 @@ const DashboardScreen = () => {
             // Handle multi-timeframe insights (Carousel)
             (safeInsight?.insights?.length || 0) > 0 ? (
               <View>
-                <PagerView style={{ width: '100%', height: 420 }} initialPage={0} onPageSelected={e => setCurrentInsightPage(e.nativeEvent.position)}>
+                <AppPagerView style={{ width: '100%', height: 420 }} initialPage={0} onPageSelected={e => setCurrentInsightPage(e.nativeEvent.position)}>
                   {safeInsight!.insights!.map((ins: any, index: number) => (
                     <View key={index} style={{ paddingHorizontal: 4 }}>
                       <InsightCard
@@ -864,7 +938,7 @@ const DashboardScreen = () => {
                       />
                     </View>
                   ))}
-                </PagerView>
+                </AppPagerView>
                 {/* Pagination Dots */}
                 <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 8, gap: 8 }}>
                   {safeInsight!.insights!.map((_: any, idx: number) => (
@@ -1156,7 +1230,6 @@ const styles = StyleSheet.create({
   },
   scrollContentContainer: {
     flexGrow: 1,
-    paddingBottom: 100,
     minHeight: '100%',
   },
   loadingContainer: {
@@ -1205,11 +1278,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.1)', // slightly darker lime-200 for better edge definition
     // Add shadow to separate from background
-    shadowColor: '#rgba(0,0,0,1)',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 3,
+    ...Platform.select({
+      ios: { shadowColor: '#rgba(0,0,0,1)', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 6 },
+      android: { elevation: 3 },
+    }),
   },
 
   insideContainer: {
@@ -1229,11 +1301,10 @@ const styles = StyleSheet.create({
     gap: 12,
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.1)',
-    shadowColor: 'rgba(0,0,0,1)',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 3,
+    ...Platform.select({
+      ios: { shadowColor: 'rgba(0,0,0,1)', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 6 },
+      android: { elevation: 3 },
+    }),
   },
   insightGreenHeader: {
     flexDirection: 'row',
@@ -1326,10 +1397,10 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 18,
     padding: 16,
     gap: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 5,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8 },
+      android: { elevation: 5 },
+    }),
   },
   sourcesHeader: {
     flexDirection: 'row',
@@ -1558,10 +1629,10 @@ const styles = StyleSheet.create({
   },
   poolToggleActive: {
     backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 1,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 1 },
+      android: { elevation: 1 },
+    }),
   },
   poolToggleText: {
     fontSize: 10,
@@ -1596,10 +1667,10 @@ const styles = StyleSheet.create({
   },
   activeTab: {
     backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2 },
+      android: { elevation: 2 },
+    }),
   },
   tabText: {
     fontSize: 13,
@@ -1634,11 +1705,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#1F2937',
     borderRadius: 16,
     padding: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 8,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8 },
+      android: { elevation: 8 },
+    }),
     zIndex: 100,
   },
   bannerContent: {

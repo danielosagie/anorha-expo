@@ -19,6 +19,10 @@ interface PaywallProps {
   onUpgrade: () => void;
   entitlements: UserEntitlements | null;
   feature?: string; // Optional feature name being gated
+  /** Pre-computed title for static rendering (e.g. Figma). When set, skips getTitle(). */
+  title?: string;
+  /** Pre-computed subtitle for static rendering (e.g. Figma). When set, skips getSubtitle(). */
+  subtitle?: string;
 }
 
 const Paywall: React.FC<PaywallProps> = ({
@@ -27,8 +31,11 @@ const Paywall: React.FC<PaywallProps> = ({
   onUpgrade,
   entitlements,
   feature,
+  title: titleProp,
+  subtitle: subtitleProp,
 }) => {
   const theme = useTheme();
+  const themeColors = theme?.colors ?? { text: '#333333', textSecondary: '#777777' };
 
   const ANORHA_GREEN = '#93C822';
   const WHITE_BG = '#FFFFFF';
@@ -89,8 +96,8 @@ const Paywall: React.FC<PaywallProps> = ({
           {/* Header */}
           <View style={styles.header}>
             <Image source={require('../assets/anorha_logo.png')} style={{ width: 140, height: 40, resizeMode: 'contain', marginBottom: 16 }} />
-            <Text style={[styles.title, { color: theme.colors.text }]}>{getTitle()}</Text>
-            <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>{getSubtitle()}</Text>
+            <Text style={[styles.title, { color: themeColors.text }]}>{titleProp ?? getTitle()}</Text>
+            <Text style={[styles.subtitle, { color: themeColors.textSecondary }]}>{subtitleProp ?? getSubtitle()}</Text>
           </View>
 
           {/* Trial badge */}
@@ -111,8 +118,8 @@ const Paywall: React.FC<PaywallProps> = ({
                   <Icon name={item.icon} size={20} color={ANORHA_GREEN} />
                 </View>
                 <View style={styles.featureText}>
-                  <Text style={[styles.featureTitle, { color: theme.colors.text }]}>{item.title}</Text>
-                  <Text style={[styles.featureDescription, { color: theme.colors.textSecondary }]}>
+                  <Text style={[styles.featureTitle, { color: themeColors.text }]}>{item.title}</Text>
+                  <Text style={[styles.featureDescription, { color: themeColors.textSecondary }]}>
                     {item.description}
                   </Text>
                 </View>
@@ -128,13 +135,13 @@ const Paywall: React.FC<PaywallProps> = ({
               onPress={onUpgrade}
             >
               <View style={styles.pricingHeader}>
-                <Text style={[styles.pricingName, { color: theme.colors.text }]}>Growth</Text>
+                <Text style={[styles.pricingName, { color: themeColors.text }]}>Growth</Text>
                 <View style={[styles.popularBadge, { backgroundColor: ANORHA_GREEN }]}>
                   <Text style={styles.popularBadgeText}>POPULAR</Text>
                 </View>
               </View>
-              <Text style={[styles.pricingPrice, { color: theme.colors.text }]}>$20<Text style={styles.pricingPeriod}>/month</Text></Text>
-              <Text style={[styles.pricingFeatures, { color: theme.colors.textSecondary }]}>
+              <Text style={[styles.pricingPrice, { color: themeColors.text }]}>$20<Text style={styles.pricingPeriod}>/month</Text></Text>
+              <Text style={[styles.pricingFeatures, { color: themeColors.textSecondary }]}>
                 2 platforms • 40 AI scans/mo • 2 team members
               </Text>
             </TouchableOpacity>
@@ -148,12 +155,12 @@ const Paywall: React.FC<PaywallProps> = ({
               style={styles.upgradeButton}
             />
             <TouchableOpacity onPress={onClose} style={styles.maybeLaterButton}>
-              <Text style={[styles.maybeLaterText, { color: theme.colors.textSecondary }]}>Maybe Later</Text>
+              <Text style={[styles.maybeLaterText, { color: themeColors.textSecondary }]}>Maybe Later</Text>
             </TouchableOpacity>
           </View>
 
           {/* Footer note */}
-          <Text style={[styles.footerNote, { color: theme.colors.textSecondary }]}>
+          <Text style={[styles.footerNote, { color: themeColors.textSecondary }]}>
             Cancel anytime. Secure payment via Polar.
           </Text>
         </View>

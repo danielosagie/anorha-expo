@@ -170,7 +170,7 @@ export function stopClerkSupabaseBridge() {
 // We return the same shape: { data: { user }, error }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (supabase as any).auth.getUser = async () => {
-  const { data, error } = await supabase.from('me').select('*').maybeSingle();
+  const { data, error } = await supabase.from('me').select('Id, Email').maybeSingle();
   if (error || !data) {
     return { data: { user: null }, error };
   }
@@ -179,7 +179,7 @@ export function stopClerkSupabaseBridge() {
 
 // Optional explicit helper if you want to import directly
 export async function getUserLike() {
-  const { data, error } = await supabase.from('me').select('*').maybeSingle();
+  const { data, error } = await supabase.from('me').select('Id, Email').maybeSingle();
   if (error || !data) return { user: null };
   return { user: { id: data.Id, email: data.Email } };
 }

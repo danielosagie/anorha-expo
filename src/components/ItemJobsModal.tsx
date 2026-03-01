@@ -11,7 +11,7 @@
  * - Batch operations for multiple items
  */
 
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import {
   Modal, View, Text, TouchableOpacity, ScrollView, Image,
   StyleSheet, ActivityIndicator, Animated, Easing, TextInput
@@ -62,6 +62,11 @@ type LegacyProps = {
   onRescan?: (index: number) => void;
   countLabel?: string;
   getSecondaryText?: (index: number) => string | null;
+  onConfirmCandidate?: (index: number) => void;
+  onDenyCandidate?: (index: number) => void;
+  onSubmitRefineText?: (index: number, text: string) => void;
+  onGenerateBestGuess?: (index: number) => void;
+  onRetakePhoto?: (index: number) => void;
   /** Optional label for current job (e.g. "Match abc123…") so modal clearly refers to this flow */
   jobLabel?: string;
 };
@@ -79,6 +84,11 @@ type EnhancedProps = {
   enableMultiSelect?: boolean;
   onBatchGenerate?: (indices: number[]) => void;
   onBatchRescan?: (indices: number[]) => void;
+  onConfirmCandidate?: (index: number) => void;
+  onDenyCandidate?: (index: number) => void;
+  onSubmitRefineText?: (index: number, text: string) => void;
+  onGenerateBestGuess?: (index: number) => void;
+  onRetakePhoto?: (index: number) => void;
   getSubstepText?: (index: number, step: StepKey) => string | null;
   isEnhanced: true;
 };
@@ -230,10 +240,16 @@ const ItemCard: React.FC<{
   secondaryText?: string | null;
   selectMode?: boolean;
   onToggleSelect?: () => void;
+  onConfirmCandidate?: () => void;
+  onDenyCandidate?: () => void;
+  onSubmitRefineText?: (text: string) => void;
+  onGenerateBestGuess?: () => void;
+  onRetakePhoto?: () => void;
 }> = (props) => {
   const {
     item, isSelected, isCurrent, isEnhanced, onSelect, selectMode, onToggleSelect
   } = props;
+  const [refineText, setRefineText] = useState('');
 
   // Extract properties with proper type handling
   const itemAsLegacy = item as LegacyItem;
@@ -244,6 +260,29 @@ const ItemCard: React.FC<{
   const matchesCount = 'matchesCount' in item
     ? itemAsLegacy.matchesCount
     : itemAsEnhanced.match?.matchesCount || 0;
+  const timelineText = React.useMemo(() => {
+    const toLabel = (status: StepStatus): string => {
+      if (status === 'completed') return 'Ready';
+      if (status === 'processing' || status === 'queued') return 'Working';
+      if (status === 'failed') return 'Needs retry';
+      if (status === 'skipped') return 'Skipped';
+      return 'Pending';
+    };
+
+    if (isEnhanced && props.getStepStatus) {
+      return `Scan ${toLabel(props.getStepStatus('scan'))} • Match ${toLabel(props.getStepStatus('match'))} • Generate ${toLabel(props.getStepStatus('generate'))} • Details ${toLabel(props.getStepStatus('details'))}`;
+    }
+
+    const matchDone = props.matchColor === ANORHA_GREEN || props.matchColor === '#10B981';
+    const matchWorking = props.matchColor === '#FFD700' || props.matchColor === '#F59E0B';
+    const detailsDone = props.detailsColor === ANORHA_GREEN || props.detailsColor === '#10B981';
+    const detailsWorking = props.detailsColor === '#FFD700' || props.detailsColor === '#F59E0B';
+    const detailsFailed = props.detailsColor === '#e11d48' || props.detailsColor === '#EF4444';
+
+    const matchLabel = matchDone ? 'Ready' : (matchWorking ? 'Working' : 'Pending');
+    const detailsLabel = detailsFailed ? 'Needs retry' : (detailsDone ? 'Ready' : (detailsWorking ? 'Working' : 'Pending'));
+    return `Match ${matchLabel} • Details ${detailsLabel}`;
+  }, [isEnhanced, props]);
 
   return (
     <TouchableOpacity
@@ -332,6 +371,57 @@ const ItemCard: React.FC<{
           </>
         )}
       </View>
+      <Text style={styles.timelineText} numberOfLines={1}>{timelineText}</Text>
+
+      {!selectMode && (props.onConfirmCandidate || props.onDenyCandidate || props.onGenerateBestGuess || props.onRetakePhoto || props.onSubmitRefineText) && (
+        <View style={styles.assistActionsWrap}>
+          <View style={styles.assistActionsRow}>
+            {props.onConfirmCandidate && (
+              <TouchableOpacity style={styles.assistPrimaryBtn} onPress={props.onConfirmCandidate}>
+                <Text style={styles.assistPrimaryBtnText}>Confirm</Text>
+              </TouchableOpacity>
+            )}
+            {props.onDenyCandidate && (
+              <TouchableOpacity style={styles.assistSecondaryBtn} onPress={props.onDenyCandidate}>
+                <Text style={styles.assistSecondaryBtnText}>Deny</Text>
+              </TouchableOpacity>
+            )}
+            {props.onGenerateBestGuess && (
+              <TouchableOpacity style={styles.assistGhostBtn} onPress={props.onGenerateBestGuess}>
+                <Text style={styles.assistGhostBtnText}>Best Guess</Text>
+              </TouchableOpacity>
+            )}
+            {props.onRetakePhoto && (
+              <TouchableOpacity style={styles.assistGhostBtn} onPress={props.onRetakePhoto}>
+                <Text style={styles.assistGhostBtnText}>Retake</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          {props.onSubmitRefineText && (
+            <View style={styles.assistRefineRow}>
+              <TextInput
+                value={refineText}
+                onChangeText={setRefineText}
+                style={styles.assistRefineInput}
+                placeholder="Refine text..."
+                placeholderTextColor="#94A3B8"
+              />
+              <TouchableOpacity
+                style={[styles.assistRefineSubmit, refineText.trim().length === 0 && styles.assistRefineSubmitDisabled]}
+                disabled={refineText.trim().length === 0}
+                onPress={() => {
+                  const value = refineText.trim();
+                  if (!value) return;
+                  props.onSubmitRefineText?.(value);
+                  setRefineText('');
+                }}
+              >
+                <Text style={styles.assistRefineSubmitText}>Use</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      )}
     </TouchableOpacity>
   );
 };
@@ -342,36 +432,87 @@ export default function ItemJobsModal(props: Props) {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'processing' | 'completed' | 'failed'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'processing' | 'completed' | 'failed' | 'needs_input'>('all');
 
   const enhanced = isEnhancedProps(props);
   const items = props.items;
   const currentIndex = props.currentIndex;
 
-  const allIndices = useMemo(() => items.map(it => it.index), [items]);
+  const getGenerateStatus = useMemo(() => {
+    return (item: ItemJobState | LegacyItem): 'pending' | 'processing' | 'completed' | 'failed' => {
+      if (enhanced) {
+        const genStatus = (item as ItemJobState).generate?.status;
+        if (genStatus === 'completed') return 'completed';
+        if (genStatus === 'failed') return 'failed';
+        if (genStatus === 'processing' || genStatus === 'queued') return 'processing';
+        return 'pending';
+      }
+      const legacyProps = props as LegacyProps;
+      const detailsColor = legacyProps.detailsColor(item.index);
+      if (detailsColor === ANORHA_GREEN) return 'completed';
+      if (detailsColor === '#FFD700' || detailsColor === '#F59E0B') return 'processing';
+      if (detailsColor === '#e11d48' || detailsColor === '#EF4444') return 'failed';
+      return 'pending';
+    };
+  }, [enhanced, props]);
+  const itemNeedsInput = useCallback((idx: number) => {
+    const secondary = enhanced
+      ? ((props as EnhancedProps).getSubstepText?.(idx, 'match') || '')
+      : ((props as LegacyProps).getSecondaryText?.(idx) || '');
+    return /need|review|input|assist|refine|await|decision|paused|stuck/i.test(String(secondary));
+  }, [enhanced, props]);
+  const awaitingDecisionIndices = useMemo(() => {
+    return items
+      .filter((item) => {
+        const idx = item.index;
+        const secondary = enhanced
+          ? ((props as EnhancedProps).getSubstepText?.(idx, 'match') || '')
+          : ((props as LegacyProps).getSecondaryText?.(idx) || '');
+        return /await|decision|paused|stuck/i.test(String(secondary));
+      })
+      .map((item) => item.index);
+  }, [items, enhanced, props]);
 
   // Calculate status counts for queue summary
   const statusCounts = useMemo(() => {
     const counts = { pending: 0, processing: 0, completed: 0, failed: 0, activeItems: [] as string[] };
     items.forEach(item => {
       const title = (item as LegacyItem).title || `Item ${item.index + 1}`;
-      if (enhanced) {
-        const genStatus = (item as ItemJobState).generate?.status;
-        if (genStatus === 'completed') counts.completed++;
-        else if (genStatus === 'processing' || genStatus === 'queued') { counts.processing++; if (counts.activeItems.length < 2) counts.activeItems.push(title); }
-        else if (genStatus === 'failed') counts.failed++;
-        else counts.pending++;
-      } else {
-        const legacyProps = props as LegacyProps;
-        const detailsColor = legacyProps.detailsColor(item.index);
-        if (detailsColor === ANORHA_GREEN) counts.completed++;
-        else if (detailsColor === '#FFD700') { counts.processing++; if (counts.activeItems.length < 2) counts.activeItems.push(title); }
-        else if (detailsColor === '#e11d48' || detailsColor === '#EF4444') counts.failed++;
-        else counts.pending++;
-      }
+      const genStatus = getGenerateStatus(item);
+      if (genStatus === 'completed') counts.completed++;
+      else if (genStatus === 'processing') {
+        counts.processing++;
+        if (counts.activeItems.length < 2) counts.activeItems.push(title);
+      } else if (genStatus === 'failed') counts.failed++;
+      else counts.pending++;
     });
     return counts;
-  }, [items, enhanced, props]);
+  }, [items, getGenerateStatus]);
+  const needsInputIndices = useMemo(() => {
+    return items
+      .filter((item) => itemNeedsInput(item.index))
+      .map((item) => item.index);
+  }, [items, itemNeedsInput]);
+  const unresolvedIndices = useMemo(() => {
+    return items
+      .filter((item) => {
+        const idx = item.index;
+        const status = getGenerateStatus(item);
+        return itemNeedsInput(idx) || status === 'pending' || status === 'failed';
+      })
+      .map((item) => item.index);
+  }, [items, getGenerateStatus, itemNeedsInput]);
+  const jumpToNextUnresolved = useCallback(() => {
+    if (unresolvedIndices.length === 0) return;
+    const ordered = [...unresolvedIndices].sort((a, b) => a - b);
+    const next = ordered.find((idx) => idx > currentIndex) ?? ordered[0];
+    if (enhanced) {
+      (props as EnhancedProps).onItemSelect(next);
+    } else {
+      (props as LegacyProps).onPickMatch(next);
+    }
+    setStatusFilter('needs_input');
+  }, [unresolvedIndices, currentIndex, enhanced, props]);
 
   // Legacy summary: only match + generate — "X matched • Y ready to review • Z generating"
   const stepSummaryLegacy = useMemo(() => {
@@ -415,35 +556,28 @@ export default function ItemJobsModal(props: Props) {
     // Apply status filter
     if (statusFilter !== 'all') {
       result = result.filter(item => {
-        if (enhanced) {
-          const genStatus = (item as ItemJobState).generate?.status;
-          if (statusFilter === 'pending') return !genStatus || genStatus === 'pending';
-          if (statusFilter === 'processing') return genStatus === 'processing' || genStatus === 'queued';
-          if (statusFilter === 'completed') return genStatus === 'completed';
-          if (statusFilter === 'failed') return genStatus === 'failed';
-        } else {
-          const legacyProps = props as LegacyProps;
-          const detailsColor = legacyProps.detailsColor(item.index);
-          if (statusFilter === 'completed') return detailsColor === ANORHA_GREEN;
-          if (statusFilter === 'processing') return detailsColor === '#FFD700';
-          if (statusFilter === 'failed') return detailsColor === '#e11d48' || detailsColor === '#EF4444';
-          if (statusFilter === 'pending') return !detailsColor || detailsColor === '#4B5563';
-        }
-        return true;
+        const genStatus = getGenerateStatus(item);
+        const idx = item.index;
+        if (statusFilter === 'pending') return genStatus === 'pending';
+        if (statusFilter === 'processing') return genStatus === 'processing';
+        if (statusFilter === 'completed') return genStatus === 'completed';
+        if (statusFilter === 'failed') return genStatus === 'failed';
+        if (statusFilter === 'needs_input') return itemNeedsInput(idx);
+        return false;
       }) as typeof items;
     }
 
     return result;
-  }, [items, searchQuery, statusFilter, enhanced, props]);
+  }, [items, searchQuery, statusFilter, getGenerateStatus, itemNeedsInput]);
 
   // Group by flowType when multiple flows exist (optional multi-flow support)
   const flowGroups = useMemo(() => {
     const withFlow = filteredItems as Array<{ index: number; flowType?: string; flowId?: string }>;
     const keys = [...new Set(withFlow.map(i => i.flowType ?? 'default'))];
     if (keys.length <= 1) return null;
-    const groups: Record<string, typeof filteredItems> = {};
+    const groups: Record<string, Array<ItemJobState | LegacyItem>> = {};
     filteredItems.forEach(item => {
-      const key = (item as LegacyItem).flowType ?? 'default';
+      const key = (item as Partial<LegacyItem>).flowType ?? 'default';
       if (!groups[key]) groups[key] = [];
       groups[key].push(item);
     });
@@ -488,6 +622,14 @@ export default function ItemJobsModal(props: Props) {
     return null;
   };
 
+  const getTopIssueText = useCallback((item: ItemJobState | LegacyItem): string => {
+    const status = getGenerateStatus(item);
+    if (status === 'failed') return 'Failed';
+    if (status === 'processing') return 'Generating';
+    if (status === 'completed') return 'Ready';
+    return 'Needs review';
+  }, [getGenerateStatus]);
+
   const enableMultiSelect = enhanced
     ? props.enableMultiSelect
     : (props as LegacyProps).enableMultiSelect;
@@ -495,6 +637,26 @@ export default function ItemJobsModal(props: Props) {
   const hasBatchOperations = enhanced
     ? !!(props.onBatchGenerate || props.onBatchRescan)
     : !!((props as LegacyProps).onBatchGenerateSelected || (props as LegacyProps).onBatchRescanSelected);
+
+  const selectedItemsList = useMemo(
+    () => items.filter(item => selected.has(item.index)),
+    [items, selected]
+  );
+  const selectedReadyIndices = useMemo(
+    () => selectedItemsList
+      .filter(item => {
+        const status = getGenerateStatus(item);
+        return status === 'pending' || status === 'completed';
+      })
+      .map(item => item.index),
+    [selectedItemsList, getGenerateStatus]
+  );
+  const selectedFailedIndices = useMemo(
+    () => selectedItemsList
+      .filter(item => getGenerateStatus(item) === 'failed')
+      .map(item => item.index),
+    [selectedItemsList, getGenerateStatus]
+  );
 
   return (
     <Modal
@@ -561,31 +723,31 @@ export default function ItemJobsModal(props: Props) {
                   <>
                     <Text style={{ fontWeight: '600' }}>{stepSummaryLegacy.matchDone}/{items.length} matched</Text>
                     {stepSummaryLegacy.genDone > 0 && (
-                      <Text style={styles.queueReadyReview}> • {stepSummaryLegacy.genDone} ready</Text>
+                      <Text style={styles.queueReadyReview}> • {stepSummaryLegacy.genDone} Ready</Text>
                     )}
                     {stepSummaryLegacy.genFailed > 0 && (
-                      <Text style={styles.queueFailed}> • {stepSummaryLegacy.genFailed} failed</Text>
+                      <Text style={styles.queueFailed}> • {stepSummaryLegacy.genFailed} Failed</Text>
                     )}
                     {stepSummaryLegacy.genInProgress > 0 && (
-                      <Text style={[styles.queueProcessing, { fontWeight: '600' }]}> • {stepSummaryLegacy.genInProgress} generating</Text>
+                      <Text style={[styles.queueProcessing, { fontWeight: '600' }]}> • {stepSummaryLegacy.genInProgress} Generating</Text>
                     )}
                   </>
                 ) : (
                   <>
                     {statusCounts.processing > 0 && (
-                      <Text style={[styles.queueProcessing, { fontWeight: '600' }]}>{statusCounts.processing} processing</Text>
+                      <Text style={[styles.queueProcessing, { fontWeight: '600' }]}>{statusCounts.processing} Generating</Text>
                     )}
                     {statusCounts.processing > 0 && statusCounts.pending > 0 && ' • '}
                     {statusCounts.pending > 0 && (
-                      <Text style={styles.queuePending}>{statusCounts.pending} pending</Text>
+                      <Text style={styles.queuePending}>{statusCounts.pending} Needs Review</Text>
                     )}
                     {(statusCounts.processing > 0 || statusCounts.pending > 0) && statusCounts.completed > 0 && ' • '}
                     {statusCounts.completed > 0 && (
-                      <Text style={styles.queueComplete}>{statusCounts.completed} done</Text>
+                      <Text style={styles.queueComplete}>{statusCounts.completed} Ready</Text>
                     )}
                     {statusCounts.failed > 0 && ' • '}
                     {statusCounts.failed > 0 && (
-                      <Text style={styles.queueFailed}>{statusCounts.failed} failed</Text>
+                      <Text style={styles.queueFailed}>{statusCounts.failed} Failed</Text>
                     )}
                   </>
                 )}
@@ -610,6 +772,20 @@ export default function ItemJobsModal(props: Props) {
               {stepSummaryLegacy && hasBatchOperations && (stepSummaryLegacy.genInProgress === 0) && (
                 <Text style={styles.queueHint}>Generate uses the platforms you selected on the match screen.</Text>
               )}
+              {awaitingDecisionIndices.length > 0 && (
+                <View style={styles.awaitingBanner}>
+                  <Icon name="alert-circle-outline" size={15} color="#9A3412" />
+                  <Text style={styles.awaitingBannerText}>
+                    {awaitingDecisionIndices.length} item{awaitingDecisionIndices.length !== 1 ? 's are' : ' is'} awaiting decision. Other items keep processing.
+                  </Text>
+                </View>
+              )}
+              {unresolvedIndices.length > 0 && (
+                <TouchableOpacity style={styles.nextUnresolvedBtn} onPress={jumpToNextUnresolved}>
+                  <Icon name="arrow-right-circle-outline" size={16} color="#7C2D12" />
+                  <Text style={styles.nextUnresolvedBtnText}>Next unresolved ({unresolvedIndices.length})</Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
@@ -617,10 +793,20 @@ export default function ItemJobsModal(props: Props) {
           {items.length >= 5 && (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterTabsScroll}>
               <View style={styles.filterTabs}>
-                {(['all', 'pending', 'processing', 'completed', 'failed'] as const).map(status => {
-                  const count = status === 'all' ? items.length : statusCounts[status];
+                {(['all', 'pending', 'processing', 'completed', 'failed', 'needs_input'] as const).map(status => {
+                  const count = status === 'all'
+                    ? items.length
+                    : status === 'needs_input'
+                      ? needsInputIndices.length
+                      : statusCounts[status];
                   const isActive = statusFilter === status;
                   if (status !== 'all' && count === 0) return null;
+                  const statusLabel =
+                    status === 'all' ? 'Open' :
+                      status === 'pending' ? 'Needs Review' :
+                        status === 'processing' ? 'Generating' :
+                          status === 'completed' ? 'Ready' :
+                            status === 'needs_input' ? 'Needs Input' : 'Failed';
                   return (
                     <TouchableOpacity
                       key={status}
@@ -628,7 +814,7 @@ export default function ItemJobsModal(props: Props) {
                       style={[styles.filterTab, isActive && styles.filterTabActive]}
                     >
                       <Text style={[styles.filterTabText, isActive && styles.filterTabTextActive]}>
-                        {status === 'all' ? 'All' : status.charAt(0).toUpperCase() + status.slice(1)}
+                        {statusLabel}
                         {count > 0 && ` (${count})`}
                       </Text>
                     </TouchableOpacity>
@@ -668,8 +854,17 @@ export default function ItemJobsModal(props: Props) {
                           onStepPress={(step) => (props as EnhancedProps).onStepPress(idx, step)}
                           getStepStatus={(step) => getStepStatus(enhancedItem, step)}
                           getProgressText={(step) => getProgressText(enhancedItem, step)}
+                          secondaryText={getTopIssueText(enhancedItem)}
                           selectMode={selectMode}
                           onToggleSelect={() => toggleIndex(idx)}
+                          onConfirmCandidate={enhanced ? () => (props as EnhancedProps).onConfirmCandidate?.(idx) : () => (props as LegacyProps).onConfirmCandidate?.(idx)}
+                          onDenyCandidate={enhanced ? () => (props as EnhancedProps).onDenyCandidate?.(idx) : () => (props as LegacyProps).onDenyCandidate?.(idx)}
+                          onGenerateBestGuess={enhanced ? () => (props as EnhancedProps).onGenerateBestGuess?.(idx) : () => (props as LegacyProps).onGenerateBestGuess?.(idx)}
+                          onRetakePhoto={enhanced ? () => (props as EnhancedProps).onRetakePhoto?.(idx) : () => (props as LegacyProps).onRetakePhoto?.(idx)}
+                          onSubmitRefineText={(text) => {
+                            if (enhanced) (props as EnhancedProps).onSubmitRefineText?.(idx, text);
+                            else (props as LegacyProps).onSubmitRefineText?.(idx, text);
+                          }}
                         />
                       );
                     } else {
@@ -693,7 +888,7 @@ export default function ItemJobsModal(props: Props) {
                           onQuickGenerate={legacyProps.onQuickGenerate ? () => legacyProps.onQuickGenerate!(idx) : undefined}
                           onRescan={legacyProps.onRescan ? () => legacyProps.onRescan!(idx) : undefined}
                           countLabel={legacyProps.countLabel}
-                          secondaryText={legacyProps.getSecondaryText?.(idx)}
+                          secondaryText={legacyProps.getSecondaryText?.(idx) || getTopIssueText(legacyItem)}
                           selectMode={selectMode}
                           onToggleSelect={() => toggleIndex(idx)}
                         />
@@ -719,8 +914,17 @@ export default function ItemJobsModal(props: Props) {
                       onStepPress={(step) => (props as EnhancedProps).onStepPress(idx, step)}
                       getStepStatus={(step) => getStepStatus(enhancedItem, step)}
                       getProgressText={(step) => getProgressText(enhancedItem, step)}
+                      secondaryText={getTopIssueText(enhancedItem)}
                       selectMode={selectMode}
                       onToggleSelect={() => toggleIndex(idx)}
+                      onConfirmCandidate={enhanced ? () => (props as EnhancedProps).onConfirmCandidate?.(idx) : () => (props as LegacyProps).onConfirmCandidate?.(idx)}
+                      onDenyCandidate={enhanced ? () => (props as EnhancedProps).onDenyCandidate?.(idx) : () => (props as LegacyProps).onDenyCandidate?.(idx)}
+                      onGenerateBestGuess={enhanced ? () => (props as EnhancedProps).onGenerateBestGuess?.(idx) : () => (props as LegacyProps).onGenerateBestGuess?.(idx)}
+                      onRetakePhoto={enhanced ? () => (props as EnhancedProps).onRetakePhoto?.(idx) : () => (props as LegacyProps).onRetakePhoto?.(idx)}
+                      onSubmitRefineText={(text) => {
+                        if (enhanced) (props as EnhancedProps).onSubmitRefineText?.(idx, text);
+                        else (props as LegacyProps).onSubmitRefineText?.(idx, text);
+                      }}
                     />
                   );
                 } else {
@@ -748,7 +952,7 @@ export default function ItemJobsModal(props: Props) {
                         ? () => legacyProps.onRescan!(idx)
                         : undefined}
                       countLabel={legacyProps.countLabel}
-                      secondaryText={legacyProps.getSecondaryText?.(idx)}
+                      secondaryText={legacyProps.getSecondaryText?.(idx) || getTopIssueText(legacyItem)}
                       selectMode={selectMode}
                       onToggleSelect={() => toggleIndex(idx)}
                     />
@@ -781,19 +985,31 @@ export default function ItemJobsModal(props: Props) {
                       >
                         <Icon name="reload" size={16} color="#fff" />
                         <Text style={styles.footerBtnText}>
-                          Rescan {selected.size > 0 ? `(${selected.size})` : ''}
+                          Rescan selected {selected.size > 0 ? `(${selected.size})` : ''}
                         </Text>
                       </TouchableOpacity>
                     )}
                     {(props as EnhancedProps).onBatchGenerate && (
                       <TouchableOpacity
-                        disabled={selected.size === 0}
-                        onPress={() => (props as EnhancedProps).onBatchGenerate?.(Array.from(selected))}
-                        style={[styles.footerBtn, selected.size === 0 && styles.footerBtnDisabled]}
+                        disabled={selectedReadyIndices.length === 0}
+                        onPress={() => (props as EnhancedProps).onBatchGenerate?.(selectedReadyIndices)}
+                        style={[styles.footerBtn, selectedReadyIndices.length === 0 && styles.footerBtnDisabled]}
                       >
                         <Icon name="rocket-launch-outline" size={16} color="#fff" />
                         <Text style={styles.footerBtnText}>
-                          Generate {selected.size > 0 ? `(${selected.size})` : ''}
+                          Generate ready {selectedReadyIndices.length > 0 ? `(${selectedReadyIndices.length})` : ''}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    {(props as EnhancedProps).onBatchGenerate && (
+                      <TouchableOpacity
+                        disabled={selectedFailedIndices.length === 0}
+                        onPress={() => (props as EnhancedProps).onBatchGenerate?.(selectedFailedIndices)}
+                        style={[styles.footerBtn, selectedFailedIndices.length === 0 && styles.footerBtnDisabled]}
+                      >
+                        <Icon name="refresh-circle" size={16} color="#fff" />
+                        <Text style={styles.footerBtnText}>
+                          Retry failed {selectedFailedIndices.length > 0 ? `(${selectedFailedIndices.length})` : ''}
                         </Text>
                       </TouchableOpacity>
                     )}
@@ -808,19 +1024,31 @@ export default function ItemJobsModal(props: Props) {
                       >
                         <Icon name="reload" size={16} color="#fff" />
                         <Text style={styles.footerBtnText}>
-                          Rescan {selected.size > 0 ? `(${selected.size})` : ''}
+                          Rescan selected {selected.size > 0 ? `(${selected.size})` : ''}
                         </Text>
                       </TouchableOpacity>
                     )}
                     {(props as LegacyProps).onBatchGenerateSelected && (
                       <TouchableOpacity
-                        disabled={selected.size === 0}
-                        onPress={() => (props as LegacyProps).onBatchGenerateSelected?.(Array.from(selected))}
-                        style={[styles.footerBtn, selected.size === 0 && styles.footerBtnDisabled]}
+                        disabled={selectedReadyIndices.length === 0}
+                        onPress={() => (props as LegacyProps).onBatchGenerateSelected?.(selectedReadyIndices)}
+                        style={[styles.footerBtn, selectedReadyIndices.length === 0 && styles.footerBtnDisabled]}
                       >
                         <Icon name="rocket-launch-outline" size={16} color="#fff" />
                         <Text style={styles.footerBtnText}>
-                          Generate {selected.size > 0 ? `(${selected.size})` : ''}
+                          Generate ready {selectedReadyIndices.length > 0 ? `(${selectedReadyIndices.length})` : ''}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    {(props as LegacyProps).onBatchGenerateSelected && (
+                      <TouchableOpacity
+                        disabled={selectedFailedIndices.length === 0}
+                        onPress={() => (props as LegacyProps).onBatchGenerateSelected?.(selectedFailedIndices)}
+                        style={[styles.footerBtn, selectedFailedIndices.length === 0 && styles.footerBtnDisabled]}
+                      >
+                        <Icon name="refresh-circle" size={16} color="#fff" />
+                        <Text style={styles.footerBtnText}>
+                          Retry failed {selectedFailedIndices.length > 0 ? `(${selectedFailedIndices.length})` : ''}
                         </Text>
                       </TouchableOpacity>
                     )}
@@ -947,14 +1175,132 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
+  timelineText: {
+    marginTop: 6,
+    color: '#6B7280',
+    fontSize: 11,
+  },
+  assistActionsWrap: {
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#EEF2F7',
+    paddingTop: 8,
+    gap: 8,
+  },
+  assistActionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  assistPrimaryBtn: {
+    backgroundColor: '#111827',
+    borderRadius: 7,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  assistPrimaryBtnText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  assistSecondaryBtn: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  assistSecondaryBtnText: {
+    color: '#334155',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  assistGhostBtn: {
+    backgroundColor: '#ECFCCB',
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: '#BEF264',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  assistGhostBtnText: {
+    color: '#365314',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  assistRefineRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  assistRefineInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 7,
+    backgroundColor: '#F8FAFC',
+    color: '#0F172A',
+    fontSize: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  assistRefineSubmit: {
+    backgroundColor: '#111827',
+    borderRadius: 7,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  assistRefineSubmitDisabled: {
+    opacity: 0.45,
+  },
+  assistRefineSubmitText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  nextUnresolvedBtn: {
+    marginTop: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FDBA74',
+    backgroundColor: '#FFF7ED',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+  },
+  nextUnresolvedBtnText: {
+    color: '#9A3412',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  awaitingBanner: {
+    marginTop: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FDBA74',
+    backgroundColor: '#FFF7ED',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  awaitingBannerText: {
+    color: '#9A3412',
+    fontSize: 12,
+    fontWeight: '600',
+    flex: 1,
+  },
 
   // Steps row
   stepsRow: {
     flexDirection: 'row',
     gap: 6,
-    flexWrap: 'nowrap',
     marginTop: 10,
-    gap: 6,
     flexWrap: 'wrap',
   },
 

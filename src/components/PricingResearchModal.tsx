@@ -29,7 +29,7 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
     return (
         <Modal visible={visible} transparent animationType="slide">
             <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }} onPress={onClose}>
-                <Pressable style={{ backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '90%' }} onPress={e => e.stopPropagation()}>
+                <Pressable style={{ flex: 1, maxHeight: '90%', backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16 }} onPress={e => e.stopPropagation()}>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 20, paddingBottom: 12 }}>
                         <Text style={{ fontSize: 18, fontWeight: '700', color: '#1F2937' }}>eBay Sold Prices</Text>
                         <TouchableOpacity onPress={onClose}>
@@ -41,9 +41,10 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                             <Text style={{ fontSize: 14, color: '#ef4444' }}>{pricingResearchResult.error}</Text>
                         </View>
                     ) : pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
-                        <ScrollView style={{ maxHeight: 580 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24 }}>
-                            {/* Accuracy / recency + Sources toggle (expands section below) */}
-                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+                        <View style={{ flex: 1, minHeight: 0 }}>
+                            <ScrollView style={{ flex: 1, maxHeight: 400 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 16 }} showsVerticalScrollIndicator={false}>
+                                {/* Accuracy / recency + Sources toggle (expands section below) */}
+                                <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 12 }}>
                                 <Text style={{ fontSize: 13, color: '#6B7280' }}>
                                     Based on {(pricingResearchResult.sampleCount ?? pricingResearchResult.samples?.length ?? 0)} sold listings
                                     {pricingResearchResult.cachedAt
@@ -162,11 +163,14 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                 );
                             })()}
 
-                            {/* Interactive chart: Sold price vs estimated time on market */}
+                            </ScrollView>
+
+                            {/* Chart section - outside vertical scroll so horizontal scroll works */}
+                            <View style={{ minHeight: 260, paddingHorizontal: 20, paddingTop: 16, paddingBottom: 24, borderTopWidth: 1, borderTopColor: '#E5E7EB' }}>
                             {(() => {
                                 const marketPoints = (pricingResearchResult.samples || [])
-                                    .filter((s: any) => typeof s.estimatedDaysToSell === 'number' && Number.isFinite(s.estimatedDaysToSell) && typeof s.price === 'number')
-                                    .sort((a: any, b: any) => Number(a.price) - Number(b.price));
+                                    .filter((s: { estimatedDaysToSell?: number; price?: number }) => typeof s.estimatedDaysToSell === 'number' && Number.isFinite(s.estimatedDaysToSell) && typeof s.price === 'number')
+                                    .sort((a: { price?: number }, b: { price?: number }) => Number(a.price) - Number(b.price));
                                 const screenWidth = Dimensions.get('window').width - 80;
                                 // Dynamic width: at least 50px per data point, but never smaller than screen
                                 const chartWidth = Math.max(marketPoints.length * 50, screenWidth, 260);
@@ -181,12 +185,12 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
 
                                     // Compute std deviation curve from price data
                                     const prices = marketPoints.map((p: any) => Number(p.price));
-                                    const mean = prices.reduce((a, b) => a + b, 0) / prices.length;
-                                    const variance = prices.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / prices.length;
+                                    const mean = prices.reduce((a: number, b: number) => a + b, 0) / prices.length;
+                                    const variance = prices.reduce((a: number, b: number) => a + Math.pow(b - mean, 2), 0) / prices.length;
                                     const stdDev = Math.sqrt(variance);
                                     // Generate normal distribution curve points mapped to chart positions
                                     const normalCurveData = stdDev > 0
-                                        ? prices.map((price) => {
+                                        ? prices.map((price: number) => {
                                             const z = (price - mean) / stdDev;
                                             const density = Math.exp(-0.5 * z * z) / (stdDev * Math.sqrt(2 * Math.PI));
                                             // Scale to fit visually within chart height (max ~80% of max data value)
@@ -200,7 +204,7 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                             <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 4 }}>Time to sell at each price</Text>
                                             <Text style={{ fontSize: 12, color: '#6B7280', marginBottom: 6 }}>Y: Time (days to sell) · X: Price ($)</Text>
                                             <ScrollView horizontal showsHorizontalScrollIndicator={true} style={{ marginHorizontal: -4 }} contentContainerStyle={{ paddingHorizontal: 4 }}>
-                                                <View>
+                                                <View style={{ width: chartWidth }}>
                                                     <BarChart
                                                         data={{
                                                             labels,
@@ -309,6 +313,7 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                             </View>
                                         </View>
                                         <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+                                            <View style={{ width: trendChartWidth }}>
                                             <LineChart
                                                 data={{ labels: trendLabels, datasets: [{ data: trendData.length ? trendData : [0] }] }}
                                                 width={trendChartWidth}
@@ -326,12 +331,13 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                                 withInnerLines={false}
                                                 withOuterLines={true}
                                             />
+                                            </View>
                                         </ScrollView>
                                     </View>
                                 );
                             })()}
-
-                        </ScrollView>
+                            </View>
+                        </View>
                     ) : (
                         <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>
                             <Text style={{ fontSize: 14, color: '#6B7280' }}>Loading...</Text>

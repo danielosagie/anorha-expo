@@ -43,6 +43,10 @@ import { useProductVariantRealtime, useInventoryLevelsRealtime } from '../hooks/
 import { useOrg } from '../context/OrgContext';
 import { parseFilterQuery } from '../utils/parseFilterQuery';
 import { logFlowEvent, FlowEvents, startTrace, getTraceHeaders } from '../lib/mobileFlowLogger';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+const TAB_BAR_HEIGHT = 84;
+const TAB_BAR_BOTTOM_OFFSET = 18;
 
 type InventoryOrdersScreenNavigationProp = StackNavigationProp<AppStackParamList, 'TabNavigator'>;
 
@@ -64,6 +68,8 @@ type EnrichedProductVariant = ProductVariantData & {
   IsArchived?: boolean;
   optionVariantCount?: number; // Count of option variants for this product
   CreatedAt?: string; // For date-based sorting
+  lastSyncedAt?: string | null;
+  isStale?: boolean;
   matchLocations?: MatchLocation[]; // Where the search query matched
   matchSnippet?: string; // Snippet of text where match occurred
 };
@@ -84,6 +90,8 @@ const InventoryOrdersScreen = observer(() => {
   const route = useRoute<any>();
   const legendState: LegendStateObservables | null = useLegendState();
   const { currentOrg } = useOrg();
+  const insets = useSafeAreaInsets();
+  const bottomSafePadding = TAB_BAR_HEIGHT + TAB_BAR_BOTTOM_OFFSET + insets.bottom + 16;
 
   // Subscribe to real-time product variant and inventory changes
   // These hooks return updateCounter values that we'll use to trigger useMemo re-computation
@@ -467,26 +475,38 @@ const InventoryOrdersScreen = observer(() => {
       try {
         const { data: connectionsData, error: connectionsError } = await supabase
           .from('PlatformConnections')
-          .select('*')
+          .select('Id, UserId, OrgId, PlatformType, DisplayName, Status, IsEnabled, LastSyncAttemptAt, LastSyncSuccessAt, CreatedAt, UpdatedAt')
           .eq('UserId', legendState.userId);
 
         if (connectionsError) {
           console.error('[InventoryScreen] Error fetching platform connections:', connectionsError);
         } else {
-          setPlatformConnections(connectionsData || []);
+          const normalizedConnections: PlatformConnection[] = (connectionsData || []).map((conn: any) => ({
+            ...conn,
+            Credentials: conn?.Credentials ?? null,
+          }));
+          setPlatformConnections(normalizedConnections);
         }
 
         if (connectionsData && connectionsData.length > 0) {
           const connectionIds = connectionsData.map(conn => conn.Id);
           const { data: locationsData, error: locationsError } = await supabase
             .from('PlatformLocations')
-            .select('*')
+            .select('Id, PlatformConnectionId, PlatformLocationId, Name, IsActive, IsPrimary')
             .in('PlatformConnectionId', connectionIds);
 
           if (locationsError) {
             console.error('[InventoryScreen] Error fetching platform locations:', locationsError);
           } else {
-            setPlatformLocations(locationsData || []);
+            const normalizedLocations: PlatformLocation[] = (locationsData || []).map((location: any) => ({
+              Id: location.Id,
+              PlatformConnectionId: location.PlatformConnectionId,
+              PlatformGeneratedLocationId: location.PlatformGeneratedLocationId ?? location.PlatformLocationId ?? location.Id,
+              Name: location.Name ?? 'Location',
+              IsPOS: Boolean(location.IsPOS),
+              id: location.Id,
+            }));
+            setPlatformLocations(normalizedLocations);
           }
         }
       } catch (error) {
@@ -503,20 +523,43 @@ const InventoryOrdersScreen = observer(() => {
   const [directFetchVariants, setDirectFetchVariants] = useState<Record<string, ProductVariantData>>({});
   const [directFetchLevels, setDirectFetchLevels] = useState<Record<string, InventoryLevel>>({});
   const [sharedLinkQuantities, setSharedLinkQuantities] = useState<Record<string, { quantity: number; poolId?: string }>>({});
+  const PRODUCT_VARIANT_SELECT = 'Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, Tags, PrimaryImageUrl, CreatedAt, UpdatedAt';
+
+  const fetchAllProductVariants = useCallback(async (userId: string) => {
+    const pageSize = 200;
+    const allRows: any[] = [];
+    let from = 0;
+
+    while (true) {
+      const to = from + pageSize - 1;
+      const { data, error } = await supabase
+        .from('ProductVariants')
+        .select(PRODUCT_VARIANT_SELECT)
+        .eq('UserId', userId)
+        .not('Sku', 'like', 'DRAFT-%')
+        .range(from, to);
+
+      if (error) throw error;
+
+      const rows = data || [];
+      allRows.push(...rows);
+
+      if (rows.length < pageSize) break;
+      from += pageSize;
+    }
+
+    return allRows;
+  }, []);
 
   useEffect(() => {
     const directFetchProducts = async () => {
       if (supabase && legendState?.userId) {
         try {
           // Fetch ProductVariants
-          const { data, error } = await supabase
-            .from('ProductVariants')
-            .select('*')
-            .eq('UserId', legendState.userId)
-            .not('Sku', 'like', 'DRAFT-%');
+          const data = await fetchAllProductVariants(legendState.userId);
 
-          if (error) {
-            console.error('[InventoryScreen - Direct Fetch] Error fetching products:', error);
+          if (!data) {
+            console.error('[InventoryScreen - Direct Fetch] Error fetching products: empty response');
           } else {
             console.log('[InventoryScreen - Direct Fetch] Successfully fetched products:', data?.length);
             // Store in fallback state, keyed by Id
@@ -557,7 +600,7 @@ const InventoryOrdersScreen = observer(() => {
               if (variantIds.length > 0) {
                 const { data: levelsData, error: levelsError } = await supabase
                   .from('InventoryLevels')
-                  .select('*')
+                  .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt')
                   .in('ProductVariantId', variantIds);
 
                 if (levelsError) {
@@ -584,7 +627,7 @@ const InventoryOrdersScreen = observer(() => {
     if (legendState?.userId) {
       directFetchProducts();
     }
-  }, [legendState]);
+  }, [fetchAllProductVariants, legendState]);
 
   // Track if this is the first render to avoid double-fetching on initial mount
   const isFirstRender = useRef(true);
@@ -607,16 +650,7 @@ const InventoryOrdersScreen = observer(() => {
 
         try {
           // Always refetch products to get latest data (covers both new AND updated products)
-          const { data, error: fetchError } = await supabase
-            .from('ProductVariants')
-            .select('*')
-            .eq('UserId', legendState.userId)
-            .not('Sku', 'like', 'DRAFT-%');
-
-          if (fetchError) {
-            console.error('[InventoryOrdersScreen] Error refreshing products:', fetchError);
-            return;
-          }
+          const data = await fetchAllProductVariants(legendState.userId);
 
           if (data) {
             const variantMap: Record<string, ProductVariantData> = {};
@@ -655,7 +689,7 @@ const InventoryOrdersScreen = observer(() => {
             if (variantIds.length > 0) {
               const { data: levelsData } = await supabase
                 .from('InventoryLevels')
-                .select('*')
+                .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt')
                 .in('ProductVariantId', variantIds);
 
               if (levelsData && levelsData.length > 0) {
@@ -674,7 +708,7 @@ const InventoryOrdersScreen = observer(() => {
       };
 
       refreshOnFocus();
-    }, [legendState?.userId])
+    }, [fetchAllProductVariants, legendState?.userId])
   );
 
 
@@ -688,12 +722,16 @@ const InventoryOrdersScreen = observer(() => {
   const activeMarketplaceListings = (legendObservables?.marketplaceListings$?.get() || {}) as Record<string, MarketplaceListing>;
 
   // Use Legend data if available, otherwise fall back to direct fetch
-  const activeProductVariants = Object.keys(legendProductVariants).length > 0
+  const legendVariantCount = Object.keys(legendProductVariants).length;
+  const directVariantCount = Object.keys(directFetchVariants).length;
+  const activeProductVariants = legendVariantCount >= directVariantCount
     ? legendProductVariants
     : directFetchVariants;
 
   // Use Legend InventoryLevels if available, otherwise fall back to direct fetch
-  const activeInventoryLevels = Object.keys(legendInventoryLevels).length > 1 // Need more than 1 level to be useful
+  const legendLevelCount = Object.keys(legendInventoryLevels).length;
+  const directLevelCount = Object.keys(directFetchLevels).length;
+  const activeInventoryLevels = legendLevelCount >= directLevelCount
     ? legendInventoryLevels
     : directFetchLevels;
 
@@ -1002,11 +1040,29 @@ const InventoryOrdersScreen = observer(() => {
       if (variant.OnEbay) platformNames.push('ebay');
       if (variant.OnFacebook) platformNames.push('facebook');
 
+      const variantIdsForSync = [variantId, ...optionVariants.map(ov => ov.id)];
+      const syncTimestamps = Object.values(mappings)
+        .filter((mapping: PlatformProductMapping) =>
+          variantIdsForSync.includes(mapping.ProductVariantId) &&
+          mapping.IsEnabled !== false
+        )
+        .map((mapping: PlatformProductMapping) => mapping.LastSyncedAt || mapping.UpdatedAt)
+        .filter((value: any) => typeof value === 'string' && value.length > 0) as string[];
+      const latestSyncMs = syncTimestamps.reduce((max, value) => {
+        const parsed = new Date(value).getTime();
+        return Number.isFinite(parsed) ? Math.max(max, parsed) : max;
+      }, 0);
+      const lastSyncedAt = latestSyncMs > 0 ? new Date(latestSyncMs).toISOString() : null;
+      const staleThresholdMs = 24 * 60 * 60 * 1000;
+      const isStale = !lastSyncedAt || (Date.now() - latestSyncMs) > staleThresholdMs;
+
       return {
         ...variant,
         imageUrl,
         totalQuantity,
         platformNames,
+        lastSyncedAt,
+        isStale,
         minPrice,
         maxPrice,
         VariantType: variantWithType.VariantType,
@@ -1291,6 +1347,8 @@ const InventoryOrdersScreen = observer(() => {
         imageUrl={item.imageUrl}
         totalQuantity={item.totalQuantity}
         platformNames={item.platformNames}
+        lastSyncedAt={item.lastSyncedAt}
+        isStale={item.isStale}
         matchLocations={item.matchLocations}
         matchSnippet={item.matchSnippet}
         searchQuery={searchQuery}
@@ -1865,7 +1923,7 @@ const InventoryOrdersScreen = observer(() => {
           <FlatList
             data={plannedActions}
             keyExtractor={(item) => item.itemId}
-            contentContainerStyle={{ padding: 16, gap: 10, paddingBottom: 100 }}
+            contentContainerStyle={{ padding: 16, gap: 10, paddingBottom: bottomSafePadding }}
             renderItem={({ item, index }) => (
               <TouchableOpacity
                 activeOpacity={0.7}
@@ -2022,7 +2080,7 @@ const InventoryOrdersScreen = observer(() => {
           <View style={{
             backgroundColor: 'transparent',
             paddingHorizontal: 16,
-            paddingBottom: Platform.OS === 'ios' ? 100 : 80
+            paddingBottom: bottomSafePadding
           }}>
             <VoiceRecorder
               apiBaseUrl={process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL}
@@ -2811,4 +2869,3 @@ const styles = StyleSheet.create({
 });
 
 export default InventoryOrdersScreen;
-

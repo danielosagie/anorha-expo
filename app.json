@@ -3,7 +3,7 @@
     "name": "Anorha",
     "slug": "sssync",
     "owner": "anorha",
-    "version": "1.0.2",
+    "version": "1.0.21",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "icon": "./src/assets/1024_anorha.png",

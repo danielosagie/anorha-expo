@@ -1,0 +1,242 @@
+__tests__/smoke.test.tsx(2,24): error TS2307: Cannot find module '@testing-library/react-native' or its corresponding type declarations.
+__tests__/smoke.test.tsx(5,1): error TS2582: Cannot find name 'describe'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha`.
+__tests__/smoke.test.tsx(6,3): error TS2582: Cannot find name 'it'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha`.
+__tests__/smoke.test.tsx(8,5): error TS2304: Cannot find name 'expect'.
+App.tsx(263,14): error TS2741: Property 'onShowPlatforms' is missing in type '{ state: "platformPicker"; selectedCount: number; selectedTemplate: null; selectedPlatforms: never[]; isConnected: (p: string) => boolean; platformActiveCounts: Record<string, number>; ... 8 more ...; onStartConnect: (platform: string) => void; }' but required in type 'Props'.
+lib/shopifyGraphQL.ts(542,5): error TS2322: Type '({ inventoryQuantity: number; id: string; title: string; handle: string; status: "ACTIVE" | "ARCHIVED" | "DRAFT"; vendor: string; productType: string; createdAt: string; updatedAt: string; ... 4 more ...; media: ProductMedia[]; } | null)[]' is not assignable to type 'Product[]'.
+  Type '{ inventoryQuantity: number; id: string; title: string; handle: string; status: "ACTIVE" | "ARCHIVED" | "DRAFT"; vendor: string; productType: string; createdAt: string; updatedAt: string; ... 4 more ...; media: ProductMedia[]; } | null' is not assignable to type 'Product'.
+    Type 'null' is not assignable to type 'Product'.
+lib/shopifyGraphQL.ts(542,63): error TS2677: A type predicate's type must be assignable to its parameter's type.
+  Type 'Product' is not assignable to type '{ inventoryQuantity: number; id: string; title: string; handle: string; status: "ACTIVE" | "ARCHIVED" | "DRAFT"; vendor: string; productType: string; createdAt: string; updatedAt: string; ... 4 more ...; media: ProductMedia[]; }'.
+    Types of property 'inventoryQuantity' are incompatible.
+      Type 'number | undefined' is not assignable to type 'number'.
+        Type 'undefined' is not assignable to type 'number'.
+src/components/ChannelSalesBar.tsx(6,28): error TS7031: Binding element 'channel' implicitly has an 'any' type.
+src/components/CSVManageModal.tsx(76,40): error TS2339: Property 'documentDirectory' does not exist on type 'typeof import("/Users/dosagie/Documents/CodeProjects/sssync_mobile_test/node_modules/expo-file-system/build/index")'.
+src/components/CSVManageModal.tsx(77,92): error TS2339: Property 'EncodingType' does not exist on type 'typeof import("/Users/dosagie/Documents/CodeProjects/sssync_mobile_test/node_modules/expo-file-system/build/index")'.
+src/components/EnhancedFilters.tsx(190,105): error TS2339: Property 'border' does not exist on type '{ primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }'.
+src/components/EnhancedFilters.tsx(209,79): error TS2339: Property 'border' does not exist on type '{ primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }'.
+src/components/EnhancedFilters.tsx(249,99): error TS2339: Property 'border' does not exist on type '{ primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }'.
+src/components/EnhancedFilters.tsx(335,110): error TS2339: Property 'border' does not exist on type '{ primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }'.
+src/components/EnhancedFilters.tsx(346,76): error TS2339: Property 'border' does not exist on type '{ primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }'.
+src/components/EnhancedSearchInterface.tsx(204,32): error TS2345: Argument of type '"query" | "url" | "barcode"' is not assignable to parameter of type '"query" | "url" | "site"'.
+  Type '"barcode"' is not assignable to type '"query" | "url" | "site"'.
+src/components/InsightCard.tsx(124,9): error TS2322: Type 'number' is not assignable to type 'Timeout'.
+src/components/InsightCard.tsx(125,13): error TS2322: Type 'number' is not assignable to type 'Timeout'.
+src/components/ItemJobsModal.tsx(448,24): error TS2345: Argument of type 'ItemJobState | LegacyItem' is not assignable to parameter of type 'ItemJobState & LegacyItem'.
+  Type 'ItemJobState' is not assignable to type 'ItemJobState & LegacyItem'.
+    Property 'matchesCount' is missing in type 'ItemJobState' but required in type 'LegacyItem'.
+src/components/ItemJobsModal.tsx(957,5): error TS1117: An object literal cannot have multiple properties with the same name.
+src/components/ItemJobsModal.tsx(958,5): error TS1117: An object literal cannot have multiple properties with the same name.
+src/components/LocationsManagerV2.tsx(722,11): error TS2353: Object literal may only specify known properties, and 'isPartnerPool' does not exist in type 'DraftPool'.
+src/components/ManifestReviewSheet.tsx(121,9): error TS2322: Type 'number' is not assignable to type 'Timeout'.
+src/components/MatchItemButton.tsx(7,41): error TS2304: Cannot find name 'SerpApiItem'.
+src/components/MatchItemButton.tsx(46,42): error TS2339: Property 'title' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(53,11): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(55,20): error TS2304: Cannot find name 'ITEM_WIDTH'.
+src/components/MatchItemButton.tsx(63,13): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(64,32): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(65,32): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(75,26): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(77,17): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(78,36): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(81,32): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(88,24): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(90,35): error TS2339: Property 'thumbnail' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(90,53): error TS2339: Property 'image' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(91,22): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(97,19): error TS2339: Property 'price' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(98,28): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(99,30): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(99,54): error TS2339: Property 'price' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(104,26): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(105,28): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(106,23): error TS2339: Property 'source' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(112,24): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(113,26): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(114,21): error TS2339: Property 'title' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(118,20): error TS2339: Property 'rating' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(118,35): error TS2339: Property 'reviews' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(119,28): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(120,23): error TS2339: Property 'rating' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(121,32): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(122,34): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(122,61): error TS2339: Property 'rating' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(125,23): error TS2339: Property 'reviews' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(126,32): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(126,59): error TS2339: Property 'reviews' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(132,19): error TS2339: Property 'in_stock' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(134,17): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(135,22): error TS2339: Property 'in_stock' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(135,33): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(135,50): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(138,19): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(139,24): error TS2339: Property 'in_stock' does not exist on type 'SelectableSerpApiItem'.
+src/components/MatchItemButton.tsx(139,35): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(139,56): error TS2304: Cannot find name 'styles'.
+src/components/MatchItemButton.tsx(141,25): error TS2339: Property 'in_stock' does not exist on type 'SelectableSerpApiItem'.
+src/components/optimizer/OptimizerReviewModeView.tsx(55,37): error TS2554: Expected 0 arguments, but got 1.
+src/components/OrderListItem.tsx(6,26): error TS7031: Binding element 'order' implicitly has an 'any' type.
+src/components/OrderListItem.tsx(10,27): error TS7006: Parameter 'status' implicitly has an 'any' type.
+src/components/OrderListItem.tsx(26,26): error TS7006: Parameter 'status' implicitly has an 'any' type.
+src/components/OrderListItem.tsx(42,28): error TS7006: Parameter 'platform' implicitly has an 'any' type.
+src/components/OrderListItem.tsx(59,23): error TS7006: Parameter 'dateString' implicitly has an 'any' type.
+src/components/OrgSwitcher.tsx(315,47): error TS2339: Property 'border' does not exist on type '{ primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }'.
+src/components/PartnerAcceptModal.tsx(138,21): error TS2322: Type '(selectedLocationIds: string[]) => void' is not assignable to type '(event: GestureResponderEvent) => void'.
+  Types of parameters 'selectedLocationIds' and 'event' are incompatible.
+    Type 'NativeSyntheticEvent<NativeTouchEvent>' is missing the following properties from type 'string[]': length, pop, push, concat, and 35 more.
+src/components/Placeholder.tsx(42,9): error TS2322: Type 'any[]' is not assignable to type 'readonly [ColorValue, ColorValue, ...ColorValue[]]'.
+  Source provides no match for required element at position 0 in target.
+src/components/Placeholder.tsx(79,22): error TS7006: Parameter 'color' implicitly has an 'any' type.
+src/components/Placeholder.tsx(79,29): error TS7006: Parameter 'amount' implicitly has an 'any' type.
+src/components/PlaceholderImage.tsx(87,9): error TS2322: Type 'any[]' is not assignable to type 'readonly [ColorValue, ColorValue, ...ColorValue[]]'.
+  Source provides no match for required element at position 0 in target.
+src/components/PlaceholderImage.tsx(124,22): error TS7006: Parameter 'color' implicitly has an 'any' type.
+src/components/PlaceholderImage.tsx(124,29): error TS7006: Parameter 'amount' implicitly has an 'any' type.
+src/components/PlatformSelector.tsx(37,27): error TS7006: Parameter 'platformId' implicitly has an 'any' type.
+src/components/PlatformSelector.tsx(58,29): error TS7006: Parameter 'platform' implicitly has an 'any' type.
+src/components/PlatformSelector.tsx(79,40): error TS7031: Binding element 'selectedPlatforms' implicitly has an 'any' type.
+src/components/PlatformSelector.tsx(79,59): error TS7031: Binding element 'onChange' implicitly has an 'any' type.
+src/components/PlatformSelector.tsx(82,27): error TS7006: Parameter 'platformId' implicitly has an 'any' type.
+src/components/PoolLocationCombobox.tsx(183,24): error TS2339: Property 'isPartnerPool' does not exist on type 'LocationPool'.
+src/components/PricingResearchModal.tsx(184,65): error TS7006: Parameter 'a' implicitly has an 'any' type.
+src/components/PricingResearchModal.tsx(184,68): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/components/PricingResearchModal.tsx(185,69): error TS7006: Parameter 'a' implicitly has an 'any' type.
+src/components/PricingResearchModal.tsx(185,72): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/components/PricingResearchModal.tsx(189,55): error TS7006: Parameter 'price' implicitly has an 'any' type.
+src/components/ProcessResumptionModal.tsx(59,12): error TS2678: Type 'ProcessType.PRODUCT_MATCHING' is not comparable to type 'ProcessType.AI_GENERATION | ProcessType.LISTING_CREATION | ProcessType.PHOTO_UPLOAD'.
+src/components/ProductGridItem.tsx(31,27): error TS2322: Type '{ name: string; size: number; color: string; }' is not assignable to type 'IntrinsicAttributes & IconProps & { source: any; color?: string | undefined; testID?: string | undefined; theme?: ThemeProp | undefined; }'.
+  Property 'name' does not exist on type 'IntrinsicAttributes & IconProps & { source: any; color?: string | undefined; testID?: string | undefined; theme?: ThemeProp | undefined; }'.
+src/components/ProductGridItem.tsx(49,16): error TS2304: Cannot find name 'ITEM_WIDTH'.
+src/components/ProductGridItem.tsx(50,23): error TS2304: Cannot find name 'ITEM_SPACING'.
+src/components/ProductGridItem.tsx(66,41): error TS2304: Cannot find name 'ITEM_WIDTH'.
+src/components/ReceiptReviewSheet.tsx(117,9): error TS2322: Type 'number' is not assignable to type 'Timeout'.
+src/components/ReceiptReviewSheet.tsx(204,64): error TS2339: Property 'background' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(209,63): error TS2339: Property 'text' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(211,60): error TS2339: Property 'text' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(223,71): error TS2339: Property 'secondaryText' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(235,66): error TS2339: Property 'primary' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(236,70): error TS2339: Property 'secondaryText' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(246,68): error TS2339: Property 'text' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(259,79): error TS2339: Property 'text' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(268,66): error TS2339: Property 'card' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(279,88): error TS2339: Property 'secondaryText' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(284,87): error TS2339: Property 'text' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(287,90): error TS2339: Property 'secondaryText' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(292,91): error TS2339: Property 'secondaryText' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(297,89): error TS2339: Property 'text' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(297,114): error TS2339: Property 'border' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(302,92): error TS2339: Property 'text' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(303,91): error TS2339: Property 'primary' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(322,79): error TS2339: Property 'text' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(329,87): error TS2339: Property 'card' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(332,87): error TS2339: Property 'text' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(335,90): error TS2339: Property 'secondaryText' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(368,74): error TS2339: Property 'card' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(368,102): error TS2339: Property 'border' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(370,74): error TS2339: Property 'secondaryText' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/ReceiptReviewSheet.tsx(373,74): error TS2339: Property 'secondaryText' does not exist on type '{ colors: { primary: string; secondary: string; accent: string; accent2: string; background: string; surface: string; text: string; textSecondary: string; success: string; error: string; warning: string; info: string; }; spacing: { ...; }; borderRadius: { ...; }; typography: { ...; }; shadows: { ...; }; }'.
+src/components/team/InviteMemberModal.tsx(141,7): error TS2304: Cannot find name 'capture'.
+src/components/team/InviteMemberModal.tsx(141,15): error TS2304: Cannot find name 'AnalyticsEvents'.
+src/components/TextField.tsx(5,21): error TS2300: Duplicate identifier 'type'.
+src/components/TextField.tsx(8,12): error TS2300: Duplicate identifier 'type'.
+src/components/TextField.tsx(8,29): error TS7053: Element implicitly has an 'any' type because expression of type '"single"' can't be used to index type 'StringConstructor'.
+  Property 'single' does not exist on type 'StringConstructor'.
+src/components/TextField.tsx(8,36): error TS2872: This kind of expression is always truthy.
+src/components/TextField.tsx(14,25): error TS2339: Property 'formInputMultiline' does not exist on type '{ singleLine: {}; multiLine: {}; }'.
+src/components/TextField.tsx(15,25): error TS2304: Cannot find name 'currentPlatformData'.
+src/components/TextField.tsx(16,43): error TS2304: Cannot find name 'handleFormUpdate'.
+src/components/TextField.tsx(16,60): error TS2304: Cannot find name 'currentPlatformKey'.
+src/components/VariantInventoryRow.tsx(68,9): error TS2322: Type 'number' is not assignable to type 'Timeout'.
+src/components/VariantInventoryRow.tsx(77,9): error TS2322: Type 'number' is not assignable to type 'Timeout'.
+src/components/VisionCamera.tsx(7,40): error TS2307: Cannot find module '../screens/AddListingScreen' or its corresponding type declarations.
+src/components/VisionCamera.tsx(56,25): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'SetStateAction<string | null>'.
+  Type 'undefined' is not assignable to type 'SetStateAction<string | null>'.
+src/components/VisionCamera.tsx(69,11): error TS2353: Object literal may only specify known properties, and 'quality' does not exist in type 'TakePhotoOptions'.
+src/components/VisionCamera.tsx(149,9): error TS2322: Type '{ ref: RefObject<Camera | null>; style: { flex: number; }; device: CameraDevice; isActive: boolean; photo: true; codeScanner: CodeScanner; frameProcessor: ReadonlyFrameProcessor; frameProcessorFps: number; }' is not assignable to type 'IntrinsicAttributes & IntrinsicClassAttributes<Camera> & Readonly<CameraProps>'.
+  Property 'frameProcessorFps' does not exist on type 'IntrinsicAttributes & IntrinsicClassAttributes<Camera> & Readonly<CameraProps>'. Did you mean 'frameProcessor'?
+src/components/VisionCamera.tsx(154,46): error TS2322: Type '{ position: string; left: string; top: string; width: string; height: string; borderWidth: number; borderColor: string; borderRadius: number; } | null' is not assignable to type 'ViewStyle | Falsy | RegisteredStyle<ViewStyle> | RecursiveArray<ViewStyle | Falsy | RegisteredStyle<ViewStyle>> | readonly (ViewStyle | ... 1 more ... | RegisteredStyle<...>)[]'.
+  Type '{ position: string; left: string; top: string; width: string; height: string; borderWidth: number; borderColor: string; borderRadius: number; }' is not assignable to type 'ViewStyle | Falsy | RegisteredStyle<ViewStyle> | RecursiveArray<ViewStyle | Falsy | RegisteredStyle<ViewStyle>> | readonly (ViewStyle | ... 1 more ... | RegisteredStyle<...>)[]'.
+    Type '{ position: string; left: string; top: string; width: string; height: string; borderWidth: number; borderColor: string; borderRadius: number; }' is not assignable to type 'ViewStyle'.
+      Types of property 'height' are incompatible.
+        Type 'string' is not assignable to type 'DimensionValue | undefined'.
+src/components/VisionCamera.tsx(182,21): error TS2322: Type '"flash" | "flash-off" | "flash-auto"' is not assignable to type '"push" | "map" | "filter" | "at" | "reload" | "navigate" | "star" | "square" | "leaf" | "square-outline" | "image" | "create" | "search" | "repeat" | "link" | "list" | "text" | "time" | ... 1339 more ... | undefined'.
+  Type '"flash-auto"' is not assignable to type '"push" | "map" | "filter" | "at" | "reload" | "navigate" | "star" | "square" | "leaf" | "square-outline" | "image" | "create" | "search" | "repeat" | "link" | "list" | "text" | "time" | ... 1339 more ... | undefined'.
+src/examples/ProcessPersistenceExample.tsx(20,50): error TS2344: Type '"AddListingScreen"' does not satisfy the constraint 'keyof AppStackParamList'.
+src/examples/ProcessPersistenceExample.tsx(34,41): error TS2339: Property 'resumeProcessId' does not exist on type 'Readonly<unknown>'.
+src/examples/ProcessPersistenceExample.tsx(41,81): error TS2345: Argument of type 'string | null' is not assignable to parameter of type 'string | undefined'.
+  Type 'null' is not assignable to type 'string | undefined'.
+src/examples/ProcessPersistenceExample.tsx(127,43): error TS18046: 'error' is of type 'unknown'.
+src/examples/VisionCameraExample.tsx(5,35): error TS2307: Cannot find module '../screens/AddListingScreen' or its corresponding type declarations.
+src/hooks/useAuth.ts(2,26): error TS2307: Cannot find module './supabase' or its corresponding type declarations.
+src/hooks/useAuth.ts(6,33): error TS2686: 'React' refers to a UMD global, but the current file is a module. Consider adding an import instead.
+src/hooks/useAuth.ts(7,27): error TS2686: 'React' refers to a UMD global, but the current file is a module. Consider adding an import instead.
+src/hooks/useAuth.ts(9,3): error TS2686: 'React' refers to a UMD global, but the current file is a module. Consider adding an import instead.
+src/hooks/useAuth.ts(10,48): error TS7031: Binding element 'session' implicitly has an 'any' type.
+src/hooks/useAuth.ts(16,8): error TS7006: Parameter '_event' implicitly has an 'any' type.
+src/hooks/useAuth.ts(16,16): error TS7006: Parameter 'session' implicitly has an 'any' type.
+src/hooks/useProductDraft.ts(25,18): error TS2304: Cannot find name 'ensureSupabaseJwt'.
+src/hooks/useProductVariantRealtime.ts(46,9): error TS18048: 'observables.productVariants$' is possibly 'undefined'.
+src/hooks/useProductVariantRealtime.ts(65,42): error TS2339: Property 'Id' does not exist on type '{} | { [key: string]: any; }'.
+  Property 'Id' does not exist on type '{}'.
+src/hooks/useProductVariantRealtime.ts(65,61): error TS2339: Property 'Id' does not exist on type '{} | Partial<{ [key: string]: any; }>'.
+  Property 'Id' does not exist on type '{}'.
+src/hooks/useProductVariantRealtime.ts(74,33): error TS2339: Property 'Title' does not exist on type '{} | { [key: string]: any; }'.
+  Property 'Title' does not exist on type '{}'.
+src/hooks/useProductVariantRealtime.ts(74,55): error TS2339: Property 'Title' does not exist on type '{} | Partial<{ [key: string]: any; }>'.
+  Property 'Title' does not exist on type '{}'.
+src/hooks/useProductVariantRealtime.ts(234,42): error TS2339: Property 'Id' does not exist on type '{} | { [key: string]: any; }'.
+  Property 'Id' does not exist on type '{}'.
+src/hooks/useProductVariantRealtime.ts(234,61): error TS2339: Property 'Id' does not exist on type '{} | Partial<{ [key: string]: any; }>'.
+  Property 'Id' does not exist on type '{}'.
+src/hooks/useProductVariantRealtime.ts(235,44): error TS2339: Property 'ProductVariantId' does not exist on type '{} | { [key: string]: any; }'.
+  Property 'ProductVariantId' does not exist on type '{}'.
+src/hooks/useProductVariantRealtime.ts(235,77): error TS2339: Property 'ProductVariantId' does not exist on type '{} | Partial<{ [key: string]: any; }>'.
+  Property 'ProductVariantId' does not exist on type '{}'.
+src/hooks/useProductVariantRealtime.ts(236,43): error TS2339: Property 'Quantity' does not exist on type '{} | { [key: string]: any; }'.
+  Property 'Quantity' does not exist on type '{}'.
+src/hooks/useProductVariantRealtime.ts(248,57): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type '{ [key: string]: any; }' is not assignable to parameter of type '{ Id: string; ProductVariantId: string; PlatformConnectionId: string; PlatformLocationId?: string | null | undefined; PoolId?: string | null | undefined; OrgId?: string | null | undefined; ... 7 more ...; UpdatedAt: string; }'.
+      Type '{ [key: string]: any; }' is missing the following properties from type '{ Id: string; ProductVariantId: string; PlatformConnectionId: string; PlatformLocationId?: string | null | undefined; PoolId?: string | null | undefined; OrgId?: string | null | undefined; ... 7 more ...; UpdatedAt: string; }': Id, ProductVariantId, PlatformConnectionId, Quantity, UpdatedAt
+src/hooks/useVisionCamera.tsx(4,35): error TS2307: Cannot find module '../screens/AddListingScreen' or its corresponding type declarations.
+src/lib/mobileFlowLogger.ts(26,39): error TS2339: Property 'getItem' does not exist on type 'typeof import("/Users/dosagie/Documents/CodeProjects/sssync_mobile_test/node_modules/@react-native-async-storage/async-storage/lib/typescript/index")'.
+src/lib/mobileFlowLogger.ts(29,7): error TS2322: Type 'string | null' is not assignable to type 'string'.
+  Type 'null' is not assignable to type 'string'.
+src/lib/mobileFlowLogger.ts(38,24): error TS2339: Property 'setItem' does not exist on type 'typeof import("/Users/dosagie/Documents/CodeProjects/sssync_mobile_test/node_modules/@react-native-async-storage/async-storage/lib/typescript/index")'.
+src/screens/BackfillOptimizerScreen.tsx(19,43): error TS2307: Cannot find module '@react-navigation/native-stack' or its corresponding type declarations.
+src/screens/BackfillOptimizerScreen.tsx(195,53): error TS2322: Type '"sparkles"' is not assignable to type '"symbol" | "function" | "sort" | "map" | "filter" | "at" | "reload" | "origin" | "star" | "clover" | "square" | "facebook" | "shopping" | "package" | "leaf" | "square-outline" | ... 7432 more ... | undefined'.
+src/screens/CreateAccountScreen.tsx(498,10): error TS2786: 'PhoneInput' cannot be used as a JSX component.
+  Its type 'typeof PhoneInput' is not a valid JSX element type.
+    Type 'typeof PhoneInput' is not assignable to type 'new (props: any) => Component<any, any, any>'.
+      Types of construct signatures are incompatible.
+        Type 'new (props: PhoneInputProps, context: any) => PhoneInput' is not assignable to type 'new (props: any) => Component<any, any, any>'.
+          Target signature provides too few arguments. Expected 2 or more, but got 1.
+src/screens/MarketplaceScreen.tsx(11,28): error TS7031: Binding element 'item' implicitly has an 'any' type.
+src/screens/MarketplaceScreen.tsx(11,34): error TS7031: Binding element 'onAddToInventory' implicitly has an 'any' type.
+src/screens/MarketplaceScreen.tsx(11,52): error TS7031: Binding element 'navigation' implicitly has an 'any' type.
+src/screens/MarketplaceScreen.tsx(63,27): error TS7006: Parameter 'platform' implicitly has an 'any' type.
+src/screens/MarketplaceScreen.tsx(127,30): error TS7031: Binding element 'navigation' implicitly has an 'any' type.
+src/screens/MarketplaceScreen.tsx(134,33): error TS7006: Parameter 'item' implicitly has an 'any' type.
+src/screens/MarketplaceScreen.tsx(141,36): error TS2322: Type '{ children: Element[]; style: { flex: number; backgroundColor: string; padding: number; }; paddingTop: number; }' is not assignable to type 'IntrinsicAttributes & IntrinsicClassAttributes<View> & Readonly<ViewProps>'.
+  Property 'paddingTop' does not exist on type 'IntrinsicAttributes & IntrinsicClassAttributes<View> & Readonly<ViewProps>'.
+src/screens/PhoneAuthScreen.tsx(107,29): error TS2769: No overload matches this call.
+  Argument of type '[string]' is not assignable to parameter of type 'never'.
+  Overload 2 of 2, '(options: never): void', gave the following error.
+    Argument of type '"CreateAccountScreen"' is not assignable to parameter of type 'never'.
+src/screens/PhoneAuthScreen.tsx(159,14): error TS2786: 'PhoneInput' cannot be used as a JSX component.
+  Its type 'typeof PhoneInput' is not a valid JSX element type.
+    Type 'typeof PhoneInput' is not assignable to type 'new (props: any) => Component<any, any, any>'.
+      Types of construct signatures are incompatible.
+        Type 'new (props: PhoneInputProps, context: any) => PhoneInput' is not assignable to type 'new (props: any) => Component<any, any, any>'.
+          Target signature provides too few arguments. Expected 2 or more, but got 1.
+src/screens/VerifyCodeScreen.tsx(145,27): error TS18048: 'signUp' is possibly 'undefined'.
+src/utils/entitlements.ts(127,5): error TS2322: Type 'boolean | null' is not assignable to type 'boolean'.
+  Type 'null' is not assignable to type 'boolean'.
+src/utils/entitlements.ts(131,5): error TS2322: Type 'boolean | null' is not assignable to type 'boolean'.
+  Type 'null' is not assignable to type 'boolean'.
+src/utils/InventoryChecker.ts(64,48): error TS2339: Property 'Title' does not exist on type '{ Id: any; Title: any; UserId: any; }[]'.
+src/utils/InventoryChecker.ts(143,48): error TS2339: Property 'Title' does not exist on type '{ Id: any; Title: any; UserId: any; }[]'.
+src/utils/InventoryChecker.ts(211,48): error TS2339: Property 'Title' does not exist on type '{ Id: any; Title: any; UserId: any; }[]'.
+src/utils/InventoryChecker.ts(278,48): error TS2339: Property 'Title' does not exist on type '{ Id: any; Title: any; UserId: any; }[]'.
+src/utils/ProcessPersistence.ts(257,7): error TS2322: Type 'ProcessType' is not assignable to type 'ProcessType.AI_GENERATION | ProcessType.LISTING_CREATION | ProcessType.PHOTO_UPLOAD'.

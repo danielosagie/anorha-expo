@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CloudUpload, Save, ChevronLeft, ChevronRight } from 'lucide-react-native';
 
@@ -30,9 +31,10 @@ type Props = {
 
 export default function BottomActionBar({ primaryLabel, primaryDisabled, onPrimary, secondaryLabel, secondaryDisabled, onSecondary, tertiaryContent, style, stepNav }: Props) {
   const showStepNav = stepNav && primaryDisabled;
+  const insets = useSafeAreaInsets();
 
   return (
-    <View style={[styles.container, style]}>
+    <View style={[styles.container, { bottom: 24 + insets.bottom }, style]}>
       {tertiaryContent}
 
       {showStepNav ? (
@@ -88,7 +90,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 16,
     right: 16,
-    bottom: 24,
     gap: 10,
   },
   primaryBtn: {
@@ -124,6 +125,7 @@ const styles = StyleSheet.create({
     padding: 12,
     alignItems: 'center',
     justifyContent: 'center',
+    opacity: 0.7,
   },
   stepCenterBtn: {
     flex: 1,

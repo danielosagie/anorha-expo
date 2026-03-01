@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BaseModal } from './BaseModal';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
@@ -43,6 +44,7 @@ export const PartnerAcceptModal: React.FC<PartnerAcceptModalProps> = ({
     onSelectionChange,
 }) => {
     const theme = useTheme();
+    const insets = useSafeAreaInsets();
 
     if (!invite) return null;
 
@@ -55,11 +57,18 @@ export const PartnerAcceptModal: React.FC<PartnerAcceptModalProps> = ({
         onSelectionChange(next);
     };
 
+    const bottomPadding = Math.max(insets.bottom, 16);
+
     return (
-        <BaseModal visible={visible} onClose={onClose}>
+        <BaseModal
+            visible={visible}
+            onClose={onClose}
+            position="bottom"
+            containerStyle={{ paddingBottom: 0 }}
+        >
             <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
                 <View style={styles.iconContainer}>
-                    <Icon name="handshake" size={40} color={theme.colors.primary} />
+                    <Icon name="handshake" size={32} color={theme.colors.primary} />
                 </View>
 
                 <Text style={styles.title}>Accept Partnership?</Text>
@@ -82,6 +91,8 @@ export const PartnerAcceptModal: React.FC<PartnerAcceptModalProps> = ({
                         <Text style={styles.detailText}>Type: <Text style={styles.bold}>{invite.shareType}</Text></Text>
                     </View>
                 </View>
+
+                {/*
 
                 <Text style={styles.locationSectionTitle}>Which location(s) should sync with this partner?</Text>
                 {locationsLoading ? (
@@ -120,11 +131,14 @@ export const PartnerAcceptModal: React.FC<PartnerAcceptModalProps> = ({
                     </View>
                 )}
 
+                */}
+
                 <Text style={styles.subtext}>
                     Accepting this invite will start syncing products to your catalog. This may take a few moments.
                 </Text>
+            </ScrollView>
 
-                <View style={styles.buttonContainer}>
+            <View style={styles.buttonContainer}>
                 <TouchableOpacity
                     style={[styles.button, styles.cancelButton]}
                     onPress={onClose}
@@ -135,7 +149,7 @@ export const PartnerAcceptModal: React.FC<PartnerAcceptModalProps> = ({
 
                 <TouchableOpacity
                     style={[styles.button, styles.confirmButton, { backgroundColor: theme.colors.primary }]}
-                    onPress={onConfirm}
+                    onPress={() => onConfirm(selectedLocationIds)}
                     disabled={loading}
                 >
                     {loading ? (
@@ -145,23 +159,24 @@ export const PartnerAcceptModal: React.FC<PartnerAcceptModalProps> = ({
                     )}
                 </TouchableOpacity>
             </View>
-            </ScrollView>
         </BaseModal>
     );
 };
 
 const styles = StyleSheet.create({
     scroll: {
-        maxHeight: '85%',
+        maxHeight: '75%',
     },
     scrollContent: {
-        paddingBottom: 24,
+        alignItems: 'center',
+        paddingBottom: 48,
     },
     locationSectionTitle: {
         fontSize: 14,
         fontWeight: '600',
         color: '#374151',
         marginBottom: 8,
+        textAlign: 'center',
     },
     locationLoadingRow: {
         flexDirection: 'row',
@@ -182,10 +197,12 @@ const styles = StyleSheet.create({
         borderRadius: 8,
         padding: 12,
         marginBottom: 16,
+        textAlign: 'center',
     },
     locationList: {
-        marginBottom: 16,
-        maxHeight: 180,
+        width: '100%',
+        marginBottom: 12,
+        maxHeight: 160,
     },
     locationGroup: {
         marginBottom: 12,
@@ -228,17 +245,17 @@ const styles = StyleSheet.create({
         marginBottom: 16,
     },
     title: {
-        fontSize: 22,
+        fontSize: 20,
         fontWeight: 'bold',
         color: '#111',
-        marginBottom: 12,
+        marginBottom: 8,
         textAlign: 'center',
     },
     description: {
-        fontSize: 16,
+        fontSize: 15,
         color: '#4B5563',
         textAlign: 'center',
-        marginBottom: 24,
+        marginBottom: 16,
         lineHeight: 22,
     },
     bold: {
@@ -247,10 +264,12 @@ const styles = StyleSheet.create({
     },
     detailsContainer: {
         width: '100%',
+        maxWidth: 320,
+        alignSelf: 'center',
         backgroundColor: '#F9FAFB',
         borderRadius: 12,
-        padding: 16,
-        marginBottom: 24,
+        padding: 12,
+        marginBottom: 16,
         borderWidth: 1,
         borderColor: '#F3F4F6',
     },
@@ -268,13 +287,14 @@ const styles = StyleSheet.create({
         fontSize: 13,
         color: '#6B7280',
         textAlign: 'center',
-        marginBottom: 24,
+        marginBottom: 32,
         fontStyle: 'italic',
     },
     buttonContainer: {
         flexDirection: 'row',
         width: '100%',
         gap: 12,
+        marginTop: 8,
     },
     button: {
         flex: 1,

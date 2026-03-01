@@ -1,5 +1,6 @@
 import React, { useState, useRef, memo } from 'react';
 import { View, Text, StyleSheet, FlatList, Image, Dimensions, TouchableOpacity, SafeAreaView, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInUp, FadeIn } from 'react-native-reanimated';
 import Button from '../components/Button';
 
@@ -45,6 +46,7 @@ const OnboardingSlide = memo(({ item }: { item: any }) => (
 const OnboardingSlides = ({ navigation }: { navigation: any }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const flatListRef = useRef<any>(null);
+  const insets = useSafeAreaInsets();
 
   const handleNext = () => {
     if (currentIndex < slides.length - 1) {
@@ -85,7 +87,7 @@ const OnboardingSlides = ({ navigation }: { navigation: any }) => {
           }}
         />
 
-        <View style={styles.footer}>
+        <View style={[styles.footer, { paddingBottom: 40 + insets.bottom }]}>
           <View style={styles.pagination}>
             {slides.map((_, index) => (
               <View
@@ -182,7 +184,6 @@ const styles = StyleSheet.create({
   footer: {
     width: '100%',
     paddingHorizontal: 32,
-    paddingBottom: 40,
     alignItems: 'center',
   },
   pagination: {

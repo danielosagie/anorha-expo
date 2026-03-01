@@ -54,8 +54,9 @@ const LiquidationCampaignScreen = () => {
     const theme = useTheme();
     const colors = theme.colors;
     const navigation = useNavigation();
-    const route = useRoute();
+    const route = useRoute<any>();
     const initialCampaignId = (route.params as any)?.campaignId;
+    const isTabRootEntry = route?.name === 'Clearouts' || (route.params as any)?.entryPoint === 'tab';
 
     // DATA STATE
     const [campaigns, setCampaigns] = useState<AgentSession[]>([]);
@@ -373,6 +374,8 @@ const LiquidationCampaignScreen = () => {
         const revenue = state.revenueGenerated ?? state.revenueCollected ?? 0;
         const target = goal.targetRevenue || 1;
 
+        const progressPercent = Math.min(100, Math.round((revenue / target) * 100));
+
         let headline = "Campaign is active.";
         if (status === 'waiting_user') headline = "Action required: Review strategy.";
         if (state.phase === 'analyzing') headline = "Analyzing inventory...";
@@ -380,8 +383,8 @@ const LiquidationCampaignScreen = () => {
         return {
             topDIN: { category: "Status", headline },
             bottomDIN: {
-                title: "Update",
-                description: `Generated $${revenue.toLocaleString()} (Current Pace: Normal).`,
+                title: "Progress",
+                description: `$${revenue.toLocaleString()} recovered of $${target.toLocaleString()} goal (${progressPercent}%).`,
                 metrics: [
                     { label: "Revenue", value: `$${revenue.toLocaleString()}`, color: "#16a34a" },
                     { label: "Target", value: `$${target.toLocaleString()}`, color: "#6b7280" }
@@ -400,51 +403,67 @@ const LiquidationCampaignScreen = () => {
 
     const renderMessageBubble = (msg: AgentMessage) => {
         const isAssistant = msg.role === 'assistant';
-        // Check for special approval type (mock logic here, ideally comes from backend type)
-        const isApprovalRequest = msg.content.includes("approve") || msg.type === 'approval_request';
+        const isApprovalRequest = msg.content.includes("approve") || msg.type === 'approval_request' || msg.content.includes("Say yes?");
+        const isAction = msg.content.startsWith("↓") || msg.content.startsWith("✓");
 
-        return (
-            <View key={msg.id} style={[styles.bubbleWrapper, isAssistant ? styles.wrapperLeft : styles.wrapperRight]}>
-                {isAssistant && (
-                    <View style={styles.avatar}>
-                        <Icon name="robot" size={16} color="#ffffff" />
+        if (isAssistant) {
+            return (
+                <View key={msg.id} style={styles.agentCardWrapper}>
+                    <View style={styles.agentCardHeader}>
+                        <View style={styles.avatarSmall}>
+                            <Icon name="robot" size={14} color="#ffffff" />
+                        </View>
+                        <Text style={styles.agentCardTitle}>
+                            {isApprovalRequest ? "ANORA RECOMMENDS" : isAction ? "ANORA'S LAST MOVE" : "ANORA"}
+                        </Text>
+                        <Text style={styles.bubbleTimeRight}>
+                            {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </Text>
                     </View>
-                )}
-                <View style={[styles.bubbleContent, isAssistant ? styles.bubbleContentLeft : styles.bubbleContentRight]}>
-                    <Text style={[styles.bubbleText, !isAssistant && styles.bubbleTextRight]}>
+                    <View style={[styles.agentCardContent, isApprovalRequest && styles.agentCardContentHighlight]}>
+                        <Text style={styles.agentCardText}>{msg.content}</Text>
+
+                        {/* APPROVAL ACTIONS */}
+                        {isApprovalRequest && (
+                            <View style={styles.approvalContainer}>
+                                {msg.approvalStatus ? (
+                                    <View style={[styles.statusBadge, msg.approvalStatus === 'approved' ? styles.badgeApproved : styles.badgeRejected]}>
+                                        <Icon name={msg.approvalStatus === 'approved' ? "check" : "close"} size={14} color={msg.approvalStatus === 'approved' ? "#15803d" : "#991b1b"} />
+                                        <Text style={[styles.statusText, msg.approvalStatus === 'approved' ? styles.textApproved : styles.textRejected]}>
+                                            {msg.approvalStatus === 'approved' ? "Approved" : "Rejected"}
+                                        </Text>
+                                    </View>
+                                ) : (
+                                    <View style={styles.actionButtons}>
+                                        <TouchableOpacity
+                                            style={[styles.actionBtn, styles.btnApprove]}
+                                            onPress={() => handleApproval(msg.id, true)}
+                                        >
+                                            <Text style={styles.btnTextApprove}>Yes, do it</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.actionBtn, styles.btnReject]}
+                                            onPress={() => handleApproval(msg.id, false)}
+                                        >
+                                            <Text style={styles.btnTextReject}>Not yet</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                )}
+                            </View>
+                        )}
+                    </View>
+                </View>
+            );
+        }
+
+        // User message
+        return (
+            <View key={msg.id} style={[styles.bubbleWrapper, styles.wrapperRight]}>
+                <View style={[styles.bubbleContent, styles.bubbleContentRight]}>
+                    <Text style={[styles.bubbleText, styles.bubbleTextRight]}>
                         {msg.content}
                     </Text>
-
-                    {/* APPROVAL ACTIONS */}
-                    {isAssistant && isApprovalRequest && (
-                        <View style={styles.approvalContainer}>
-                            {msg.approvalStatus ? (
-                                <View style={[styles.statusBadge, msg.approvalStatus === 'approved' ? styles.badgeApproved : styles.badgeRejected]}>
-                                    <Icon name={msg.approvalStatus === 'approved' ? "check" : "close"} size={14} color={msg.approvalStatus === 'approved' ? "#15803d" : "#991b1b"} />
-                                    <Text style={[styles.statusText, msg.approvalStatus === 'approved' ? styles.textApproved : styles.textRejected]}>
-                                        {msg.approvalStatus === 'approved' ? "Plan Approved" : "Plan Rejected"}
-                                    </Text>
-                                </View>
-                            ) : (
-                                <View style={styles.actionButtons}>
-                                    <TouchableOpacity
-                                        style={[styles.actionBtn, styles.btnReject]}
-                                        onPress={() => handleApproval(msg.id, false)}
-                                    >
-                                        <Text style={styles.btnTextReject}>Reject</Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        style={[styles.actionBtn, styles.btnApprove]}
-                                        onPress={() => handleApproval(msg.id, true)}
-                                    >
-                                        <Text style={styles.btnTextApprove}>Approve</Text>
-                                    </TouchableOpacity>
-                                </View>
-                            )}
-                        </View>
-                    )}
-
-                    <Text style={[styles.bubbleTime, !isAssistant && styles.bubbleTimeRight]}>
+                    <Text style={[styles.bubbleTime, styles.bubbleTimeRight]}>
                         {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </Text>
                 </View>
@@ -459,9 +478,13 @@ const LiquidationCampaignScreen = () => {
             {/* Header / Selector (Sticky) */}
             <View style={styles.headerSection}>
                 <View style={styles.navRow}>
-                    <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 8 }}>
-                        <Icon name="arrow-left" size={24} color="#111827" />
-                    </TouchableOpacity>
+                    {isTabRootEntry ? (
+                        <View style={{ width: 40 }} />
+                    ) : (
+                        <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 8 }}>
+                            <Icon name="arrow-left" size={24} color="#111827" />
+                        </TouchableOpacity>
+                    )}
                     <Text style={styles.screenTitle}>Liquidation Console</Text>
                     <View style={{ width: 40 }} />
                 </View>
@@ -520,9 +543,22 @@ const LiquidationCampaignScreen = () => {
                             </View>
 
                             <View style={styles.feedSection}>
+                                {/* Live Status Header */}
+                                <View style={styles.liveStatusHeader}>
+                                    <View style={styles.liveStatusIcon}>
+                                        <Icon name="progress-clock" size={16} color="#1f2937" />
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.liveStatusTitle}>Anora is working</Text>
+                                        <Text style={styles.liveStatusDesc}>
+                                            "Watching pricing on items. Lowering overnight if no bids."
+                                        </Text>
+                                    </View>
+                                </View>
+
                                 <Text style={styles.feedDateHeader}>
                                     {selectedDate.toDateString() === new Date().toDateString()
-                                        ? "Today's Conversation"
+                                        ? "Today's Activity"
                                         : selectedDate.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
                                 </Text>
 
@@ -644,6 +680,39 @@ const styles = StyleSheet.create({
         alignSelf: 'center',
     },
 
+    // Live Status Header
+    liveStatusHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#ffffff',
+        padding: 16,
+        borderRadius: 12,
+        marginBottom: 24,
+        borderWidth: 1,
+        borderColor: '#e5e7eb',
+        shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1,
+    },
+    liveStatusIcon: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        backgroundColor: '#f3f4f6',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 12,
+    },
+    liveStatusTitle: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: '#1f2937',
+        marginBottom: 2,
+    },
+    liveStatusDesc: {
+        fontSize: 13,
+        color: '#4b5563',
+        lineHeight: 18,
+    },
+
     // Chat Bubbles
     bubbleWrapper: {
         flexDirection: 'row',
@@ -678,7 +747,53 @@ const styles = StyleSheet.create({
     bubbleText: { fontSize: 15, lineHeight: 22, color: '#1f2937' },
     bubbleTextRight: { color: '#ffffff' },
     bubbleTime: { fontSize: 10, color: '#9ca3af', marginTop: 4, alignSelf: 'flex-end' },
-    bubbleTimeRight: { color: 'rgba(255,255,255,0.6)' },
+    bubbleTimeRight: { color: 'rgba(255,255,255,0.6)', fontSize: 10, marginTop: 4, alignSelf: 'flex-end' },
+
+    // Agent Cards
+    agentCardWrapper: {
+        marginBottom: 20,
+        backgroundColor: '#ffffff',
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#e5e7eb',
+        overflow: 'hidden',
+    },
+    agentCardHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        backgroundColor: '#f9fafb',
+        borderBottomWidth: 1,
+        borderBottomColor: '#f3f4f6',
+    },
+    avatarSmall: {
+        width: 20,
+        height: 20,
+        borderRadius: 10,
+        backgroundColor: '#10b981',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 8,
+    },
+    agentCardTitle: {
+        fontSize: 11,
+        fontWeight: '700',
+        color: '#6b7280',
+        letterSpacing: 0.5,
+        flex: 1,
+    },
+    agentCardContent: {
+        padding: 16,
+    },
+    agentCardContentHighlight: {
+        backgroundColor: '#fefce8', // very light yellow for recommendations
+    },
+    agentCardText: {
+        fontSize: 15,
+        lineHeight: 22,
+        color: '#1f2937',
+    },
 
     // Approval
     approvalContainer: {

@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Camera, ChevronUp } from 'lucide-react-native';
+import { capture } from '../lib/analytics';
 
 interface UsageCounterProps {
     usageCount: number;
@@ -46,7 +47,15 @@ const UsageCounter: React.FC<UsageCounterProps> = ({
                     styles.upgradeButton,
                     { backgroundColor: isExhausted ? '#DC2626' : ANORHA_GREEN }
                 ]}
-                onPress={onUpgradePress}
+                onPress={() => {
+                    capture('billing_metering_upgrade_cta_tapped', {
+                        usageCount,
+                        freeLimit,
+                        remaining,
+                        exhausted: isExhausted,
+                    });
+                    onUpgradePress();
+                }}
             >
                 <Text style={styles.upgradeText}>Upgrade</Text>
                 <ChevronUp size={14} color="#fff" />

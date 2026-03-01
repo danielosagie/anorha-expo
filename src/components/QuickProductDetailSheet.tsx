@@ -118,7 +118,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
             try {
               const { data: allVariants, error: variantsError } = await supabase
                 .from('ProductVariants')
-                .select('*')
+                .select('Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, VariantType, PrimaryImageUrl, CreatedAt, UpdatedAt')
                 .eq('ProductId', baseVariant.ProductId);
 
               console.log('[QUICK DETAIL] DB Query result:', {
@@ -132,7 +132,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
               const variantIds = (allVariants || []).map((v: any) => v.Id);
               const { data: allInventory } = await supabase
                 .from('InventoryLevels')
-                .select('*')
+                .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt')
                 .in('ProductVariantId', variantIds);
 
               // CRITICAL FIX: Filter out base variant when option variants exist
@@ -399,11 +399,12 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
         >
           {/* Header with close button */}
           <View style={styles.header}>
-            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-              <Icon name="close" size={28} color={theme.colors.text} />
-            </TouchableOpacity>
+            <View style={styles.sheetHeaderSpacer} />
             <Text style={[styles.headerTitle, { color: theme.colors.text }]}>Update Product</Text>
-            <View style={{ width: 28 }} />
+            <TouchableOpacity onPress={onClose} style={styles.exitButton} activeOpacity={0.8} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Icon name="close" size={18} color="#64748B" />
+              <Text style={styles.exitButtonText}>Exit</Text>
+            </TouchableOpacity>
           </View>
 
           {/* Product Card */}
@@ -756,16 +757,11 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'white',
-    justifyContent: 'center',
-    alignItems: 'flex-start',
-
+    backgroundColor: 'transparent',
   },
 
   modalSheet: {
     width: '100%',
-    minHeight: '100%',
-    maxHeight: '95%',
     borderRadius: 16,
     backgroundColor: 'transparent',
     overflow: 'hidden',
@@ -782,7 +778,6 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    paddingTop: 12,
   },
   header: {
     flexDirection: 'row',
@@ -791,12 +786,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
-  closeButton: {
-    width: 28,
-    height: 28,
-    justifyContent: 'center',
+  sheetHeaderSpacer: { minWidth: 72, minHeight: 34 },
+  exitButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    minHeight: 34,
+    maxHeight: 34,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F2F2F7',
+    flexDirection: 'row',
     alignItems: 'center',
   },
+  exitButtonText: { color: '#64748B', fontWeight: '600', marginLeft: 6, fontSize: 15 },
   headerTitle: {
     fontSize: 18,
     fontWeight: '700',

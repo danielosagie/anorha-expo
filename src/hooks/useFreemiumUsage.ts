@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { ensureSupabaseJwt } from '../lib/supabase';
+import { capture } from '../lib/analytics';
 
 const API_BASE_URL = 'https://api.sssync.app/api';
 
@@ -82,6 +83,12 @@ export function useFreemiumUsage(): UseFreemiumUsageReturn {
 
             const data = await response.json();
             setStatus(data);
+            capture('billing_metering_readiness_snapshot', {
+                usageCount: data?.usageCount ?? 0,
+                freeLimit: data?.freeLimit ?? 0,
+                hasSubscription: !!data?.hasSubscription,
+                plan: data?.currentPlan ?? null,
+            });
         } catch (err: any) {
             console.error('[useFreemiumUsage] Error fetching status:', err);
             setError(err.message);
@@ -103,6 +110,12 @@ export function useFreemiumUsage(): UseFreemiumUsageReturn {
             if (!prev) return prev;
             const newUsageCount = prev.usageCount + 1;
             const newRemaining = Math.max(0, prev.freeLimit - newUsageCount);
+            capture('billing_metering_usage_increment', {
+                usageCount: newUsageCount,
+                freeLimit: prev.freeLimit,
+                remaining: newRemaining,
+                hasSubscription: !!prev.hasSubscription,
+            });
             return {
                 ...prev,
                 usageCount: newUsageCount,

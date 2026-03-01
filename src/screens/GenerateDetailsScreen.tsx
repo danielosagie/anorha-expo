@@ -16,13 +16,20 @@ import { hydratePlatformsFromBackend, normalizeForListingEditor, isEmpty } from 
 import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
 import { Paths, Directory, File } from 'expo-file-system/next';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { useJobsOptional } from '../context/JobsContext';
+import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { useJobProgress } from '../hooks/useJobProgress';
 import { useCollaboration } from '../hooks/useCollaboration';
 import PublishConfirmationModal from '../components/PublishConfirmationModal';
 import { PLATFORM_META } from '../utils/platformConstants';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useIsFocused } from '@react-navigation/native';
+
+const ACTION_BAR_HEIGHT = 80;
+const ACTION_BAR_BOTTOM_OFFSET = 24;
 
 // Feature flag to hide AI refill functionality
 const ENABLE_AI_REFILL_FEATURES = false;
@@ -81,8 +88,11 @@ const groupVersionsByMatchId = (versions: Array<{ id: string; jobId: string; cre
 // REMOVED - Now using unified hydration utilities from platformDataHydration.ts
 
 function GenerateDetailsScreen({ route, navigation }: Props) {
+  const isFocused = useIsFocused();
   const mainScrollRef = useRef<ScrollView>(null);
   const [listingEditorY, setListingEditorY] = useState(0);
+  const insets = useSafeAreaInsets();
+  const bottomSafePadding = ACTION_BAR_HEIGHT + ACTION_BAR_BOTTOM_OFFSET + insets.bottom + 16;
   // Support both direct props and nested { response: {...} }
   const params: any = (route.params || {}) as any;
   const jobId = params.jobId ?? params.response?.jobId;
@@ -96,6 +106,33 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [jobData, setJobData] = useState<{ status?: string; results?: GeneratedResult[]; summary?: any; completedAt?: string } | null>(null);
   const [dbImages, setDbImages] = useState<Record<string, string[]>>({});
   const [isInputExpanded, setIsInputExpanded] = useState(false);
+
+  // Wire up the platform picker overlay so "+ Add Platform" works in ListingEditorForm
+  const platformPickerOverlay = usePlatformPickerOverlay();
+  useEffect(() => {
+    if (!isFocused) return;
+    platformPickerOverlay.enableForScreen((platform: string) => {
+      // When a platform is selected from the picker overlay, add it to platforms & generate
+      const key = platform.toLowerCase();
+      updatePlatforms(prev => {
+        if (prev[key]) return prev; // Already exists
+        // Copy core fields from canonical (first available platform)
+        const canonicalKey = Object.keys(prev)[0];
+        const canonical = canonicalKey ? prev[canonicalKey] : {};
+        return {
+          ...prev,
+          [key]: {
+            title: (canonical as any)?.title || '',
+            description: (canonical as any)?.description || '',
+            price: (canonical as any)?.price || '',
+            tags: (canonical as any)?.tags || [],
+          },
+        };
+      });
+      platformPickerOverlay.hide();
+    });
+    return () => platformPickerOverlay.disableForScreen();
+  }, [isFocused, platformPickerOverlay.enableForScreen, platformPickerOverlay.disableForScreen, platformPickerOverlay.hide]);
 
 
   // If we only get a jobId, fetch the job payload from Supabase once
@@ -715,9 +752,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   }, [route.params, first, results, matchJobId]);
 
   useEffect(() => {
+    const focusIndexParam = (route.params as any)?.focusIndex;
+    if (typeof focusIndexParam === 'number' && Number.isFinite(focusIndexParam)) {
+      setCurrentProductIndex(focusIndexParam);
+      return;
+    }
     const idx = (first?.productIndex as number) ?? items[0]?.index ?? 0;
     setCurrentProductIndex(idx);
-  }, [first?.productIndex, items[0]?.index]);
+  }, [first?.productIndex, items[0]?.index, (route.params as any)?.focusIndex]);
 
   const jobMap = ((route.params as any)?.jobMap || {}) as Record<number, { jobId: string; status?: string }>;
   const hasGenerateForIndex = useMemo(() => (idx: number) => Boolean(jobMap[idx]?.jobId), [jobMap]);
@@ -1687,9 +1729,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
         try {
           console.log('[UPLOAD] Uploading image:', localUri);
-          const parsedPath = Paths.parse(localUri);
-          const srcFile = new File(new Directory(parsedPath.dir), parsedPath.base);
-          const bytes = await srcFile.bytes();
+          // Light compression before upload (0.9 quality, max 1920px) - reduces size with minimal quality loss
+          const compressed = await ImageManipulator.manipulateAsync(
+            localUri,
+            [{ resize: { width: 1920 } }], // Only downscale if wider than 1920px
+            { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
+          );
+          const response = await fetch(compressed.uri);
+          const arrayBuffer = await response.arrayBuffer();
+          const bytes = new Uint8Array(arrayBuffer);
 
           const fileName = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
 
@@ -1697,7 +1745,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             .from('product-images')
             .upload(fileName, bytes, {
               contentType: 'image/jpeg',
-              cacheControl: '3600',
+              cacheControl: '86400', // 24h - reduces egress via browser cache
             });
 
           if (error) {
@@ -2312,7 +2360,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           </View>
         </View>
       )}
-      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <ScrollView style={styles.container} contentContainerStyle={[styles.content, { paddingBottom: bottomSafePadding }]}>
         <View style={{ position: 'absolute', top: -32, right: 16, zIndex: 4000, flexDirection: 'row', gap: 8 }}>
           <TouchableOpacity onPress={() => setVersionsSheetOpen(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5' }}>
             <Text style={{ color: '#000', fontWeight: '600' }}>•••</Text>
@@ -2521,6 +2569,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             }
           }}
           onPickScan={(idx) => {
+            // Reset hydration ref so the useEffect re-hydrates platforms for the new item
+            lastHydratedJobRef.current = null;
             setCurrentProductIndex(idx);
             setSelectedIndices([]);
             setSelectedPlatforms([]);
@@ -2707,15 +2757,37 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                 currentLabel: allMissingRequiredFields[missingFieldNavIndex % allMissingRequiredFields.length]?.label || 'Field',
                 currentIndex: (missingFieldNavIndex % allMissingRequiredFields.length) + 1,
                 totalCount: allMissingRequiredFields.length,
-                onPrev: () => setMissingFieldNavIndex(i => i <= 0 ? allMissingRequiredFields.length - 1 : i - 1),
-                onNext: () => setMissingFieldNavIndex(i => (i + 1) % allMissingRequiredFields.length),
+                onPrev: () => {
+                  setMissingFieldNavIndex(i => {
+                    const next = i <= 0 ? allMissingRequiredFields.length - 1 : i - 1;
+                    // Auto-scroll after index changes by scheduling after re-render
+                    setTimeout(() => {
+                      mainScrollRef.current?.scrollTo({
+                        y: Math.max(0, listingEditorY - 40),
+                        animated: true,
+                      });
+                    }, 350);
+                    return next;
+                  });
+                },
+                onNext: () => {
+                  setMissingFieldNavIndex(i => {
+                    const next = (i + 1) % allMissingRequiredFields.length;
+                    setTimeout(() => {
+                      mainScrollRef.current?.scrollTo({
+                        y: Math.max(0, listingEditorY - 40),
+                        animated: true,
+                      });
+                    }, 350);
+                    return next;
+                  });
+                },
                 onTapField: () => {
-                  // Trigger scroll to the current missing field
-                  const currentField = allMissingRequiredFields[missingFieldNavIndex % allMissingRequiredFields.length];
-                  if (currentField) {
-                    // The highlightedField/highlightedPlatform props will auto-switch tab and scroll
-                    setMissingFieldNavIndex(i => i); // Force re-render to trigger useEffect
-                  }
+                  // Scroll to the listing editor area — the highlightedField prop handles field-level scroll
+                  mainScrollRef.current?.scrollTo({
+                    y: Math.max(0, listingEditorY - 40),
+                    animated: true,
+                  });
                 },
               } : undefined}
               secondaryLabel={'Save to Inventory'}
@@ -3243,7 +3315,7 @@ export default GenerateDetailsScreen;
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff', paddingTop: "20%" },
-  content: { padding: 16, paddingBottom: 140 },
+  content: { padding: 16 },
   heading: { color: '#000', fontSize: 24, fontWeight: '700', marginBottom: 6 },
   subheading: { color: '#000', fontSize: 18, fontWeight: '600', marginBottom: 4 },
   meta: { color: '#000', marginBottom: 4 },

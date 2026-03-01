@@ -1,0 +1,92 @@
+{
+  "scenarios": [
+    {
+      "name": "paywall-trialing",
+      "component": "paywall",
+      "url": "file:///Users/dosagie/Documents/CodeProjects/sssync_mobile_test/dist/index.html",
+      "selector": "body",
+      "waitForReady": "__FIGMA_USE_READY__",
+      "readyTimeoutMs": 12000,
+      "settleMs": 1400,
+      "props": {
+        "visible": true,
+        "feature": "AI Product Scanning",
+        "entitlements": {
+          "planName": "Growth",
+          "maxConnections": 2,
+          "aiScanLimit": 40,
+          "isPaid": false,
+          "inTrial": true,
+          "trialEndsAt": "2025-03-15",
+          "trialDaysLeft": 5,
+          "subscriptionStatus": "trialing",
+          "hasAccess": true
+        }
+      },
+      "network": {
+        "stubs": []
+      }
+    },
+    {
+      "name": "paywall-expired",
+      "component": "paywall",
+      "url": "file:///Users/dosagie/Documents/CodeProjects/sssync_mobile_test/dist/index.html",
+      "selector": "body",
+      "waitForReady": "__FIGMA_USE_READY__",
+      "readyTimeoutMs": 12000,
+      "settleMs": 1400,
+      "props": {
+        "visible": true,
+        "feature": "AI Product Scanning",
+        "entitlements": {
+          "planName": "Growth",
+          "maxConnections": 2,
+          "aiScanLimit": 40,
+          "isPaid": false,
+          "inTrial": false,
+          "trialEndsAt": null,
+          "trialDaysLeft": 0,
+          "subscriptionStatus": "expired",
+          "hasAccess": false
+        }
+      },
+      "network": {
+        "stubs": []
+      }
+    },
+    {
+      "name": "paywall-no-entitlements",
+      "component": "paywall",
+      "url": "file:///Users/dosagie/Documents/CodeProjects/sssync_mobile_test/dist/index.html",
+      "selector": "body",
+      "waitForReady": "__FIGMA_USE_READY__",
+      "readyTimeoutMs": 12000,
+      "settleMs": 1400,
+      "props": {
+        "visible": true,
+        "feature": "AI Product Scanning",
+        "entitlements": null
+      },
+      "network": {
+        "stubs": []
+      }
+    }
+  ],
+  "breakpoints": [
+    {
+      "name": "sm",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "md",
+      "width": 768,
+      "height": 1024
+    },
+    {
+      "name": "lg",
+      "width": 1280,
+      "height": 900
+    }
+  ]
+}

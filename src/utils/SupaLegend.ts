@@ -136,7 +136,7 @@ export async function initializeLegendState(
         customSynced({
             collection: 'ProductVariants',
             // OPTIMIZED: Only fetch columns we actually use in the UI
-            select: (from: any) => from.select('Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, ImageUrls, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, Tags, PrimaryImageUrl, CreatedAt, UpdatedAt'),
+            select: (from: any) => from.select('Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, Tags, PrimaryImageUrl, CreatedAt, UpdatedAt'),
             filter: (query: any) => query.eq('UserId', currentUserId).not('Sku', 'like', 'DRAFT-%'),
             actions: ['read', 'create', 'update', 'delete'],
             realtime: { filter: `UserId=eq.${currentUserId}` },

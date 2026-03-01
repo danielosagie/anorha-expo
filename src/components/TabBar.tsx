@@ -15,8 +15,8 @@ const getTabIcon = (routeName: string): string => {
       return 'message-outline';
     case 'AddProduct':
       return 'plus';
-    case 'ActivityFeed':
-      return 'clipboard-clock-outline';
+    case 'Clearouts':
+      return 'cash-fast';
     case 'Profile':
       return 'cog-outline';
     default:
@@ -124,12 +124,12 @@ const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, style }
             <Icon
               name={icon}
               size={24}
-              color={isFocused && route.name === 'ActivityFeed' ? '#FF9900' : (isFocused ? theme.colors.primary : '#999')}
+              color={isFocused && route.name === 'Clearouts' ? '#FF9900' : (isFocused ? theme.colors.primary : '#999')}
             />
             <Text
               style={[
                 styles.tabLabel,
-                { color: isFocused && route.name === 'ActivityFeed' ? '#FF9900' : (isFocused ? theme.colors.primary : '#999') }
+                { color: isFocused && route.name === 'Clearouts' ? '#FF9900' : (isFocused ? theme.colors.primary : '#999') }
               ]}
             >
               {label}

@@ -30,6 +30,8 @@ interface InventoryListCardProps {
   imageUrl?: string;
   totalQuantity?: number;
   platformNames?: string[];
+  lastSyncedAt?: string | null;
+  isStale?: boolean;
   matchLocations?: MatchLocation[];
   matchSnippet?: string;
   searchQuery?: string;
@@ -50,6 +52,8 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
   imageUrl,
   totalQuantity,
   platformNames = [],
+  lastSyncedAt,
+  isStale = false,
   matchLocations,
   matchSnippet,
   searchQuery,
@@ -182,6 +186,15 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
               </Text>
             )}
 
+            {lastSyncedAt ? (
+              <Text style={[styles.syncText, { color: isStale ? '#B45309' : '#6B7280' }]}>
+                Last synced: {new Date(lastSyncedAt).toLocaleString()}
+                {isStale ? ' • Stale' : ''}
+              </Text>
+            ) : (
+              <Text style={[styles.syncText, { color: '#9CA3AF' }]}>Last synced: unavailable</Text>
+            )}
+
             {/* Match chips - only show when there's a search query and matches */}
             {searchQuery && matchLocations && matchLocations.length > 0 && (
               <View style={styles.matchChipsContainer}>
@@ -301,6 +314,11 @@ const styles = StyleSheet.create({
   },
   sku: {
     fontSize: 11,
+    marginBottom: 8,
+  },
+  syncText: {
+    fontSize: 10,
+    marginTop: -4,
     marginBottom: 8,
   },
   bottomRow: {
