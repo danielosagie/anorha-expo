@@ -39,6 +39,14 @@ export interface ItemJobState {
         currentStage?: string;
         selectedIndices?: number[];
         serpApiData?: any[];
+        vlmAnalysis?: {
+            confidence: number;
+            ocrText: string;
+            brand: string;
+            model: string;
+            type: string;
+            paraphrases: string[];
+        };
     };
 
     // Generate step (AI listing generation)

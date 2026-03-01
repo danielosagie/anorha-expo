@@ -61,7 +61,7 @@ export function hydratePlatformsFromBackend(
   // Process each platform from backend
   for (const [platformKey, platformData] of Object.entries(backendPlatforms)) {
     const existing = existingPlatforms[platformKey] || {};
-    
+
     // Smart merge: backend data first, then preserve user edits
     result[platformKey] = smartMergePlatformData(platformData, existing);
   }
@@ -103,7 +103,7 @@ export function normalizeForListingEditor(platformData: any): any {
     normalized.name = normalized.name || itemData.name;
     normalized.description = normalized.description || itemData.description;
     normalized.categorySuggestion = normalized.categorySuggestion || itemData.categorySuggestion;
-    
+
     // Extract price from first variation if available
     if (itemData.variations?.[0]?.itemVariationData?.priceMoney) {
       const priceMoney = itemData.variations[0].itemVariationData.priceMoney;
@@ -121,6 +121,11 @@ export function normalizeForListingEditor(platformData: any): any {
 
   if (normalized.media?.picURL) {
     normalized.imageUrl = normalized.imageUrl || normalized.media.picURL;
+  }
+
+  // Ensure title is populated - many platforms use 'name' instead of 'title'
+  if (!normalized.title && normalized.name) {
+    normalized.title = normalized.name;
   }
 
   return normalized;
@@ -170,7 +175,7 @@ export function createCanonicalBase(productVariant: {
     tags: metadata.tags || [],
     vendor: metadata.vendor || '',
     productType: metadata.productType || '',
-    images: productVariant.ImageUrls || [],
+    images: productVariant.ImageUrls?.length ? productVariant.ImageUrls : (productVariant.PrimaryImageUrl ? [productVariant.PrimaryImageUrl] : []),
   };
 
   // Merge with saved platform-specific fields (variants, options, inventoryType, etc.)

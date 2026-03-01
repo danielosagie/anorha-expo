@@ -31,6 +31,10 @@ import CampaignCard from '../components/CampaignCard';
 import { PlatformConnection, PlatformLocation } from '../utils/SupaLegend';
 import { useProductVariantRealtime } from '../hooks/useProductVariantRealtime';
 import { useUser } from '@clerk/clerk-expo';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+const TAB_BAR_HEIGHT = 84;
+const TAB_BAR_BOTTOM_OFFSET = 18;
 
 // User-relevant event types - ONLY show orders, inventory updates, and product updates/publishes
 // Filtered per user request: inventory updates, product updates/publish, and orders
@@ -171,6 +175,8 @@ const ActivityFeedScreen = observer(() => {
   const legendState = useLegendState();
   const { currentOrg, isLoading: isOrgLoading } = useOrg();
   const { user: clerkUser } = useUser();
+  const insets = useSafeAreaInsets();
+  const bottomSafePadding = TAB_BAR_HEIGHT + TAB_BAR_BOTTOM_OFFSET + insets.bottom + 16;
 
   // Subscribe to real-time product variant changes
   useProductVariantRealtime();
@@ -400,7 +406,7 @@ const ActivityFeedScreen = observer(() => {
       try {
         const { data: connectionsData, error: connectionsError } = await supabase
           .from('PlatformConnections')
-          .select('*')
+          .select('Id, UserId, OrgId, PlatformType, DisplayName, Status, IsEnabled, LastSyncAttemptAt, LastSyncSuccessAt, CreatedAt, UpdatedAt')
           .eq('UserId', legendState.userId);
 
         if (connectionsError) {
@@ -413,7 +419,7 @@ const ActivityFeedScreen = observer(() => {
           const connectionIds = connectionsData.map(conn => conn.Id);
           const { data: locationsData, error: locationsError } = await supabase
             .from('PlatformLocations')
-            .select('*')
+            .select('Id, PlatformConnectionId, PlatformLocationId, Name, IsActive, IsPrimary')
             .in('PlatformConnectionId', connectionIds);
 
           if (locationsError) {
@@ -776,7 +782,7 @@ const ActivityFeedScreen = observer(() => {
     })();
 
     // Get product image from variant (ImageUrls array) or details
-    const productImageUrl = (variant?.ImageUrls && variant.ImageUrls.length > 0 ? variant.ImageUrls[0] : null)
+    const productImageUrl = (variant?.ImageUrls && variant.ImageUrls.length > 0 ? variant.ImageUrls[0] : variant?.PrimaryImageUrl ?? null)
       || item.details?.imageUrl
       || item.details?.image_url
       || item.primaryImageUrl
@@ -953,7 +959,7 @@ const ActivityFeedScreen = observer(() => {
             }
             onEndReached={loadMore}
             onEndReachedThreshold={0.5}
-            contentContainerStyle={styles.listContent}
+            contentContainerStyle={[styles.listContent, { paddingBottom: bottomSafePadding }]}
             ListFooterComponent={
               loadingMore ? (
                 <View style={styles.loadingMore}>
@@ -1115,9 +1121,7 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 14,
   },
-  listContent: {
-    paddingBottom: 16,
-  },
+  listContent: {},
   dateHeader: {
     paddingHorizontal: 16,
     paddingVertical: 12,

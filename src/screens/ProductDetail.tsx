@@ -29,15 +29,21 @@ import {
 } from '../utils/SupaLegend';
 import { observer } from '@legendapp/state/react';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { useCollaboration } from '../hooks/useCollaboration';
 import { useOrg } from '../context/OrgContext';
 import LoadingOverlay from '../components/LoadingOverlay';
 import { capture, AnalyticsEvents } from '../lib/analytics';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+const ACTION_BAR_HEIGHT = 80;
+const ACTION_BAR_BOTTOM_OFFSET = 24;
+
 // Base URL for API
 const SSSYNC_API_BASE_URL = 'https://api.sssync.app';
 
-// Toggle to use manual save via BottomActionBar
-const ENABLE_AUTOSAVE = false;
+// Debounced autosave keeps listing/inventory changes live without manual refresh.
+const ENABLE_AUTOSAVE = true;
 
 // 🚨 CRITICAL: ProductDetail should be READ-ONLY
 // It should ONLY read from cached database data (Supabase + PlatformSpecificData)
@@ -219,6 +225,8 @@ const ProductDetailScreen = observer(
     const passedItem = route.params?.item;
     const productId = route.params?.productId || passedItem?.Id;
     const { currentOrg } = useOrg();
+    const insets = useSafeAreaInsets();
+    const bottomSafePadding = ACTION_BAR_HEIGHT + ACTION_BAR_BOTTOM_OFFSET + insets.bottom + 16;
 
     // 🚨 DEBUG: Intercept all fetch calls from this component
     React.useEffect(() => {
@@ -242,6 +250,20 @@ const ProductDetailScreen = observer(
 
     // State management
     const [detailedItem, setDetailedItem] = useState<ProductVariant | undefined | null>(passedItem);
+
+    // Derive images from ProductImages table or PrimaryImageUrl (ProductVariants has no ImageUrls column)
+    const displayImages = useMemo(() => {
+      if (!detailedItem?.Id) return [];
+      try {
+        const obs = getLegendStateObservables();
+        const productImages = obs?.productImages$?.get?.() ?? {};
+        const forVariant = Object.values(productImages).filter((img: any) => img.ProductVariantId === detailedItem.Id);
+        if (forVariant.length > 0) {
+          return forVariant.sort((a: any, b: any) => (a.Position ?? 0) - (b.Position ?? 0)).map((img: any) => img.ImageUrl);
+        }
+      } catch { /* Legend may not be ready */ }
+      return detailedItem?.PrimaryImageUrl ? [detailedItem.PrimaryImageUrl] : [];
+    }, [detailedItem?.Id, detailedItem?.PrimaryImageUrl]);
     const [mappings, setMappings] = useState<PlatformProductMapping[]>([]);
     const [groupedInventory, setGroupedInventory] = useState<GroupedInventoryLocations>({});
     const [connections, setConnections] = useState<PlatformConnection[]>([]);
@@ -294,6 +316,8 @@ const ProductDetailScreen = observer(
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [lastSaveTime, setLastSaveTime] = useState<number>(0);
+    const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const editVersionRef = useRef(0);
     const [isUploadingImages, setIsUploadingImages] = useState(false);
     const listingEditorRef = useRef<ListingEditorFormRef | null>(null);
     const scrollViewRef = useRef<ScrollView | null>(null);
@@ -463,6 +487,10 @@ const ProductDetailScreen = observer(
       TaxCode: '',
     });
 
+    useEffect(() => {
+      editVersionRef.current += 1;
+    }, [displayedPlatforms, formData]);
+
     // State for sync status
     const [syncStatus, setSyncStatus] = useState<any>(null);
     const [fetchErrors, setFetchErrors] = useState<string[]>([]);
@@ -470,6 +498,8 @@ const ProductDetailScreen = observer(
     // State for sync loading
     const [isSyncing, setIsSyncing] = useState(false);
     const [pendingImages, setPendingImages] = useState<string[]>([]);
+    const pendingExternalReloadRef = useRef(false);
+    const deferredReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Helper function to get proper location names from platform data
     const getLocationName = useCallback((level: InventoryLevel, connection: PlatformConnection, mapping?: PlatformProductMapping): string => {
@@ -522,7 +552,7 @@ const ProductDetailScreen = observer(
         // Connections in 'review', 'scanning', or 'error' status shouldn't show their locations
         const { data: connectionsData, error: connectionsError } = await supabase
           .from('PlatformConnections')
-          .select('*')
+          .select('Id, UserId, OrgId, PlatformType, DisplayName, Status, IsEnabled, LastSyncAttemptAt, LastSyncSuccessAt, CreatedAt, UpdatedAt')
           .eq('UserId', user.id)
           .eq('IsEnabled', true)
           .eq('Status', 'active'); // Only show active connections
@@ -555,7 +585,7 @@ const ProductDetailScreen = observer(
         // Load inventory levels for ALL variants of this product (base + options)
         const { data: inventoryData, error: inventoryError } = await supabase
           .from('InventoryLevels')
-          .select('*')
+          .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt')
           .in('ProductVariantId', allVariantIds);
 
         if (inventoryError) {
@@ -649,7 +679,7 @@ const ProductDetailScreen = observer(
         // Load platform mappings for ALL variants
         const { data: mappingsData, error: mappingsError } = await supabase
           .from('PlatformProductMappings')
-          .select('*')
+          .select('Id, PlatformConnectionId, ProductVariantId, PlatformProductId, PlatformVariantId, PlatformSku, SyncStatus, IsEnabled, LastSyncedAt, UpdatedAt')
           .in('ProductVariantId', allVariantIds);
 
         if (mappingsError) {
@@ -1314,6 +1344,7 @@ const ProductDetailScreen = observer(
         console.log('[ProductDetail] Skipping auto-save: no item or no changes');
         return;
       }
+      const saveStartEditVersion = editVersionRef.current;
 
       console.log('[ProductDetail] ========== SAVE START ==========');
       console.log('[ProductDetail] detailedItem BEFORE save:', JSON.stringify(detailedItem, null, 2).slice(0, 500));
@@ -1405,7 +1436,12 @@ const ProductDetailScreen = observer(
           return merged;
         });
 
-        setHasUnsavedChanges(false);
+        if (editVersionRef.current === saveStartEditVersion) {
+          setHasUnsavedChanges(false);
+        } else {
+          console.log('[ProductDetail] Save completed but local edits changed during request; keeping unsaved state');
+          setHasUnsavedChanges(true);
+        }
         setLastSaveTime(Date.now());
 
         // CRITICAL FIX: Clear draft data after successful save
@@ -1421,6 +1457,35 @@ const ProductDetailScreen = observer(
         setIsSaving(false);
       }
     }, [detailedItem, formData, hasUnsavedChanges, displayedPlatforms]);
+
+    useEffect(() => {
+      if (!ENABLE_AUTOSAVE) return;
+      if (!hasUnsavedChanges || isSaving) return;
+
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+      }
+
+      autoSaveTimeoutRef.current = setTimeout(() => {
+        performAutoSave();
+      }, 1200);
+
+      return () => {
+        if (autoSaveTimeoutRef.current) {
+          clearTimeout(autoSaveTimeoutRef.current);
+          autoSaveTimeoutRef.current = null;
+        }
+      };
+    }, [hasUnsavedChanges, isSaving, performAutoSave]);
+
+    useEffect(() => {
+      return () => {
+        if (deferredReloadTimerRef.current) {
+          clearTimeout(deferredReloadTimerRef.current);
+          deferredReloadTimerRef.current = null;
+        }
+      };
+    }, []);
 
     // Track active regeneration jobs: jobId -> platformKey
     const activeRegenJobsRef = useRef<Record<string, string>>({});
@@ -1460,27 +1525,38 @@ const ProductDetailScreen = observer(
             const productResult = resultArray[0]; // Assuming single product regen
             const platformData = productResult?.platforms?.[platformKey];
 
-            if (platformData) {
-              console.log(`[ProductDetail] Got generated data for ${platformKey}:`, Object.keys(platformData));
+	            if (platformData) {
+	              console.log(`[ProductDetail] Got generated data for ${platformKey}:`, Object.keys(platformData));
 
               // Smart Merge: Don't overwrite existing values with empty strings
               const safePlatformData = { ...platformData };
 
-              // Sanitize: If title/desc are empty strings, remove them from update so we keep existing
-              if (safePlatformData.title === '') delete safePlatformData.title;
-              if (safePlatformData.description === '') delete safePlatformData.description;
+	              // Sanitize: If title/desc are empty strings, remove them from update so we keep existing
+	              if (safePlatformData.title === '') delete safePlatformData.title;
+	              if (safePlatformData.description === '') delete safePlatformData.description;
+	              const now = Date.now();
+	              const aiFieldChanges: Record<string, { value?: any; updatedAt: number }> = {};
+	              if (safePlatformData.title !== undefined) aiFieldChanges.title = { value: safePlatformData.title, updatedAt: now };
+	              if (safePlatformData.description !== undefined) aiFieldChanges.description = { value: safePlatformData.description, updatedAt: now };
+	              if (safePlatformData.price !== undefined) aiFieldChanges.price = { value: safePlatformData.price, updatedAt: now };
+	              if (safePlatformData.sku !== undefined) aiFieldChanges.sku = { value: safePlatformData.sku, updatedAt: now };
+	              if (safePlatformData.barcode !== undefined) aiFieldChanges.barcode = { value: safePlatformData.barcode, updatedAt: now };
+	              if (safePlatformData.weight !== undefined) aiFieldChanges.weight = { value: safePlatformData.weight, updatedAt: now };
 
-              // Update displayedPlatforms with the generated data
-              setDisplayedPlatforms(prev => ({
-                ...prev,
-                [platformKey]: {
-                  ...prev[platformKey],
-                  ...safePlatformData,
-                }
-              }));
-              setHasUnsavedChanges(true);
-              showBanner(`✨ Generated ${platformKey} listing data`);
-            }
+	              // Update displayedPlatforms with the generated data
+	              setDisplayedPlatforms(prev => ({
+	                ...prev,
+	                [platformKey]: {
+	                  ...prev[platformKey],
+	                  ...safePlatformData,
+	                }
+	              }));
+	              if (Object.keys(aiFieldChanges).length > 0) {
+	                setExternalUpdates(prev => ({ ...prev, ...aiFieldChanges }));
+	              }
+	              setHasUnsavedChanges(true);
+	              showBanner(`✨ Generated ${platformKey} listing data`);
+	            }
           } catch (err) {
             console.error(`[ProductDetail] Error processing completion for ${platformKey}:`, err);
             Alert.alert('Generation Error', 'Failed to process generated results.');
@@ -1546,7 +1622,7 @@ const ProductDetailScreen = observer(
               variantId: detailedItem.Id,
               regenerateType: 'entire_platform',
               targetPlatform: platformKey,
-              imageUrls: detailedItem.ImageUrls || [],
+              imageUrls: displayImages,
             }],
             options: { useExistingScrapedData: true }
           }),
@@ -1581,7 +1657,7 @@ const ProductDetailScreen = observer(
           return next;
         });
       }
-    }, [detailedItem, performAutoSave, hasUnsavedChanges]);
+    }, [detailedItem, displayImages, performAutoSave, hasUnsavedChanges]);
 
     // Detect platforms that have data in displayedPlatforms but no mapping (unpublished)
     const unpublishedPlatforms = useMemo(() => {
@@ -1760,7 +1836,7 @@ const ProductDetailScreen = observer(
             [platformKey]: platformData,
           },
           media: {
-            imageUris: detailedItem.ImageUrls || [],
+            imageUris: displayImages,
             coverImageIndex: 0, // Default to first image
           },
           selectedPlatformsToPublish: [platformKey],
@@ -2071,11 +2147,16 @@ const ProductDetailScreen = observer(
 
       for (const asset of assets) {
         try {
-          const fileExt = asset.uri.split('.').pop() || 'jpg';
-          const fileName = `${Date.now()}.${fileExt}`;
+          // Light compression before upload (0.9 quality, max 1920px) - reduces size with minimal quality loss
+          const compressed = await ImageManipulator.manipulateAsync(
+            asset.uri,
+            [{ resize: { width: 1920 } }], // Only downscale if wider than 1920px
+            { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
+          );
+
+          const fileName = `${Date.now()}.jpg`;
 
           // CRITICAL: Path MUST be {orgId}/{variantId}/{filename} for RLS to work
-          // Try to find OrgId from currentOrg first, then connections, then fallback to UserId
           const orgId = currentOrg?.id || connections.find(c => c.OrgId)?.OrgId || detailedItem?.UserId;
           const variantId = detailedItem?.Id;
 
@@ -2088,16 +2169,16 @@ const ProductDetailScreen = observer(
 
           const filePath = `${orgId}/${variantId}/${fileName}`;
 
-          // React Native compatible upload: use fetch with arraybuffer
-          const response = await fetch(asset.uri);
+          const response = await fetch(compressed.uri);
           const arrayBuffer = await response.arrayBuffer();
           const uint8Array = new Uint8Array(arrayBuffer);
 
           const { data, error } = await supabase.storage
             .from('product-images')
             .upload(filePath, uint8Array, {
-              contentType: `image/${fileExt}`,
+              contentType: 'image/jpeg',
               upsert: false,
+              cacheControl: '86400', // 24h - reduces egress via browser cache
             });
 
           if (error) {
@@ -2122,7 +2203,7 @@ const ProductDetailScreen = observer(
       if (!detailedItem || imageUrls.length === 0) return;
 
       try {
-        const currentImages = detailedItem.ImageUrls || [];
+        const currentImages = displayImages;
         const updatedImages = [...currentImages, ...imageUrls];
 
         const updateData = { ImageUrls: updatedImages };
@@ -2146,7 +2227,8 @@ const ProductDetailScreen = observer(
         }
 
         // Update local state
-        setDetailedItem(prev => prev ? { ...prev, ImageUrls: updatedImages } : prev);
+        setDetailedItem(prev => prev ? { ...prev } : prev);
+        // displayImages will refresh from productImages$ after sync
 
         Alert.alert('Success', `Added ${imageUrls.length} image(s) to product`);
       } catch (error) {
@@ -2156,10 +2238,10 @@ const ProductDetailScreen = observer(
     };
 
     const removeImage = async (imageIndex: number) => {
-      if (!detailedItem || !detailedItem.ImageUrls) return;
+      if (!detailedItem || displayImages.length === 0) return;
 
       try {
-        const updatedImages = detailedItem.ImageUrls.filter((_, index) => index !== imageIndex);
+        const updatedImages = displayImages.filter((_, index) => index !== imageIndex);
         const updateData = { ImageUrls: updatedImages };
 
         // Update via API
@@ -2182,7 +2264,8 @@ const ProductDetailScreen = observer(
         }
 
         // Update local state
-        setDetailedItem(prev => prev ? { ...prev, ImageUrls: updatedImages } : prev);
+        setDetailedItem(prev => prev ? { ...prev } : prev);
+        // displayImages will refresh from productImages$ after sync
 
         Alert.alert('Success', 'Image removed from product');
       } catch (error) {
@@ -2208,7 +2291,8 @@ const ProductDetailScreen = observer(
           });
           if (!response.ok) throw new Error('Failed to reorder images');
         }
-        setDetailedItem(prev => prev ? { ...prev, ImageUrls: nextImageUrls } : prev);
+        setDetailedItem(prev => prev ? { ...prev } : prev);
+        // displayImages will refresh from productImages$ after sync
         setHasUnsavedChanges(false);
       } catch (error) {
         console.error('Error reordering images:', error);
@@ -2288,7 +2372,7 @@ const ProductDetailScreen = observer(
         setIsLoading(true);
         supabase
           .from('ProductVariants')
-          .select('*')
+          .select('Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, VariantType, IsArchived, Tags, PrimaryImageUrl, Weight, WeightUnit, RequiresShipping, IsTaxable, TaxCode, Metadata, CreatedAt, UpdatedAt')
           .eq('Id', productId)
           .maybeSingle()  // Use maybeSingle to avoid error when product doesn't exist
           .then(({ data, error }) => {
@@ -2965,6 +3049,27 @@ const ProductDetailScreen = observer(
       hasUnsavedChangesRef.current = hasUnsavedChanges;
     }, [hasUnsavedChanges]);
 
+    const scheduleDeferredExternalReload = useCallback((reason: string) => {
+      pendingExternalReloadRef.current = true;
+      if (deferredReloadTimerRef.current) {
+        clearTimeout(deferredReloadTimerRef.current);
+      }
+      const elapsedSinceSave = Date.now() - justSavedTimestampRef.current;
+      const remainingBlock = Math.max(0, SAVE_BLOCK_WINDOW_MS - elapsedSinceSave);
+      const delayMs = Math.max(350, remainingBlock + 100);
+
+      deferredReloadTimerRef.current = setTimeout(() => {
+        if (hasUnsavedChangesRef.current || isInSaveBlockingWindow()) {
+          scheduleDeferredExternalReload('still_blocked');
+          return;
+        }
+        if (!pendingExternalReloadRef.current) return;
+        pendingExternalReloadRef.current = false;
+        console.log(`[ProductDetail] Applying deferred external reload (${reason})`);
+        loadPlatformData();
+      }, delayMs);
+    }, [isInSaveBlockingWindow, loadPlatformData]);
+
     useEffect(() => {
       if (!detailedItem) return;
 
@@ -2989,6 +3094,7 @@ const ProductDetailScreen = observer(
             // This prevents realtime from overwriting data right after a save
             if (isInSaveBlockingWindow()) {
               console.log('[ProductDetail] ⚠️ BLOCKING REALTIME - in save blocking window (2s after save)');
+              scheduleDeferredExternalReload('product_update_block_window');
               return;
             }
 
@@ -2996,6 +3102,7 @@ const ProductDetailScreen = observer(
             if (hasUnsavedChangesRef.current) {
               console.log('[ProductDetail] ⚠️ BLOCKING REALTIME - user has unsaved changes');
               showBanner('External update available. Save your changes first.', false);
+              scheduleDeferredExternalReload('product_update_unsaved');
               return;
             }
 
@@ -3007,39 +3114,32 @@ const ProductDetailScreen = observer(
               setDetailedItem((prev) => {
                 if (!prev) return prev;
 
-                // Check if this is a meaningful update or just a timestamp change
-                const hasRealChanges = (
-                  prev.Title !== updatedProduct.Title ||
-                  prev.Description !== updatedProduct.Description ||
-                  prev.Sku !== updatedProduct.Sku ||
-                  prev.Price !== updatedProduct.Price
-                );
+                // Check all user-facing scalar fields for meaningful changes.
+                const trackedFieldDefs: Array<{ model: keyof ProductVariant; marker: string }> = [
+                  { model: 'Title', marker: 'title' },
+                  { model: 'Description', marker: 'description' },
+                  { model: 'Price', marker: 'price' },
+                  { model: 'CompareAtPrice', marker: 'compareAtPrice' },
+                  { model: 'Sku', marker: 'sku' },
+                  { model: 'Barcode', marker: 'barcode' },
+                  { model: 'Weight', marker: 'weight' },
+                  { model: 'WeightUnit', marker: 'weightUnit' },
+                  { model: 'RequiresShipping', marker: 'requiresShipping' },
+                  { model: 'IsTaxable', marker: 'isTaxable' },
+                  { model: 'TaxCode', marker: 'taxCode' },
+                ];
+                const now = Date.now();
+                const fieldChanges: Record<string, { value?: any; updatedAt: number }> = {};
+                for (const { model, marker } of trackedFieldDefs) {
+                  const nextVal = (updatedProduct as any)[model];
+                  if (nextVal !== undefined && (prev as any)[model] !== nextVal) {
+                    fieldChanges[marker] = { value: nextVal, updatedAt: now };
+                  }
+                }
+                const hasRealChanges = Object.keys(fieldChanges).length > 0;
                 if (!hasRealChanges) {
                   console.log('[ProductDetail] No meaningful changes, skipping realtime update');
                   return prev;
-                }
-
-                // 🟢 TRACK EXTERNAL UPDATES: Record which fields changed for green border highlighting
-                const now = Date.now();
-                const fieldChanges: Record<string, { value?: any; updatedAt: number }> = {};
-
-                if (prev.Title !== updatedProduct.Title && updatedProduct.Title !== undefined) {
-                  fieldChanges['title'] = { value: updatedProduct.Title, updatedAt: now };
-                }
-                if (prev.Description !== updatedProduct.Description && updatedProduct.Description !== undefined) {
-                  fieldChanges['description'] = { value: updatedProduct.Description, updatedAt: now };
-                }
-                if (prev.Price !== updatedProduct.Price && updatedProduct.Price !== undefined) {
-                  fieldChanges['price'] = { value: updatedProduct.Price, updatedAt: now };
-                }
-                if (prev.Sku !== updatedProduct.Sku && updatedProduct.Sku !== undefined) {
-                  fieldChanges['sku'] = { value: updatedProduct.Sku, updatedAt: now };
-                }
-                if (prev.Barcode !== updatedProduct.Barcode && updatedProduct.Barcode !== undefined) {
-                  fieldChanges['barcode'] = { value: updatedProduct.Barcode, updatedAt: now };
-                }
-                if (prev.Weight !== updatedProduct.Weight && updatedProduct.Weight !== undefined) {
-                  fieldChanges['weight'] = { value: updatedProduct.Weight, updatedAt: now };
                 }
 
                 if (Object.keys(fieldChanges).length > 0) {
@@ -3071,6 +3171,21 @@ const ProductDetailScreen = observer(
                     }
                     if (fieldChanges.weight && updatedProduct.Weight !== undefined) {
                       updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), weight: updatedProduct.Weight };
+                    }
+                    if (fieldChanges.compareAtPrice && updatedProduct.CompareAtPrice !== undefined) {
+                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), compareAtPrice: updatedProduct.CompareAtPrice };
+                    }
+                    if (fieldChanges.weightUnit && updatedProduct.WeightUnit !== undefined) {
+                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), weightUnit: updatedProduct.WeightUnit };
+                    }
+                    if (fieldChanges.requiresShipping && updatedProduct.RequiresShipping !== undefined) {
+                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), requiresShipping: updatedProduct.RequiresShipping };
+                    }
+                    if (fieldChanges.isTaxable && updatedProduct.IsTaxable !== undefined) {
+                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), isTaxable: updatedProduct.IsTaxable };
+                    }
+                    if (fieldChanges.taxCode && updatedProduct.TaxCode !== undefined) {
+                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), taxCode: updatedProduct.TaxCode };
                     }
 
                     return updated;
@@ -3104,7 +3219,6 @@ const ProductDetailScreen = observer(
                   IsTaxable: updatedProduct.IsTaxable ?? prev.IsTaxable,
                   UpdatedAt: updatedProduct.UpdatedAt ?? prev.UpdatedAt,
                   // PRESERVE these complex fields from prev - don't overwrite with undefined
-                  ImageUrls: prev.ImageUrls,
                   Options: prev.Options,
                   Metadata: prev.Metadata,
                   Tags: prev.Tags,
@@ -3127,6 +3241,13 @@ const ProductDetailScreen = observer(
                     description: updatedProduct.Description ?? updated[platformKey].description,
                     price: updatedProduct.Price ?? updated[platformKey].price,
                     sku: updatedProduct.Sku ?? updated[platformKey].sku,
+                    compareAtPrice: updatedProduct.CompareAtPrice ?? updated[platformKey].compareAtPrice,
+                    barcode: updatedProduct.Barcode ?? updated[platformKey].barcode,
+                    weight: updatedProduct.Weight ?? updated[platformKey].weight,
+                    weightUnit: updatedProduct.WeightUnit ?? updated[platformKey].weightUnit,
+                    requiresShipping: updatedProduct.RequiresShipping ?? updated[platformKey].requiresShipping,
+                    isTaxable: updatedProduct.IsTaxable ?? updated[platformKey].isTaxable,
+                    taxCode: updatedProduct.TaxCode ?? updated[platformKey].taxCode,
                   };
                 }
                 console.log('[ProductDetail] ✅ REALTIME: Also updated displayedPlatforms for UI refresh');
@@ -3170,6 +3291,7 @@ const ProductDetailScreen = observer(
             if (hasUnsavedChangesRef.current) {
               console.log('[ProductDetail] ⚠️ Skipping inventory reload - user has unsaved changes');
               showBanner('Inventory changed externally. Save your changes first.');
+              scheduleDeferredExternalReload('inventory_unsaved');
               return;
             }
 
@@ -3271,8 +3393,13 @@ const ProductDetailScreen = observer(
               }
             } else {
               // For INSERT/DELETE, do a full reload only if not in blocking window
-              console.log('[ProductDetail] Inventory INSERT/DELETE - triggering full reload');
-              loadPlatformData();
+              if (isInSaveBlockingWindow()) {
+                console.log('[ProductDetail] Inventory INSERT/DELETE while save-blocked - deferring reload');
+                scheduleDeferredExternalReload('inventory_insert_delete_blocked');
+              } else {
+                console.log('[ProductDetail] Inventory INSERT/DELETE - triggering full reload');
+                loadPlatformData();
+              }
             }
           }
         )
@@ -3295,6 +3422,7 @@ const ProductDetailScreen = observer(
             // ✅ CRITICAL: Block during save window
             if (isInSaveBlockingWindow()) {
               console.log('[ProductDetail] ⚠️ Skipping mapping reload - in save blocking window');
+              scheduleDeferredExternalReload('mapping_blocked');
               return;
             }
 
@@ -3303,6 +3431,7 @@ const ProductDetailScreen = observer(
               loadPlatformData();
             } else {
               showBanner('Platform mapping changed. Save your changes first.');
+              scheduleDeferredExternalReload('mapping_unsaved');
             }
           }
         )
@@ -3314,7 +3443,7 @@ const ProductDetailScreen = observer(
         inventorySubscription.unsubscribe();
         mappingSubscription.unsubscribe();
       };
-    }, [detailedItem?.Id, loadPlatformData, showBanner, isInSaveBlockingWindow]);
+    }, [detailedItem?.Id, loadPlatformData, showBanner, isInSaveBlockingWindow, scheduleDeferredExternalReload]);
 
     // Collaboration: Request edit lock and listen for team updates
     useEffect(() => {
@@ -3449,7 +3578,7 @@ const ProductDetailScreen = observer(
 
         <ScrollView
           ref={scrollViewRef}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomSafePadding }]}
         >
           {/* Header with auto-save indicator */}
           <View style={[styles.header, { backgroundColor: theme.colors.surface }]}>
@@ -3491,7 +3620,7 @@ const ProductDetailScreen = observer(
             <ListingEditorForm
               ref={listingEditorRef}
               platforms={displayedPlatforms}
-              images={detailedItem?.ImageUrls || []}
+              images={displayImages}
               platformLocations={buildPlatformLocations()}
               onChangePlatforms={(next) => {
                 console.log('[ProductDetail] ListingEditorForm onChange:', Object.keys(next));
@@ -3630,6 +3759,9 @@ const ProductDetailScreen = observer(
                     const platformName = connection?.DisplayName || `${typeLabel} Account`;
                     const platformType = rawType;
                     const Logo = getPlatformLogoComponent(platformType);
+                    const lastSyncedAt = mapping.LastSyncedAt || null;
+                    const parsedSyncMs = lastSyncedAt ? new Date(lastSyncedAt).getTime() : 0;
+                    const isStale = !parsedSyncMs || (Date.now() - parsedSyncMs) > 24 * 60 * 60 * 1000;
                     return (
                       <View key={mapping.Id} style={styles.platformRow}>
                         <View style={styles.platformInfo}>
@@ -3643,6 +3775,10 @@ const ProductDetailScreen = observer(
                           <View style={styles.platformDetails}>
                             <Text style={[styles.platformName, { color: theme.colors.text }]}>{platformName}</Text>
                             <Text style={[styles.platformStatus, { color: theme.colors.text }]}>Status: {mapping.SyncStatus || 'Connected'}</Text>
+                            <Text style={[styles.platformStatus, { color: isStale ? '#B45309' : theme.colors.textSecondary }]}>
+                              Last synced: {lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : 'Unavailable'}
+                              {isStale ? ' • Stale' : ''}
+                            </Text>
                           </View>
                         </View>
                         <TouchableOpacity
@@ -3936,9 +4072,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  scrollContent: {
-    paddingBottom: 100,
-  },
+  scrollContent: {},
   header: {
     paddingTop: 60,
     flexDirection: 'row',

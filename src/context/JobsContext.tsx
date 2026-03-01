@@ -121,35 +121,35 @@ export function JobsProvider({ children }: { children: ReactNode }) {
     // starting jobs in-session and from AsyncStorage keyed by this matchJobId.
     const initializeFromMatchJob = useCallback(async (matchJobId: string, items: JobItem[]) => {
         const existing = await loadState(matchJobId);
-        const mergedGenerateJobs: Record<number, GenerateJobInfo> = existing?.generateJobs ? { ...existing.generateJobs } : {};
-
-        if (existing && existing.items.length > 0) {
-            // Merge with new items (keep existing generate job status)
-            const mergedItems = items.map(item => {
-                const existingItem = existing.items.find(e => e.index === item.index);
+        const validIndices = new Set(items.map(item => item.index));
+        const mergedGenerateJobs: Record<number, GenerateJobInfo> = Object.entries(existing?.generateJobs || {})
+            .reduce((acc, [indexStr, job]) => {
+                const index = Number(indexStr);
+                if (!Number.isFinite(index)) return acc;
+                if (!validIndices.has(index)) return acc;
+                if (!job?.jobId) return acc;
+                acc[index] = job;
+                return acc;
+            }, {} as Record<number, GenerateJobInfo>);
+        const mergedItems = (existing?.items?.length || 0) > 0
+            ? items.map(item => {
+                const existingItem = existing!.items.find(e => e.index === item.index);
                 return existingItem ? { ...item, ...existingItem } : item;
-            });
+            })
+            : items;
 
-            setState({
-                matchJobId,
-                items: mergedItems,
-                generateJobs: mergedGenerateJobs,
-                lastUpdated: Date.now(),
-            });
-        } else {
-            // Fresh initialization
-            setState({
-                matchJobId,
-                items,
-                generateJobs: mergedGenerateJobs,
-                lastUpdated: Date.now(),
-            });
-        }
+        // Always reset to the scoped state for this match flow to prevent cross-flow bleed.
+        setState({
+            matchJobId,
+            items: mergedItems,
+            generateJobs: mergedGenerateJobs,
+            lastUpdated: Date.now(),
+        });
 
         // Persist the merged state
         persistState({
             matchJobId,
-            items: items,
+            items: mergedItems,
             generateJobs: mergedGenerateJobs,
             lastUpdated: Date.now(),
         });
@@ -180,6 +180,8 @@ export function JobsProvider({ children }: { children: ReactNode }) {
                 generateResults.forEach((result: any) => {
                     const productIndex = result?.productIndex;
                     if (typeof productIndex === 'number') {
+                        const existsInCurrentFlow = state.items.some(item => item.index === productIndex);
+                        if (!existsInCurrentFlow) return;
                         setState(prev => {
                             const generateJobs = {
                                 ...prev.generateJobs,
@@ -206,7 +208,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
         } catch (e) {
             console.error('[JobsContext] Error in initializeFromGenerateJob:', e);
         }
-    }, [initializeFromMatchJob, state.matchJobId, state.items.length, persistState]);
+    }, [state.matchJobId, state.items, persistState]);
 
     // Set items
     const setItems = useCallback((items: JobItem[]) => {
@@ -232,6 +234,8 @@ export function JobsProvider({ children }: { children: ReactNode }) {
     // Start a generate job
     const startGenerateJob = useCallback((index: number, jobId: string) => {
         setState(prev => {
+            const existsInCurrentFlow = prev.items.some(item => item.index === index);
+            if (!existsInCurrentFlow) return prev;
             const generateJobs = {
                 ...prev.generateJobs,
                 [index]: {
@@ -249,6 +253,8 @@ export function JobsProvider({ children }: { children: ReactNode }) {
     // Update generate job
     const updateGenerateJob = useCallback((index: number, update: Partial<GenerateJobInfo>) => {
         setState(prev => {
+            const existsInCurrentFlow = prev.items.some(item => item.index === index);
+            if (!existsInCurrentFlow) return prev;
             const existing = prev.generateJobs[index];
             if (!existing) return prev;
 

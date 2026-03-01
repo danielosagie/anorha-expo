@@ -13,14 +13,19 @@ import {
   Pressable,
   Clipboard,
   ScrollView,
+  ActivityIndicator,
   Modal,
   TextInput,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Camera, CameraView, CameraType, FlashMode, BarcodeScanningResult } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system/legacy';
+import { decode as base64Decode } from 'base64-arraybuffer';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -28,6 +33,7 @@ import Animated, {
   withTiming,
   interpolate,
   runOnJS,
+  cancelAnimation,
   FadeIn,
   FadeOut,
   SlideInDown,
@@ -38,7 +44,9 @@ import { PanGestureHandler, TapGestureHandler, State, PanGestureHandlerGestureEv
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useNavigation, useIsFocused, useFocusEffect } from '@react-navigation/native';
+
+import { useNavigation, useRoute, useIsFocused, useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { SvgXml } from 'react-native-svg';
@@ -54,8 +62,8 @@ import TierSelectorModal from '../components/TierSelectorModal';
 import UsageCounter from '../components/UsageCounter';
 import useFreemiumUsage from '../hooks/useFreemiumUsage';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
-import { File, Directory, Paths } from 'expo-file-system';
 import BarcodeEntrySheet from '../components/camera/BarcodeEntrySheet';
+import EventSource from "react-native-sse";
 import { ENABLE_DOC_MODES } from '../config/features';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 import { PricingResearchModal } from '../components/PricingResearchModal';
@@ -68,6 +76,8 @@ import {
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BULK_MODAL_FTUX_KEY = '@anorha_hasSeenBulkItemsModal';
+const MAX_BATCH_ITEMS = 100;
+const QUICK_SCAN_QUEUE_LIMIT = 100;
 
 // Types
 
@@ -169,6 +179,7 @@ interface MatchCandidate {
   estimatedShippingMax?: number;
   estimatedShippingMidpoint?: number;
   estimatedShippingLabel?: string;
+  pricingResearch?: any;
 }
 
 interface JobResponse {
@@ -194,16 +205,47 @@ interface MatchResponse {
   };
 }
 
+type ItemLoadingState = {
+  isLoading: boolean;
+  stage: string;
+  error?: string;
+};
+
 type AddProductScreenProps = StackScreenProps<AppStackParamList, 'AddProduct'>;
 
-type CameraInstruction = 'ready' | 'move_closer' | 'move_back' | 'add_light' | 'focus' | 'processing' | 'matches_found' | 'no_matches' | 'barcode_scanned';
+type CameraInstruction =
+  | 'ready'
+  | 'move_closer'
+  | 'move_back'
+  | 'add_light'
+  | 'focus'
+  | 'processing'
+  | 'matches_found'
+  | 'no_matches'
+  | 'barcode_scanned'
+  | 'analyzing'
+  | 'extracting'
+  | 'optimizing'
+  | 'searching'
+  | 'capturing'
+  | 'recognizing'
+  | 'matched'
+  | 'needs_review';
 
-type CameraMode = 'camera' | 'barcode' | 'manifest' | 'receipt';
+type CameraMode = 'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf';
 
 const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const navigation = useNavigation();
+  const route = useRoute();
   const theme = useTheme();
+  const rawParams = (route.params ?? {}) as any;
+  const params = ((rawParams?.params && typeof rawParams.params === 'object') ? rawParams.params : rawParams) as { sessionId?: string; firstPhotos?: any[]; bulkItems?: any[] };
+  const sessionIdParam = params?.sessionId;
 
+  const sessionIdRef = useRef<string | null>(null);
+  const shelfPhotoUriForDraftRef = useRef<string | null>(null);
+  const saveDraftTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftSessionCreatePromiseRef = useRef<Promise<string | null> | null>(null);
 
   console.log('[RENDER] AddProductScreen rendered');
 
@@ -213,7 +255,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [capturedPhotos, setCapturedPhotos] = useState<CapturedPhoto[]>([]);
   const [isCapturing, setIsCapturing] = useState(false);
-  const [cameraMode, setCameraMode] = useState<'camera' | 'barcode' | 'manifest' | 'receipt'>('camera');
+  const [cameraMode, setCameraMode] = useState<'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf'>('camera');
 
   // Barcode state
   const [scannedBarcode, setScannedBarcode] = useState<string | null>(null);
@@ -233,6 +275,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Receipt state
   const [showReceiptSheet, setShowReceiptSheet] = useState(false);
   const [receiptJobId, setReceiptJobId] = useState<string | null>(null);
+
+  // Shelf state
+  const [shelfPhotoUri, setShelfPhotoUri] = useState<string | null>(null);
+  const [isProcessingShelfScan, setIsProcessingShelfScan] = useState(false);
 
   // Fetch platform locations on mount (with platformType from connections)
   useEffect(() => {
@@ -257,6 +303,96 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     fetchLocations();
   }, []);
 
+  // Hydrate from draft session when sessionId param is present
+  const isHydratingRef = useRef(false);
+  useEffect(() => {
+    if (!sessionIdParam || isHydratingRef.current) return;
+    let cancelled = false;
+    isHydratingRef.current = true;
+    (async () => {
+      try {
+        const token = await ensureSupabaseJwt();
+        const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+        const res = await fetch(`${API_BASE}/api/products/quick-scan-sessions/${sessionIdParam}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok || cancelled) return;
+        const session = await res.json();
+        const items = session.ScannedItems ?? session.scannedItems ?? [];
+        const matchCtx = session.MatchContext ?? session.matchContext ?? {};
+        const shelfUri = session.ShelfPhotoUri ?? session.shelfPhotoUri ?? null;
+        const activeId = session.ActiveItemId ?? session.activeItemId ?? null;
+        if (items.length > 0 && !cancelled) {
+          setBulkItems(items);
+          setQuickScanStore(matchCtx);
+          setShelfPhotoUri(shelfUri);
+          setActiveItemId(activeId || items[0]?.id || null);
+          setIsBulkMode(true);
+          setCameraMode('shelf');
+          setShowDeepSearchSheet(true);
+          sheetTranslateY.value = withSpring(0);  // Fully visible, bottom aligned to screen
+          sessionIdRef.current = session.Id ?? session.id ?? sessionIdParam;
+          if (shelfUri) shelfPhotoUriForDraftRef.current = shelfUri;
+        }
+      } catch (e) {
+        console.error('[AddProduct] Hydrate draft failed:', e);
+      } finally {
+        if (!cancelled) isHydratingRef.current = false;
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sessionIdParam]);
+
+  // Save draft to backend (create or update)
+  const ensureDraftSessionId = useCallback(async (payload: { scannedItems: any[]; matchContext: Record<string, any>; shelfPhotoUri?: string | null; activeItemId?: string | null }): Promise<string | null> => {
+    if (sessionIdRef.current) return sessionIdRef.current;
+    if (draftSessionCreatePromiseRef.current) return draftSessionCreatePromiseRef.current;
+
+    draftSessionCreatePromiseRef.current = (async () => {
+      const token = await ensureSupabaseJwt();
+      const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+      const res = await fetch(`${API_BASE}/api/products/quick-scan-sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const newSessionId = data.Id ?? data.id ?? null;
+      if (newSessionId) {
+        sessionIdRef.current = newSessionId;
+      }
+      return newSessionId;
+    })();
+
+    try {
+      return await draftSessionCreatePromiseRef.current;
+    } finally {
+      draftSessionCreatePromiseRef.current = null;
+    }
+  }, []);
+
+  const saveDraftToBackend = useCallback(async (payload: { scannedItems: any[]; matchContext: Record<string, any>; shelfPhotoUri?: string | null; activeItemId?: string | null }) => {
+    if (isHydratingRef.current) return;
+    try {
+      const token = await ensureSupabaseJwt();
+      const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+      let sid = sessionIdRef.current;
+      if (!sid) {
+        sid = await ensureDraftSessionId(payload);
+      }
+      if (!sid) return;
+
+      await fetch(`${API_BASE}/api/products/quick-scan-sessions/${sid}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ ...payload }),
+      });
+    } catch (e) {
+      console.warn('[AddProduct] Save draft failed:', e);
+    }
+  }, [ensureDraftSessionId]);
+
   // UI state
   const [currentInstruction, setCurrentInstruction] = useState<CameraInstruction>('ready');
   const [showMatchSheet, setShowMatchSheet] = useState(false);
@@ -271,7 +407,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [confirmedQuickMatchByItemId, setConfirmedQuickMatchByItemId] = useState<Record<string, { serpApiData: any[]; preSelectedIndices: number[] }>>({});
 
   // Loading state tracking per item
-  const [itemLoadingStates, setItemLoadingStates] = useState<Record<string, { isLoading: boolean; stage: string; }>>({});
+  const [itemLoadingStates, setItemLoadingStates] = useState<Record<string, ItemLoadingState>>({});
 
   // Bulk mode state
   const [isBulkMode, setIsBulkMode] = useState(false);
@@ -280,8 +416,26 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     photos: CapturedPhoto[];
     title?: string;
     isActive?: boolean;
+    preSelectedSource?: any;
+    quantity?: number;
   }>>([]);
   const [activeItemId, setActiveItemId] = useState<string | null>(null);
+
+  // Debounced auto-save when scan state changes (so drafts appear in Scan Drafts)
+  useEffect(() => {
+    if (isHydratingRef.current || bulkItems.length === 0) return;
+    if (saveDraftTimeoutRef.current) clearTimeout(saveDraftTimeoutRef.current);
+    saveDraftTimeoutRef.current = setTimeout(() => {
+      saveDraftTimeoutRef.current = null;
+      saveDraftToBackend({
+        scannedItems: bulkItems,
+        matchContext: quickScanStore,
+        shelfPhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri,
+        activeItemId,
+      });
+    }, 800);
+    return () => { if (saveDraftTimeoutRef.current) clearTimeout(saveDraftTimeoutRef.current); };
+  }, [bulkItems, quickScanStore, activeItemId, shelfPhotoUri, saveDraftToBackend]);
 
   // Auto-scan state
   const [isAutoScanning, setIsAutoScanning] = useState(false);
@@ -290,7 +444,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Job response state
   const [jobResponse, setJobResponse] = useState<JobResponse | null>(null);
   const quickScanCancelledRef = useRef(false);
+  const quickScanQueueRef = useRef<Array<{ photo: CapturedPhoto; itemId: string }>>([]);
+  const shelfQueryToItemIdRef = useRef<Record<string, string>>({});
   const hasTriggeredBulkModalFtuxRef = useRef(false);
+  const closeRequestIdRef = useRef(0);
+  // Track whether we've already opened the sheet for the first scan result
+  const hasOpenedSheetForScanRef = useRef(false);
 
   // Notification and progress state
   const [showNotification, setShowNotification] = useState(false);
@@ -378,6 +537,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }, duration);
   }, [notificationOpacity, notificationTranslateY]);
 
+  const canAddAnotherItem = useCallback((currentCount: number) => {
+    if (currentCount < MAX_BATCH_ITEMS) return true;
+    showNotificationMessage(`Batch limit reached (${MAX_BATCH_ITEMS}/${MAX_BATCH_ITEMS}).`, 2500);
+    return false;
+  }, [showNotificationMessage]);
+
   // Start progress bar animation
   const startProgressAnimation = useCallback(() => {
     setShowProgressBar(true);
@@ -428,25 +593,38 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Instructions mapping
   const getInstructionText = (instruction: CameraInstruction): string => {
+    // Throughput-first deterministic labels for intake lifecycle.
+    if (cameraMode === 'camera' || cameraMode === 'shelf') {
+      if (instruction === 'matches_found' || instruction === 'matched') return 'Matched';
+      if (instruction === 'no_matches' || instruction === 'needs_review') return 'Needs review';
+      if (
+        instruction === 'processing' ||
+        instruction === 'analyzing' ||
+        instruction === 'extracting' ||
+        instruction === 'optimizing' ||
+        instruction === 'searching' ||
+        instruction === 'recognizing'
+      ) {
+        return 'Recognizing';
+      }
+      return 'Capturing';
+    }
+
     switch (instruction) {
-      case 'ready': cameraMode === 'receipt' ? 'Upload/take picture of receipt' : 'Upload/take picture of receipt';
-      case 'ready': cameraMode === 'manifest' ? 'Upload/take picture of manifest' : 'Upload/take picture of manifest';
       case 'ready':
-        if (cameraMode === 'camera') {
-          return isBulkMode
-            ? 'Take photos, then tap + New Item to start a separate product'
-            : 'Take photos to get started';
-        }
-        return 'Scan barcode on product';
+        if (cameraMode === 'barcode') return 'Scan barcode on product';
+        if (cameraMode === 'manifest') return 'Take photos of manifest';
+        if (cameraMode === 'receipt') return 'Take photos of receipt';
+        return 'Capturing';
       case 'move_closer': return 'Move closer to product';
       case 'move_back': return 'Move back from product';
       case 'add_light': return 'Add more light to scene';
       case 'focus': return 'Tap to focus';
-      case 'processing': return 'Analyzing image...';
-      case 'matches_found': return `${matchData?.totalMatches || 0} match${(matchData?.totalMatches || 0) > 1 ? 'es' : ''} found!`;
-      case 'no_matches': return 'No matches yet - try another angle';
+      case 'processing': return 'Recognizing';
+      case 'matches_found': return 'Matched';
+      case 'no_matches': return 'Needs review';
       case 'barcode_scanned': return scannedBarcode || 'Barcode scanned';
-      default: return cameraMode === 'camera' ? 'Take photos to get started' : 'lol';
+      default: return 'Take photos to get started';
     }
   };
 
@@ -513,85 +691,84 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
         setCapturedPhotos(prev => {
           const updated = [...prev, newPhoto];
-          console.log('[PHOTO CAPTURE] Photos updated:', {
-            previousCount: prev.length,
-            newCount: updated.length,
-            newPhotoId: newPhoto.id,
-            allPhotoIds: updated.map(p => p.id)
-          });
           return updated;
         });
 
-        // SIMPLIFIED: Always create real items, regardless of mode
-        console.log('[ITEM CREATION] ==================');
-        console.log('[ITEM CREATION] Photo added to capturedPhotos:', newPhoto.id);
-        console.log('[ITEM CREATION] Current bulkItems count:', bulkItems.length);
-        console.log('[ITEM CREATION] Current activeItemId:', activeItemId);
-
-        // Always create items in bulkItems (much simpler logic)
-        if (bulkItems.length === 0) {
-          // Very first photo ever - create first item
-          console.log('[ITEM CREATION] Creating FIRST ITEM (no items exist yet)');
-          const firstItem = {
-            id: `item-${Date.now()}`,
-            photos: [newPhoto],
-            title: undefined,
-            isActive: true
-          };
-          setBulkItems([firstItem]);
-          setActiveItemId(firstItem.id);
-          capture(AnalyticsEvents.PRODUCT_ADDED, { source: 'camera' });
-          console.log('[ITEM CREATION] Created first item:', firstItem.id);
-          console.log('[ITEM CREATION] Triggering quick scan (first photo of first item)');
-
-          console.log('[FIRST ITEM] Created first item with ID:', firstItem.id);
-          setTimeout(() => {
-            console.log('[FIRST ITEM] About to call performQuickScan for first item:', firstItem.id);
-            performQuickScan(newPhoto, firstItem.id);
-          }, 500);
-
+        if (cameraMode === 'shelf' && bulkItems.length === 0) {
+          setShelfPhotoUri(newPhoto.uri);
+          handleShelfModeScan(newPhoto);
         } else {
-          // Use current state (prev) to avoid stale closures. Prefer active item by isActive flag.
-          setBulkItems(prev => {
-            if (prev.length === 0) {
-              // First item
-              const firstId = `item-${Date.now()}`;
-              setActiveItemId(firstId);
-              setTimeout(() => performQuickScan(newPhoto, firstId), 500);
-              return [{ id: firstId, photos: [newPhoto], title: undefined, isActive: true }];
-            }
+          // SIMPLIFIED: Always create real items, regardless of mode
+          if (bulkItems.length === 0) {
+            // Very first photo ever - create first item
+            console.log('[ITEM CREATION] Creating FIRST ITEM (no items exist yet)');
+            const firstItem = {
+              id: `item-${Date.now()}`,
+              photos: [newPhoto],
+              title: undefined,
+              isActive: true
+            };
+            setBulkItems([firstItem]);
+            setActiveItemId(firstItem.id);
+            capture(AnalyticsEvents.PRODUCT_ADDED, { source: 'camera' });
+            console.log('[ITEM CREATION] Created first item:', firstItem.id);
+            console.log('[ITEM CREATION] Triggering quick scan (first photo of first item)');
 
-            const activeIndex = prev.findIndex(it => it.isActive);
-            if (activeIndex >= 0) {
-              const activeItemIdLocal = prev[activeIndex].id;
-              const next = prev.map((it, idx) => {
-                if (idx !== activeIndex) return it;
-                const wasFirstPhoto = it.photos.length === 0;
-                const updated = { ...it, photos: [...it.photos, newPhoto] };
-                if (wasFirstPhoto) setTimeout(() => performQuickScan(newPhoto, activeItemIdLocal), 500);
-                return updated;
-              });
-              return next;
-            }
+            console.log('[FIRST ITEM] Created first item with ID:', firstItem.id);
+            setTimeout(() => {
+              console.log('[FIRST ITEM] About to call performQuickScan for first item:', firstItem.id);
+              performQuickScan(newPhoto, firstItem.id);
+            }, 500);
 
-            // No active item flagged; create a new active item
-            const newId = `item-${Date.now()}`;
-            setActiveItemId(newId);
-            setTimeout(() => performQuickScan(newPhoto, newId), 500);
-            return [...prev.map(it => ({ ...it, isActive: false })), { id: newId, photos: [newPhoto], title: undefined, isActive: true }];
-          });
+          } else {
+            // Use current state (prev) to avoid stale closures. Prefer active item by isActive flag.
+            setBulkItems(prev => {
+              if (prev.length === 0) {
+                // First item
+                const firstId = `item-${Date.now()}`;
+                setActiveItemId(firstId);
+                setTimeout(() => performQuickScan(newPhoto, firstId), 500);
+                return [{ id: firstId, photos: [newPhoto], title: undefined, isActive: true }];
+              }
+
+              const activeIndex = prev.findIndex(it => it.isActive);
+              if (activeIndex >= 0) {
+                const activeItemIdLocal = prev[activeIndex].id;
+                const next = prev.map((it, idx) => {
+                  if (idx !== activeIndex) return it;
+                  const wasFirstPhoto = it.photos.length === 0;
+                  const updated = { ...it, photos: [...it.photos, newPhoto] };
+                  if (wasFirstPhoto) setTimeout(() => performQuickScan(newPhoto, activeItemIdLocal), 500);
+                  return updated;
+                });
+                return next;
+              }
+
+              // No active item flagged; create a new active item
+              if (!canAddAnotherItem(prev.length)) {
+                if (prev[0]) {
+                  const fallbackId = prev[0].id;
+                  setActiveItemId(fallbackId);
+                  setTimeout(() => performQuickScan(newPhoto, fallbackId), 500);
+                  return prev.map((it, idx) => {
+                    if (idx === 0) {
+                      return { ...it, isActive: true, photos: [...it.photos, newPhoto] };
+                    }
+                    return { ...it, isActive: false };
+                  });
+                }
+                return prev;
+              }
+              const newId = `item-${Date.now()}`;
+              setActiveItemId(newId);
+              setTimeout(() => performQuickScan(newPhoto, newId), 500);
+              return [...prev.map(it => ({ ...it, isActive: false })), { id: newId, photos: [newPhoto], title: undefined, isActive: true }];
+            });
+          }
+
+          setCurrentInstruction('ready');
+          stopProgressAnimation();
         }
-
-        setCurrentInstruction('ready');
-        stopProgressAnimation();
-        console.log('[ITEM CREATION] ==================');
-
-        // FIXED: Use refs to get current state values, not closure-captured ones
-        setTimeout(() => {
-          console.log('[ITEM CREATION] State after timeout - bulkItems.length:', bulkItems.length);
-          console.log('[ITEM CREATION] State after timeout - activeItemId:', activeItemId);
-          console.log('[ITEM CREATION] 🚨 NOTE: These values are closure-captured and may be stale!');
-        }, 100);
       }
 
     } catch (error) {
@@ -602,7 +779,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     } finally {
       setIsCapturing(false);
     }
-  }, [isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity]);
+  }, [isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity, canAddAnotherItem]);
 
   // Handle barcode scan - with debouncing to prevent duplicates
   const barcodeLastScannedRef = useRef<string | null>(null);
@@ -696,6 +873,182 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   }, []);
 
+  const handleShelfModeScan = useCallback(async (photo: CapturedPhoto) => {
+    try {
+      shelfPhotoUriForDraftRef.current = photo.uri;
+      setCurrentInstruction('processing');
+      setIsProcessingShelfScan(true);
+      // Open sheet when user takes/uploads shelf photo so they see loading
+      setShowDeepSearchSheet(true);
+      sheetTranslateY.value = withSpring(0);
+
+      // Compress image before converting to base64
+      const compressedImage = await ImageManipulator.manipulateAsync(
+        photo.uri,
+        [{ resize: { width: 1200 } }], // Resize to max 1200px width
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG } // Compress aggressively to reduce payload
+      );
+
+      // Convert compressed image to base64
+      const response = await fetch(compressedImage.uri);
+      const blob = await response.blob();
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const result = reader.result as string;
+          resolve(result.split(',')[1] || result);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+
+      const token = await ensureSupabaseJwt();
+      const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+      const API_BASE = /localhost|127\.0\.0\.1/i.test(rawApiBase) ? 'https://api.sssync.app' : rawApiBase;
+
+      // 1. Establish SSE Connection for Agentic Stream
+      console.log(`[SHELF MODE] Starting SSE stream with ${base64.length} bytes`);
+      const sseUrl = `${API_BASE}/api/products/orchestrate/quick-scan-stream`;
+
+      const es = new EventSource(sseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          images: [{ base64 }],
+          mode: 'vlm-multi'
+        })
+      });
+
+
+
+      es.addEventListener("open", () => {
+        console.log("[SSE] Connection opened");
+        setCurrentInstruction('processing');
+      });
+
+      es.addEventListener("message", (event) => {
+        if (!event.data) return;
+        try {
+          const parsed = JSON.parse(event.data);
+          console.log("[SSE] Message Type:", parsed.type);
+
+          if (parsed.type === 'START_ANALYSIS') {
+            setCurrentInstruction('analyzing');
+            // Clear out prior states if starting fresh
+            setBulkItems([]);
+            setQuickScanStore({});
+            shelfQueryToItemIdRef.current = {};
+
+            // IMMEDIATELY show the sheet so the user sees loading skeletons
+            setShowDeepSearchSheet(true);
+            sheetTranslateY.value = withSpring(0);  // Fully visible, bottom aligned to screen
+          }
+          else if (parsed.type === 'EXTRACTED_ITEMS') {
+            if (!parsed.items || parsed.items.length === 0) {
+              Alert.alert('No Items Found', 'Could not detect any items on this shelf.');
+              setCurrentInstruction('ready');
+              setIsProcessingShelfScan(false);
+              es.close();
+              return;
+            }
+            // Support both formats: items as string[] or Array<{ query, quantity }>
+            const items = parsed.items as Array<string | { query: string; quantity?: number }>;
+            const newBulkItems = items.map((item: string | { query: string; quantity?: number }, idx: number) => {
+              const query = typeof item === 'string' ? item : item.query;
+              const quantity = typeof item === 'object' && item.quantity != null ? item.quantity : 1;
+              return {
+                id: `shelf-${Date.now()}-${idx}`,
+                photos: [],
+                title: query,
+                quantity,
+                isActive: idx === 0
+              };
+            });
+
+            // Store mapping from extracted search string to bulk item ID
+            items.forEach((item: string | { query: string; quantity?: number }, idx: number) => {
+              const query = typeof item === 'string' ? item : item.query;
+              shelfQueryToItemIdRef.current[query] = newBulkItems[idx].id;
+            });
+
+            setBulkItems(newBulkItems);
+            setIsBulkMode(true);
+            setActiveItemId(newBulkItems[0].id);
+            setCurrentInstruction('extracting');
+          }
+          else if (parsed.type === 'OPTIMIZING_QUERIES') {
+            setCurrentInstruction('optimizing');
+          }
+          else if (parsed.type === 'SEARCHING_ITEMS') {
+            setCurrentInstruction('searching'); // Show user that we are searching
+          }
+          else if (parsed.type === 'SEARCH_RESULT') {
+            const res = parsed.result;
+            // The Original VLM query or type that was returned
+            const originalQuery = res.extractedItem?.ocrText || res.extractedItem?.paraphrases?.[0] || res.extractedItem?.type || res.usedQuery;
+
+            const itemId = shelfQueryToItemIdRef.current[originalQuery] || shelfQueryToItemIdRef.current[res.usedQuery];
+
+            if (itemId) {
+              // Update bulk item's title and quantity if Groq optimized it / dedup provided quantity
+              const quantity = typeof res.quantity === 'number' ? res.quantity : 1;
+              setBulkItems(prev => prev.map(item => item.id === itemId ? { ...item, title: res.usedQuery, quantity } : item));
+
+              // Add matches to quickScanStore
+              if (res.matches && res.matches.length > 0) {
+                setQuickScanStore(prev => ({
+                  ...prev,
+                  [itemId]: {
+                    matchData: {
+                      systemAction: 'show_multiple_matches',
+                      confidence: res.confidence || 'medium',
+                      rankedCandidates: res.matches,
+                      totalMatches: res.matches.length
+                    },
+                    serpApiData: res.matches
+                  }
+                }));
+              }
+            }
+          }
+          else if (parsed.type === 'COMPLETE') {
+            setCurrentInstruction('ready');
+            setIsProcessingShelfScan(false);
+            es.close();
+
+            // Ensure sheet is at a good height upon completion
+            sheetTranslateY.value = withSpring(0);  // Fully visible, bottom aligned to screen
+          }
+          else if (parsed.type === 'ERROR') {
+            console.error("[SSE] Agent error:", parsed.message);
+            Alert.alert('Scan Error', parsed.message || 'Error processing shelf scan');
+            setCurrentInstruction('ready');
+            setIsProcessingShelfScan(false);
+            es.close();
+          }
+        } catch (err) {
+          console.error("[SSE Parse Error]", err);
+        }
+      });
+
+      es.addEventListener("error", (event) => {
+        console.error("[SSE] Connection error", event);
+        setCurrentInstruction('ready');
+        setIsProcessingShelfScan(false);
+        es.close();
+      });
+
+    } catch (error: any) {
+      console.error(`[SHELF MODE] Error:`, error);
+      Alert.alert('Extraction Error', error?.message || 'Failed to extract items from the image.');
+      setCurrentInstruction('ready');
+      setIsProcessingShelfScan(false);
+    }
+  }, [ensureSupabaseJwt]);
+
   const handleManualBarcodeSubmit = useCallback(async () => {
     const trimmed = manualBarcode.trim();
     if (!trimmed) {
@@ -748,6 +1101,26 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       cameraMode,
       hasBarcodeResult: !!barcodeSearchResult
     });
+
+    // SHELF MODE: identification first, then explicit one-tap transition to listing flow.
+    if (cameraMode === 'shelf') {
+      if (bulkItems.length === 0) {
+        Alert.alert(
+          'Shelf Mode',
+          'Take or upload one shelf photo first. We will identify items, then move them into listing flow.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+      setCameraMode('camera');
+      setCurrentInstruction('capturing');
+      setShowMatchSheet(false);
+      matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
+      setShowDeepSearchSheet(true);
+      sheetTranslateY.value = withSpring(0);
+      showNotificationMessage('Moved to listing flow', 1800);
+      return;
+    }
 
     // BARCODE MODE: Open barcode result modal if we have a result
     if (cameraMode === 'barcode' && barcodeSearchResult) {
@@ -916,8 +1289,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     setShowMatchSheet(false);
     matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
     setShowDeepSearchSheet(true);
-    sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4); // Position for 60% height sheet
-  }, [sheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems, activeItemId, cameraMode, barcodeSearchResult, showNotificationMessage]);
+    sheetTranslateY.value = withSpring(0);  // Fully visible, bottom aligned to screen
+  }, [sheetTranslateY, matchSheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems, activeItemId, cameraMode, barcodeSearchResult, showNotificationMessage]);
 
   // Handle image picker - SIMPLIFIED: Always add to bulkItems
   const handleImageUpload = useCallback(async () => {
@@ -936,7 +1309,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
     if (!result.canceled && result.assets?.length) {
       const assets = result.assets;
-      console.log('[IMAGE UPLOAD] Adding', assets.length, 'uploaded image(s) to bulkItems system');
+      console.log('[IMAGE UPLOAD] Adding', assets.length, 'uploaded image(s)');
 
       // Build CapturedPhoto for each selected asset (no crop frame)
       const newPhotos: CapturedPhoto[] = assets.map((asset, idx) => ({
@@ -947,6 +1320,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         timestamp: Date.now(),
         isCover: false,
       }));
+
+      // SHELF MODE: Route uploaded image to shelf extraction instead of normal bulkItems
+      // ONLY if we don't already have items. If we have items, we are likely adding photos to one of them.
+      if (cameraMode === 'shelf' && newPhotos.length > 0 && bulkItems.length === 0) {
+        console.log('[IMAGE UPLOAD] Shelf mode - routing to handleShelfModeScan');
+        const shelfPhoto = newPhotos[0];
+        setCapturedPhotos(prev => [...prev, shelfPhoto]);
+        setShelfPhotoUri(shelfPhoto.uri);
+        handleShelfModeScan(shelfPhoto);
+        return;
+      }
 
       if (bulkItems.length === 0) {
         const firstItem = {
@@ -974,6 +1358,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           setTimeout(() => performQuickScan(newPhotos[0], activeItemId), 500);
         }
       } else {
+        if (!canAddAnotherItem(bulkItems.length)) {
+          return;
+        }
         const newItem = {
           id: `item-${Date.now()}`,
           photos: newPhotos.map((p, i) => ({ ...p, isCover: i === 0 })),
@@ -988,7 +1375,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         }
       }
     }
-  }, [bulkItems, activeItemId]);
+  }, [bulkItems, activeItemId, cameraMode, canAddAnotherItem]);
 
   // Copy barcode to clipboard
   const copyBarcodeToClipboard = useCallback(() => {
@@ -997,17 +1384,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       Alert.alert('Copied', 'Barcode copied to clipboard');
     }
   }, [scannedBarcode]);
-
-  // Toggle camera mode (cycles: camera → barcode → manifest → camera)
-  const toggleCameraMode = useCallback(() => {
-    setCameraMode(prev => {
-      if (prev === 'camera') return 'barcode';
-      if (prev === 'barcode') return 'manifest';
-      return 'camera';
-    });
-    setScannedBarcode(null);
-    setCurrentInstruction('ready');
-  }, []);
 
   // Legacy photo management functions - no longer needed with simplified bulkItems system
   // (All photo management now happens through bulkItems functions)
@@ -1062,6 +1438,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }
 
   // Upload image to Supabase Storage and get public URL
+  // Compresses/resizes before upload to reduce storage and egress (Supabase Free Plan)
   const uploadImageToSupabase = useCallback(async (localUri: string, photoId: string): Promise<string> => {
     try {
       console.log('[UPLOAD] Starting upload for:', photoId);
@@ -1072,24 +1449,35 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         throw new Error('User not authenticated');
       }
 
-      // Read bytes using the new File API (Expo SDK 54+)
-      const normalizedLocalUri = localUri.startsWith('file://') ? localUri.replace('file://', '') : localUri;
-      const parsedPath = Paths.parse(normalizedLocalUri);
-      const srcFile = new File(new Directory(parsedPath.dir), parsedPath.base);
-      const bytes = await srcFile.bytes();
+      // Light compression before upload (0.9 quality, max 1920px) - reduces size with minimal quality loss
+      const compressed = await ImageManipulator.manipulateAsync(
+        localUri,
+        [{ resize: { width: 1920 } }], // Only downscale if wider than 1920px
+        { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
+      );
+
+      // React Native fetch() does not support file:// URIs on Android - use expo-file-system
+      let byteArray: Uint8Array;
+      if (Platform.OS === 'android') {
+        const base64 = await FileSystem.readAsStringAsync(compressed.uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const arrayBuffer = base64Decode(base64);
+        byteArray = new Uint8Array(arrayBuffer);
+      } else {
+        const response = await fetch(compressed.uri);
+        const arrayBuffer = await response.arrayBuffer();
+        byteArray = new Uint8Array(arrayBuffer);
+      }
 
       // Create file name
       const fileName = `${user.id}/${photoId}-${Date.now()}.jpg`;
-
-      // Convert base64 to proper blob for upload
-      // Use bytes directly
-      const byteArray = bytes;
 
       const { data, error } = await supabase.storage
         .from('product-images')
         .upload(fileName, byteArray, {
           contentType: 'image/jpeg',
-          cacheControl: '3600',
+          cacheControl: '86400', // 24h - reduces egress via browser cache
         });
 
       if (error) {
@@ -1115,7 +1503,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Auto-quick scan when photo is captured
   const performQuickScan = useCallback(async (photo: CapturedPhoto, itemId: string) => {
     if (isAutoScanning) {
-      console.log('[QUICK SCAN] Another quick scan is already running, skipping');
+      if (quickScanQueueRef.current.length >= QUICK_SCAN_QUEUE_LIMIT) {
+        console.log('[QUICK SCAN] Queue limit reached, dropping oldest queued scan');
+        quickScanQueueRef.current.shift();
+      }
+      const alreadyQueued = quickScanQueueRef.current.some(task => task.itemId === itemId && task.photo.id === photo.id);
+      if (!alreadyQueued) {
+        quickScanQueueRef.current.push({ photo, itemId });
+      }
+      console.log('[QUICK SCAN] Scan in progress, queued follow-up scan');
       return;
     }
 
@@ -1128,8 +1524,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     // Set loading state for this item
     setItemLoadingStates(prev => ({
       ...prev,
-      [itemId]: { isLoading: true, stage: 'Quick Scanning...' }
+      [itemId]: { isLoading: true, stage: 'Quick Scanning...', error: undefined }
     }));
+
+    let scanErrorMessage: string | null = null;
 
     try {
       // Ensure auth bridge is ready and we have a Supabase JWT before any network calls
@@ -1137,10 +1535,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       if (!tokenMaybe) {
         console.warn('[QUICK SCAN] No Supabase JWT available. Are you signed in and the Clerk bridge configured?');
         showNotificationMessage('Sign in required to scan. Please log in and try again.', 3000);
-        setItemLoadingStates(prev => {
-          const { [itemId]: removed, ...rest } = prev;
-          return rest;
-        });
+        scanErrorMessage = 'Sign in required';
         setIsAutoScanning(false);
         return;
       }
@@ -1237,7 +1632,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       console.log('[QUICK SCAN] Full result:', JSON.stringify(result, null, 2));
 
       // Parse backend response - backend returns results array with matches
-      const allMatches = result.results?.flatMap((r: any) => r.matches) || result.quickScanMatches || [];
+      const allMatches = result.results?.flatMap((r: any) => r.matches) || result.matches || result.quickScanMatches || [];
       const rerankerMeta = result.results?.[0]?.rerankerAnalysis;
       const quickScanResult = {
         recommendedAction: result.recommendedAction || 'show_multiple_matches',
@@ -1272,28 +1667,35 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         }
 
         // Update store
+        const serpApiDataForItem = candidatesToSerpApiData(nextMatchData.rankedCandidates as any);
         setQuickScanStore(prev => {
           const updated = {
             ...prev,
-            [itemId]: { matchData: nextMatchData, serpApiData: candidatesToSerpApiData(nextMatchData.rankedCandidates as any) }
+            [itemId]: { matchData: nextMatchData, serpApiData: serpApiDataForItem }
           };
           return updated;
         });
 
-        // Notify user (silent update, no sheet)
-        const isFirstItemScanned = Object.keys(quickScanStore).length === 0;
-        if (isFirstItemScanned) {
-          showNotificationMessage(`✓ Match found! Tap to review.`, 3000);
-        } else {
-          showNotificationMessage(`✓ Match found!`, 2000);
-        }
+        // AUTO-CONFIRM: Pre-select the top quick scan match so it's used when "Analyze & List" is pressed
+        // This saves time by using the quick scan result instead of re-searching from scratch
+        setConfirmedQuickMatchByItemId(prev => ({
+          ...prev,
+          [itemId]: { serpApiData: serpApiDataForItem, preSelectedIndices: [0] },
+        }));
+
         // CRITICAL: Also update component-level matchData so getInstructionText displays correct count
         setMatchData(nextMatchData);
         // Update instruction to show match count in center box
         setCurrentInstruction('matches_found');
+        // Only open sheet on the FIRST scan result in camera mode (Bug 2 fix)
+        if (cameraMode === 'camera' && !hasOpenedSheetForScanRef.current) {
+          hasOpenedSheetForScanRef.current = true;
+          setShowDeepSearchSheet(true);
+          sheetTranslateY.value = withSpring(0);
+        }
 
-        // Price + shipping safety: enrich top quick candidate in background
-        // so users get faster and more realistic price + shipping guidance during quick scan.
+        // Pricing enrichment: Use eBay pricing research (actual sold listings) in background
+        // to populate price range and shipping data from real market data.
         const topTitle = nextMatchData.rankedCandidates?.[0]?.title;
         if (topTitle) {
           const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
@@ -1301,36 +1703,36 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           (async () => {
             try {
               const cleanedTitle = topTitle.replace(/\s*[|—–-]\s*(eBay|Amazon|Walmart|Etsy|Target)\s*$/i, '').trim();
-              const [priceRes, shippingRes] = await Promise.all([
-                fetch(`${API_BASE}/api/ebay/pricing-research`, {
-                  method: 'POST',
-                  headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ title: cleanedTitle, condition: 'new', limit: 20 }),
-                }),
-                // Quick potential shipping estimate (safe default for small consumer items).
-                fetch(`${API_BASE}/api/shipping/estimate?weight=0.75&weightUnit=lb&speed=Ground`, {
-                  headers: { Authorization: `Bearer ${token}` },
-                }),
-              ]);
+
+              const priceRes = await fetch(`${API_BASE}/api/ebay/pricing-research`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: cleanedTitle, condition: 'new', limit: 20 }),
+              });
 
               const priceData = priceRes.ok ? await priceRes.json() : null;
-              const shippingData = shippingRes.ok ? await shippingRes.json() : null;
+              if (!priceData || priceData.error) {
+                console.warn('[QUICK SCAN] pricing research returned no data or error');
+                return;
+              }
               const recommended = Number(priceData?.recommended ?? priceData?.median ?? priceData?.low ?? 0);
 
               setQuickScanStore(prev => {
                 const current = prev[itemId];
                 if (!current?.matchData?.rankedCandidates?.length) return prev;
-                const first = current.matchData.rankedCandidates[0];
+                const firstCand = current.matchData.rankedCandidates[0];
                 const updatedCandidates = [...current.matchData.rankedCandidates];
+                // Use pricing research price range as shipping proxy:
+                // low = fast sale price, high = max profit price
+                const priceLow = Number(priceData?.low ?? 0);
+                const priceHigh = Number(priceData?.high ?? 0);
                 updatedCandidates[0] = {
-                  ...first,
-                  price: (typeof first?.price === 'number' && first.price > 0)
-                    ? first.price
-                    : (Number.isFinite(recommended) && recommended > 0 ? recommended : first?.price),
-                  estimatedShippingMin: Number(shippingData?.estimatedMin ?? 0) || undefined,
-                  estimatedShippingMax: Number(shippingData?.estimatedMax ?? 0) || undefined,
-                  estimatedShippingMidpoint: Number(shippingData?.midpoint ?? 0) || undefined,
-                  estimatedShippingLabel: typeof shippingData?.distanceBand === 'string' ? shippingData.distanceBand : undefined,
+                  ...firstCand,
+                  price: (typeof firstCand?.price === 'number' && firstCand.price > 0)
+                    ? firstCand.price
+                    : (Number.isFinite(recommended) && recommended > 0 ? recommended : firstCand?.price),
+                  // Store the full pricing research for display in the match sheet
+                  pricingResearch: priceData,
                 };
                 return {
                   ...prev,
@@ -1340,8 +1742,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   },
                 };
               });
+
+              // Also update the auto-confirmed match with the enriched data
+              setConfirmedQuickMatchByItemId(prev => {
+                const existing = prev[itemId];
+                if (!existing) return prev;
+                return { ...prev, [itemId]: { ...existing } };
+              });
             } catch (enrichErr) {
-              console.warn('[QUICK SCAN] pricing/shipping enrichment skipped:', enrichErr);
+              console.warn('[QUICK SCAN] pricing enrichment skipped:', enrichErr);
             }
           })();
         }
@@ -1351,21 +1760,40 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         showNotificationMessage('No quick matches found. Added to review.', 3000);
         // Update instruction to show no matches in center box
         setCurrentInstruction('no_matches');
+        if (cameraMode === 'camera') {
+          setShowDeepSearchSheet(true);
+          sheetTranslateY.value = withSpring(0);
+        }
       }
 
     } catch (error) {
       console.error('[QUICK SCAN] scan failed:', error);
       showNotificationMessage('Quick scan failed. Retrying in background...', 3000);
+      scanErrorMessage = error instanceof Error ? error.message : 'Quick scan failed';
     } finally {
       setIsAutoScanning(false);
-      // Clear loading state
-      setItemLoadingStates(prev => {
-        const { [itemId]: removed, ...rest } = prev;
-        return rest;
-      });
+      if (scanErrorMessage) {
+        setItemLoadingStates(prev => ({
+          ...prev,
+          [itemId]: { isLoading: false, stage: 'Scan failed', error: scanErrorMessage || 'Quick scan failed' },
+        }));
+      } else {
+        // Clear loading state
+        setItemLoadingStates(prev => {
+          const { [itemId]: removed, ...rest } = prev;
+          return rest;
+        });
+      }
+
+      const nextQueued = quickScanQueueRef.current.shift();
+      if (nextQueued && !quickScanCancelledRef.current) {
+        setTimeout(() => performQuickScan(nextQueued.photo, nextQueued.itemId), 120);
+      } else if (!nextQueued) {
+        setCurrentInstruction('ready');
+      }
     }
 
-  }, [uploadImageToSupabase, candidatesToSerpApiData, quickScanStore, showNotificationMessage]);
+  }, [uploadImageToSupabase, candidatesToSerpApiData, quickScanStore, showNotificationMessage, cameraMode, sheetTranslateY, isAutoScanning, incrementLocalUsage]);
 
   // Open Match Selection screen using quick scan results for a given item
   const openMatchSelectionForItem = useCallback((itemId?: string | null) => {
@@ -1397,6 +1825,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       showNotificationMessage('No quick matches for this item yet.', 2000);
       return;
     }
+    // Don't allow closing while processing shelf scan
+    if (isProcessingShelfScan) {
+      showNotificationMessage('Please wait for shelf scan to complete', 2000);
+      return;
+    }
     setMatchData(store.matchData);
     setCurrentMatchItemId(itemId);
     // Close bulk sheet before opening match sheet
@@ -1404,7 +1837,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     sheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
     setShowMatchSheet(true);
     matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2);
-  }, [quickScanStore, matchSheetTranslateY, sheetTranslateY, showNotificationMessage]);
+  }, [quickScanStore, matchSheetTranslateY, sheetTranslateY, showNotificationMessage, isProcessingShelfScan]);
 
   // Send payload of first photos for analysis/matching
   const performAnalyze = useCallback(async (firstPhotos: CapturedPhoto[]) => {
@@ -1536,6 +1969,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Add new bulk item
   const addNewBulkItem = useCallback(() => {
+    if (!canAddAnotherItem(bulkItems.length)) {
+      return;
+    }
     const newItemId = generateItemId();
     console.log('[ADD NEW ITEM] Starting to add new item:', newItemId);
     console.log('[ADD NEW ITEM] Current bulk mode:', isBulkMode);
@@ -1612,7 +2048,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       showNotificationMessage('You can\'t disable bulk mode when there are items in the list', 3000);
       setIsBulkMode(true);
     }
-  }, [isBulkMode, capturedPhotos, bulkItems.length]);
+  }, [isBulkMode, capturedPhotos, bulkItems.length, canAddAnotherItem, generateItemId]);
 
   // NEW: Handle pressing the match indicator/banner
   const handleMatchIndicatorPress = useCallback(() => {
@@ -1625,17 +2061,24 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       if (hasMatches) {
         openQuickMatchesForItem(activeItemId);
       } else {
-        // Optional: Provide feedback if no matches or still processing
+        // Retry: re-trigger quick scan for this item if no matches yet
         if (currentInstruction === 'processing') {
           showNotificationMessage('Scanning in progress...', 1500);
         } else {
-          showNotificationMessage('No matches available yet', 1500);
+          // Find the photo for this item and re-scan
+          const item = bulkItems.find(b => b.id === activeItemId);
+          if (item && item.photos.length > 0) {
+            showNotificationMessage('Retrying scan...', 1500);
+            performQuickScan(item.photos[0], activeItemId);
+          } else {
+            showNotificationMessage('No photo available to scan', 1500);
+          }
         }
       }
     } else {
       showNotificationMessage('Select an item first', 1500);
     }
-  }, [activeItemId, quickScanStore, currentInstruction, openQuickMatchesForItem, showNotificationMessage]);
+  }, [activeItemId, quickScanStore, currentInstruction, openQuickMatchesForItem, showNotificationMessage, bulkItems, performQuickScan]);
 
   // Select item as active
   const selectActiveItem = useCallback((itemId: string) => {
@@ -1748,14 +2191,43 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }));
   }, []);
 
+  // Complete close only if sheet was not reopened (guards against stale animation callback)
+  const completeCloseIfNotReopened = useCallback((closeId: number) => {
+    if (closeRequestIdRef.current === closeId) {
+      // Don't allow closing while processing shelf scan
+      if (isProcessingShelfScan) {
+        return;
+      }
+      // Don't close if quick scan has produced results — the user needs to review them
+      if (Object.keys(quickScanStore).length > 0) {
+        return;
+      }
+      setShowDeepSearchSheet(false);
+      setCurrentInstruction('ready');
+    }
+  }, [isProcessingShelfScan, quickScanStore]);
+
   // Close bulk items sheet
   const closeBulkItemsSheet = useCallback(() => {
+    // Don't allow closing while processing shelf scan
+    if (isProcessingShelfScan) {
+      return;
+    }
+    closeRequestIdRef.current += 1;
+    const myCloseId = closeRequestIdRef.current;
     sheetTranslateY.value = withTiming(SCREEN_HEIGHT, {
       duration: 200,
     }, () => {
-      runOnJS(setShowDeepSearchSheet)(false);
-      runOnJS(setCurrentInstruction)('ready');
+      runOnJS(completeCloseIfNotReopened)(myCloseId);
     });
+  }, [sheetTranslateY, completeCloseIfNotReopened, isProcessingShelfScan]);
+
+  // Open bulk items sheet (cancels any in-flight close so its callback does not overwrite)
+  const openBulkItemsSheet = useCallback(() => {
+    cancelAnimation(sheetTranslateY);
+    closeRequestIdRef.current += 1;
+    setShowDeepSearchSheet(true);
+    sheetTranslateY.value = withSpring(0);
   }, [sheetTranslateY]);
 
   // First-time walkthrough: briefly show bulk modal so users discover multi-item flow.
@@ -1768,16 +2240,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   useEffect(() => {
     if (hasSeenBulkModalFtux !== false || hasTriggeredBulkModalFtuxRef.current) return;
     if (showDeepSearchSheet || showMatchSheet || showBarcodeResultModal) return;
+    if (cameraMode === 'shelf') return; // In shelf mode, don't auto-close the sheet
 
     const hasAnyPhoto = capturedPhotos.length > 0 || bulkItems.some((item) => item.photos.length > 0);
     if (!hasAnyPhoto) return;
 
     hasTriggeredBulkModalFtuxRef.current = true;
-    setShowDeepSearchSheet(true);
-    sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
+    openBulkItemsSheet();
 
     const timer = setTimeout(async () => {
-      closeBulkItemsSheet();
+      // Don't auto-close the sheet — let the user decide when to dismiss.
+      // We only mark the FTUX as seen so the walkthrough doesn't replay.
       setHasSeenBulkModalFtux(true);
       try {
         await AsyncStorage.setItem(BULK_MODAL_FTUX_KEY, '1');
@@ -1792,10 +2265,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     showDeepSearchSheet,
     showMatchSheet,
     showBarcodeResultModal,
+    cameraMode,
     capturedPhotos.length,
     bulkItems,
     closeBulkItemsSheet,
-    sheetTranslateY,
+    openBulkItemsSheet,
   ]);
 
   // Close match results sheet
@@ -1822,7 +2296,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Animate barcode sheet open
   useEffect(() => {
     if (showBarcodeResultModal) {
-      // Use same height as MatchSheet (taller sheet)
       matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.12, { damping: 70 });
     }
   }, [showBarcodeResultModal, matchSheetTranslateY]);
@@ -1840,43 +2313,47 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   }, [showMatchSheet, showDeepSearchSheet, showBarcodeResultModal, closeMatchSheet, closeBulkItemsSheet, closeBarcodeSheet]);
 
-  // When starting a broad search, close any open sheets and cancel quick scan
+  // When starting a broad search or analysis, cancel any in-progress quick scan and reset camera state
   const handleStartBroadSearch = useCallback(() => {
-    console.log('[BROAD SEARCH] Starting broad search: closing sheets and cancelling quick scan');
+    console.log('[BROAD SEARCH] Starting broad search: cancelling quick scan and resetting state');
     // Cancel any in-progress quick scan so it doesn't reopen sheets
     quickScanCancelledRef.current = true;
+    quickScanQueueRef.current = [];
     setIsAutoScanning(false);
     stopProgressAnimation();
     setShowProgressBar(false);
     setCurrentInstruction('ready');
-
-    if (showMatchSheet) {
-      closeMatchSheet();
-    }
-    if (showDeepSearchSheet) {
-      closeBulkItemsSheet();
-    }
   }, [
-    closeBulkItemsSheet,
-    closeMatchSheet,
-    showDeepSearchSheet,
-    showMatchSheet,
     stopProgressAnimation,
     setCurrentInstruction,
     setIsAutoScanning,
     setShowProgressBar,
     quickScanCancelledRef,
+    quickScanQueueRef,
   ]);
 
-  // When screen loses focus (user navigates away), close sheets so camera can resume when they return
+  // When screen loses focus (user navigates away), save draft and close sheets
   useFocusEffect(
     useCallback(() => {
       return () => {
+        quickScanQueueRef.current = [];
         setShowMatchSheet(false);
-        setShowDeepSearchSheet(false);
+        // Don't close deep search sheet if processing shelf scan
+        if (!isProcessingShelfScan) {
+          setShowDeepSearchSheet(false);
+        }
         setShowBarcodeResultModal(false);
+        // Persist scan draft when navigating away so it appears in Scan Drafts
+        if (bulkItems.length > 0 && !isHydratingRef.current) {
+          saveDraftToBackend({
+            scannedItems: bulkItems,
+            matchContext: quickScanStore,
+            shelfPhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri,
+            activeItemId,
+          });
+        }
       };
-    }, [])
+    }, [bulkItems, quickScanStore, activeItemId, shelfPhotoUri, saveDraftToBackend, isProcessingShelfScan])
   );
 
   // Animated styles
@@ -1993,8 +2470,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           onLongPress={() => {
             // Open sheet on long press if not already open
             if (!showDeepSearchSheet && !showMatchSheet && !showBarcodeResultModal) {
-              setShowDeepSearchSheet(true);
-              sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
+              openBulkItemsSheet();
             }
           }}
         />
@@ -2025,6 +2501,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                     onReorder={reorderPhotos}
                     draggedPhotoId={draggedPhotoId}
                     onPress={() => setShowViewPhotosModal(true)}
+                    onLongPress={handleImageUpload}
                   />
                 )}
               </View>
@@ -2039,100 +2516,98 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           onPastScans={() => navigation.navigate('PastScans' as never)}
         />
 
-        {/* Center overlay with instructions - hidden when user has photos (camera mode) */}
-        <CenterOverlay
-          instruction={getInstructionText(currentInstruction)}
-          isProcessing={currentInstruction === 'processing'}
-          cameraMode={cameraMode}
-          scannedBarcode={scannedBarcode}
-          onCopyBarcode={copyBarcodeToClipboard}
-          onPress={handleMatchIndicatorPress}
-          totalPhotos={bulkItems.reduce((sum, item) => sum + item.photos.length, 0)}
-        />
-
-
-        {cameraMode === 'camera' && (
-          <View style={styles.photoFrameOverlay} />
-        )}
-
-        {cameraMode === 'barcode' && (
-          <View style={styles.photoFrameOverlay}>
-            <View style={styles.scanLineContainer}>
-              <View style={styles.scanLine} />
-            </View>
-          </View>
-        )}
-
-        {ENABLE_DOC_MODES && cameraMode === 'manifest' && (
-          <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
-        )}
-
-        {ENABLE_DOC_MODES && cameraMode === 'receipt' && (
-          <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
-        )}
-
-
-
-
-        {/* Progress Bar */}
-        {showProgressBar && (
-          <ProgressBarOverlay
-            progressWidth={progressWidth}
-            spinRotation={spinRotation}
-          />
-        )}
-
-        {/* Notification Bar */}
-        {showNotification && (
-          <NotificationBar
-            message={notificationMessage}
-            opacity={notificationOpacity}
-            translateY={notificationTranslateY}
-            onPress={handleMatchIndicatorPress}
-          />
-        )}
-
-
-
-        {/* Bottom controls */}
-        <BottomControls
-          onCapture={handleCapture}
-          isCapturing={isCapturing}
-          captureButtonScale={captureButtonScale}
-          photosCount={bulkItems.reduce((sum, item) => sum + item.photos.length, 0)}
-          cameraMode={cameraMode}
-          onSetCameraMode={(mode) => {
-            setCameraMode(mode);
-            setScannedBarcode(null);
-            setCurrentInstruction('ready');
-          }}
-          onImageUpload={handleImageUpload}
-          onContinue={handleContinue}
-          hasBarcodeResult={!!barcodeSearchResult}
-          productName={barcodeSearchResult?.variant?.Title}
-          items={bulkItems}
-          activeItemId={activeItemId}
-          onSelectItem={(id) => setActiveItemId(id)}
-          onNewItem={() => {
-            const newItemId = `item-${Date.now()}`;
-            setBulkItems(prev => [...prev.map(i => ({ ...i, isActive: false })), {
-              id: newItemId,
-              photos: [],
-              isActive: true
-            }]);
-            setActiveItemId(newItemId);
-          }}
-          onOpenBarcodeEntry={
-            cameraMode === 'barcode'
-              ? () => {
-                setShowBarcodeEntry(true);
-                setManualBarcode(scannedBarcode || '');
-                setBarcodeEntryError(null);
-              }
-              : undefined
-          }
-        />
       </CameraView>
+
+      {/* Overlays & Controls (Outside CameraView to avoid touch issues) */}
+      <CenterOverlay
+        instruction={getInstructionText(currentInstruction)}
+        isProcessing={['processing', 'analyzing', 'extracting', 'optimizing', 'searching', 'recognizing'].includes(currentInstruction)}
+        cameraMode={cameraMode}
+        scannedBarcode={scannedBarcode}
+        onCopyBarcode={copyBarcodeToClipboard}
+        onPress={
+          cameraMode === 'shelf' && !showDeepSearchSheet && (isProcessingShelfScan || bulkItems.length > 0 || shelfPhotoUri)
+            ? openBulkItemsSheet
+            : handleMatchIndicatorPress
+        }
+        totalPhotos={bulkItems.reduce((sum, sumItem) => sum + sumItem.photos.length, 0)}
+      />
+
+      {cameraMode === 'camera' && (
+        <View style={styles.photoFrameOverlay} />
+      )}
+
+      {cameraMode === 'barcode' && (
+        <View style={styles.photoFrameOverlay}>
+          <View style={styles.scanLineContainer}>
+            <View style={styles.scanLine} />
+          </View>
+        </View>
+      )}
+
+      {ENABLE_DOC_MODES && cameraMode === 'manifest' && (
+        <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
+      )}
+
+      {ENABLE_DOC_MODES && cameraMode === 'receipt' && (
+        <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
+      )}
+
+      {/* Progress Bar */}
+      {showProgressBar && (
+        <ProgressBarOverlay
+          progressWidth={progressWidth}
+          spinRotation={spinRotation}
+        />
+      )}
+
+      {/* Notification Bar */}
+      {showNotification && (
+        <NotificationBar
+          message={notificationMessage}
+          opacity={notificationOpacity}
+          translateY={notificationTranslateY}
+          onPress={handleMatchIndicatorPress}
+        />
+      )}
+
+      {/* Bottom controls */}
+      <BottomControls
+        onCapture={handleCapture}
+        isCapturing={isCapturing}
+        captureButtonScale={captureButtonScale}
+        photosCount={bulkItems.reduce((sum, sumItem) => sum + sumItem.photos.length, 0)}
+        cameraMode={cameraMode}
+        onSetCameraMode={(mode) => {
+          setCameraMode(mode);
+          setScannedBarcode(null);
+          setCurrentInstruction('ready');
+        }}
+        onImageUpload={handleImageUpload}
+        onContinue={handleContinue}
+        hasBarcodeResult={!!barcodeSearchResult}
+        productName={barcodeSearchResult?.variant?.Title}
+        items={bulkItems}
+        activeItemId={activeItemId}
+        onSelectItem={(id) => setActiveItemId(id)}
+        maxItems={MAX_BATCH_ITEMS}
+        onNewItem={addNewBulkItem}
+        onOpenBarcodeEntry={
+          cameraMode === 'barcode'
+            ? () => {
+              setShowBarcodeEntry(true);
+              setManualBarcode(scannedBarcode || '');
+              setBarcodeEntryError(null);
+            }
+            : undefined
+        }
+        showDeepSearchSheet={showDeepSearchSheet}
+        onOpenSheet={
+          cameraMode === 'shelf' && (isProcessingShelfScan || bulkItems.length > 0 || shelfPhotoUri)
+            ? openBulkItemsSheet
+            : undefined
+        }
+      />
 
       {/* Match results sheet (rendered above TabBar via Modal) */}
       <Modal
@@ -2175,8 +2650,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             onStartBroadSearch={() => {
               setShowMatchSheet(false);
               matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
-              setShowDeepSearchSheet(true);
-              sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
+              openBulkItemsSheet();
             }}
           />
         ) : null}
@@ -2191,63 +2665,197 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onRequestClose={closeBulkItemsSheet}
         presentationStyle="overFullScreen"
       >
-        {showDeepSearchSheet && (() => {
-          console.log('[SHEET CONDITIONAL] Sheet IS showing - showDeepSearchSheet is true');
-          console.log('[SHEET PROPS] ==================');
-          console.log('[SHEET PROPS] Passing to BulkItemsSheet:');
-          console.log('[SHEET PROPS] - photos (capturedPhotos):', capturedPhotos.length, 'items');
-          capturedPhotos.forEach((photo, index) => {
-            console.log(`[SHEET PROPS]   Photo ${index + 1}:`, {
-              id: photo.id,
-              uri: photo.uri.substring(0, 30) + '...',
-              isCover: photo.isCover
-            });
-          });
-          console.log('[SHEET PROPS] - isBulkMode:', isBulkMode);
-          console.log('[SHEET PROPS] - bulkItems:', bulkItems.length, 'items');
-          bulkItems.forEach((item, index) => {
-            console.log(`[SHEET PROPS]   BulkItem ${index + 1}:`, {
-              id: item.id,
-              photosCount: item.photos.length,
-              isActive: item.isActive
-            });
-          });
-          console.log('[SHEET PROPS] - activeItemId:', activeItemId);
-          console.log('[SHEET PROPS] ==================');
+        {showDeepSearchSheet && (
+          <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+            {(() => {
+              console.log('[SHEET CONDITIONAL] Sheet IS showing - showDeepSearchSheet is true');
+              console.log('[SHEET PROPS] ==================');
+              console.log('[SHEET PROPS] Passing to BulkItemsSheet:');
+              console.log('[SHEET PROPS] - photos (capturedPhotos):', capturedPhotos.length, 'items');
+              capturedPhotos.forEach((photo, index) => {
+                console.log(`[SHEET PROPS]   Photo ${index + 1}:`, {
+                  id: photo.id,
+                  uri: photo.uri.substring(0, 30) + '...',
+                  isCover: photo.isCover
+                });
+              });
+              console.log('[SHEET PROPS] - isBulkMode:', isBulkMode);
+              console.log('[SHEET PROPS] - bulkItems:', bulkItems.length, 'items');
+              bulkItems.forEach((item, index) => {
+                console.log(`[SHEET PROPS]   BulkItem ${index + 1}:`, {
+                  id: item.id,
+                  photosCount: item.photos.length,
+                  isActive: item.isActive
+                });
+              });
+              console.log('[SHEET PROPS] - activeItemId:', activeItemId);
+              console.log('[SHEET PROPS] ==================');
 
-          return (
-            <BulkItemsSheet
-              onClose={closeBulkItemsSheet}
-              onStartBroadSearch={handleStartBroadSearch}
-              sheetStyle={sheetAnimatedStyle}
-              photos={capturedPhotos}
-              isBulkMode={isBulkMode}
-              bulkItems={bulkItems}
-              activeItemId={activeItemId}
-              onAddNewItem={addNewBulkItem}
-              onImageUpload={handleImageUpload}
-              onDeleteItem={deleteBulkItem}
-              onMovePhoto={movePhoto}
-              onSelectItem={selectActiveItem}
-              onSetCoverPhoto={setBulkItemCoverPhoto}
-              onRemovePhoto={removeBulkItemPhoto}
-              performAnalyze={performAnalyze}
-              sheetTranslateY={sheetTranslateY}
-              navigation={navigation}
-              jobResponse={jobResponse}
-              setJobResponse={setJobResponse}
-              quickScanStore={quickScanStore}
-              onOpenQuickMatches={openQuickMatchesForItem}
-              onOpenPhotoModal={(itemId) => {
-                selectActiveItem(itemId);
-                setShowViewPhotosModal(true);
-              }}
-              itemLoadingStates={itemLoadingStates}
-              setItemLoadingStates={setItemLoadingStates}
-              confirmedQuickMatchByItemId={confirmedQuickMatchByItemId}
-            />
-          );
-        })()}
+              return (
+                <BulkItemsSheet
+                  onClose={closeBulkItemsSheet}
+                  onStartBroadSearch={handleStartBroadSearch}
+                  sheetStyle={sheetAnimatedStyle}
+                  photos={capturedPhotos}
+                  isBulkMode={isBulkMode}
+                  bulkItems={bulkItems}
+                  activeItemId={activeItemId}
+                  onAddNewItem={addNewBulkItem}
+                  onImageUpload={handleImageUpload}
+                  onDeleteItem={deleteBulkItem}
+                  onMovePhoto={movePhoto}
+                  onSelectItem={selectActiveItem}
+                  onSetCoverPhoto={setBulkItemCoverPhoto}
+                  onRemovePhoto={removeBulkItemPhoto}
+                  performAnalyze={performAnalyze}
+                  sheetTranslateY={sheetTranslateY}
+                  navigation={navigation}
+                  jobResponse={jobResponse}
+                  setJobResponse={setJobResponse}
+                  quickScanStore={quickScanStore}
+                  onOpenQuickMatches={openQuickMatchesForItem}
+                  onRetryItemScan={(itemId) => {
+                    const targetItem = bulkItems.find(item => item.id === itemId);
+                    const firstPhoto = targetItem?.photos?.[0];
+                    if (!firstPhoto) return;
+                    performQuickScan(firstPhoto, itemId);
+                  }}
+                  onOpenPhotoModal={(itemId) => {
+                    selectActiveItem(itemId);
+                    setShowViewPhotosModal(true);
+                  }}
+                  itemLoadingStates={itemLoadingStates}
+                  setItemLoadingStates={setItemLoadingStates}
+                  confirmedQuickMatchByItemId={confirmedQuickMatchByItemId}
+                  currentInstruction={currentInstruction}
+                  onOpenLocalMatch={(itemId) => {
+                    const match = quickScanStore?.[itemId]?.serpApiData?.[0];
+                    if (match && match.isLocalMatch) {
+                      setBarcodeSearchResult({
+                        product: { id: match.productId },
+                        variant: { id: match.variantId, Title: match.title, Price: match.price }
+                      } as any);
+                      // Don't close sheet if processing shelf scan
+                      if (!isProcessingShelfScan) {
+                        setShowDeepSearchSheet(false);
+                      }
+                    }
+                  }}
+                  shelfPhotoUri={shelfPhotoUri}
+                  cameraMode={cameraMode}
+                  onSaveDraft={() => {
+                    if (bulkItems.length > 0 && !isHydratingRef.current) {
+                      saveDraftToBackend({
+                        scannedItems: bulkItems,
+                        matchContext: quickScanStore,
+                        shelfPhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri,
+                        activeItemId,
+                      });
+                    }
+                  }}
+                  onUpdateItemTitle={(id, newTitle) => {
+                    setBulkItems(prev => prev.map(item => item.id === id ? { ...item, title: newTitle } : item));
+                  }}
+                  onUpdateItemQuantity={(id, quantity) => {
+                    setBulkItems(prev => prev.map(item => item.id === id ? { ...item, quantity } : item));
+                  }}
+                  onUpdateItemQuery={(id, newQuery) => {
+                    setBulkItems(prev => prev.map(item => item.id === id ? { ...item, title: newQuery } : item));
+
+                    // Trigger a text search locally via server events for just this item
+                    (async () => {
+                      try {
+                        const token = await supabase.auth.getSession().then(({ data }: any) => data.session?.access_token);
+                        if (!token) return;
+
+                        setItemLoadingStates(prev => ({ ...prev, [id]: { isLoading: true, stage: 'Searching...', error: undefined } }));
+
+                        const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+                        const API_BASE = /localhost|127\.0\.0\.1/i.test(rawApiBase) ? 'https://api.sssync.app' : rawApiBase;
+                        const sseUrl = `${API_BASE}/api/products/orchestrate/quick-scan-stream`;
+
+                        const es = new EventSource(sseUrl, {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                          },
+                          body: JSON.stringify({
+                            textQuery: newQuery,
+                            mode: 'ocr-vlm-search'
+                          })
+                        });
+
+                        es.addEventListener("message", (event: any) => {
+                          if (!event.data) return;
+                          try {
+                            const parsed = JSON.parse(event.data);
+                            if (parsed.type === 'SEARCH_RESULT') {
+                              const res = parsed.result;
+                              if (res.matches && res.matches.length > 0) {
+                                setQuickScanStore(prev => ({
+                                  ...prev,
+                                  [id]: {
+                                    matchData: {
+                                      systemAction: 'show_multiple_matches',
+                                      confidence: res.confidence || 'medium',
+                                      rankedCandidates: res.matches,
+                                      totalMatches: res.matches.length
+                                    },
+                                    serpApiData: res.matches.map((m: any) => ({ ...m, queryKey: newQuery }))
+                                  }
+                                }));
+                              }
+                            } else if (parsed.type === 'COMPLETE') {
+                              setItemLoadingStates(prev => {
+                                const next = { ...prev };
+                                delete next[id];
+                                return next;
+                              });
+                              es.close();
+                            } else if (parsed.type === 'ERROR') {
+                              setItemLoadingStates(prev => ({
+                                ...prev,
+                                [id]: {
+                                  isLoading: false,
+                                  stage: 'Search failed',
+                                  error: parsed?.message || 'Unable to search catalog right now.',
+                                },
+                              }));
+                              es.close();
+                            }
+                          } catch (e) { }
+                        });
+
+                        es.addEventListener("error", () => {
+                          setItemLoadingStates(prev => ({
+                            ...prev,
+                            [id]: {
+                              isLoading: false,
+                              stage: 'Search failed',
+                              error: 'Unable to search catalog right now.',
+                            },
+                          }));
+                          es.close();
+                        });
+                      } catch (err) {
+                        console.log("[Re-Search Error]", err);
+                        setItemLoadingStates(prev => ({
+                          ...prev,
+                          [id]: {
+                            isLoading: false,
+                            stage: 'Search failed',
+                            error: 'Unable to search catalog right now.',
+                          },
+                        }));
+                      }
+                    })();
+                  }}
+                />
+              );
+            })()}
+          </View>
+        )}
       </Modal>
 
       {/* View Photos Modal - photo management with item switcher */}
@@ -2453,6 +3061,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         ) : null}
       </Modal>
 
+
       {/* Tier Selector Modal (Paywall) */}
       <TierSelectorModal
         visible={showTierSelector}
@@ -2586,11 +3195,14 @@ const BottomControls: React.FC<{
   hasBarcodeResult?: boolean;
   productName?: string;
   // Item navigation props
-  items: Array<{ id: string; photos: any[] }>;
+  items: Array<{ id: string; photos: any[]; title?: string }>;
   activeItemId: string | null;
   onSelectItem: (id: string) => void;
   onNewItem: () => void;
   onOpenBarcodeEntry?: () => void;
+  showDeepSearchSheet?: boolean;
+  onOpenSheet?: () => void;
+  maxItems?: number;
 }> = ({
   onCapture,
   isCapturing,
@@ -2607,6 +3219,9 @@ const BottomControls: React.FC<{
   onSelectItem,
   onNewItem,
   onOpenBarcodeEntry,
+  showDeepSearchSheet = false,
+  onOpenSheet,
+  maxItems = MAX_BATCH_ITEMS,
 }) => {
     const activeIndex = items.findIndex(i => i.id === activeItemId);
     const totalItems = items.length;
@@ -2650,8 +3265,8 @@ const BottomControls: React.FC<{
     }, [onSetCameraMode, popupScale, popupOpacity]);
 
     const modes: CameraMode[] = ENABLE_DOC_MODES
-      ? ['camera', 'barcode', 'manifest', 'receipt']
-      : ['camera', 'barcode'];
+      ? ['camera', 'barcode', 'shelf', 'manifest', 'receipt']
+      : ['camera', 'barcode', 'shelf'];
 
     const POPUP_WIDTH = 90 * modes.length;
     const ITEM_WIDTH = POPUP_WIDTH / modes.length;
@@ -2666,12 +3281,14 @@ const BottomControls: React.FC<{
     // Pan gesture handler callback (non-deprecated approach)
     const onPanGestureEvent = useCallback((event: PanGestureHandlerGestureEvent) => {
       const x = event.nativeEvent.x;
+      const modeIndex = Math.floor(x / ITEM_WIDTH);
+      const activeModes: CameraMode[] = ENABLE_DOC_MODES
+        ? ['camera', 'barcode', 'shelf', 'manifest', 'receipt']
+        : ['camera', 'barcode', 'shelf'];
       let newMode: CameraMode | null = null;
-
-      if (x >= 0 && x < ITEM_WIDTH) newMode = 'camera';
-      else if (x >= ITEM_WIDTH && x < ITEM_WIDTH * 2) newMode = 'barcode';
-      else if (x >= ITEM_WIDTH * 2 && x < ITEM_WIDTH * 3) newMode = 'manifest';
-      else if (x >= ITEM_WIDTH * 3 && x <= ITEM_WIDTH * 4) newMode = 'receipt';
+      if (modeIndex >= 0 && modeIndex < activeModes.length) {
+        newMode = activeModes[modeIndex];
+      }
 
       if (newMode && newMode !== hoveredMode) {
         setHoveredMode(newMode);
@@ -2693,6 +3310,7 @@ const BottomControls: React.FC<{
         case 'barcode': return 'barcode-scan';
         case 'manifest': return 'file-document-outline';
         case 'receipt': return 'receipt';
+        case 'shelf': return 'layers';
       }
     };
 
@@ -2702,6 +3320,7 @@ const BottomControls: React.FC<{
         case 'barcode': return 'Barcode';
         case 'manifest': return ENABLE_DOC_MODES ? 'Manifest' : '';
         case 'receipt': return ENABLE_DOC_MODES ? 'Receipt' : '';
+        case 'shelf': return 'Shelf';
       }
     };
 
@@ -2764,6 +3383,7 @@ const BottomControls: React.FC<{
                         style={[
                           styles.modePopupItem,
                           activeMode === mode && styles.modePopupItemActive,
+                          //activeMode === mode && mode === 'shelf' && { backgroundColor: '#FF8A65' }
                         ]}
                         onPress={() => selectMode(mode)}
                         activeOpacity={1}
@@ -2796,9 +3416,9 @@ const BottomControls: React.FC<{
               </Animated.View>
             )}
 
-            {/* Current mode button (collapsed state) */}
+            {/* Current mode button MODE (collapsed state) cameraMode === 'shelf' && { backgroundColor: '#FF8A65', borderColor: '#FF8A65' } */}
             <TouchableOpacity
-              style={styles.modeButton}
+              style={[styles.modeButton]}
               onPress={toggleModePopup}
             >
               <Icon
@@ -2811,9 +3431,18 @@ const BottomControls: React.FC<{
           </View>
         </Animated.View>
 
-        {(cameraMode === 'barcode' || photosCount >= 1) && (
+        {((cameraMode === 'shelf' && !showDeepSearchSheet && (items.length > 0 || onOpenSheet)) || (cameraMode !== 'shelf' && (cameraMode === 'barcode' || photosCount >= 1 || items.some((i) => i.title)))) && (
           <Animated.View entering={SlideInDown.delay(700)} style={styles.continueButtonContainer}>
-            {cameraMode === 'barcode' ? (
+            {cameraMode === 'shelf' && !showDeepSearchSheet && onOpenSheet ? (
+              <TouchableOpacity
+                style={styles.continueButton}
+                onPress={onOpenSheet}
+              >
+                <Text style={styles.continueButtonText} numberOfLines={1}>
+                  Move to listing flow
+                </Text>
+              </TouchableOpacity>
+            ) : cameraMode === 'barcode' ? (
               hasBarcodeResult ? (
                 <View style={styles.barcodeActionsRow}>
                   {onOpenBarcodeEntry && (
@@ -2865,9 +3494,9 @@ const BottomControls: React.FC<{
                   style={styles.continueButton}
                   onPress={onContinue}
                 >
-                  {totalItems > 1 && (
+                  {totalItems > 0 && (
                     <View style={styles.itemCountBadge}>
-                      <Text style={styles.itemCountBadgeText}>{activeIndex + 1}/{totalItems}</Text>
+                      <Text style={styles.itemCountBadgeText}>{totalItems}/{maxItems}</Text>
                     </View>
                   )}
                   <Text style={styles.continueButtonText} numberOfLines={1}>
@@ -2887,9 +3516,12 @@ const BottomControls: React.FC<{
                   <TouchableOpacity
                     style={[styles.itemNavArrow, styles.itemNavNewButton]}
                     onPress={onNewItem}
+                    disabled={totalItems >= maxItems}
                   >
-                    <Icon name="plus" size={24} color="#FFF" />
-                    <Text style={styles.continueButtonText}>New Item</Text>
+                    <Icon name="plus" size={24} color={totalItems >= maxItems ? 'rgba(255,255,255,0.4)' : '#FFF'} />
+                    <Text style={[styles.continueButtonText, totalItems >= maxItems && { color: 'rgba(255,255,255,0.6)' }]}>
+                      {totalItems >= maxItems ? 'Limit reached' : 'New Item'}
+                    </Text>
                   </TouchableOpacity>
                 )}
               </View>
@@ -2920,6 +3552,8 @@ const MatchResultsSheet: React.FC<{
   fetchPricingResearch?: (title: string) => Promise<{ low?: number; median?: number; high?: number; recommended?: number; error?: string } | null>;
   navigation?: any;
 }> = ({ matchData, onClose, sheetStyle, onUseForSelection, onStartBroadSearch, onConfirmMatch, currentMatchItemId, fetchPricingResearch, navigation }) => {
+  const insets = useSafeAreaInsets();
+  const bottomMargin = Math.max(insets.bottom, 20);
   // Use index-based selection to avoid duplicate id issues
   const [selectedMatchIndices, setSelectedMatchIndices] = React.useState<Set<number>>(new Set());
   const [pricingResearch, setPricingResearch] = React.useState<{ low?: number; median?: number; high?: number; recommended?: number } | null>(null);
@@ -2931,8 +3565,18 @@ const MatchResultsSheet: React.FC<{
   const [shippingModalVisible, setShippingModalVisible] = React.useState(false);
   const [shippingModalData, setShippingModalData] = React.useState<{ min: number; max: number } | null>(null);
 
-  const firstTitle = matchData.rankedCandidates[0]?.title;
+  const firstCandidate = matchData.rankedCandidates[0];
+  const firstTitle = firstCandidate?.title;
+  // Check if candidate already has pre-fetched pricing research from quick scan enrichment
+  const preFetchedPricing = (firstCandidate as any)?.pricingResearch;
+
   React.useEffect(() => {
+    // If pre-fetched pricing research data exists from quick scan, use it directly
+    if (preFetchedPricing && typeof preFetchedPricing.low === 'number') {
+      setPricingResearch(preFetchedPricing);
+      setPricingResearchLoading(false);
+      return;
+    }
     if (!firstTitle || !fetchPricingResearch) return;
     setPricingResearchLoading(true);
     setPricingResearch(null);
@@ -2942,7 +3586,7 @@ const MatchResultsSheet: React.FC<{
       })
       .catch(() => { })
       .finally(() => setPricingResearchLoading(false));
-  }, [firstTitle, fetchPricingResearch]);
+  }, [firstTitle, fetchPricingResearch, preFetchedPricing]);
 
   const toggleMatchSelection = (index: number) => {
     setSelectedMatchIndices(prev => {
@@ -2980,7 +3624,7 @@ const MatchResultsSheet: React.FC<{
   };
 
   return (
-    <Animated.View style={[styles.matchSheet, sheetStyle]}>
+    <Animated.View style={[styles.matchSheet, sheetStyle, { paddingBottom: 230 }]}>
       <ScrollView
         style={[
           styles.itemsScrollContainer,
@@ -2989,23 +3633,19 @@ const MatchResultsSheet: React.FC<{
         contentContainerStyle={[
           styles.scrollContent,
           {
-            flexGrow: 1
+            flexGrow: 1,
+            paddingBottom: 0
           }
         ]}
       >
         <View style={styles.sheetHeader}>
-          <TouchableOpacity>
-            <View style={styles.closeButtonInner}>
-              <Icon name="close" size={20} color="#FFF" />
-            </View>
-          </TouchableOpacity>
-          <Text style={styles.sheetTitle}>
+          <View style={styles.sheetHeaderSpacer} />
+          <Text style={[styles.sheetTitle, { flex: 1 }]}>
             {matchData.totalMatches} Match{matchData.totalMatches > 1 ? 'es' : ''} Found
           </Text>
-          <TouchableOpacity onPress={onClose}>
-            <View style={styles.closeButtonInner}>
-              <Icon name="close" size={20} color="#999" />
-            </View>
+          <TouchableOpacity onPress={onClose} style={styles.exitButton} activeOpacity={0.8} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Icon name="close" size={18} color="#64748B" />
+            <Text style={styles.exitButtonText}>Exit</Text>
           </TouchableOpacity>
         </View>
 
@@ -3017,20 +3657,17 @@ const MatchResultsSheet: React.FC<{
           {matchData.rankedCandidates.map((candidate, index) => {
             const isSelected = selectedMatchIndices.has(index);
             const hasPrice = typeof candidate.price === 'number' && candidate.price > 0;
-            const usePricingResearch = !hasPrice && index === 0 && pricingResearch && typeof pricingResearch.low === 'number';
+            // Use pricing research for price display: prefer candidate's pre-fetched data, then component-level data
+            const candidatePricing = (candidate as any)?.pricingResearch;
+            const effectivePricing = (index === 0) ? (pricingResearch || candidatePricing) : candidatePricing;
+            const usePricingResearch = !hasPrice && effectivePricing && typeof effectivePricing.low === 'number';
             const priceText = hasPrice
               ? `$${candidate.price}`
               : usePricingResearch
-                ? `$${pricingResearch.low} – $${pricingResearch.high ?? pricingResearch.median ?? pricingResearch.low}${pricingResearch.median != null ? ` (avg $${pricingResearch.median})` : ''}`
+                ? `$${effectivePricing.low} – $${effectivePricing.high ?? effectivePricing.median ?? effectivePricing.low}${effectivePricing.median != null ? ` (avg $${effectivePricing.median})` : ''}`
                 : pricingResearchLoading && index === 0
                   ? '…'
                   : '—';
-            const shippingMin = (candidate as any).estimatedShippingMin;
-            const shippingMax = (candidate as any).estimatedShippingMax;
-            const shippingText =
-              typeof shippingMin === 'number' && typeof shippingMax === 'number'
-                ? `Ship: $${shippingMin.toFixed(2)}-$${shippingMax.toFixed(2)}`
-                : null;
 
             return (
               <TouchableOpacity
@@ -3048,8 +3685,8 @@ const MatchResultsSheet: React.FC<{
 
                   <View style={{ flexDirection: 'row', gap: 6, marginTop: 6, marginBottom: 4 }}>
                     <TouchableOpacity
-                      disabled={(index !== 0) || !pricingResearch || pricingResearchLoading}
-                      onPress={(index === 0 && pricingResearch && !pricingResearchLoading) ? () => setPricingResearchModalVisible(true) : undefined}
+                      disabled={(index !== 0) || (!pricingResearch && !candidatePricing) || pricingResearchLoading}
+                      onPress={(index === 0 && (pricingResearch || candidatePricing) && !pricingResearchLoading) ? () => setPricingResearchModalVisible(true) : undefined}
                       style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#F3F4F6', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, borderWidth: 1, borderColor: '#E5E7EB' }}
                     >
                       <Icon name="tag-outline" size={12} color="#4B5563" style={{ marginRight: 4 }} />
@@ -3057,21 +3694,6 @@ const MatchResultsSheet: React.FC<{
                         {priceText}
                       </Text>
                     </TouchableOpacity>
-
-                    {shippingText && (
-                      <TouchableOpacity
-                        onPress={() => {
-                          setShippingModalData({ min: shippingMin, max: shippingMax });
-                          setShippingModalVisible(true);
-                        }}
-                        style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0FDF4', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, borderWidth: 1, borderColor: '#BBF7D0' }}
-                      >
-                        <Icon name="truck-outline" size={12} color="#166534" style={{ marginRight: 4 }} />
-                        <Text style={{ fontSize: 12, fontWeight: '600', color: '#166534' }}>
-                          {shippingText}
-                        </Text>
-                      </TouchableOpacity>
-                    )}
                   </View>
 
                   {candidate.sourceUrl && (() => {
@@ -3170,7 +3792,7 @@ const BulkItemsSheet: React.FC<{
   sheetStyle: any;
   photos: CapturedPhoto[];
   isBulkMode: boolean;
-  bulkItems: Array<{ id: string; photos: CapturedPhoto[]; title?: string; isActive?: boolean; }>;
+  bulkItems: Array<{ id: string; photos: CapturedPhoto[]; title?: string; isActive?: boolean; preSelectedSource?: any; quantity?: number; }>;
   activeItemId: string | null;
   onAddNewItem: () => void;
   onImageUpload: () => void;
@@ -3186,11 +3808,20 @@ const BulkItemsSheet: React.FC<{
   navigation: any;
   quickScanStore?: Record<string, { matchData: MatchResponse; serpApiData: any[] }>;
   onOpenQuickMatches?: (itemId: string) => void;
+  onRetryItemScan?: (itemId: string) => void;
   onOpenPhotoModal?: (itemId: string) => void;
-  itemLoadingStates: Record<string, { isLoading: boolean; stage: string; }>;
-  setItemLoadingStates: React.Dispatch<React.SetStateAction<Record<string, { isLoading: boolean; stage: string; }>>>;
+  itemLoadingStates: Record<string, ItemLoadingState>;
+  setItemLoadingStates: React.Dispatch<React.SetStateAction<Record<string, ItemLoadingState>>>;
   confirmedQuickMatchByItemId?: Record<string, { serpApiData: any[]; preSelectedIndices: number[] }>;
-}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, confirmedQuickMatchByItemId = {} }) => {
+  currentInstruction?: string | null;
+  onOpenLocalMatch?: (itemId: string) => void;
+  shelfPhotoUri?: string | null;
+  onUpdateItemQuery?: (id: string, newQuery: string) => void;
+  onUpdateItemTitle?: (id: string, newTitle: string) => void;
+  onUpdateItemQuantity?: (id: string, quantity: number) => void;
+  onSaveDraft?: () => void;
+  cameraMode?: 'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf';
+}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onRetryItemScan, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, confirmedQuickMatchByItemId = {}, currentInstruction, onOpenLocalMatch, shelfPhotoUri, onUpdateItemQuery, onUpdateItemTitle, onUpdateItemQuantity, onSaveDraft, cameraMode = 'camera' }) => {
 
   console.log('[SHEET RENDER] ==================');
   console.log('[SHEET RENDER] BulkItemsSheet RE-RENDERED at:', new Date().toISOString());
@@ -3202,7 +3833,7 @@ const BulkItemsSheet: React.FC<{
   console.log('[SHEET RENDER] ==================');
 
   // SIMPLIFIED: Always use bulkItems (no more virtual items)
-  let displayItems: Array<{ id: string; photos: CapturedPhoto[]; title?: string; isActive?: boolean; }>;
+  let displayItems: Array<{ id: string; photos: CapturedPhoto[]; title?: string; isActive?: boolean; quantity?: number; }>;
 
   console.log('[DISPLAY LOGIC] ==================');
   console.log('[DISPLAY LOGIC] Using simplified logic - always show bulkItems');
@@ -3224,6 +3855,43 @@ const BulkItemsSheet: React.FC<{
   console.log('[DISPLAY LOGIC] ==================');
 
   const totalItems = displayItems.length;
+  const [editingItemId, setEditingItemId] = React.useState<string | null>(null);
+  const [editQueryText, setEditQueryText] = React.useState("");
+  const [countDraftByItemId, setCountDraftByItemId] = React.useState<Record<string, string>>({});
+  const insets = useSafeAreaInsets();
+
+  useEffect(() => {
+    setCountDraftByItemId(prev => {
+      const next: Record<string, string> = {};
+      for (const item of bulkItems) {
+        const existingDraft = prev[item.id];
+        if (typeof existingDraft === 'string') {
+          next[item.id] = existingDraft;
+          continue;
+        }
+        const quantity = item.quantity ?? 1;
+        next[item.id] = String(quantity);
+      }
+      return next;
+    });
+  }, [bulkItems]);
+
+  const handleCountDraftChange = useCallback((itemId: string, rawText: string) => {
+    const sanitized = rawText
+      .replace(',', '.')
+      .replace(/[^0-9.]/g, '')
+      .replace(/(\..*?)\..*/g, '$1');
+    setCountDraftByItemId(prev => ({ ...prev, [itemId]: sanitized }));
+  }, []);
+
+  const commitCountDraft = useCallback((itemId: string) => {
+    const draft = (countDraftByItemId[itemId] ?? '').trim();
+    const parsed = Number.parseFloat(draft);
+    const quantity = Number.isFinite(parsed) && parsed > 0 ? Number(parsed.toFixed(2)) : 1;
+
+    setCountDraftByItemId(prev => ({ ...prev, [itemId]: String(quantity) }));
+    onUpdateItemQuantity?.(itemId, quantity);
+  }, [countDraftByItemId, onUpdateItemQuantity]);
 
   console.log('[SHEET DEBUG] ==================');
   console.log('[SHEET DEBUG] isBulkMode:', isBulkMode);
@@ -3235,103 +3903,196 @@ const BulkItemsSheet: React.FC<{
   console.log('[SHEET DEBUG] Sheet State:', totalItems === 0 ? 'EMPTY' : 'HAS_ITEMS');
   console.log('[SHEET DEBUG] ==================');
 
-  // Fixed height at 60% of screen
-  const sheetMaxHeight = SCREEN_HEIGHT * 0.7;
-  const headerHeight = 160; // Increased for debug sections
-  const footerHeight = 120; // Height for fixed bottom actions
-  const scrollableHeight = Math.max(200, sheetMaxHeight - headerHeight - footerHeight);
+  // Keep a tall, consistent sheet so actions never get clipped on smaller devices.
+  const sheetMaxHeight = SCREEN_HEIGHT * 0.88;
 
   console.log('[SHEET LAYOUT] Heights calculated:', {
     screenHeight: SCREEN_HEIGHT,
     sheetMaxHeight,
-    headerHeight,
-    footerHeight,
-    scrollableHeight
   });
-
   const dynamicSheetStyle = useAnimatedStyle(() => ({
-    transform: sheetStyle.transform,
+    transform: [{ translateY: sheetTranslateY.value }],
     height: sheetMaxHeight,
   }));
 
+  const bottomMargin = Math.max(insets.bottom, 20);
+
+  const hasLoadingItems = Object.values(itemLoadingStates || {}).some(state => state.isLoading);
+  const hasAnyPhotos = displayItems.some(item => item.photos.length > 0);
+  const hasAnyItems = totalItems > 0;
+  const shouldShowBottomActions =
+    cameraMode === 'shelf'
+      ? true
+      : hasAnyItems || hasAnyPhotos;
+
+  // Shared handler: analyze and navigate to match/generate flow (accounts for quick scan selections)
+  const handleAnalyzeAndNavigate = React.useCallback(async () => {
+    onSaveDraft?.();
+    const firstPhotos = bulkItems.map(item => item.photos[0]).filter(Boolean);
+    if (firstPhotos.length === 0) {
+      Alert.alert('No Photos', 'Please take some photos first before searching.');
+      return;
+    }
+
+    onStartBroadSearch();
+
+    const loadingStates: Record<string, ItemLoadingState> = {};
+    bulkItems.forEach(item => {
+      if (item.photos.length > 0) {
+        loadingStates[item.id] = { isLoading: true, stage: 'Processing...' };
+      }
+    });
+    setItemLoadingStates(loadingStates);
+
+    try {
+      const jobResponseData: JobResponse = await performAnalyze(firstPhotos);
+      console.log('[ANALYZE] Job Response:', jobResponseData);
+      setJobResponse(jobResponseData);
+      const jobId = jobResponseData?.jobId;
+
+      if (jobId) {
+        const mergedConfirmedQuickMatch = { ...confirmedQuickMatchByItemId };
+        bulkItems.forEach(item => {
+          if (item.preSelectedSource) {
+            mergedConfirmedQuickMatch[item.id] = {
+              serpApiData: [item.preSelectedSource],
+              preSelectedIndices: [0]
+            };
+          }
+        });
+
+        navigation.navigate('LoadingScreen', {
+          processType: 'match',
+          payload: {
+            jobId,
+            bulkItems,
+            firstPhotos,
+            confirmedQuickMatchByItemId: mergedConfirmedQuickMatch,
+            skipMatchSelection: true,
+            autoGenerateAllPlatforms: true,
+          },
+          onCompleteRoute: {
+            screen: 'MatchSelectionScreen',
+            params: {
+              jobResponse: jobResponseData,
+              response: {
+                jobId,
+                bulkItems,
+                firstPhotos,
+                confirmedQuickMatchByItemId: mergedConfirmedQuickMatch,
+              },
+            },
+          },
+        });
+      } else {
+        Alert.alert('Error', 'Failed to start analysis. Please try again.');
+      }
+    } catch (error) {
+      console.error('[ANALYZE] Error:', error);
+      Alert.alert('Error', 'Failed to start analysis. Please try again.');
+    }
+  }, [
+    bulkItems,
+    confirmedQuickMatchByItemId,
+    performAnalyze,
+    onStartBroadSearch,
+    setJobResponse,
+    setItemLoadingStates,
+    navigation,
+    onSaveDraft,
+  ]);
+
   return (
     <Animated.View style={[styles.bulkItemsSheet, dynamicSheetStyle]}>
-      {/* Drag Handle */}
-      <PanGestureHandler
-        onGestureEvent={(event) => {
-          const { translationY } = event.nativeEvent;
-          const minY = SCREEN_HEIGHT * 0.1; // Maximum expanded (80% height)
-          const maxY = SCREEN_HEIGHT * 0.6; // Minimum height (40% height)
-          const currentY = SCREEN_HEIGHT * 0.6; // Current position (60% height)
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 84 : 0}
+      >
+        {/* Drag Handle */}
+        <PanGestureHandler
+          onGestureEvent={(event) => {
+            const { translationY } = event.nativeEvent;
+            const minY = 0; // Fully visible
+            const maxY = SCREEN_HEIGHT * 0.5; // Drag down before close
+            const currentY = sheetTranslateY.value;
 
-          // Calculate new position based on drag
-          const newY = Math.max(minY, Math.min(maxY, currentY + translationY * 0.5));
-          sheetTranslateY.value = newY;
-        }}
-        onHandlerStateChange={(event) => {
-          if (event.nativeEvent.state === State.END) {
-            const { velocityY } = event.nativeEvent;
+            // Calculate new position based on drag
+            const newY = Math.max(minY, Math.min(maxY, currentY + translationY * 0.5));
+            sheetTranslateY.value = newY;
+          }}
+          onHandlerStateChange={(event) => {
+            if (event.nativeEvent.state === State.END) {
+              const { velocityY } = event.nativeEvent;
 
-            // Snap to positions based on velocity
-            if (velocityY > 500) {
-              // Fast downward swipe - close completely
-              onClose();
-            } else if (velocityY < -500) {
-              // Fast upward swipe - expand to max
-              sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2);
-            } else {
-              // Snap to nearest position
-              const currentY = sheetTranslateY.value;
-              const midPoint = SCREEN_HEIGHT * 0.4;
-
-              if (currentY < midPoint) {
-                // Closer to top - expand
-                sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2);
+              // Snap to positions based on velocity
+              if (velocityY > 500) {
+                // Fast downward swipe - close completely
+                onClose();
+              } else if (velocityY < -500) {
+                // Fast upward swipe - expand to fully visible
+                sheetTranslateY.value = withSpring(0);
               } else {
-                // Closer to middle - default
-                sheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.4);
+                // Snap to nearest position
+                const currentY = sheetTranslateY.value;
+                const midPoint = SCREEN_HEIGHT * 0.25;
+
+                if (currentY < midPoint) {
+                  // Closer to top - stay fully visible
+                  sheetTranslateY.value = withSpring(0);
+                } else {
+                  // Closer to bottom - default open
+                  sheetTranslateY.value = withSpring(0);
+                }
               }
             }
-          }
-        }}
-      >
-        <Animated.View style={styles.dragHandle}>
-          <TouchableOpacity onPress={onClose} style={styles.dragHandleButton}>
-            <View style={styles.dragHandleBar} />
-          </TouchableOpacity>
-        </Animated.View>
-      </PanGestureHandler>
+          }}
+        >
+          <Animated.View style={styles.dragHandle}>
+            <TouchableOpacity onPress={onClose} style={styles.dragHandleButton}>
+              <View style={styles.dragHandleBar} />
+            </TouchableOpacity>
+          </Animated.View>
+        </PanGestureHandler>
 
-      <View style={styles.sheetHeader}>
-        <TouchableOpacity onPress={onClose}>
-          <View style={styles.closeButtonInner}>
-            <Icon name="close" size={20} color="#999" />
-          </View>
+        <View style={styles.sheetHeader}>
+        <View style={styles.sheetHeaderSpacer} />
+        <View style={{ flex: 1, alignItems: 'center' }}>
+          <Text style={styles.sheetTitle}>
+            {totalItems === 0
+              ? (cameraMode === 'shelf' ? 'Scan a shelf' : 'Ready to Create Items')
+              : `Analyze & List ${totalItems} New Item${totalItems > 1 ? 's' : ''}`
+            }
+          </Text>
+          <Text style={{ marginTop: 2, fontSize: 12, color: '#64748B', fontWeight: '600' }}>
+            {totalItems}/{MAX_BATCH_ITEMS}
+          </Text>
+        </View>
+        <TouchableOpacity
+          onPress={onClose}
+          style={styles.exitButton}
+          activeOpacity={0.8}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Icon name="close" size={18} color="#64748B" />
+          <Text style={styles.exitButtonText}>Exit</Text>
         </TouchableOpacity>
-        <Text style={styles.sheetTitle}>
-          {totalItems === 0
-            ? 'Ready to Create Items'
-            : `Analyze & List ${totalItems} New Item${totalItems > 1 ? 's' : ''}`
-          }
-        </Text>
-
-        <View style={{ height: 4, width: 4 }} />
 
         {/* New Item button
         <TouchableOpacity style={styles.headerNewItemButton} onPress={onAddNewItem}>
           <Icon name="plus" size={20} color="#93C822" />
         </TouchableOpacity>
          */}
-      </View>
+        </View>
 
 
-      {/* Main Camera View */}
-      <View style={styles.sheetContent}>
+        {/* Main Camera View */}
+        <View style={styles.sheetContent}>
 
 
         <Text style={styles.sheetSubtitle}>
           {totalItems === 0
-            ? 'Take a photo to automatically create your first item'
+            ? (cameraMode === 'shelf' ? 'One photo, we detect all items' : 'Take a photo to automatically create your first item')
             : ''
           }
         </Text>
@@ -3340,303 +4101,383 @@ const BulkItemsSheet: React.FC<{
         <ScrollView
           style={[
             styles.itemsScrollContainer,
-            {
-              height: scrollableHeight,
-            }
           ]}
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={true}
           contentContainerStyle={[
             styles.scrollContent,
             {
-              flexGrow: 1
+              flexGrow: 1,
+              paddingBottom: bottomMargin
             }
           ]}
         >
           {displayItems.length === 0 ? (
             (() => {
+              if (currentInstruction && currentInstruction !== 'ready') {
+                if (shelfPhotoUri) {
+                  return (
+                    <View style={{ height: 350, borderRadius: 16, overflow: 'hidden', margin: 20, backgroundColor: '#000' }}>
+                      <Image source={{ uri: shelfPhotoUri }} style={{ width: '100%', height: '100%', opacity: 0.5 }} resizeMode="cover" />
+                      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' }}>
+                        <ActivityIndicator size="large" color="#ffffff" style={{ marginBottom: 16, transform: [{ scale: 1.2 }] }} />
+                        <Text style={{ fontSize: 18, color: '#ffffff', fontWeight: '600', textAlign: 'center', paddingHorizontal: 20 }}>
+                          {'Recognizing...'}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                }
+                return (
+                  <View style={{ padding: 20 }}>
+                    {/* Skeleton 1 */}
+                    <View style={[styles.bulkItemContainer, { opacity: 0.7 }]}>
+                      <View style={styles.itemHeader}>
+                        <View style={[styles.itemLabelContainer, { width: 100, height: 20, backgroundColor: '#E0E0E0', borderRadius: 4 }]} />
+                        <View style={[styles.loadingBadge, { width: 80, height: 20, backgroundColor: '#E0E0E0', borderRadius: 10 }]} />
+                      </View>
+                      <View style={[styles.photoSlotsContainer, { marginTop: 15 }]}>
+                        <View style={[styles.photoSlot, { backgroundColor: '#F5F5F5' }]} />
+                        <View style={[styles.addPhotoButton, { backgroundColor: '#F5F5F5' }]} />
+                      </View>
+                    </View>
+                    {/* Skeleton 2 */}
+                    <View style={[styles.bulkItemContainer, { opacity: 0.4, marginTop: 10 }]}>
+                      <View style={styles.itemHeader}>
+                        <View style={[styles.itemLabelContainer, { width: 120, height: 20, backgroundColor: '#E0E0E0', borderRadius: 4 }]} />
+                      </View>
+                      <View style={[styles.photoSlotsContainer, { marginTop: 15 }]}>
+                        <View style={[styles.photoSlot, { backgroundColor: '#F5F5F5' }]} />
+                        <View style={[styles.addPhotoButton, { backgroundColor: '#F5F5F5' }]} />
+                      </View>
+                    </View>
+
+                    <Text style={{ marginTop: 24, fontSize: 16, color: '#666', textAlign: 'center', fontWeight: '500' }}>
+                      {'Recognizing...'}
+                    </Text>
+                  </View>
+                );
+              }
+
               console.log('[RENDER] Showing EMPTY STATE (no items to display)');
               return (
-                <View style={{ padding: 20, alignItems: 'center' }}>
+                <TouchableOpacity
+                  style={{ padding: 20, alignItems: 'center' }}
+                  onPress={onImageUpload}
+                  activeOpacity={0.8}
+                >
                   <Icon name="camera-plus-outline" size={48} color="#ccc" />
                   <Text style={{ marginTop: 12, fontSize: 16, color: '#666', textAlign: 'center' }}>
-                    Take your first photo to get started
+                    {cameraMode === 'shelf' ? 'Scan multiple items' : 'Take your first photo to get started'}
                   </Text>
                   <Text style={{ marginTop: 4, fontSize: 14, color: '#999', textAlign: 'center' }}>
-                    The first photo of each item gets automatically scanned
+                    {cameraMode === 'shelf' ? 'Tap to capture' : 'Tap to take or upload a photo'}
                   </Text>
-                </View>
+                </TouchableOpacity>
               );
             })()
           ) : (
             (() => {
               console.log('[RENDER] Showing', displayItems.length, 'ITEMS');
-              return displayItems.map((item, id) => {
-                const loadingState = itemLoadingStates[item.id];
-                const matchInfo = confirmedQuickMatchByItemId?.[item.id];
-                console.log(`[RENDER] Rendering Item ${id + 1}:`, {
-                  id: item.id,
-                  photosCount: item.photos.length,
-                  isActive: item.isActive,
-                  hasQuickMatches: quickScanStore?.[item.id] ? 'YES' : 'NO',
-                  quickMatchCount: quickScanStore?.[item.id]?.matchData?.totalMatches || 0,
-                  isLoading: loadingState?.isLoading || false,
-                  loadingStage: loadingState?.stage
-                });
-                return (
-                  <TouchableOpacity
-                    key={`bulk-item-${item.id}`}
-                    style={[
-                      styles.bulkItemContainer,
-                      item.isActive && styles.activeItemContainer,
-
-                      { backgroundColor: item.isActive ? '#e8f5e8' : '#ffffff' }
-                    ]}
-                    onPress={() => onSelectItem(item.id)}
-                  >
-                    <View style={styles.itemHeader}>
-                      <View style={styles.itemLabelContainer}>
-                        <Text style={[
-                          styles.itemLabel,
-                          item.isActive && styles.activeItemLabel
-                        ]}>
-                          Item {id + 1}
+              return (
+                <>
+                  {/* Show shelf photo at top if we are still processing/searching */}
+                  {shelfPhotoUri && ['extracting', 'optimizing', 'searching'].includes(currentInstruction || '') && (
+                    <View style={{ height: 200, borderRadius: 12, overflow: 'hidden', marginBottom: 16, backgroundColor: '#000' }}>
+                      <Image source={{ uri: shelfPhotoUri }} style={{ width: '100%', height: '100%', opacity: 0.6 }} resizeMode="cover" />
+                      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' }}>
+                        <ActivityIndicator size="small" color="#ffffff" style={{ marginBottom: 8 }} />
+                        <Text style={{ fontSize: 14, color: '#ffffff', fontWeight: '600' }}>
+                          {'Recognizing...'}
                         </Text>
-                        {item.isActive && (
-                          <View style={styles.activeItemBadge}>
-                            <Text style={styles.activeItemBadgeText}>ACTIVE</Text>
-                          </View>
-                        )}
-                        {loadingState?.isLoading && (
-                          <View style={styles.loadingBadge}>
-                            <Icon name="loading" size={12} color="#93C822" />
-                            <Text style={styles.loadingBadgeText}>{loadingState.stage}</Text>
-                          </View>
-                        )}
                       </View>
-                      {/* Show delete button if there are items */}
-                      {bulkItems.length > 0 && (
-                        <TouchableOpacity
-                          style={styles.deleteItemButton}
-                          onPress={(e) => { e.stopPropagation?.(); onDeleteItem(item.id); }}
-                        >
-                          <Icon name="delete-outline" size={18} color="#ff6b6b" />
-                        </TouchableOpacity>
-                      )}
                     </View>
+                  )}
+                  {displayItems.map((item, id) => {
+                    const loadingState = itemLoadingStates[item.id];
+                    const matchInfo = confirmedQuickMatchByItemId?.[item.id];
+                    const hasQuickScanData = quickScanStore?.[item.id];
+                    const matchCount = hasQuickScanData?.matchData?.totalMatches || 0;
+                    const topMatch = hasQuickScanData?.matchData?.rankedCandidates?.[0];
+                    const confirmedMatch = (matchInfo && matchInfo.serpApiData && matchInfo.preSelectedIndices && matchInfo.preSelectedIndices.length > 0)
+                      ? matchInfo.serpApiData[matchInfo.preSelectedIndices[0]]
+                      : null;
+                    const selectedMatch = confirmedMatch || topMatch;
+                    const selectedMatchImage = selectedMatch?.imageUrl || selectedMatch?.image || null;
+                    const selectedMatchTitle = selectedMatch?.title || 'Selected match';
+                    const countDraft = countDraftByItemId[item.id] ?? String(item.quantity ?? 1);
 
-                    {matchInfo && matchInfo.serpApiData && matchInfo.preSelectedIndices && matchInfo.preSelectedIndices.length > 0 && (
-                      <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0F9FF', padding: 8, borderRadius: 8, marginBottom: 12, borderWidth: 1, borderColor: '#BAE6FD' }}>
-                        <Icon name="check-circle" size={16} color="#0284C7" />
-                        <Text style={{ fontSize: 13, color: '#0369A1', fontWeight: '500', marginLeft: 6, flex: 1 }} numberOfLines={1}>
-                          {matchInfo.serpApiData[matchInfo.preSelectedIndices[0]]?.title || 'Selected Match'}
-                        </Text>
-                      </View>
-                    )}
+                    if (currentInstruction === 'extracting' || currentInstruction === 'optimizing') {
+                      return (
+                        <View key={`apple-notes-${item.id}`} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#f0f0f0' }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                            <Text style={{ fontSize: 16, color: '#333' }}>Item {id + 1}</Text>
+                            {item.quantity != null && item.quantity > 1 && (
+                              <View style={{ marginLeft: 8, backgroundColor: '#10B981', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 }}>
+                                <Text style={{ fontSize: 12, color: 'white', fontWeight: '600' }}>x{item.quantity}</Text>
+                              </View>
+                            )}
+                          </View>
+                          <Text style={{ fontSize: 14, color: '#999' }}>Thinking...</Text>
+                        </View>
+                      );
+                    }
 
-                    <View style={styles.photoSlotsContainer}>
-                      {item.photos.map((photo: CapturedPhoto, photoIndex: number) => (
-                        <View key={`photo-${item.id}-${photo.id}`} style={styles.photoSlotWrapper}>
-                          <TapGestureHandler
-                            numberOfTaps={2}
-                            onHandlerStateChange={(event) => {
-                              if (event.nativeEvent.state === State.ACTIVE) {
-                                onSetCoverPhoto(item.id, photo.id);
-                              }
-                            }}
-                          >
-                            <Animated.View
-                              style={[
-                                styles.photoSlot,
-                                photo.isCover && styles.coverPhotoSlot
-                              ]}
-                            >
-                              <TouchableOpacity
-                                style={StyleSheet.absoluteFill}
-                                onPress={() => onOpenPhotoModal?.(item.id)}
-                                onLongPress={() => {
-                                  Alert.alert(
-                                    'Photo Options',
-                                    `Photo ${photoIndex + 1}${photo.isCover ? ' (Cover)' : ''}`,
-                                    [
-                                      { text: 'Set as Cover', onPress: () => onSetCoverPhoto(item.id, photo.id) },
-                                      { text: 'Remove from Item', onPress: () => onRemovePhoto(item.id, photo.id) },
-                                      { text: 'Cancel', style: 'cancel' },
-                                    ]
-                                  );
+                    if (currentInstruction === 'searching' && !hasQuickScanData && !loadingState?.isLoading) {
+                      return (
+                        <View key={`skeleton-${item.id}`} style={[styles.bulkItemContainer, { borderColor: '#E0E0E0', borderWidth: 1 }]}>
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                            <View style={{ width: 120, height: 20, backgroundColor: '#F0F0F0', borderRadius: 4 }} />
+                            <View style={[styles.loadingBadge, { backgroundColor: '#F0F9FF' }]}>
+                              <ActivityIndicator size="small" color="#0284C7" style={{ transform: [{ scale: 0.7 }] }} />
+                              <Text style={[styles.loadingBadgeText, { color: '#0369A1' }]}>Searching catalog...</Text>
+                            </View>
+                          </View>
+                          <View style={styles.photoSlotsContainer}>
+                            <View style={[styles.photoSlot, { backgroundColor: '#F9F9F9', borderColor: '#EAEAEA' }]} />
+                            <View style={[styles.addPhotoButton, { backgroundColor: '#F9F9F9', borderColor: '#EAEAEA' }]} />
+                          </View>
+                        </View>
+                      );
+                    }
+
+                    return (
+                      <TouchableOpacity
+                        key={`bulk-item-${item.id}`}
+                        style={[
+                          styles.bulkItemContainer,
+                          item.isActive && styles.activeItemContainer,
+                          { backgroundColor: item.isActive ? '#e8f5e8' : '#ffffff' }
+                        ]}
+                        onPress={() => onSelectItem(item.id)}
+                      >
+                        <View style={styles.itemHeader}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <Text style={[styles.itemLabel, item.isActive && styles.activeItemLabel]} numberOfLines={1}>
+                              Item {id + 1}
+                            </Text>
+                            {item.quantity != null && item.quantity > 1 && (
+                              <View style={{ backgroundColor: '#93C822', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 }}>
+                                <Text style={{ fontSize: 11, color: 'white', fontWeight: '600' }}>x{item.quantity}</Text>
+                              </View>
+                            )}
+                            {item.isActive && (
+                              <View style={styles.activeItemBadge}>
+                                <Text style={styles.activeItemBadgeText}>ACTIVE</Text>
+                              </View>
+                            )}
+                          </View>
+                          {loadingState?.isLoading ? (
+                            <View style={styles.loadingBadge}>
+                              <ActivityIndicator size="small" color="#93C822" style={{ transform: [{ scale: 0.75 }] }} />
+                              <Text style={styles.loadingBadgeText}>{loadingState.stage}</Text>
+                            </View>
+                          ) : null}
+                        </View>
+
+                        <View style={styles.photoSlotsContainer}>
+                          {item.photos.map((photo: CapturedPhoto, photoIndex: number) => (
+                            <View key={`photo-${item.id}-${photo.id}`} style={styles.photoSlotWrapper}>
+                              <TapGestureHandler
+                                numberOfTaps={2}
+                                onHandlerStateChange={(event) => {
+                                  if (event.nativeEvent.state === State.ACTIVE) {
+                                    onSetCoverPhoto(item.id, photo.id);
+                                  }
                                 }}
                               >
-                                <Image source={{ uri: photo.uri }} style={styles.photoSlotImage} />
-                                <View style={styles.photoSlotNumberBadge}>
-                                  <Text style={styles.photoSlotNumberBadgeText}>{photoIndex + 1}</Text>
-                                </View>
-                                {photo.isCover && (
-                                  <View style={[
-                                    styles.photoSlotLabel,
-                                    styles.coverPhotoLabel
-                                  ]}>
-                                    <Text style={styles.photoSlotLabelText}>COVER</Text>
-                                  </View>
-                                )}
+                                <Animated.View style={[styles.photoSlot, photo.isCover && styles.coverPhotoSlot]}>
+                                  <TouchableOpacity
+                                    style={StyleSheet.absoluteFill}
+                                    onPress={() => onOpenPhotoModal?.(item.id)}
+                                    onLongPress={() => {
+                                      Alert.alert(
+                                        'Photo Options',
+                                        `Photo ${photoIndex + 1}${photo.isCover ? ' (Cover)' : ''}`,
+                                        [
+                                          { text: 'Set as Cover', onPress: () => onSetCoverPhoto(item.id, photo.id) },
+                                          { text: 'Remove from Item', onPress: () => onRemovePhoto(item.id, photo.id) },
+                                          { text: 'Cancel', style: 'cancel' },
+                                        ]
+                                      );
+                                    }}
+                                  >
+                                    <Image source={{ uri: photo.uri }} style={styles.photoSlotImage} />
+                                    <View style={styles.photoSlotNumberBadge}>
+                                      <Text style={styles.photoSlotNumberBadgeText}>{photoIndex + 1}</Text>
+                                    </View>
+                                    {photo.isCover && (
+                                      <View style={[styles.photoSlotLabel, styles.coverPhotoLabel]}>
+                                        <Text style={styles.photoSlotLabelText}>COVER</Text>
+                                      </View>
+                                    )}
+                                  </TouchableOpacity>
+                                </Animated.View>
+                              </TapGestureHandler>
+                              <TouchableOpacity
+                                style={styles.bulkPhotoDeleteButton}
+                                onPress={() => onRemovePhoto(item.id, photo.id)}
+                                hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
+                                activeOpacity={1}
+                              >
+                                <Icon name="close-circle" size={18} color="#ff4444" />
                               </TouchableOpacity>
-                            </Animated.View>
-                          </TapGestureHandler>
-                          {/* Delete button outside TapGestureHandler so it receives taps reliably */}
-                          <TouchableOpacity
-                            style={styles.bulkPhotoDeleteButton}
-                            onPress={() => onRemovePhoto(item.id, photo.id)}
-                            hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
-                            activeOpacity={1}
-                          >
-                            <Icon name="close-circle" size={18} color="#ff4444" />
-                          </TouchableOpacity>
+                            </View>
+                          ))}
+
+                          {item.photos.length < 12 && (
+                            <TouchableOpacity style={styles.addPhotoButton} onPress={onImageUpload}>
+                              <Icon name="camera-plus-outline" size={20} color="#999" />
+                              <Text style={styles.addPhotoText}>Add Photo</Text>
+                            </TouchableOpacity>
+                          )}
                         </View>
-                      ))}
 
-                      {/* Add Photo Button - Only show if less than 12 photos */}
-                      {item.photos.length < 12 && (
-                        <TouchableOpacity style={styles.addPhotoButton} onPress={onImageUpload}>
-                          <Icon name="camera-plus-outline" size={20} color="#999" />
-                          <Text style={styles.addPhotoText}>Add Photo</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
+                        {item.photos.length >= 12 && (
+                          <Text style={styles.maxPhotosText}>Maximum 12 photos per item</Text>
+                        )}
 
+                        {loadingState?.isLoading ? (
+                          <View style={styles.matchSkeletonCard}>
+                            <View style={styles.matchSkeletonThumb} />
+                            <View style={{ flex: 1 }}>
+                              <View style={styles.matchSkeletonLineShort} />
+                              <View style={styles.matchSkeletonLineLong} />
+                            </View>
+                          </View>
+                        ) : loadingState?.error ? (
+                          <View style={styles.matchErrorCard}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.matchErrorTitle}>Match failed</Text>
+                              <Text style={styles.matchErrorText} numberOfLines={2}>{loadingState.error}</Text>
+                            </View>
+                            <TouchableOpacity
+                              style={styles.matchActionPillDanger}
+                              onPress={(e) => {
+                                e.stopPropagation?.();
+                                onRetryItemScan?.(item.id);
+                              }}
+                            >
+                              <Text style={styles.matchActionPillDangerText}>Retry</Text>
+                            </TouchableOpacity>
+                          </View>
+                        ) : selectedMatch ? (
+                          <TouchableOpacity
+                            style={styles.selectedMatchCard}
+                            onPress={(e) => {
+                              e.stopPropagation?.();
+                              onOpenQuickMatches?.(item.id);
+                            }}
+                          >
+                            {selectedMatchImage ? (
+                              <Image source={{ uri: selectedMatchImage }} style={styles.selectedMatchImage} />
+                            ) : (
+                              <View style={[styles.selectedMatchImage, { backgroundColor: '#E2E8F0' }]} />
+                            )}
+                            <View style={{ flex: 1, marginRight: 8 }}>
+                              <Text style={styles.selectedMatchLabel}>{confirmedMatch ? 'Selected Match' : `${matchCount} Match${matchCount > 1 ? 'es' : ''} Found`}</Text>
+                              <Text style={styles.selectedMatchTitle} numberOfLines={1}>{selectedMatchTitle}</Text>
+                            </View>
+                            <View style={styles.matchActionPill}>
+                              <Text style={styles.matchActionPillText}>Change</Text>
+                            </View>
+                          </TouchableOpacity>
+                        ) : (
+                          <View style={styles.noMatchCard}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.noMatchTitle}>No quick match yet.</Text>
+                              <Text style={styles.noMatchHint}>Deep analysis will keep searching, or retake cover photo.</Text>
+                            </View>
+                            <TouchableOpacity style={[styles.matchActionPill, styles.matchActionPillDisabled]} disabled={true}>
+                              <Text style={[styles.matchActionPillText, styles.matchActionPillDisabledText]}>Find Match</Text>
+                            </TouchableOpacity>
+                          </View>
+                        )}
 
-                    {item.photos.length >= 12 && (
-                      <Text style={styles.maxPhotosText}>Maximum 12 photos per item</Text>
-                    )}
-
-                    {/* Optional quick matches reopen button if present */}
-                    {(() => {
-                      const hasQuickMatches = quickScanStore?.[item.id];
-                      const matchCount = hasQuickMatches?.matchData?.totalMatches || 0;
-                      console.log(`[RENDER QUICK BUTTON] Item ${id + 1} (${item.id}): hasQuickMatches = ${hasQuickMatches ? 'YES' : 'NO'}`);
-                      if (hasQuickMatches) {
-                        console.log(`[RENDER QUICK BUTTON] Item ${id + 1} match count:`, matchCount);
-                      }
-                      return matchCount > 0 && (
-                        <TouchableOpacity
-                          style={styles.quickMatchesButton}
-                          onPress={() => onOpenQuickMatches?.(item.id)}
-                        >
-                          <View style={styles.matchNotificationDot} />
-                          <Text style={styles.quickMatchesButtonText}>
-                            View Quick Matches ({matchCount})
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })()}
-
-                  </TouchableOpacity>
-
-                );
-              });
+                        <View style={styles.itemFooterRow}>
+                          {bulkItems.length > 0 && (
+                            <TouchableOpacity
+                              style={styles.itemFooterRemoveButton}
+                              onPress={(e) => {
+                                e.stopPropagation?.();
+                                onDeleteItem(item.id);
+                              }}
+                            >
+                              <Icon name="trash-can-outline" size={16} color="#991B1B" />
+                              <Text style={styles.itemFooterRemoveText}>Remove</Text>
+                            </TouchableOpacity>
+                          )}
+                          <View style={styles.itemFooterCountBlock}>
+                            <Text style={styles.itemFooterCountLabel}>Count: </Text>
+                            <TextInput
+                              value={countDraft}
+                              onChangeText={(text) => handleCountDraftChange(item.id, text)}
+                              onBlur={() => commitCountDraft(item.id)}
+                              onEndEditing={() => commitCountDraft(item.id)}
+                              style={styles.itemFooterCountInput}
+                              keyboardType={Platform.OS === 'ios' ? 'decimal-pad' : 'numeric'}
+                              inputMode="decimal"
+                              returnKeyType="done"
+                              placeholder="1"
+                              placeholderTextColor="#94A3B8"
+                            />
+                          </View>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </>
+              );
             })()
           )}
         </ScrollView>
 
         {/* Fixed Bottom Actions */}
-        <View style={styles.bottomActions}>
-          {/* New Item Button */}
-          <TouchableOpacity
-            style={styles.newItemButton}
-            onPress={() => {
-              console.log('[NEW ITEM] Button pressed');
-              onAddNewItem();
-            }}
-          >
-            <Icon name="plus" size={16} color="#999" />
-            <Text style={styles.newItemButtonText}>Add Item</Text>
-          </TouchableOpacity>
-
-          {/* Search Button */}
-          <TouchableOpacity
-            style={[
-              styles.searchForProductButton,
-              totalItems === 0 && styles.disabledButton
-            ]}
-            disabled={totalItems === 0}
-            onPress={async () => {
-              console.log('[SEARCH] Starting broad search for all items');
-
-              // Get all photos from bulkItems (simplified - no more dual system)
-              const firstPhotos = bulkItems.map(item => item.photos[0]).filter(Boolean);
-
-              if (firstPhotos.length === 0) {
-                Alert.alert('No Photos', 'Please take some photos first before searching.');
-                return;
-              }
-
-              // Tell parent to close existing sheets and stop any quick scan
-              onStartBroadSearch();
-
-              // Set loading state for all items
-              const loadingStates: Record<string, { isLoading: boolean; stage: string; }> = {};
-              bulkItems.forEach(item => {
-                if (item.photos.length > 0) {
-                  loadingStates[item.id] = { isLoading: true, stage: 'Processing...' };
-                }
-              });
-              setItemLoadingStates(loadingStates);
-
-              try {
-
-                // Call performAnalyze to get the job ID
-                const jobResponseData: JobResponse = await performAnalyze(firstPhotos);
-                console.log('[SEARCH] Job Response:', jobResponseData);
-                setJobResponse(jobResponseData); // Store in state
-                const jobId = jobResponseData?.jobId;
-                console.log('[SEARCH] Job ID:', jobId);
-
-                if (jobId) {
-                  // With skipMatchSelection + autoGenerateAllPlatforms, intended path is:
-                  // LoadingScreen (match) -> LoadingScreen (generate) -> GenerateDetailsScreen.
-                  // We only fall back to MatchSelectionScreen if match returns no results.
-                  navigation.navigate("LoadingScreen", {
-                    processType: 'match',
-                    payload: {
-                      jobId: jobId,
-                      bulkItems: bulkItems,
-                      firstPhotos: firstPhotos,
-                      confirmedQuickMatchByItemId: confirmedQuickMatchByItemId,
-                      skipMatchSelection: true,
-                      autoGenerateAllPlatforms: true,
-                    },
-                    onCompleteRoute: {
-                      screen: 'MatchSelectionScreen',
-                      params: {
-                        jobResponse: jobResponseData,
-                        response: {
-                          jobId: jobId,
-                          bulkItems: bulkItems,
-                          firstPhotos: firstPhotos,
-                          confirmedQuickMatchByItemId: confirmedQuickMatchByItemId,
-                        }
-                      },
-                    }
-                  });
-
-                  console.log('[SEARCH] Navigating to LoadingScreen with jobId:', jobId);
-                } else {
-                  console.error('[SEARCH] Missing jobId from analyze response:', jobResponseData);
-                  Alert.alert('Error', 'Failed to start analysis. Please try again.');
-                }
-              } catch (error) {
-                console.error('[SEARCH] Error starting analysis:', error);
-                Alert.alert('Error', 'Failed to start analysis. Please try again.');
-              }
-            }
-            }>
-            <Icon name="magnify" size={16} color={totalItems === 0 ? "#999" : "white"} />
-            <Text style={[
-              styles.searchForProductButtonText,
-              totalItems === 0 && { color: '#999' }
-            ]}>
-              Analyze All Items
-            </Text>
-          </TouchableOpacity>
+        {shouldShowBottomActions && (
+          <View style={[styles.bottomActions, { paddingBottom: bottomMargin, flexDirection: 'column', gap: 6 }]}>
+            {totalItems >= 1 && (cameraMode === 'shelf' || cameraMode === 'camera') && (
+              <TouchableOpacity
+                style={[styles.newItemButton, totalItems >= MAX_BATCH_ITEMS && { opacity: 0.45 }]}
+                onPress={onAddNewItem}
+                disabled={totalItems >= MAX_BATCH_ITEMS}
+              >
+                <Icon name="plus" size={18} color="#666" />
+                <Text style={styles.newItemButtonText}>
+                  {totalItems >= MAX_BATCH_ITEMS ? 'Item Limit Reached' : 'Add Item'}
+                </Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={[
+                styles.searchForProductButton,
+                { backgroundColor: hasLoadingItems || (cameraMode !== 'shelf' && totalItems === 0) ? '#A3A3A3' : '#93C822' },
+              ]}
+              disabled={hasLoadingItems || (cameraMode !== 'shelf' && totalItems === 0)}
+              onPress={cameraMode === 'shelf' && totalItems === 0 ? onImageUpload : handleAnalyzeAndNavigate}
+            >
+              {hasLoadingItems ? (
+                <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 8 }} />
+              ) : (
+                <Icon
+                  name={cameraMode === 'shelf' && totalItems === 0 ? 'camera-plus-outline' : 'rocket-launch-outline'}
+                  size={20}
+                  color="white"
+                />
+              )}
+              <Text style={[styles.searchForProductButtonText, { marginLeft: 8 }]}>
+                {cameraMode === 'shelf' && totalItems === 0
+                  ? 'Take shelf photo'
+                  : cameraMode !== 'shelf' && totalItems === 0
+                    ? 'Take a photo to continue'
+                    : hasLoadingItems
+                      ? 'Analyzing...'
+                      : `Analyze & List ${totalItems} Items`}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Animated.View>
   );
 };
@@ -3801,11 +4642,10 @@ const styles = StyleSheet.create({
     borderRadius: 25,
     paddingHorizontal: 16,
     paddingVertical: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 5,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
+      android: { elevation: 5 },
+    }),
   },
   textSearchInput: {
     flex: 1,
@@ -3963,14 +4803,10 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.2)',
     justifyContent: 'space-between',
     width: '100%',
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.30,
-    shadowRadius: 4.65,
-    elevation: 8,
+    ...Platform.select({
+      ios: { shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.30, shadowRadius: 4.65 },
+      android: { elevation: 8 },
+    }),
   },
   modePopupItem: {
     alignItems: 'center',
@@ -4044,8 +4880,8 @@ const styles = StyleSheet.create({
   },
   barcodeSecondaryText: {
     color: '#E5E7EB',
-    fontSize: 14,
-    fontWeight: '500',
+    fontSize: 16,
+    fontWeight: '600',
   },
   itemNavRow: {
     flexDirection: 'row',
@@ -4108,24 +4944,23 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    paddingTop: 20,
-    paddingBottom: 20,
-    marginBottom: 20,
-    minHeight: SCREEN_HEIGHT * 0.9,
+    paddingTop: 16,
+    paddingHorizontal: 4,
+    paddingBottom: 0,
+    marginBottom: 0,
     maxHeight: SCREEN_HEIGHT * 0.9,
   },
   bulkItemsSheet: {
     position: 'absolute',
-    bottom: 0,
+    top: SCREEN_HEIGHT * 0.12,
     left: 0,
     right: 0,
     backgroundColor: 'white',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingTop: 20,
-    paddingBottom: 120, // Increased bottom padding
-    marginBottom: 0, // Added bottom margin
-    height: SCREEN_HEIGHT * 0.9,
+    paddingBottom: 20,
+    marginBottom: 0,
   },
   sheetHeader: {
     flexDirection: 'row',
@@ -4266,11 +5101,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#93C822',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 4,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3 },
+      android: { elevation: 4 },
+    }),
   },
   selectionHint: {
     fontSize: 14,
@@ -4569,16 +5403,41 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'column',
   },
-  deleteItemButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#ff6b6b',
-    justifyContent: 'center',
+  editItemButton: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginLeft: 8,
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 36,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  editItemButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  deleteItemButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 36,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  deleteItemButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#DC2626',
   },
   newItemButton: {
     flexDirection: 'row',
@@ -4632,12 +5491,11 @@ const styles = StyleSheet.create({
     borderRadius: 2,
   },
   itemsScrollContainer: {
-    flexGrow: 1,
-    marginBottom: -20,
+    flex: 1,
+    marginBottom: 0,
   },
   scrollContent: {
-    paddingBottom: 20,
-
+    paddingBottom: 24,
     paddingHorizontal: 10,
   },
   itemHeader: {
@@ -4694,6 +5552,185 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 4,
   },
+  matchSkeletonCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
+    borderWidth: 1,
+    borderRadius: 10,
+    marginTop: 10,
+    gap: 10,
+  },
+  matchSkeletonThumb: {
+    width: 38,
+    height: 38,
+    borderRadius: 8,
+    backgroundColor: '#E2E8F0',
+  },
+  matchSkeletonLineShort: {
+    width: '50%',
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#E2E8F0',
+    marginBottom: 6,
+  },
+  matchSkeletonLineLong: {
+    width: '80%',
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#E2E8F0',
+  },
+  selectedMatchCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
+    borderWidth: 1,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  selectedMatchImage: {
+    width: 38,
+    height: 38,
+    borderRadius: 8,
+    marginRight: 10,
+  },
+  selectedMatchLabel: {
+    fontSize: 10,
+    color: '#64748B',
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  selectedMatchTitle: {
+    fontSize: 13,
+    color: '#1E293B',
+    fontWeight: '600',
+  },
+  noMatchCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 10,
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
+    borderWidth: 1,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  noMatchTitle: {
+    fontSize: 13,
+    color: '#475569',
+    fontWeight: '600',
+  },
+  noMatchHint: {
+    marginTop: 3,
+    fontSize: 11,
+    color: '#64748B',
+  },
+  matchErrorCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+    borderWidth: 1,
+    borderRadius: 10,
+    marginBottom: 10,
+    gap: 10,
+  },
+  matchErrorTitle: {
+    color: '#991B1B',
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  matchErrorText: {
+    color: '#B91C1C',
+    fontSize: 12,
+  },
+  matchActionPill: {
+    backgroundColor: '#E2E8F0',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  matchActionPillText: {
+    fontSize: 11,
+    color: '#334155',
+    fontWeight: '700',
+  },
+  matchActionPillDisabled: {
+    opacity: 0.55,
+  },
+  matchActionPillDisabledText: {
+    color: '#64748B',
+  },
+  matchActionPillDanger: {
+    backgroundColor: '#DC2626',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  matchActionPillDangerText: {
+    fontSize: 11,
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  itemFooterRow: {
+    marginTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    paddingTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  itemFooterRemoveButton: {
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    backgroundColor: '#FEE2E2',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  itemFooterRemoveText: {
+    color: '#991B1B',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  itemFooterCountBlock: {
+    flex: 1,
+    minHeight: 38,
+    gap: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  itemFooterCountLabel: {
+    color: '#334155',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  itemFooterCountInput: {
+    textAlign: 'right',
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0F172A',
+    paddingVertical: 4,
+  },
   bulkPhotoDeleteButton: {
     position: 'absolute',
     top: -2,
@@ -4729,9 +5766,9 @@ const styles = StyleSheet.create({
   bottomActions: {
     borderTopWidth: 1,
     borderTopColor: '#eee',
-    paddingTop: 16,
-    marginTop: 16,
-    marginBottom: 16,
+    paddingTop: 10,
+    marginTop: 10,
+    marginBottom: 10,
   },
 
   // Progress Bar Styles
@@ -4897,6 +5934,28 @@ const styles = StyleSheet.create({
     backgroundColor: '#F2F2F7',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  exitButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    minHeight: 34,
+    maxHeight: 34,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F2F2F7',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  exitButtonText: {
+    color: '#64748B',
+    fontWeight: '600',
+    marginLeft: 6,
+    fontSize: 15,
+  },
+  sheetHeaderSpacer: {
+    minWidth: 72,
+    minHeight: 34,
   },
   sheetHeaderTitle: {
     fontSize: 18,

@@ -1,4 +1,9 @@
 import React, { createContext, useContext } from 'react';
+import { Platform } from 'react-native';
+
+// Android-only: font scale 0.9, iOS stays 1
+const fontScale = Platform.OS === 'android' ? 0.9 : 1;
+const getFontSize = (baseSize: number): number => Math.round(baseSize * fontScale);
 
 // Colors based on your dashboard screenshot
 const theme = {
@@ -44,22 +49,30 @@ const theme = {
       small: 12,
     },
   },
-  shadows: {
-    small: {
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 1 },
-      shadowOpacity: 0.1,
-      shadowRadius: 2,
-      elevation: 2,
+  fontScale,
+  getFontSize,
+  shadows: Platform.select({
+    ios: {
+      small: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1,
+        shadowRadius: 2,
+        elevation: 2,
+      },
+      medium: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 4,
+        elevation: 4,
+      },
     },
-    medium: {
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.15,
-      shadowRadius: 4,
-      elevation: 4,
+    android: {
+      small: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 1 },
+      medium: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4, elevation: 2 },
     },
-  }
+  }) as { small: any; medium: any },
 };
 
 const ThemeContext = createContext(theme);

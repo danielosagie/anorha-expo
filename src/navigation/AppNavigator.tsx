@@ -22,6 +22,7 @@ import {
 // import { CirclePlus } from 'lucide-react-native';
 import OnboardConnectionScreen from '../screens/OnboardConnectionScreen';
 import { usePushNotifications } from '../hooks/usePushNotifications';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Import the context from its new location
 import { AuthContext, AuthContextType } from '../context/AuthContext';
@@ -101,6 +102,13 @@ export type AppStackParamList = {
       jobId?: string;
       firstPhotos: any[];
       bulkItems?: any[];
+      userAssistDecisions?: Record<number, {
+        confirmedCandidateIndex?: number;
+        deniedCandidateIndices?: number[];
+        refineText?: string;
+        generateBestGuess?: boolean;
+        state?: 'pending' | 'submitted' | 'failed';
+      }>;
       // When true, LoadingScreen will NOT early-navigate to MatchSelectionScreen.
       // It will wait for the job to complete so it can respect skipToGenerate/autoGenerateJobId.
       skipMatchSelection?: boolean;
@@ -121,15 +129,20 @@ export type AppStackParamList = {
   Team: undefined;
   Billing: undefined;
   AddProduct: {
-    firstPhotos: any[];
-    bulkItems: any[];
-  }
+    firstPhotos?: any[];
+    bulkItems?: any[];
+    sessionId?: string;
+  } | undefined;
   MatchSelectionScreen: {
     jobResponse?: JobResponse;
     jobId?: string;
     focusIndex?: number;
     items?: Array<{ index: number; title?: string; thumb?: string; matchesCount?: number; matchJobId?: string }>;
     jobMap?: Record<number, { jobId: string; status?: string }>;
+    preResolvedSelections?: Record<number, number[]>;
+    preDeniedSelections?: Record<number, number[]>;
+    preRefineTextByIndex?: Record<number, string>;
+    bestGuessByIndex?: Record<number, boolean>;
     response: {
       jobId?: string;
       bulkItems?: any[];
@@ -198,6 +211,20 @@ export type AppStackParamList = {
             in_stock?: boolean;
           }>;
           confidence: string; // Changed from number to string based on the JSON example
+          matchDecision?: 'matched' | 'classified' | 'needs_user_input';
+          userAssist?: {
+            required: boolean;
+            prompt: string;
+            requestedFields?: string[];
+            allowedActions?: Array<'confirm' | 'deny' | 'refine' | 'retake' | 'best_guess'>;
+            requestId?: string;
+          };
+          autoMatchMeta?: {
+            score?: number;
+            margin?: number;
+            blockedByRules?: string[];
+            stageUsed?: string;
+          };
           vectorSearchFoundResults: boolean;
           originalTargetImage: string;
           timing: {
@@ -237,10 +264,18 @@ export type AppStackParamList = {
     items?: Array<{ index: number; title?: string; thumb?: string; matchesCount?: number; matchJobId?: string }>,
     jobMap?: Record<number, { jobId: string; status?: string }>,
     matchJobId?: string,
-  }
+    focusIndex?: number,
+  };
+  GenerateJobOverviewScreen: {
+    /** @deprecated Use GenerateDetailsScreen directly. */
+    jobId: string;
+    matchJobId?: string;
+    items?: Array<{ index: number; title?: string; thumb?: string; matchesCount?: number; matchJobId?: string }>;
+    jobMap?: Record<number, { jobId: string; status?: string }>;
+  };
   PhotoUpload: {
     onDone: (uris: string[]) => void;
-  }
+  };
   PublishConfirmation: {
     productId?: string;
     variantId?: string;
@@ -273,7 +308,7 @@ export type AppStackParamList = {
     sampleRow: Record<string, string>;
   };
   Backups: undefined;
-  LiquidationCampaignScreen: { campaignId: string };
+  LiquidationCampaignScreen: { campaignId?: string; entryPoint?: 'tab' | 'detail' } | undefined;
   Partners: undefined;
 };
 
@@ -294,6 +329,7 @@ const Tab = createBottomTabNavigator();
 const TabNavigator = () => {
   const { lastNotificationResponse } = usePushNotifications();
   const navigation = useNavigation<any>();
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     if (lastNotificationResponse) {
@@ -334,7 +370,7 @@ const TabNavigator = () => {
     position: 'absolute' as const,
     left: 12,
     right: 12,
-    bottom: 18,
+    bottom: 18, //+ insets.bottom
     height: 84,
   };
 
@@ -381,13 +417,14 @@ const TabNavigator = () => {
   
 
       <Tab.Screen
-        name="ActivityFeed"
-        component={ActivityFeedScreen}
+        name="Clearouts"
+        component={LiquidationCampaignScreen}
+        initialParams={{ entryPoint: 'tab' }}
         options={{
-          tabBarLabel: 'Activity',
+          tabBarLabel: 'Clearouts',
           tabBarIcon: ({ color, size, focused }: { color: string; size: number; focused: boolean }) => (
             <Icon
-              name="clipboard-clock-outline"
+              name="cash-fast"
               color={focused ? "#FF9900" : color}
               size={size}
             />
@@ -451,6 +488,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="PartnershipDetail" component={PartnershipDetailScreen} />
     <AppStackNav.Screen name="BackfillOptimizer" component={BackfillOptimizerScreen} />
     <AppStackNav.Screen name="CSVColumnMapping" component={CSVColumnMappingScreen} />
+    <AppStackNav.Screen name="ActivityFeed" component={ActivityFeedScreen} />
     <AppStackNav.Screen name="Backups" component={BackupsScreen} />
   </AppStackNav.Navigator>
 );
@@ -469,7 +507,7 @@ const AppNavigator = () => {
   const [initialAppScreen, setInitialAppScreen] = useState<'CreateAccountScreen' | 'TabNavigator' | null>(null);
 
   // Dev tools to test onboarding flow
-  const [devForceOnboarding] = useState(true); // Set this to true only when testing onboarding - FTUX
+  const [devForceOnboarding] = useState(false); // Set this to true only when testing onboarding - FTUX
   const [devExpireSession, setDevExpireSession] = useState(false); // Set true to make you have to login new each time you leave/after session expires
 
   const [fontsLoaded] = useFonts({

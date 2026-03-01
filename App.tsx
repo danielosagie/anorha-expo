@@ -36,7 +36,7 @@ import { init as initFlowLogger } from './src/lib/mobileFlowLogger';
 WebBrowser.maybeCompleteAuthSession();
 
 // Initialize mobile flow logger (sessionId) early
-initFlowLogger().catch(() => {});
+initFlowLogger().catch(() => { });
 
 // Feature flag to disable new functionality during debugging
 const ENABLE_PROCESS_FEATURES = false;
@@ -268,6 +268,7 @@ const App: React.FC = () => {
               isConnected={(p) => (connections || []).some((c: any) => c.PlatformType === p && (c.Status || '').toLowerCase() === 'active')}
               platformActiveCounts={counts}
               onShowSelection={() => { }}
+              onShowPlatforms={() => { }}
               onShowTemplates={() => { }}
               onBackToEmpty={() => { overlay.hide(); }}
               onBackToSelection={() => { }}

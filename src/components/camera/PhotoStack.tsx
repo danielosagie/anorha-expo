@@ -28,9 +28,10 @@ interface PhotoStackProps {
   onReorder?: (fromIndex: number, toIndex: number) => void;
   draggedPhotoId?: string | null;
   onPress?: () => void; // Opens modal when tapped
+  onLongPress?: () => void; // Shortcut for adding a photo quickly
 }
 
-const PhotoStack: React.FC<PhotoStackProps> = ({ photos, onPress }) => {
+const PhotoStack: React.FC<PhotoStackProps> = ({ photos, onPress, onLongPress }) => {
   const coverPhoto = photos.find((p) => p.isCover) || photos[0];
   const count = photos.length;
 
@@ -40,6 +41,8 @@ const PhotoStack: React.FC<PhotoStackProps> = ({ photos, onPress }) => {
     <TouchableOpacity
       style={styles.container}
       onPress={() => onPress?.()}
+      onLongPress={() => onLongPress?.()}
+      delayLongPress={220}
       activeOpacity={0.9}
     >
       <View style={styles.photoWrapper}>

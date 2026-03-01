@@ -32,6 +32,10 @@ import AmazonSvg from '../assets/amazon.svg';
 const AnorhaLogo = require('../assets/rounded_anorha.png');
 import { CameraView } from 'expo-camera';
 import { capture, AnalyticsEvents } from '../lib/analytics';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+const ACTION_BAR_HEIGHT = 80;
+const ACTION_BAR_BOTTOM_OFFSET = 24;
 
 interface MappingSuggestion {
   action: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE' | 'UNMATCHED';
@@ -183,10 +187,13 @@ const MappingReviewScreen = () => {
   const { connectionId, platformName, jobId, importedProducts, isCSVImport, isScanning, scanStartTime } = route.params as any;
   const legendState: LegendStateObservables | null = useLegendState();
   const { currentOrg } = useOrg(); // Use Org Context
+  const insets = useSafeAreaInsets();
+  const bottomSafePadding = ACTION_BAR_HEIGHT + ACTION_BAR_BOTTOM_OFFSET + insets.bottom + 16;
   const [connection, setConnection] = useState<any>()
 
 
   const [suggestions, setSuggestions] = useState<MappingSuggestion[] | null>(null);
+  const [missingMappings, setMissingMappings] = useState<Array<{ variantId: string; sku: string | null; title: string | null; productId: string | null }>>([]);
   // Persist review progress
   const [hasLoadedDraft, setHasLoadedDraft] = useState(false);
   // ✅ CHANGED: Start loading=true when scanning is detected
@@ -200,8 +207,13 @@ const MappingReviewScreen = () => {
   const [isReconcileMode, setIsReconcileMode] = useState(false);
   const [previewingItem, setPreviewingItem] = useState<MappingSuggestion | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>('matched');
+  const [reviewEntryStage, setReviewEntryStage] = useState<'summary' | 'details'>('summary');
   // --- NEW: State for WebSocket sync progress ---
   const { progress: syncProgress } = useSyncProgress(connectionId);
+
+  useEffect(() => {
+    setReviewEntryStage('summary');
+  }, [connectionId]);
 
   // ✅ FIX: Derive scanning state from BOTH route param AND connection status
   // This ensures progress bar shows even when navigating back to an active scan
@@ -359,7 +371,7 @@ const MappingReviewScreen = () => {
 
   // Wizard step configuration - centralized titles and descriptions (description shown above divider)
   const WIZARD_STEP_CONFIG: Record<number, { title: string; description?: string }> = {
-    0: { title: 'Should We Add Missing Items?', description: 'What happens when a product is missing from one platform?' },
+    0: { title: 'Should We Add Missing Items?', description: 'What happens when a product is missing from your platforms?' },
     1: { title: 'Add Platform To Pool', description: 'Which pool should this platform be added to?' },
     2: { title: 'Set Sync Settings', description: 'Sync updates automatically or only on approval' },
     3: { title: 'Set Sync Settings', description: 'Choose how auction listings behave (like FB, Ebay, Whatnot) ' },
@@ -968,7 +980,7 @@ const MappingReviewScreen = () => {
         try {
           let query = supabase
             .from('PlatformConnections')
-            .select('*')
+            .select('Id, UserId, OrgId, PlatformType, DisplayName, Status, IsEnabled, LastSyncAttemptAt, LastSyncSuccessAt, CreatedAt, UpdatedAt')
             .eq('IsEnabled', true);
 
           if (targetOrgId) {
@@ -1252,6 +1264,18 @@ const MappingReviewScreen = () => {
         console.log(`[MappingReviewScreen] Successfully loaded ${suggestionsArray.length} suggestions:`,
           suggestionsArray.map(s => ({ action: s.action, title: s.platformProduct.title })));
       }
+
+      // Fix 4: Fetch missing mappings (org products with no mapping for this connection)
+      try {
+        const missingResp = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connId}/missing-mappings`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (missingResp.ok) {
+          const missing = await missingResp.json();
+          setMissingMappings(Array.isArray(missing) ? missing : []);
+        }
+      } catch { /* non-blocking */ }
 
     } catch (err: any) {
       console.error('[MappingReviewScreen] Error fetching mapping suggestions:', err);
@@ -2042,14 +2066,14 @@ const MappingReviewScreen = () => {
     const list = suggestions || [];
     const matched = list.filter(s => s.action === 'LINK_EXISTING' || s.resolved === true).length;
     const ignore = list.filter(s => s.action === 'IGNORE').length;
-    const review = Math.max(0, list.filter(s => s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved).length);
+    const review = Math.max(0, list.filter(s => s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved).length) + missingMappings.length;
     // NEW: Count push items (Anorha items to push to this platform)
     const push = list.filter(s => s.direction === 'anorha_to_platform' && s.isSelected).length;
     const pushTotal = list.filter(s => s.direction === 'anorha_to_platform').length;
     return { matched, review, ignore, push, pushTotal } as any;
-  }, [suggestions]);
+  }, [suggestions, missingMappings]);
 
-  // Current list by active tab + query + sort
+  // Current list by active tab + query + sort (review tab includes missing mappings)
   const currentList = useMemo(() => {
     const base = (suggestions || []).filter(s => {
       if (activeTab === 'matched') return s.action === 'LINK_EXISTING' || s.resolved === true;
@@ -2142,8 +2166,24 @@ const MappingReviewScreen = () => {
     // Add loose items (no header needed for individual items)
     result.push(...looseItems.map(s => ({ type: 'item', suggestion: s, isChild: false })));
 
+    // Include missing mappings in review tab
+    if (activeTab === 'review' && missingMappings.length > 0) {
+      const filteredMissing = listQuery
+        ? missingMappings.filter(m =>
+            (m.title || '').toLowerCase().includes(listQuery.toLowerCase()) ||
+            (m.sku || '').toLowerCase().includes(listQuery.toLowerCase())
+          )
+        : missingMappings;
+      const sortedMissing = [...filteredMissing].sort((a, b) =>
+        sortBy === 'title'
+          ? (a.title || '').localeCompare(b.title || '')
+          : (a.sku || '').localeCompare(b.sku || '')
+      );
+      result.push(...sortedMissing.map(m => ({ type: 'missing', ...m })));
+    }
+
     return result;
-  }, [currentList, expandedGroups]);
+  }, [currentList, expandedGroups, activeTab, missingMappings, listQuery, sortBy]);
 
   // --- END ALWAYS-CALLED HOOKS ---
 
@@ -3026,11 +3066,10 @@ const MappingReviewScreen = () => {
       borderRadius: 8,
       backgroundColor: theme.colors.surface,
       minWidth: 100,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 1 },
-      shadowOpacity: 0.05,
-      shadowRadius: 2,
-      elevation: 1,
+      ...Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2 },
+        android: { elevation: 1 },
+      }),
     },
     summaryCount: {
       fontSize: 20,
@@ -3219,11 +3258,10 @@ const MappingReviewScreen = () => {
       right: 0,
       borderTopWidth: 1,
       borderTopColor: '#f0f0f0',
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: -2 },
-      shadowOpacity: 0.1,
-      shadowRadius: 4,
-      elevation: 5,
+      ...Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: -2 }, shadowOpacity: 0.1, shadowRadius: 4 },
+        android: { elevation: 5 },
+      }),
     },
     progressContainer: {
       paddingHorizontal: 20,
@@ -3927,11 +3965,10 @@ const MappingReviewScreen = () => {
       borderRadius: 12,
       padding: 10,
       marginBottom: 15,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.08,
-      shadowRadius: 4,
-      elevation: 3,
+      ...Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 4 },
+        android: { elevation: 3 },
+      }),
     },
     miniCard: {
       flex: 1,
@@ -4307,7 +4344,70 @@ const MappingReviewScreen = () => {
       {/* Content */}
       {!loading && !error && suggestions && (
         <>
+          {reviewEntryStage === 'summary' ? (
+            <View style={{ paddingHorizontal: 20, paddingTop: 16, gap: 12 }}>
+              <View style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, padding: 16, backgroundColor: '#fff' }}>
+                <Text style={{ fontSize: 18, fontWeight: '700', color: '#111827' }}>Here&apos;s what we got</Text>
+                <Text style={{ marginTop: 6, fontSize: 13, color: '#6B7280' }}>
+                  Triage this import first, then open detailed mapping cards.
+                </Text>
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
+                  <View style={{ flex: 1, borderRadius: 10, padding: 12, backgroundColor: '#ECFDF3' }}>
+                    <Text style={{ fontSize: 20, fontWeight: '700', color: '#065F46' }}>{counts.matched}</Text>
+                    <Text style={{ marginTop: 2, fontSize: 12, color: '#065F46' }}>Ready to confirm</Text>
+                  </View>
+                  <View style={{ flex: 1, borderRadius: 10, padding: 12, backgroundColor: '#FEF3C7' }}>
+                    <Text style={{ fontSize: 20, fontWeight: '700', color: '#92400E' }}>{counts.review}</Text>
+                    <Text style={{ marginTop: 2, fontSize: 12, color: '#92400E' }}>Needs attention</Text>
+                  </View>
+                </View>
+              </View>
 
+              <View style={{ gap: 8 }}>
+                <TouchableOpacity
+                  style={{ backgroundColor: '#93C822', borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}
+                  onPress={() => {
+                    setActiveTab('matched');
+                    setReviewEntryStage('details');
+                  }}
+                >
+                  <Text style={{ color: '#fff', fontWeight: '700' }}>Open Ready Queue</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={{ backgroundColor: '#F59E0B', borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}
+                  onPress={() => {
+                    setActiveTab('review');
+                    setReviewEntryStage('details');
+                  }}
+                >
+                  <Text style={{ color: '#fff', fontWeight: '700' }}>Open Needs Attention Queue</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={{ backgroundColor: '#fff', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}
+                  onPress={() => {
+                    setSuggestions(prev => (prev || []).map(s => {
+                      if (s.action === 'UNMATCHED' || !s.suggestedCanonicalProduct?.id) return s;
+                      return { ...s, action: 'LINK_EXISTING', isSelected: true, resolved: true };
+                    }));
+                  }}
+                >
+                  <Text style={{ color: '#111827', fontWeight: '700' }}>Bulk resolve ready matches</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={{ backgroundColor: '#fff', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}
+                  onPress={() => {
+                    setSuggestions(prev => (prev || []).map(s => {
+                      const inReview = s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved;
+                      return inReview ? { ...s, action: 'CREATE_NEW', isSelected: true, resolved: true } : s;
+                    }));
+                  }}
+                >
+                  <Text style={{ color: '#111827', fontWeight: '700' }}>Bulk set review queue to create new</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <>
           <PillTabs
             tabs={[
               { key: 'matched', label: 'Matches', count: counts.matched, tone: 'success' },
@@ -4366,11 +4466,10 @@ const MappingReviewScreen = () => {
                     borderRadius: 12,
                     borderWidth: 1,
                     borderColor: '#E5E7EB',
-                    shadowColor: '#000',
-                    shadowOpacity: 0.15,
-                    shadowRadius: 10,
-                    shadowOffset: { width: 0, height: 6 },
-                    elevation: 10,
+                    ...Platform.select({
+                      ios: { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } },
+                      android: { elevation: 10 },
+                    }),
                     zIndex: 1000,
                     minWidth: 200,
                     overflow: 'hidden',
@@ -4439,11 +4538,27 @@ const MappingReviewScreen = () => {
           </View>
 
           <FlatList
-            // Use groupedList instead of currentList
             data={groupedList}
-            keyExtractor={(item, index) => item.type === 'header' ? `header-${item.id}` : `item-${item.suggestion.platformProduct.id}-${index}`}
+            keyExtractor={(item, index) => (item as any).type === 'missing'
+              ? `missing-${(item as any).variantId}-${index}`
+              : (item as any).type === 'header' ? `header-${(item as any).id}` : `item-${(item as any).suggestion.platformProduct.id}-${index}`}
             renderItem={({ item }) => {
-              if (item.type === 'header') {
+              if ((item as any).type === 'missing') {
+                const m = item as { variantId: string; sku: string | null; title: string | null; productId: string | null };
+                return (
+                  <View style={[styles.reviewItemCard, { marginHorizontal: 20, marginBottom: 12 }]}>
+                    <View style={styles.reviewItemSection}>
+                      <PlaceholderImage uri={'/src/assets/rounded_anorha.png'} size={40} borderRadius={6} />
+                      <View style={styles.reviewItemDetails}>
+                        <Text style={styles.reviewItemTitle} numberOfLines={2}>{m.title || 'Unnamed'}</Text>
+                        <Text style={styles.reviewItemSku}>SKU: {m.sku || 'N/A'}</Text>
+                        <Text style={{ fontSize: 12, color: theme.colors.warning, marginTop: 4 }}>No mapping for this connection</Text>
+                      </View>
+                    </View>
+                  </View>
+                );
+              }
+              if ((item as any).type === 'header') {
                 // Format price range for display
                 let priceText = '';
                 if (item.minPrice != null && item.maxPrice != null) {
@@ -4600,7 +4715,7 @@ const MappingReviewScreen = () => {
                 />
               );
             }}
-            contentContainerStyle={{ paddingHorizontal: 15, paddingBottom: 120 }}
+            contentContainerStyle={{ paddingHorizontal: 15, paddingBottom: bottomSafePadding }}
             initialNumToRender={10}
             windowSize={10}
             maxToRenderPerBatch={12}
@@ -4635,11 +4750,10 @@ const MappingReviewScreen = () => {
                 borderTopLeftRadius: 20,
                 borderTopRightRadius: 20,
                 paddingTop: 20,
-                shadowColor: "#000",
-                shadowOffset: { width: 0, height: -4 },
-                shadowOpacity: 0.1,
-                shadowRadius: 10,
-                elevation: 10
+                ...Platform.select({
+                  ios: { shadowColor: "#000", shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.1, shadowRadius: 10 },
+                  android: { elevation: 10 },
+                }),
               }}>
                 <View style={{ paddingHorizontal: 20, marginBottom: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                   <Text style={{ fontSize: 18, fontWeight: '700' }}>Select Product</Text>
@@ -4734,7 +4848,7 @@ const MappingReviewScreen = () => {
                   scrollEnabled={true}
                   nestedScrollEnabled={true}
                 >
-                  <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 20, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 3, paddingBottom: 32, }}>
+                  <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 20, ...Platform.select({ ios: { shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4 }, android: { elevation: 3 } }), paddingBottom: 32, }}>
                     {/* Wizard Header */}
                     <View style={{ paddingVertical: 12, alignItems: 'center' }}>
                       {/* Back link - ONLY on Step 0 */}
@@ -4771,6 +4885,49 @@ const MappingReviewScreen = () => {
                       <View style={{ paddingHorizontal: 0, minHeight: 300 }}>
                         {/* Three horizontal option cards */}
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 10, marginBottom: 24 }}>
+              
+
+                          {/* Option 2: Pull Only - Other platforms → arrow → This platform */}
+                          <TouchableOpacity
+                            style={{
+                              flex: 1,
+                              borderWidth: 2,
+                              borderColor: productCreationMode === 'pull_only' ? theme.colors.primary : '#E5E7EB',
+                              borderRadius: 12,
+                              paddingVertical: 16,
+                              paddingHorizontal: 4,
+                              backgroundColor: productCreationMode === 'pull_only' ? theme.colors.primary + '15' : '#fff',
+                              alignItems: 'center',
+                            }}
+                            onPress={() => setProductCreationMode('pull_only')}
+                          >
+                            {/* Visual flow: This platform → arrow → Anorha */}
+                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 10, height: 52, gap: 2 }}>
+                              {/* Current platform (Square/Shopify/etc) on LEFT */}
+                              <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 1.5, borderColor: '#E5E7EB' }}>
+                                {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={32} height={32} />}
+                                {platformName?.toLowerCase().includes('square') && <SquareSvg width={32} height={32} />}
+                                {platformName?.toLowerCase().includes('clover') && <CloverSvg width={32} height={32} />}
+                                {platformName?.toLowerCase().includes('ebay') && <EbaySvg width={32} height={32} />}
+                                {platformName?.toLowerCase().includes('facebook') && <FacebookSvg width={32} height={32} />}
+                                {platformName?.toLowerCase().includes('amazon') && <AmazonSvg width={32} height={32} />}
+                                {!platformName?.toLowerCase().match(/shopify|square|clover|ebay|facebook|amazon/) && <Icon name="store" size={32} color="#9CA3AF" />}
+                              </View>
+                              {/* Arrow pointing right */}
+                              <Icon name="arrow-right" size={20} color={theme.colors.primary} />
+                              {/* Anorha logo on RIGHT */}
+                              <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 2, borderColor: theme.colors.primary }}>
+                                <RNImage source={AnorhaLogo} style={{ width: 32, height: 32, borderRadius: 6 }} />
+                              </View>
+                            </View>
+                            <Text style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text, textAlign: 'center' }}>
+                              Import to Anorha
+                            </Text>
+                            <Text style={{ fontSize: 11, color: theme.colors.textSecondary, textAlign: 'center', marginTop: 4 }}>
+                              Pull items from {platformName || 'platform'}
+                            </Text>
+                          </TouchableOpacity>
+
                           {/* Option 1: Sync Everywhere - Dynamic platform icon stack */}
                           <TouchableOpacity
                             style={{
@@ -4802,11 +4959,10 @@ const MappingReviewScreen = () => {
                                   borderWidth: 2,
                                   borderColor: theme.colors.primary,
                                   zIndex: 5,
-                                  shadowColor: '#000',
-                                  shadowOpacity: 0.08,
-                                  shadowRadius: 2,
-                                  shadowOffset: { width: 0, height: 1 },
-                                  elevation: 2,
+                                  ...Platform.select({
+                                    ios: { shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } },
+                                    android: { elevation: 2 },
+                                  }),
                                 }}>
                                   <RNImage source={AnorhaLogo} style={{ width: 32, height: 32, borderRadius: 6 }} />
                                 </View>
@@ -4823,11 +4979,10 @@ const MappingReviewScreen = () => {
                                         borderWidth: 1.5,
                                         borderColor: '#E5E7EB',
                                         zIndex: 3 - index,
-                                        shadowColor: '#000',
-                                        shadowOpacity: 0.08,
-                                        shadowRadius: 2,
-                                        shadowOffset: { width: 0, height: 1 },
-                                        elevation: 2,
+                                        ...Platform.select({
+                                          ios: { shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } },
+                                          android: { elevation: 2 },
+                                        }),
                                       }}
                                     >
                                       {platformType.includes('shopify') && <ShopifySvg width={32} height={32} />}
@@ -4874,47 +5029,6 @@ const MappingReviewScreen = () => {
                             </Text>
                           </TouchableOpacity>
 
-                          {/* Option 2: Pull Only - Other platforms → arrow → This platform */}
-                          <TouchableOpacity
-                            style={{
-                              flex: 1,
-                              borderWidth: 2,
-                              borderColor: productCreationMode === 'pull_only' ? theme.colors.primary : '#E5E7EB',
-                              borderRadius: 12,
-                              paddingVertical: 16,
-                              paddingHorizontal: 4,
-                              backgroundColor: productCreationMode === 'pull_only' ? theme.colors.primary + '15' : '#fff',
-                              alignItems: 'center',
-                            }}
-                            onPress={() => setProductCreationMode('pull_only')}
-                          >
-                            {/* Visual flow: This platform → arrow → Anorha */}
-                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 10, height: 52, gap: 2 }}>
-                              {/* Current platform (Square/Shopify/etc) on LEFT */}
-                              <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 1.5, borderColor: '#E5E7EB' }}>
-                                {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={32} height={32} />}
-                                {platformName?.toLowerCase().includes('square') && <SquareSvg width={32} height={32} />}
-                                {platformName?.toLowerCase().includes('clover') && <CloverSvg width={32} height={32} />}
-                                {platformName?.toLowerCase().includes('ebay') && <EbaySvg width={32} height={32} />}
-                                {platformName?.toLowerCase().includes('facebook') && <FacebookSvg width={32} height={32} />}
-                                {platformName?.toLowerCase().includes('amazon') && <AmazonSvg width={32} height={32} />}
-                                {!platformName?.toLowerCase().match(/shopify|square|clover|ebay|facebook|amazon/) && <Icon name="store" size={32} color="#9CA3AF" />}
-                              </View>
-                              {/* Arrow pointing right */}
-                              <Icon name="arrow-right" size={20} color={theme.colors.primary} />
-                              {/* Anorha logo on RIGHT */}
-                              <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 2, borderColor: theme.colors.primary }}>
-                                <RNImage source={AnorhaLogo} style={{ width: 32, height: 32, borderRadius: 6 }} />
-                              </View>
-                            </View>
-                            <Text style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text, textAlign: 'center' }}>
-                              Import to Anorha
-                            </Text>
-                            <Text style={{ fontSize: 11, color: theme.colors.textSecondary, textAlign: 'center', marginTop: 4 }}>
-                              Pull items from {platformName || 'platform'}
-                            </Text>
-                          </TouchableOpacity>
-
                           {/* Option 3: Push Only - Anorha → arrow → This platform */}
                           <TouchableOpacity
                             style={{
@@ -4957,10 +5071,11 @@ const MappingReviewScreen = () => {
                           </TouchableOpacity>
                         </View>
 
-                        {/* Continue button */}
+                        {/* Continue button
                         <Text style={{ color: theme.colors.textSecondary, fontSize: 12, textAlign: 'center', marginBottom: 10 }}>
-                          You can change this later in Sync Rules.
+                          You can change this later
                         </Text>
+                        */}
                         <TouchableOpacity
                           style={{
                             backgroundColor: "#5C9B00",
@@ -5778,6 +5893,8 @@ const MappingReviewScreen = () => {
               </KeyboardAvoidingView>
             </View>
           </Modal>
+            </>
+          )}
         </>
       )}
 

@@ -1,5 +1,6 @@
 // Design tokens for React Native app
 // Primitive tokens (do not depend on theme)
+import { Platform } from 'react-native';
 
 export const spacing = {
   xxs: 2,
@@ -54,6 +55,7 @@ export const easings = {
 } as const;
 
 // Cross-platform shadow/elevation presets
+// Android: lower elevation to avoid harsh shadows (Android-only)
 export const elevation = (level: 0 | 1 | 2 | 3 | 4 = 1) => {
   const presets: Record<number, any> = {
     0: { shadowColor: 'transparent', elevation: 0 },
@@ -86,8 +88,17 @@ export const elevation = (level: 0 | 1 | 2 | 3 | 4 = 1) => {
       elevation: 6,
     },
   };
-  return presets[level];
+  const base = presets[level];
+  if (Platform.OS === 'android') {
+    const androidElevation = level === 0 ? 0 : Math.max(1, Math.floor((base.elevation || 2) / 2));
+    return { ...base, elevation: androidElevation };
+  }
+  return base;
 };
+
+// Android-only font scale: shrink text on Android
+export const scaleFont = (size: number): number =>
+  Platform.OS === 'android' ? Math.round(size * 0.9) : size;
 
 // Semantic color helper that maps to theme when provided
 export type SemanticColors = {

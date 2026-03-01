@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Platform } from 'react-native';
 import { CloudDownload, Settings } from 'lucide-react-native';
-import * as FileSystem from 'expo-file-system';
+import { documentDirectory, writeAsStringAsync, EncodingType } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { supabase } from '../lib/supabase';
 import BaseModal from './BaseModal';
@@ -73,8 +73,8 @@ export default function CSVManageModal({ visible, onClose, onSettings }: CSVMana
 
             // 4. Save to file
             const fileName = `inventory_export_${new Date().toISOString().split('T')[0]}.csv`;
-            const fileUri = FileSystem.documentDirectory + fileName;
-            await FileSystem.writeAsStringAsync(fileUri, csvString, { encoding: FileSystem.EncodingType.UTF8 });
+            const fileUri = documentDirectory + fileName;
+            await writeAsStringAsync(fileUri, csvString, { encoding: EncodingType.UTF8 });
 
             // 5. Share
             if (await Sharing.isAvailableAsync()) {

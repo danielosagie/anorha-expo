@@ -8,6 +8,8 @@ interface BaseModalProps extends Omit<ModalProps, 'children'> {
     showCloseButton?: boolean;
     children: ReactNode;
     containerStyle?: ViewStyle;
+    /** 'center' = centered modal (default), 'bottom' = bottom sheet */
+    position?: 'center' | 'bottom';
 }
 
 /**
@@ -20,23 +22,29 @@ export const BaseModal: React.FC<BaseModalProps> = ({
     showCloseButton = false,
     children,
     containerStyle,
+    position = 'center',
     ...modalProps
 }) => {
+    const isBottomSheet = position === 'bottom';
     return (
         <Modal
             visible={visible}
             transparent
-            animationType="fade"
+            animationType={isBottomSheet ? 'slide' : 'fade'}
             onRequestClose={onClose}
             {...modalProps}
         >
             <TouchableOpacity
-                style={styles.overlay}
+                style={[styles.overlay, isBottomSheet && styles.overlayBottomSheet]}
                 activeOpacity={1}
                 onPress={onClose}
             >
                 <TouchableWithoutFeedback onPress={() => { }}>
-                    <View style={[styles.container, containerStyle]}>
+                    <View style={[
+                        styles.container,
+                        isBottomSheet && styles.containerBottomSheet,
+                        containerStyle
+                    ]}>
                         {showCloseButton && onClose && (
                             <TouchableOpacity
                                 style={styles.closeButton}
@@ -62,6 +70,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         padding: 20,
     },
+    overlayBottomSheet: {
+        justifyContent: 'flex-end',
+        alignItems: 'stretch',
+        padding: 0,
+    },
     container: {
         backgroundColor: '#fff',
         borderRadius: 24,
@@ -72,6 +85,15 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.3,
         shadowRadius: 10,
         elevation: 10,
+    },
+    containerBottomSheet: {
+        width: '100%',
+        maxWidth: '100%',
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        borderBottomLeftRadius: 0,
+        borderBottomRightRadius: 0,
+        padding: 24,
     },
     closeButton: {
         position: 'absolute',

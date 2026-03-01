@@ -44,7 +44,7 @@ const CameraControls: React.FC<CameraControlsProps> = ({
           <TouchableOpacity style={styles.controlButton} onPress={onPastScans}>
             <Icon name="history" size={22} color="white" />
           </TouchableOpacity>
-          <Text style={styles.controlLabel}>Past Scans</Text>
+          <Text style={styles.controlLabel}>History</Text>
         </View>
       </Animated.View>
     </SafeAreaView>
@@ -61,7 +61,7 @@ const styles = StyleSheet.create({
   cameraControlsContent: {
     paddingHorizontal: 20,
     paddingTop: 10,
-    gap: 8,
+    gap: 16,
   },
   controlGroup: {
     alignItems: 'center',

@@ -1,0 +1,18 @@
+{
+  "sortBy": "name",
+  "displayLabel": "Name (A-Z)",
+  "options": [
+    { "value": "name", "label": "Name (A-Z)" },
+    { "value": "price-low", "label": "Price (Low to High)" },
+    { "value": "price-high", "label": "Price (High to Low)" },
+    { "value": "stock-low", "label": "Stock (Low to High)" },
+    { "value": "stock-high", "label": "Stock (High to Low)" },
+    { "value": "date", "label": "Recently Added" }
+  ],
+  "name": { "sortBy": "name", "displayLabel": "Name (A-Z)" },
+  "price-low": { "sortBy": "price-low", "displayLabel": "Price (Low to High)" },
+  "price-high": { "sortBy": "price-high", "displayLabel": "Price (High to Low)" },
+  "stock-low": { "sortBy": "stock-low", "displayLabel": "Stock (Low to High)" },
+  "stock-high": { "sortBy": "stock-high", "displayLabel": "Stock (High to Low)" },
+  "date": { "sortBy": "date", "displayLabel": "Recently Added" }
+}

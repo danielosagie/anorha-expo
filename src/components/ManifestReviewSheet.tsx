@@ -200,11 +200,12 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
         >
             {/* Header */}
             <View style={styles.header}>
-                <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-                    <Icon name="close" size={24} color={colors.text} />
+                <View style={styles.sheetHeaderSpacer} />
+                <Text style={[styles.title, { flex: 1, color: colors.text }]}>Manifest Review</Text>
+                <TouchableOpacity onPress={onClose} style={styles.exitButton} activeOpacity={0.8} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                    <Icon name="close" size={18} color="#64748B" />
+                    <Text style={styles.exitButtonText}>Exit</Text>
                 </TouchableOpacity>
-                <Text style={[styles.title, { color: colors.text }]}>Manifest Review</Text>
-                <View style={{ width: 40 }} />
             </View>
 
             {/* Progress/Status Bar */}
@@ -400,8 +401,27 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1,
         borderBottomColor: 'rgba(0,0,0,0.1)',
     },
-    closeButton: {
-        padding: 8,
+    sheetHeaderSpacer: {
+        minWidth: 72,
+        minHeight: 34,
+    },
+    exitButton: {
+        paddingVertical: 6,
+        paddingHorizontal: 10,
+        minHeight: 34,
+        maxHeight: 34,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+        backgroundColor: '#F2F2F7',
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    exitButtonText: {
+        color: '#64748B',
+        fontWeight: '600',
+        marginLeft: 6,
+        fontSize: 15,
     },
     title: {
         fontSize: 18,

@@ -6,7 +6,7 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
 import Button from '../components/Button';
-import { supabase } from '../../lib/supabase';
+import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import BackButton from '../components/BackButton';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { JobResponse } from './MatchSelectionScreen';
@@ -46,6 +46,9 @@ interface GenerationJob {
   id: string; // This is the job_id from the table
   created_at: string;
   status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
+  matchJobId?: string | null;
+  workflowGroupId?: string;
+  workflowJobCount?: number;
   summary: {
     highConfidenceCount?: number;
     mediumConfidenceCount?: number;
@@ -57,15 +60,28 @@ interface GenerationJob {
   results?: any[];
 }
 
+interface DraftScan {
+  id: string;
+  ScannedItems?: any[];
+  scannedItems?: any[];
+  MatchContext?: Record<string, any>;
+  ShelfPhotoUri?: string | null;
+  shelfPhotoUri?: string | null;
+  ActiveItemId?: string | null;
+  CreatedAt: string;
+  UpdatedAt: string;
+}
+
 type PastScansScreenNavigationProp = StackNavigationProp<AppStackParamList, 'PastScans'>;
 
 const PastScansScreen = () => {
   const theme = useTheme();
   const navigation = useNavigation<PastScansScreenNavigationProp>();
 
-  const [activeTab, setActiveTab] = useState<'matches' | 'listings'>('matches');
+  const [activeTab, setActiveTab] = useState<'drafts' | 'matches' | 'listings'>('listings');
   const [matchJobs, setMatchJobs] = useState<MatchJob[]>([]);
   const [generationJobs, setGenerationJobs] = useState<GenerationJob[]>([]);
+  const [draftScans, setDraftScans] = useState<DraftScan[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -105,16 +121,30 @@ const PastScansScreen = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('No authenticated user');
 
-      const { data, error } = await supabase
+      let data: any[] | null = null;
+      const primaryQuery = await supabase
         .from("generate_jobs")
-        .select('job_id, created_at, status, summary, results')
+        .select('job_id, match_job_id, created_at, status, summary, results')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
-
-      if (error) {
-        console.error('Database error:', error);
+      if (primaryQuery.error?.code === '42703') {
+        console.warn('[PastScans] generate_jobs.match_job_id missing; falling back to schema-compatible select');
+        const fallbackQuery = await supabase
+          .from("generate_jobs")
+          .select('job_id, created_at, status, summary, results')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false });
+        if (fallbackQuery.error) {
+          console.error('Database error (fallback query):', fallbackQuery.error);
+          throw new Error('Failed to fetch past scans');
+        }
+        data = fallbackQuery.data;
+      } else if (primaryQuery.error) {
+        console.error('Database error:', primaryQuery.error);
         throw new Error('Failed to fetch past scans');
+      } else {
+        data = primaryQuery.data;
       }
 
       if (!data) {
@@ -181,10 +211,28 @@ const PastScansScreen = () => {
           '';
 
         const summary = { ...(job.summary || {}), firstTitle: title, firstThumb: thumb };
-        return { ...job, id: job.job_id, summary, results } as GenerationJob;
+        const matchJobId = job.match_job_id || first?.matchJobId || first?.match_job_id || null;
+        return { ...job, id: job.job_id, summary, results, matchJobId } as GenerationJob;
       });
 
-      setGenerationJobs(formattedJobs);
+      const groupedByWorkflow = formattedJobs.reduce((acc, job) => {
+        const workflowKey = job.matchJobId || `solo-${job.id}`;
+        const existing = acc.get(workflowKey);
+        if (!existing) {
+          acc.set(workflowKey, { ...job, workflowGroupId: workflowKey, workflowJobCount: 1 });
+        } else {
+          const nextCount = (existing.workflowJobCount || 1) + 1;
+          const latest = new Date(job.created_at).getTime() > new Date(existing.created_at).getTime() ? job : existing;
+          acc.set(workflowKey, {
+            ...latest,
+            workflowGroupId: workflowKey,
+            workflowJobCount: nextCount,
+          });
+        }
+        return acc;
+      }, new Map<string, GenerationJob>());
+
+      setGenerationJobs(Array.from(groupedByWorkflow.values()));
     } catch (err: any) {
       console.error('Error in fetchPastGenerations:', err);
       setError(err.message || 'Failed to fetch past scans');
@@ -193,13 +241,36 @@ const PastScansScreen = () => {
     }
   }, []);
 
+  const fetchDraftScans = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const token = await ensureSupabaseJwt();
+      if (!token) throw new Error('Not authenticated');
+      const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+      const res = await fetch(`${API_BASE}/api/products/quick-scan-sessions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error('Failed to fetch draft scans');
+      const data = await res.json();
+      const raw = Array.isArray(data) ? data : [];
+      setDraftScans(raw.map((d: any) => ({ ...d, id: d.Id ?? d.id })));
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (activeTab === 'matches') {
       fetchMatchJobs();
-    } else {
+    } else if (activeTab === 'listings') {
       fetchPastGenerations();
+    } else if (activeTab === 'drafts') {
+      fetchDraftScans();
     }
-  }, [activeTab, fetchMatchJobs, fetchPastGenerations]);
+  }, [activeTab, fetchMatchJobs, fetchPastGenerations, fetchDraftScans]);
 
   const handleLoadMatchJob = (job: MatchJob) => {
     // Always navigate to selection; the screen will poll status and hydrate when ready
@@ -211,10 +282,27 @@ const PastScansScreen = () => {
   const handleLoadGeneration = (job: GenerationJob) => {
     if (job.status === 'completed') {
       navigation.navigate('GenerateDetailsScreen', {
-        jobId: job.id
+        jobId: job.id,
+        status: 'completed',
+        results: Array.isArray(job.results) ? job.results : [],
+        summary: [],
+        completedAt: job.created_at || '',
+        matchJobId: job.matchJobId || undefined,
+        focusIndex: 0,
       } as any);
     } else {
       console.log(`Job status is '${job.status}', cannot view results yet.`);
+    }
+  };
+
+  const handleLoadDraft = (draft: DraftScan) => {
+    try {
+      navigation.navigate('TabNavigator' as any, {
+        screen: 'AddProduct',
+        params: { sessionId: draft.id },
+      } as any);
+    } catch {
+      navigation.navigate('AddProduct', { sessionId: draft.id });
     }
   };
 
@@ -376,6 +464,11 @@ const PastScansScreen = () => {
           <Text style={styles.scanDate}>
             {new Date(item.created_at).toLocaleDateString()}
           </Text>
+          {item.workflowJobCount && item.workflowJobCount > 1 && (
+            <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 4 }}>
+              Grouped workflow ({item.workflowJobCount} runs)
+            </Text>
+          )}
 
           <View style={styles.scanStatus}>
             <Icon
@@ -397,6 +490,40 @@ const PastScansScreen = () => {
     </Card>
   );
 
+  const renderDraftItem = ({ item }: { item: DraftScan }) => {
+    const items = item.ScannedItems ?? item.scannedItems ?? [];
+    const count = items.length;
+    const thumb = item.ShelfPhotoUri ?? item.shelfPhotoUri ?? items[0]?.photos?.[0]?.uri ?? '';
+    return (
+      <Card style={styles.scanCard}>
+        <TouchableOpacity
+          style={styles.scanItem}
+          onPress={() => handleLoadDraft(item)}
+        >
+          <View style={styles.thumbRow}>
+            {thumb ? (
+              <Image source={{ uri: thumb }} style={styles.thumb} />
+            ) : (
+              <View style={[styles.thumb, { justifyContent: 'center', alignItems: 'center' }]}>
+                <Icon name="file-document-outline" size={24} color="#94a3b8" />
+              </View>
+            )}
+          </View>
+          <View style={styles.scanInfo}>
+            <Text style={styles.scanTitle}>Draft Scan</Text>
+            <Text style={styles.scanDate}>
+              {new Date(item.UpdatedAt ?? item.CreatedAt ?? 0).toLocaleString()}
+            </Text>
+            <Text style={{ fontSize: 13, color: theme.colors.textSecondary, marginTop: 4 }}>
+              {count} item{count !== 1 ? 's' : ''}
+            </Text>
+          </View>
+          <Icon name="chevron-right" size={24} color={theme.colors.textSecondary} />
+        </TouchableOpacity>
+      </Card>
+    );
+  };
+
   const renderContent = () => {
     if (loading) {
       return (
@@ -407,30 +534,59 @@ const PastScansScreen = () => {
     }
 
     if (error) {
+      const retryFn = activeTab === 'matches' ? fetchMatchJobs : activeTab === 'listings' ? fetchPastGenerations : fetchDraftScans;
       return (
         <View style={styles.centered}>
           <Text style={styles.errorText}>{error}</Text>
-          <Button
-            title="Try Again"
-            onPress={activeTab === 'matches' ? fetchMatchJobs : fetchPastGenerations}
-            style={styles.retryButton}
-          />
+          <Button title="Try Again" onPress={retryFn} style={styles.retryButton} />
         </View>
+      );
+    }
+
+    if (activeTab === 'matches') {
+      return (
+        <FlatList
+          data={matchJobs}
+          renderItem={renderMatchJobItem}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Icon name="history" size={48} color={theme.colors.textSecondary} />
+              <Text style={styles.emptyText}>No match jobs found</Text>
+            </View>
+          }
+        />
+      );
+    }
+
+    if (activeTab === 'listings') {
+      return (
+        <FlatList
+          data={generationJobs}
+          renderItem={renderScanItem}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Icon name="history" size={48} color={theme.colors.textSecondary} />
+              <Text style={styles.emptyText}>No generated listings found</Text>
+            </View>
+          }
+        />
       );
     }
 
     return (
       <FlatList
-        data={activeTab === 'matches' ? matchJobs : generationJobs}
-        renderItem={activeTab === 'matches' ? renderMatchJobItem : renderScanItem}
-        keyExtractor={item => item.id}
+        data={draftScans}
+        renderItem={renderDraftItem}
+        keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Icon name="history" size={48} color={theme.colors.textSecondary} />
-            <Text style={styles.emptyText}>
-              {activeTab === 'matches' ? 'No match jobs found' : 'No generated listings found'}
-            </Text>
+            <Text style={styles.emptyText}>No draft scans</Text>
           </View>
         }
       />
@@ -449,17 +605,23 @@ const PastScansScreen = () => {
       </View>
 
       <View style={styles.tabContainer}>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === 'matches' && styles.activeTab]}
-          onPress={() => setActiveTab('matches')}
+         <TouchableOpacity
+          style={[styles.tab, styles.tabThird, activeTab === 'drafts' && styles.activeTab]}
+          onPress={() => setActiveTab('drafts')}
         >
-          <Text style={[styles.tabText, activeTab === 'matches' && styles.activeTabText]}>Match Jobs</Text>
+          <Text style={[styles.tabText, activeTab === 'drafts' && styles.activeTabText]}>Scan Drafts</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.tab, activeTab === 'listings' && styles.activeTab]}
+          style={[styles.tab, styles.tabThird, activeTab === 'matches' && styles.activeTab]}
+          onPress={() => setActiveTab('matches')}
+        >
+          <Text style={[styles.tabText, activeTab === 'matches' && styles.activeTabText]}>Matches</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, styles.tabThird, activeTab === 'listings' && styles.activeTab]}
           onPress={() => setActiveTab('listings')}
         >
-          <Text style={[styles.tabText, activeTab === 'listings' && styles.activeTabText]}>Generated Listings</Text>
+          <Text style={[styles.tabText, activeTab === 'listings' && styles.activeTabText]}>Listings</Text>
         </TouchableOpacity>
       </View>
 
@@ -502,11 +664,14 @@ const styles = StyleSheet.create({
   },
   tab: {
     paddingVertical: 10,
-    paddingHorizontal: 20,
+    paddingHorizontal: 12,
     borderRadius: 12,
     width: '40%',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  tabThird: {
+    width: '31%',
   },
   activeTab: {
     backgroundColor: '#93C822', // theme.colors.primary

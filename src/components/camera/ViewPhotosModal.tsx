@@ -60,9 +60,9 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
 
   useEffect(() => {
     if (visible) {
-      Animated.timing(overlayOpacity, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+      Animated.timing(overlayOpacity, { toValue: 1, duration: 120, useNativeDriver: true }).start();
     } else {
-      Animated.timing(overlayOpacity, { toValue: 0, duration: 150, useNativeDriver: true }).start();
+      Animated.timing(overlayOpacity, { toValue: 0, duration: 90, useNativeDriver: true }).start();
     }
   }, [visible, overlayOpacity]);
 
@@ -110,7 +110,7 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
   return (
     <Modal
       visible={visible}
-      animationType="slide"
+      animationType="none"
       transparent
       onRequestClose={onClose}
     >
@@ -179,6 +179,7 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
                         ]}
                         onPress={() => onSetCover(photo.id)}
                         onLongPress={drag}
+                        delayLongPress={140}
                         disabled={isActive}
                       >
                         <Image key={photo.id} source={{ uri: photo.uri }} style={styles.photoImage} />
@@ -234,7 +235,11 @@ const styles = StyleSheet.create({
     borderBottomColor: '#eee',
   },
   closeButton: {
-    padding: 4,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   headerTitle: {
     flex: 1,
@@ -250,9 +255,12 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   navButton: {
+    minHeight: 36,
+    minWidth: 48,
     paddingVertical: 6,
     paddingHorizontal: 12,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   navButtonDisabled: {
     opacity: 0.4,
@@ -335,10 +343,13 @@ const styles = StyleSheet.create({
   },
   deleteButton: {
     position: 'absolute',
-    top: -6,
-    right: -6,
+    top: -10,
+    right: -10,
     zIndex: 10,
-    padding: 2,
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   addPhotoButton: {
     borderRadius: 12,

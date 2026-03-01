@@ -334,7 +334,7 @@ export class ShopifyGraphQLClient {
 
   private async makeRequest(query: string, variables?: any): Promise<any> {
     const url = `https://${this.config.storeName}.myshopify.com/admin/api/2024-01/graphql.json`;
-    
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -352,7 +352,7 @@ export class ShopifyGraphQLClient {
     }
 
     const data = await response.json();
-    
+
     if (data.errors) {
       throw new Error(`GraphQL errors: ${JSON.stringify(data.errors)}`);
     }
@@ -363,7 +363,7 @@ export class ShopifyGraphQLClient {
   // Read Operations
   async getProducts(first: number = 50, after?: string, query?: string): Promise<{ products: Product[], hasNextPage: boolean, endCursor?: string }> {
     const data = await this.makeRequest(GET_PRODUCTS_QUERY, { first, after, query });
-    
+
     const products = data.products.edges.map((edge: any) => ({
       ...edge.node,
       variants: edge.node.variants.edges.map((v: any) => v.node),
@@ -379,7 +379,7 @@ export class ShopifyGraphQLClient {
 
   async getProductById(id: string): Promise<Product | null> {
     const data = await this.makeRequest(GET_PRODUCT_BY_ID_QUERY, { id });
-    
+
     if (!data.product) return null;
 
     return {
@@ -395,9 +395,9 @@ export class ShopifyGraphQLClient {
   }
 
   async getInventoryLevels(inventoryItemId: string, locationIds?: string[]): Promise<InventoryLevel[]> {
-    const data = await this.makeRequest(GET_INVENTORY_LEVELS_QUERY, { 
-      inventoryItemId, 
-      locationIds 
+    const data = await this.makeRequest(GET_INVENTORY_LEVELS_QUERY, {
+      inventoryItemId,
+      locationIds
     });
     return data.inventoryItem.inventoryLevels.edges.map((edge: any) => edge.node);
   }
@@ -416,7 +416,7 @@ export class ShopifyGraphQLClient {
     };
 
     const data = await this.makeRequest(UPDATE_PRODUCT_MUTATION, { product: input });
-    
+
     if (data.productUpdate.userErrors.length > 0) {
       throw new Error(`Update failed: ${JSON.stringify(data.productUpdate.userErrors)}`);
     }
@@ -432,7 +432,7 @@ export class ShopifyGraphQLClient {
     };
 
     const data = await this.makeRequest(ARCHIVE_PRODUCT_MUTATION, { product: input });
-    
+
     if (data.productUpdate.userErrors.length > 0) {
       throw new Error(`Archive failed: ${JSON.stringify(data.productUpdate.userErrors)}`);
     }
@@ -447,7 +447,7 @@ export class ShopifyGraphQLClient {
     };
 
     const data = await this.makeRequest(UNPUBLISH_PRODUCT_MUTATION, { input });
-    
+
     if (data.productUnpublish.userErrors.length > 0) {
       throw new Error(`Unpublish failed: ${JSON.stringify(data.productUnpublish.userErrors)}`);
     }
@@ -460,7 +460,7 @@ export class ShopifyGraphQLClient {
     const input = { id: productId };
 
     const data = await this.makeRequest(DELETE_PRODUCT_MUTATION, { input });
-    
+
     if (data.productDelete.userErrors.length > 0) {
       throw new Error(`Delete failed: ${JSON.stringify(data.productDelete.userErrors)}`);
     }
@@ -488,7 +488,7 @@ export class ShopifyGraphQLClient {
     };
 
     const data = await this.makeRequest(ADJUST_INVENTORY_MUTATION, { input });
-    
+
     if (data.inventoryAdjustQuantities.userErrors.length > 0) {
       throw new Error(`Inventory adjustment failed: ${JSON.stringify(data.inventoryAdjustQuantities.userErrors)}`);
     }
@@ -520,8 +520,8 @@ export class ShopifyGraphQLClient {
   async getProductsByLocation(locationId: string, first: number = 50): Promise<Product[]> {
     // Get products and filter by those that have inventory at the specified location
     const { products } = await this.getProducts(first);
-    
-    const productsWithInventory = await Promise.all(
+
+    const productsWithInventory: (Product | null)[] = await Promise.all(
       products.map(async (product) => {
         const variant = product.variants[0]; // Check first variant for simplicity
         if (!variant?.inventoryItem?.id) return null;
@@ -534,7 +534,7 @@ export class ShopifyGraphQLClient {
         } catch (error) {
           console.warn(`Could not get inventory for product ${product.id}:`, error);
         }
-        
+
         return null;
       })
     );

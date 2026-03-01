@@ -109,7 +109,7 @@ export function useProductRealtime({
           // Reload all mappings when any mapping changes
           const { data: mappings, error } = await supabase
             .from('PlatformProductMappings')
-            .select('*')
+            .select('Id, PlatformConnectionId, ProductVariantId, PlatformProductId, PlatformVariantId, PlatformSku, SyncStatus, IsEnabled, LastSyncedAt, UpdatedAt')
             .eq('ProductVariantId', productVariantId);
 
           if (error) {
@@ -147,7 +147,7 @@ export function useProductRealtime({
           // Reload all inventory when any level changes
           const { data: inventory, error } = await supabase
             .from('InventoryLevels')
-            .select('*')
+            .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt')
             .eq('ProductVariantId', productVariantId);
 
           if (error) {

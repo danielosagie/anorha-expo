@@ -25,6 +25,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useOrg } from '../context/OrgContext';
 import { PartnerAcceptModal } from '../components/PartnerAcceptModal';
 import BaseModal from '../components/BaseModal';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const SSSYNC_API_BASE_URL = "https://api.sssync.app";
 
@@ -63,6 +64,8 @@ export default function PartnersScreen() {
     const theme = useTheme();
     const navigation = useNavigation<any>();
     const { currentOrg } = useOrg();
+    const insets = useSafeAreaInsets();
+    const bottomSafePadding = 48 + insets.bottom;
 
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -606,7 +609,7 @@ export default function PartnersScreen() {
 
             {/* Content */}
             <ScrollView
-                contentContainerStyle={styles.scrollContent}
+                contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomSafePadding }]}
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#93C822" />}
             >
                 {activeTab === 'active' ? (
@@ -933,7 +936,6 @@ const styles = StyleSheet.create({
     },
     scrollContent: {
         padding: 16,
-        paddingBottom: 100,
     },
     card: {
         marginBottom: 16,

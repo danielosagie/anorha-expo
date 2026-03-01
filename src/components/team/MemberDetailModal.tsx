@@ -109,7 +109,7 @@ export default function MemberDetailModal({
       // Get member's permissions
       const { data: permsData } = await supabase
         .from('OrgMemberPermissions')
-        .select('*')
+        .select('ResourceId, ResourceType, CanRead, CanWrite, OrgMembershipId')
         .eq('OrgMembershipId', memberId);
 
       if (permsData) {
@@ -126,7 +126,7 @@ export default function MemberDetailModal({
       // Load available platforms
       const { data: platformsData } = await supabase
         .from('PlatformConnections')
-        .select('*')
+        .select('Id, UserId, OrgId, PlatformType, DisplayName, Status, IsEnabled, LastSyncAttemptAt, LastSyncSuccessAt, CreatedAt, UpdatedAt')
         .eq('UserId', user.id)
         .eq('IsEnabled', true);
 

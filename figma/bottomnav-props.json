@@ -1,0 +1,31 @@
+{
+  "state": "empty",
+  "selectedCount": 0,
+  "selectedTemplate": null,
+  "selectedPlatforms": [],
+  "totalItemsCount": 1,
+  "manualOverrideInput": "",
+  "selection": {
+    "state": "selection",
+    "selectedCount": 3
+  },
+  "template": {
+    "state": "template",
+    "selectedCount": 3,
+    "selectedTemplate": "Shopify + Amazon"
+  },
+  "platform": {
+    "state": "platform",
+    "selectedCount": 3,
+    "selectedPlatforms": ["shopify", "amazon"],
+    "confirmedProduct": {
+      "title": "Logitech G502 Mouse",
+      "price": "$45",
+      "condition": "Like New"
+    }
+  },
+  "platformPicker": {
+    "state": "platformPicker",
+    "platformActiveCounts": { "shopify": 2, "amazon": 1 }
+  }
+}

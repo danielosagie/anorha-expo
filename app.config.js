@@ -5,9 +5,11 @@ export default {
   version: "1.0.2",
   scheme: "anorhaapp",
   icon: "./src/assets/1024_anorha.png",
+  orientation: "portrait",
   android: {
     package: "anorha.alpha",
     versionCode: 1,
+    orientation: "portrait",
     permissions: [
       "android.permission.CAMERA",
       "android.permission.RECORD_AUDIO"
