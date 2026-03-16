@@ -42,26 +42,26 @@ const MODE_PRESETS: Record<SmartCommandMode, {
     initialMode: 'text' | 'voice';
 }> = {
     quick_fix: {
-        label: 'Something not right?',
-        headerTitle: 'What needs to change?',
-        placeholder: 'e.g. make the description more casual, or @Title make it catchier',
-        submitLabel: 'Update',
+        label: 'Wanna change something?',
+        headerTitle: 'What should I change?',
+        placeholder: 'Describe the change, or mention a field with @ (example: @Title make this clearer for buyers).',
+        submitLabel: 'Apply changes',
         collapsedIcon: 'sparkles',
         initialMode: 'text',
     },
     voice_search: {
-        label: 'Search by voice',
-        headerTitle: 'Voice search',
-        placeholder: 'Tap the mic or type your search…',
-        submitLabel: 'Search',
+        label: 'Search with voice',
+        headerTitle: 'Say what to find',
+        placeholder: 'Tap the mic or type what you want to find.',
+        submitLabel: 'Find',
         collapsedIcon: 'mic',
         initialMode: 'voice',
     },
     voice_filter: {
-        label: 'Filter by voice',
-        headerTitle: 'Speak your filter',
-        placeholder: 'e.g. under 50 dollars, low stock, on eBay',
-        submitLabel: 'Apply',
+        label: 'Filter with voice',
+        headerTitle: 'Describe your filter',
+        placeholder: 'Try: under $50, low stock, or listed on eBay.',
+        submitLabel: 'Apply filter',
         collapsedIcon: 'mic',
         initialMode: 'voice',
     },
@@ -78,6 +78,10 @@ export interface SmartCommandInputProps {
     availableFields?: FieldOption[];
     /** Called when user submits the command */
     onSubmit: (text: string, mentionedFields: string[]) => void | Promise<void>;
+    /** Controlled input value */
+    value?: string;
+    /** Called whenever text changes */
+    onTextChange?: (text: string) => void;
     /** External loading state */
     isLoading?: boolean;
     /** Submit button text (overrides mode default) */
@@ -103,6 +107,8 @@ export interface SmartCommandInputProps {
     disableKeyboardHandling?: boolean;
     /** If true, the component will extend to the full width of its container (removing horizontal margins) */
     fullWidth?: boolean;
+    /** Visual design variant. `legacy` keeps old style; `v2` uses card style aligned with new command design language. */
+    designVariant?: 'legacy' | 'v2';
 }
 
 type ComponentState = 'collapsed' | 'expanded' | 'recording' | 'transcribing' | 'loading';
@@ -115,6 +121,8 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
     placeholder: placeholderOverride,
     availableFields = [],
     onSubmit,
+    value: valueProp,
+    onTextChange,
     isLoading = false,
     submitLabel: submitLabelOverride,
     initialMode: initialModeOverride,
@@ -126,6 +134,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
     variant = 'default',
     disableKeyboardHandling = false,
     fullWidth = false,
+    designVariant = 'legacy',
 }) => {
     // Resolve mode presets with explicit overrides
     const preset = MODE_PRESETS[modeProp];
@@ -135,9 +144,11 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
     const initialMode = initialModeOverride ?? preset.initialMode;
     const collapsedIcon = preset.collapsedIcon as any;
     const headerTitle = preset.headerTitle;
+    const isV2 = designVariant === 'v2';
+    const isControlled = typeof valueProp === 'string';
     // ── State ──
     const [state, setState] = useState<ComponentState>(startExpanded ? 'expanded' : 'collapsed');
-    const [text, setText] = useState('');
+    const [text, setText] = useState(valueProp ?? '');
     const [mentionedFields, setMentionedFields] = useState<string[]>([]);
     const [showMentions, setShowMentions] = useState(false);
     const [mentionFilter, setMentionFilter] = useState('');
@@ -175,6 +186,11 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
             });
         }
     }, [startExpanded]); // Depend on startExpanded so it triggers when parent toggles it
+
+    useEffect(() => {
+        if (!isControlled) return;
+        setText(valueProp ?? '');
+    }, [isControlled, valueProp]);
 
     // ── Sync loading state ──
     useEffect(() => {
@@ -250,7 +266,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
             const permission = await AudioModule.requestRecordingPermissionsAsync();
             if (!permission.granted) {
                 console.warn('[SmartCommandInput] Microphone permission denied');
-                setRecordingError('Microphone permission denied. Please enable microphone access in settings.');
+                setRecordingError('Microphone access is off. Enable it in Settings, or type your request.');
                 return;
             }
 
@@ -288,7 +304,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
             pulseLoop.current.start();
         } catch (err) {
             console.error('[SmartCommandInput] Could not start recording:', err);
-            setRecordingError('Unable to start recording. Please try again or type your command.');
+            setRecordingError('I couldn’t start recording. Try again, or type your request.');
             // Reset to expanded state so user can try again or type instead
             setState('expanded');
         }
@@ -360,6 +376,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
     // ── @ Mentions ──
     const handleTextChange = useCallback((value: string) => {
         setText(value);
+        onTextChange?.(value);
 
         // Detect @ trigger
         const lastAtIndex = value.lastIndexOf('@');
@@ -376,7 +393,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
             }
         }
         setShowMentions(false);
-    }, []);
+    }, [onTextChange]);
 
     const insertMention = useCallback((field: FieldOption) => {
         const lastAtIndex = text.lastIndexOf('@');
@@ -525,7 +542,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
             >
                 <View style={styles.recordingBar}>
                     <ActivityIndicator size="small" color="#8BB04F" />
-                    <Text style={styles.transcribingInlineText}>Transcribing…</Text>
+                    <Text style={styles.transcribingInlineText}>Turning your voice note into text…</Text>
                     <View style={{ width: 36 }} />
                 </View>
             </Animated.View >
@@ -586,10 +603,13 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
             )}
 
             {/* Input row */}
-            <View style={[styles.inputRow, variant === 'inline' && styles.inlineInputRow]}>
+            <View style={[styles.inputRow, variant === 'inline' && styles.inlineInputRow, variant === 'inline' && isV2 && styles.v2InlineInputRow]}>
                 <TextInput
                     ref={inputRef}
-                    style={styles.textInput}
+                    style={[
+                        styles.textInput,
+                        variant === 'inline' && isV2 && styles.v2TextInput,
+                    ]}
                     value={text}
                     onChangeText={handleTextChange}
                     placeholder={placeholder}
@@ -599,11 +619,18 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
                     editable={state !== 'loading'}
                 />
                 <TouchableOpacity
-                    style={styles.micButton}
+                    style={[
+                        styles.micButton,
+                        variant === 'inline' && isV2 && styles.v2MicButton,
+                    ]}
                     onPress={startRecording}
                     disabled={state === 'loading'}
                 >
-                    <Ionicons name="mic" size={22} color={state === 'loading' ? '#999' : '#8BB04F'} />
+                    <Ionicons
+                        name="mic"
+                        size={20}
+                        color={state === 'loading' ? '#9CA3AF' : (variant === 'inline' && isV2 ? '#FFFFFF' : '#8BB04F')}
+                    />
                 </TouchableOpacity>
             </View>
 
@@ -631,21 +658,25 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
             )}
 
             {/* Actions */}
-            <View style={styles.actions}>
+            <View style={[styles.actions, variant === 'inline' && isV2 && styles.v2Actions]}>
                 {variant === 'default' && (
                     <TouchableOpacity style={styles.cancelButton} onPress={handleCollapse} disabled={state === 'loading'}>
                         <Text style={styles.cancelText}>Cancel</Text>
                     </TouchableOpacity>
                 )}
                 <TouchableOpacity
-                    style={[styles.submitButton, (!text.trim() || state === 'loading') && styles.submitDisabled]}
+                    style={[
+                        styles.submitButton,
+                        variant === 'inline' && isV2 && styles.v2SubmitButton,
+                        (!text.trim() || state === 'loading') && styles.submitDisabled
+                    ]}
                     onPress={() => handleSubmit()}
                     disabled={!text.trim() || state === 'loading'}
                 >
                     {state === 'loading' ? (
                         <ActivityIndicator size="small" color="#fff" />
                     ) : (
-                        <Text style={styles.submitText}>{submitLabel}</Text>
+                        <Text style={[styles.submitText, variant === 'inline' && isV2 && styles.v2SubmitText]}>{submitLabel}</Text>
                     )}
                 </TouchableOpacity>
             </View>
@@ -761,13 +792,36 @@ const styles = StyleSheet.create({
         paddingBottom: 0,
     },
     inlineInputRow: {
-        backgroundColor: '#F9FAFB',
-        borderRadius: 16,
-        paddingHorizontal: 16,
-        paddingVertical: 14,
+        backgroundColor: '#FFFFFF',
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
         borderWidth: 1,
         borderColor: '#E5E7EB',
         minHeight: 56,
+    },
+    v2InlineInputRow: {
+        borderRadius: 16,
+        borderColor: '#E2E8F0',
+        backgroundColor: '#FFFFFF',
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        minHeight: 64,
+    },
+    v2TextInput: {
+        minHeight: 52,
+        fontSize: 14,
+        lineHeight: 20,
+        color: '#111827',
+    },
+    v2MicButton: {
+        width: 34,
+        height: 34,
+        borderRadius: 9,
+        backgroundColor: '#6B7280',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: 8,
     },
 
     // Header
@@ -815,13 +869,13 @@ const styles = StyleSheet.create({
     },
     textInput: {
         flex: 1,
-        fontSize: 17,
+        fontSize: 14,
         color: '#111',
-        minHeight: 50,
-        paddingTop: 8,
-        paddingBottom: 8,
+        minHeight: 40,
+        paddingTop: 4,
+        paddingBottom: 4,
         paddingRight: 12,
-        lineHeight: 24,
+        lineHeight: 20,
     },
     micButton: {
         padding: 8,
@@ -872,6 +926,11 @@ const styles = StyleSheet.create({
         marginTop: 16,
         gap: 12,
     },
+    v2Actions: {
+        marginTop: 12,
+        width: '100%',
+        justifyContent: 'flex-end',
+    },
     cancelButton: {
         paddingVertical: 8,
         paddingHorizontal: 12,
@@ -890,6 +949,14 @@ const styles = StyleSheet.create({
         gap: 6,
         alignItems: 'center',
     },
+    v2SubmitButton: {
+        width: '100%',
+        minHeight: 54,
+        borderRadius: 12,
+        justifyContent: 'center',
+        backgroundColor: '#93C822',
+        paddingHorizontal: 16,
+    },
     submitDisabled: {
         opacity: 0.5,
     },
@@ -897,6 +964,10 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 14,
         fontWeight: '600',
+    },
+    v2SubmitText: {
+        fontSize: 15,
+        fontWeight: '700',
     },
 
     // Recording — compact inline bar

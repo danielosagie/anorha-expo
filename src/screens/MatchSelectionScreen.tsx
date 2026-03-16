@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RouteProp, useNavigation } from '@react-navigation/native';
 import {
   ActivityIndicator,
   Alert,
@@ -8,70 +7,23 @@ import {
   Platform,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { RouteProp, useNavigation } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { ensureSupabaseJwt } from '../lib/supabase';
+import { Boxes } from 'lucide-react-native';
+import BackButton from '../components/BackButton';
+import BottomNav from '../components/BottomNav';
+import ItemJobsModal from '../components/ItemJobsModal';
 
 const BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
 const GRID_COLUMNS = 3;
 
-interface Price {
-  value?: string;
-  extracted_value?: number;
-  currency?: string;
-}
-
-interface SerpApiData {
-  position?: number;
-  title?: string;
-  link?: string;
-  source?: string;
-  source_icon?: string;
-  thumbnail?: string;
-  image?: string;
-  rating?: number;
-  reviews?: number;
-  price?: Price;
-  condition?: string;
-  in_stock?: boolean;
-}
-
-interface MatchResult {
-  productIndex: number;
-  productId?: string;
-  variantId?: string;
-  serpApiData: SerpApiData[];
-  rerankedResults?: Array<{
-    serpApiIndex?: number;
-    score?: number;
-    title?: string;
-    link?: string;
-  }>;
-  confidence?: 'high' | 'medium' | 'low';
-  matchDecision?: 'matched' | 'classified' | 'needs_user_input';
-  matchDecisionReason?: string;
-  userAssist?: {
-    required: boolean;
-    prompt: string;
-    requestedFields?: string[];
-    allowedActions?: Array<'confirm' | 'deny' | 'refine' | 'best_guess' | 'retake'>;
-    requestId?: string;
-  };
-  processingState?: 'ready_for_generate' | 'awaiting_user_input' | 'user_resolved' | 'blocked';
-}
-
-interface MatchStatusPayload {
-  jobId: string;
-  status: string;
-  currentStage?: string;
-  results: MatchResult[];
-}
+type ScreenRoute = RouteProp<AppStackParamList, 'MatchSelectionScreen'>;
 
 export interface JobResponse {
   jobId: string;
@@ -81,15 +33,49 @@ export interface JobResponse {
   message?: string;
 }
 
-type ScreenRoute = RouteProp<AppStackParamList, 'MatchSelectionScreen'>;
+type Candidate = {
+  title?: string;
+  link?: string;
+  source?: string;
+  thumbnail?: string;
+  image?: string;
+};
 
-function reorderCandidates(result?: MatchResult | null): SerpApiData[] {
+type MatchResult = {
+  productIndex: number;
+  serpApiData?: Candidate[];
+  rerankedResults?: Array<{
+    serpApiIndex?: number;
+    score?: number;
+    title?: string;
+    link?: string;
+  }>;
+  matchDecision?: 'matched' | 'classified' | 'needs_user_input' | string;
+  matchDecisionReason?: string;
+  userAssist?: {
+    required?: boolean;
+    prompt?: string;
+    requestId?: string;
+  };
+  originalTargetImage?: string;
+};
+
+type MatchStatusPayload = {
+  jobId: string;
+  status: string;
+  currentStage?: string;
+  results: MatchResult[];
+};
+
+const getToken = async () => ensureSupabaseJwt();
+
+function reorderCandidates(result?: MatchResult | null): Candidate[] {
   if (!result) return [];
   const base = Array.isArray(result.serpApiData) ? result.serpApiData : [];
   const reranked = Array.isArray(result.rerankedResults) ? result.rerankedResults : [];
   if (!base.length || !reranked.length) return base;
 
-  const ordered: SerpApiData[] = [];
+  const ordered: Candidate[] = [];
   const used = new Set<number>();
 
   reranked.forEach((item) => {
@@ -106,7 +92,7 @@ function reorderCandidates(result?: MatchResult | null): SerpApiData[] {
   return ordered;
 }
 
-function sourceLabel(candidate?: SerpApiData): string {
+function sourceLabel(candidate?: Candidate): string {
   const rawSource = String(candidate?.source || '').trim();
   if (rawSource.length > 0) return rawSource;
   try {
@@ -117,43 +103,48 @@ function sourceLabel(candidate?: SerpApiData): string {
   }
 }
 
-async function getToken() {
-  return ensureSupabaseJwt();
+function buildInitialAnalysis(params: any): MatchStatusPayload | null {
+  const results = params?.response?.analysis?.results || params?.response?.jobResults || params?.overrideResults;
+  if (!Array.isArray(results) || results.length === 0) return null;
+
+  return {
+    jobId: params?.jobId || params?.response?.analysis?.jobId || params?.response?.jobId || 'local',
+    status: params?.response?.analysis?.status || 'processing',
+    currentStage: params?.response?.analysis?.currentStage,
+    results,
+  };
 }
 
 export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) {
   const navigation = useNavigation<any>();
-  const insets = useSafeAreaInsets();
   const params = (route.params || {}) as any;
 
   const jobId: string | undefined = params.jobId || params?.response?.jobId || params?.jobResponse?.jobId;
-  const initialFocusRef = useRef<number>(typeof params.focusIndex === 'number' ? params.focusIndex : 0);
   const returnToLoadingRef = useRef<any>(params.returnToLoading);
+
+  const initialAnalysisRef = useRef<MatchStatusPayload | null>(buildInitialAnalysis(params));
+  const initialFocusRef = useRef<number>(
+    typeof params.focusIndex === 'number'
+      ? params.focusIndex
+      : (typeof params.overrideFocusIndex === 'number' ? params.overrideFocusIndex : 0)
+  );
+
   const initialPreResolvedRef = useRef<Record<number, number[]>>(params.preResolvedSelections || {});
   const initialPreDeniedRef = useRef<Record<number, number[]>>(params.preDeniedSelections || {});
   const initialPreRefineRef = useRef<Record<number, string>>(params.preRefineTextByIndex || {});
 
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState<boolean>(() => !initialAnalysisRef.current);
   const [error, setError] = useState<string | null>(null);
-  const [jobStatus, setJobStatus] = useState<string>('queued');
-  const [analysisData, setAnalysisData] = useState<MatchStatusPayload | null>(() => {
-    const results = params?.response?.analysis?.results || params?.response?.jobResults || params?.overrideResults;
-    if (Array.isArray(results) && results.length > 0) {
-      return {
-        jobId: jobId || params?.response?.analysis?.jobId || 'local',
-        status: params?.response?.analysis?.status || 'processing',
-        currentStage: params?.response?.analysis?.currentStage,
-        results,
-      };
-    }
-    return null;
-  });
+  const [jobStatus, setJobStatus] = useState<string>(initialAnalysisRef.current?.status || 'queued');
+  const [analysisData, setAnalysisData] = useState<MatchStatusPayload | null>(initialAnalysisRef.current);
 
-  const [currentProductIndex, setCurrentProductIndex] = useState<number>(initialFocusRef.current);
+  const [currentProductIndex, setCurrentProductIndex] = useState<number>(Math.max(0, initialFocusRef.current));
   const [selectedMatchesByIndex, setSelectedMatchesByIndex] = useState<Record<number, number[]>>({});
   const [deniedSelectionsByIndex, setDeniedSelectionsByIndex] = useState<Record<number, number[]>>({});
   const [refineTextByIndex, setRefineTextByIndex] = useState<Record<number, string>>({});
+  const [, setBestGuessByIndex] = useState<Record<number, boolean>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [jobsModalVisible, setJobsModalVisible] = useState(false);
 
   const hydrationKeyRef = useRef<string | null>(null);
   const autoSelectedRef = useRef<Set<number>>(new Set());
@@ -164,30 +155,28 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
     hydrationKeyRef.current = hydrationKey;
 
     if (Object.keys(initialPreResolvedRef.current).length > 0) {
-      setSelectedMatchesByIndex((prev) => ({ ...initialPreResolvedRef.current, ...prev }));
+      setSelectedMatchesByIndex(initialPreResolvedRef.current);
     }
     if (Object.keys(initialPreDeniedRef.current).length > 0) {
-      setDeniedSelectionsByIndex((prev) => ({ ...initialPreDeniedRef.current, ...prev }));
+      setDeniedSelectionsByIndex(initialPreDeniedRef.current);
     }
     if (Object.keys(initialPreRefineRef.current).length > 0) {
-      setRefineTextByIndex((prev) => ({ ...initialPreRefineRef.current, ...prev }));
+      setRefineTextByIndex(initialPreRefineRef.current);
     }
 
-    if (typeof initialFocusRef.current === 'number' && Number.isFinite(initialFocusRef.current)) {
-      setCurrentProductIndex(Math.max(0, initialFocusRef.current));
-    }
+    const focusIndex = Math.max(0, initialFocusRef.current);
+    setCurrentProductIndex(focusIndex);
   }, [route.key, jobId]);
 
   useEffect(() => {
-    if (analysisData?.results?.length) {
+    if (initialAnalysisRef.current?.results?.length) {
       setIsLoading(false);
-      setJobStatus(analysisData.status || 'processing');
       return;
     }
 
     if (!jobId) {
-      setError('Missing match job id.');
       setIsLoading(false);
+      setError('Missing match job id.');
       return;
     }
 
@@ -199,7 +188,8 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
         const token = await getToken();
         if (!token) throw new Error('Sign-in required to continue.');
 
-        const res = await fetch(`${BASE_URL}/api/products/match/jobs/${jobId}/status`, {
+        const encodedJobId = encodeURIComponent(jobId);
+        const res = await fetch(`${BASE_URL}/api/products/match/jobs/${encodedJobId}/status`, {
           headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
@@ -214,18 +204,19 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
         const status = await res.json();
         if (cancelled) return;
 
-        setJobStatus(status?.status || 'processing');
-        setAnalysisData({
+        const nextPayload: MatchStatusPayload = {
           jobId: status?.jobId || jobId,
           status: status?.status || 'processing',
           currentStage: status?.currentStage,
           results: Array.isArray(status?.results) ? status.results : [],
-        });
+        };
 
+        setJobStatus(nextPayload.status);
+        setAnalysisData(nextPayload);
         setError(null);
         setIsLoading(false);
 
-        if (!cancelled && (status?.status === 'queued' || status?.status === 'processing')) {
+        if (!cancelled && (nextPayload.status === 'queued' || nextPayload.status === 'processing')) {
           pollTimer = setTimeout(pollStatus, 1200);
         }
       } catch (err: any) {
@@ -236,13 +227,13 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
     };
 
     setIsLoading(true);
-    pollStatus();
+    void pollStatus();
 
     return () => {
       cancelled = true;
       if (pollTimer) clearTimeout(pollTimer);
     };
-  }, [jobId, analysisData?.results?.length, analysisData?.status]);
+  }, [jobId]);
 
   const results = analysisData?.results || [];
   const safeIndex = useMemo(() => {
@@ -252,8 +243,11 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
 
   useEffect(() => {
     if (!results.length) return;
-    if (currentProductIndex !== safeIndex) setCurrentProductIndex(safeIndex);
-  }, [currentProductIndex, safeIndex, results.length]);
+    setCurrentProductIndex((prev) => {
+      const next = Math.min(Math.max(prev, 0), results.length - 1);
+      return next === prev ? prev : next;
+    });
+  }, [results.length]);
 
   const currentResult = results[safeIndex] || null;
   const candidates = useMemo(() => reorderCandidates(currentResult), [currentResult]);
@@ -267,22 +261,18 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
 
   const selectedIndex = selectedMatchesByIndex[safeIndex]?.[0];
   const selectedCandidate = typeof selectedIndex === 'number' ? candidates[selectedIndex] : undefined;
-  const refineText = refineTextByIndex[safeIndex] || '';
 
   useEffect(() => {
     if (!currentResult || candidates.length === 0) return;
     if (autoSelectedRef.current.has(safeIndex)) return;
+
     if ((selectedMatchesByIndex[safeIndex] || []).length > 0) {
       autoSelectedRef.current.add(safeIndex);
       return;
     }
 
-    const ranked = Array.isArray(currentResult.rerankedResults) ? currentResult.rerankedResults : [];
-    const bestFromRerank = typeof ranked?.[0]?.serpApiIndex === 'number' ? ranked[0].serpApiIndex : 0;
-    const safeBest = bestFromRerank >= 0 && bestFromRerank < candidates.length ? bestFromRerank : 0;
-
     autoSelectedRef.current.add(safeIndex);
-    setSelectedMatchesByIndex((prev) => ({ ...prev, [safeIndex]: [safeBest] }));
+    setSelectedMatchesByIndex((prev) => ({ ...prev, [safeIndex]: [0] }));
   }, [currentResult, candidates.length, safeIndex, selectedMatchesByIndex]);
 
   const submitAssistResponse = useCallback(async (input: {
@@ -299,6 +289,7 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
 
     const body: Record<string, any> = {
       action: input.action,
+      continueToGenerate: input.action !== 'deny',
     };
 
     if (typeof currentResult?.userAssist?.requestId === 'string' && currentResult.userAssist.requestId.length > 0) {
@@ -309,7 +300,8 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
     if (typeof input.refineText === 'string' && input.refineText.trim().length > 0) body.refineText = input.refineText.trim();
     if (input.generateBestGuess === true) body.generateBestGuess = true;
 
-    const res = await fetch(`${BASE_URL}/api/products/match/jobs/${jobId}/product/${safeIndex}/assist-response`, {
+    const encodedJobId = encodeURIComponent(jobId);
+    const res = await fetch(`${BASE_URL}/api/products/match/jobs/${encodedJobId}/product/${safeIndex}/assist-response`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -331,15 +323,48 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
         if (!prev || !Array.isArray(prev.results)) return prev;
         const nextResults = [...prev.results];
         nextResults[safeIndex] = { ...(nextResults[safeIndex] || {}), ...updatedResult };
-        return { ...prev, results: nextResults, status: data?.status || prev.status, currentStage: data?.currentStage || prev.currentStage };
+        return {
+          ...prev,
+          results: nextResults,
+          status: data?.status || prev.status,
+          currentStage: data?.currentStage || prev.currentStage,
+        };
       });
     }
-  }, [jobId, safeIndex, currentResult]);
+  }, [currentResult, jobId, safeIndex]);
 
   const navigateBackToLoading = useCallback((decisionPatch: Record<string, any>) => {
     const returnToLoading = returnToLoadingRef.current;
     if (!returnToLoading) {
-      navigation.goBack();
+      if (!jobId) {
+        navigation.goBack();
+        return;
+      }
+
+      navigation.replace('LoadingScreen', {
+        processType: 'match',
+        payload: {
+          jobId,
+          firstPhotos: [],
+          userAssistDecisions: {
+            [safeIndex]: {
+              ...decisionPatch,
+              state: 'submitted',
+            },
+          },
+          resumeFromAssist: true,
+          assistTransitionToken: `${Date.now()}`,
+          assistSourceItemIndex: safeIndex,
+          skipMatchSelection: true,
+        },
+        onCompleteRoute: {
+          screen: 'GenerateDetailsScreen',
+          params: {
+            matchJobId: jobId,
+            focusIndex: safeIndex,
+          },
+        },
+      } as any);
       return;
     }
 
@@ -364,7 +389,7 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
         assistSourceItemIndex: safeIndex,
       },
     } as any);
-  }, [navigation, safeIndex]);
+  }, [jobId, navigation, safeIndex]);
 
   const handleConfirm = useCallback(async () => {
     if (typeof selectedIndex !== 'number') {
@@ -381,10 +406,11 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
     } finally {
       setIsSubmitting(false);
     }
-  }, [selectedIndex, submitAssistResponse, navigateBackToLoading]);
+  }, [navigateBackToLoading, selectedIndex, submitAssistResponse]);
 
   const handleDenySelected = useCallback(async () => {
     if (typeof selectedIndex !== 'number') return;
+
     const nextDenied = Array.from(new Set([...(deniedSelectionsByIndex[safeIndex] || []), selectedIndex]));
     setDeniedSelectionsByIndex((prev) => ({ ...prev, [safeIndex]: nextDenied }));
     setSelectedMatchesByIndex((prev) => ({ ...prev, [safeIndex]: [] }));
@@ -396,47 +422,89 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
         deniedCandidateIndices: [selectedIndex],
       });
     } catch {
-      // non-blocking for UX; local state still reflects denied option
+      // Non-blocking: local denial still applies.
     }
-  }, [selectedIndex, deniedSelectionsByIndex, safeIndex, submitAssistResponse]);
+  }, [deniedSelectionsByIndex, safeIndex, selectedIndex, submitAssistResponse]);
 
-  const handleSubmitRefine = useCallback(async () => {
-    const value = (refineTextByIndex[safeIndex] || '').trim();
-    if (!value) {
+  const handleSubmitRefine = useCallback(async (value: string) => {
+    const normalizedValue = value.trim();
+    setRefineTextByIndex((prev) => ({ ...prev, [safeIndex]: normalizedValue }));
+
+    if (!normalizedValue) {
       Alert.alert('Add details', 'Enter a detail like barcode, model, or visible text.');
       return;
     }
 
     try {
       setIsSubmitting(true);
-      await submitAssistResponse({ action: 'refine', refineText: value });
-      navigateBackToLoading({ refineText: value });
+      await submitAssistResponse({ action: 'refine', refineText: normalizedValue });
+      navigateBackToLoading({ refineText: normalizedValue });
     } catch (err: any) {
       Alert.alert('Could not submit details', err?.message || 'Please try again.');
     } finally {
       setIsSubmitting(false);
     }
-  }, [refineTextByIndex, safeIndex, submitAssistResponse, navigateBackToLoading]);
+  }, [navigateBackToLoading, safeIndex, submitAssistResponse]);
+
+  const handleInlineRefineChange = useCallback((value: string) => {
+    setRefineTextByIndex((prev) => ({ ...prev, [safeIndex]: value }));
+  }, [safeIndex]);
+
+  const handleReselectMatches = useCallback(() => {
+    if (visibleCandidates.length === 0 && candidates.length === 0) {
+      Alert.alert('No matches available', 'There are no match candidates available to reselect.');
+      return;
+    }
+
+    if (visibleCandidates.length === 0 && candidates.length > 0) {
+      setDeniedSelectionsByIndex((prev) => ({ ...prev, [safeIndex]: [] }));
+      setSelectedMatchesByIndex((prev) => ({ ...prev, [safeIndex]: [0] }));
+      return;
+    }
+
+    const firstVisible = visibleCandidates[0];
+    if (firstVisible && typeof firstVisible.originalIndex === 'number') {
+      setSelectedMatchesByIndex((prev) => ({ ...prev, [safeIndex]: [firstVisible.originalIndex] }));
+    }
+  }, [candidates.length, safeIndex, visibleCandidates]);
 
   const handleBestGuess = useCallback(async () => {
     try {
       setIsSubmitting(true);
+      setBestGuessByIndex((prev) => ({ ...prev, [safeIndex]: true }));
       await submitAssistResponse({ action: 'best_guess', generateBestGuess: true });
-      navigateBackToLoading({ generateBestGuess: true });
+      navigateBackToLoading({ bestGuess: true });
     } catch (err: any) {
       Alert.alert('Could not continue', err?.message || 'Please try again.');
     } finally {
       setIsSubmitting(false);
     }
-  }, [submitAssistResponse, navigateBackToLoading]);
+  }, [navigateBackToLoading, safeIndex, submitAssistResponse]);
 
-  const totalItems = Math.max(results.length, 1);
+  const footerState: 'match_confirm' | 'match_assist_input' = selectedCandidate ? 'match_confirm' : 'match_assist_input';
+  const selectedPreview = selectedCandidate ? {
+    thumb: selectedCandidate.thumbnail || selectedCandidate.image,
+    title: selectedCandidate.title || 'Untitled listing',
+    source: sourceLabel(selectedCandidate),
+  } : null;
+  const jobsModalItems = useMemo(() => {
+    return results.map((result, index) => {
+      const top = result?.rerankedResults?.[0] || result?.serpApiData?.[0];
+      const topImage = (top as any)?.thumbnail || (top as any)?.image;
+      return {
+        index,
+        title: top?.title || `Item ${index + 1}`,
+        thumb: result?.originalTargetImage || topImage || '',
+        matchesCount: Array.isArray(result?.serpApiData) ? result.serpApiData.length : 0,
+      };
+    });
+  }, [results]);
 
   if (isLoading) {
     return (
       <View style={styles.centeredContainer}>
         <ActivityIndicator size="large" color="#93C822" />
-        <Text style={styles.loadingText}>Loading match candidates…</Text>
+        <Text style={styles.loadingText}>Loading match candidates...</Text>
       </View>
     );
   }
@@ -452,49 +520,47 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
     );
   }
 
+  const totalItems = Math.max(results.length, 1);
+
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 10 : 0}
-    >
+    <View style={styles.container}>
       <View style={styles.headerRow}>
-        <TouchableOpacity style={styles.chip} onPress={() => navigation.goBack()}>
-          <Icon name="arrow-left" size={14} color="#111827" />
-          <Text style={styles.chipText}>Back</Text>
+        <BackButton onPress={() => navigation.goBack()} />
+        <TouchableOpacity style={styles.jobsButton} onPress={() => setJobsModalVisible(true)}>
+          <Boxes size={17} color="#111827" />
+          <Text style={styles.jobsButtonText}>Current Jobs</Text>
         </TouchableOpacity>
-        <View style={[styles.chip, styles.progressChip]}>
-          <Icon name="progress-clock" size={14} color="#111827" />
-          <Text style={styles.chipText}>Progress</Text>
-        </View>
       </View>
 
       <View style={styles.titleWrap}>
-        <Text style={styles.title}>Select Best Matching Listing</Text>
-        <Text style={styles.subtitle}>Item {safeIndex + 1} of {totalItems} • {jobStatus}</Text>
-      </View>
-
-      {currentResult?.matchDecisionReason ? (
-        <View style={styles.infoPill}>
-          <Text style={styles.infoPillText}>{currentResult.matchDecisionReason}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, justifyContent: 'flex-start' }}>
+          {currentResult?.originalTargetImage ? (
+            <Image source={{ uri: currentResult.originalTargetImage }} style={{ width: 44, height: 44, borderRadius: 8, backgroundColor: '#E2E8F0' }} />
+          ) : (
+            <View style={{ width: 44, height: 44, borderRadius: 8, backgroundColor: '#E2E8F0' }} />
+          )}
+          <View>
+            <Text style={styles.title}>Select Best Matching Listing</Text>
+            <Text style={styles.subtitle}>Item {safeIndex + 1} of {totalItems} • {jobStatus}</Text>
+          </View>
         </View>
-      ) : null}
+      </View>
 
       <FlashList
         data={visibleCandidates}
         numColumns={GRID_COLUMNS}
         keyExtractor={(entry, index) => entry.candidate.link || `${entry.originalIndex}-${index}`}
-        estimatedItemSize={170}
         contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 280 }}
         ListEmptyComponent={
           <View style={styles.emptyState}>
             <Text style={styles.emptyStateTitle}>No candidate matches left</Text>
-            <Text style={styles.emptyStateBody}>Refine with text details or continue with best guess.</Text>
+            <Text style={styles.emptyStateBody}>Add details below or continue with best guess.</Text>
           </View>
         }
         renderItem={({ item }) => {
           const isSelected = typeof selectedIndex === 'number' && selectedIndex === item.originalIndex;
           const imageUri = item.candidate.thumbnail || item.candidate.image;
+
           return (
             <TouchableOpacity
               style={[styles.card, isSelected && styles.cardSelected]}
@@ -520,80 +586,69 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
         }}
       />
 
-      <View style={[styles.bottomSheet, { paddingBottom: Math.max(insets.bottom, 14) }]}>
-        {selectedCandidate ? (
-          <>
-            <Text style={styles.bottomTitle}>Selected Match</Text>
-            <View style={styles.selectedRow}>
-              {(selectedCandidate.thumbnail || selectedCandidate.image) ? (
-                <Image source={{ uri: selectedCandidate.thumbnail || selectedCandidate.image }} style={styles.selectedThumb} />
-              ) : (
-                <View style={[styles.selectedThumb, styles.cardImagePlaceholder]} />
-              )}
-              <View style={{ flex: 1 }}>
-                <Text style={styles.selectedTitle} numberOfLines={2}>{selectedCandidate.title || 'Untitled listing'}</Text>
-                <Text style={styles.selectedMeta} numberOfLines={1}>{sourceLabel(selectedCandidate)}</Text>
-              </View>
-            </View>
-            <View style={styles.bottomActionsRow}>
-              <TouchableOpacity
-                style={[styles.secondaryButton, isSubmitting && styles.disabledButton]}
-                onPress={() => { void handleDenySelected(); }}
-                disabled={isSubmitting}
-              >
-                <Text style={styles.secondaryButtonText}>Not this</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.primaryButton, isSubmitting && styles.disabledButton]}
-                onPress={() => { void handleConfirm(); }}
-                disabled={isSubmitting}
-              >
-                {isSubmitting ? (
-                  <ActivityIndicator color="#FFF" size="small" />
-                ) : (
-                  <Text style={styles.primaryButtonText}>Confirm Product Selection</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </>
-        ) : (
-          <>
-            <Text style={styles.bottomTitle}>Need help identifying this item?</Text>
-            <Text style={styles.bottomDescription}>
-              {currentResult?.userAssist?.prompt || 'Add a detail like barcode/model/title, or continue with best guess.'}
-            </Text>
-            <TextInput
-              style={styles.refineInput}
-              placeholder="Refine with text details (barcode, model, title)"
-              placeholderTextColor="#94A3B8"
-              value={refineText}
-              onChangeText={(text) => {
-                setRefineTextByIndex((prev) => ({ ...prev, [safeIndex]: text }));
-              }}
-              multiline
-            />
-            <TouchableOpacity
-              style={[styles.primaryButton, isSubmitting && styles.disabledButton]}
-              onPress={() => { void handleSubmitRefine(); }}
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? (
-                <ActivityIndicator color="#FFF" size="small" />
-              ) : (
-                <Text style={styles.primaryButtonText}>Submit Details</Text>
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.linkButton, isSubmitting && styles.disabledButton]}
-              onPress={() => { void handleBestGuess(); }}
-              disabled={isSubmitting}
-            >
-              <Text style={styles.linkButtonText}>Just give your best guess</Text>
-            </TouchableOpacity>
-          </>
-        )}
-      </View>
-    </KeyboardAvoidingView>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+        style={styles.footerKeyboardWrap}
+      >
+        <BottomNav
+          state={footerState}
+          selectedCount={typeof selectedIndex === 'number' ? 1 : 0}
+          selectedTemplate={null}
+          selectedPlatforms={[]}
+          isConnected={() => true}
+          onShowSelection={() => { }}
+          onShowTemplates={() => { }}
+          onShowPlatforms={() => { }}
+          onBackToEmpty={() => { }}
+          onBackToSelection={() => { }}
+          onOpenTemplateModal={() => { }}
+          onTemplateSelect={() => { }}
+          onPlatformToggle={() => { }}
+          onGeneratePress={() => { }}
+          matchSelectedItem={selectedPreview}
+          matchPrompt={currentResult?.userAssist?.prompt}
+          matchInputValue={refineTextByIndex[safeIndex] || ''}
+          onMatchInputChange={handleInlineRefineChange}
+          onMatchConfirm={() => { void handleConfirm(); }}
+          onMatchDeny={() => { void handleDenySelected(); }}
+          onMatchSubmitDetails={(text) => { void handleSubmitRefine(text); }}
+          onMatchBestGuess={() => { void handleBestGuess(); }}
+          onMatchReselect={handleReselectMatches}
+          matchSubmitting={isSubmitting}
+        />
+      </KeyboardAvoidingView>
+
+      <ItemJobsModal
+        visible={jobsModalVisible}
+        onClose={() => setJobsModalVisible(false)}
+        items={jobsModalItems}
+        currentIndex={safeIndex}
+        scanColor={() => '#10B981'}
+        matchColor={() => '#10B981'}
+        detailsColor={(idx) => (idx === safeIndex ? '#93C822' : '#94A3B8')}
+        detailsEnabled={() => true}
+        onPickScan={(idx) => {
+          setCurrentProductIndex(idx);
+          setJobsModalVisible(false);
+        }}
+        onPickMatch={(idx) => {
+          setCurrentProductIndex(idx);
+          setJobsModalVisible(false);
+        }}
+        onPickDetails={(idx) => {
+          setCurrentProductIndex(idx);
+          setJobsModalVisible(false);
+        }}
+        getSecondaryText={(idx) => {
+          const item = results[idx];
+          if (!item) return 'Queued';
+          if (item?.matchDecision === 'needs_user_input') return 'Needs your input';
+          if (item?.matchDecision === 'matched' || item?.matchDecision === 'classified') return 'Ready';
+          return 'Analyzing';
+        }}
+      />
+    </View>
   );
 }
 
@@ -619,68 +674,86 @@ const styles = StyleSheet.create({
     color: '#B91C1C',
     fontSize: 14,
     textAlign: 'center',
+    marginBottom: 16,
   },
   retryButton: {
-    marginTop: 12,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    backgroundColor: '#111827',
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
   retryText: {
-    color: '#111827',
-    fontWeight: '600',
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 13,
   },
   headerRow: {
-    paddingTop: 16,
-    paddingHorizontal: 14,
+    marginTop: 64,
+    marginHorizontal: 14,
     flexDirection: 'row',
     gap: 8,
+    alignItems: 'center',
+  },
+  jobsButton: {
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 34,
+    gap: 6,
+  },
+  jobsButtonText: {
+    color: '#000',
+    fontSize: 15,
+    fontWeight: '600',
   },
   chip: {
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    borderRadius: 16,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     backgroundColor: '#FFFFFF',
   },
   progressChip: {
-    marginLeft: 4,
+    backgroundColor: '#F8FAFC',
   },
   chipText: {
     color: '#111827',
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   titleWrap: {
-    paddingHorizontal: 14,
-    paddingTop: 14,
-    paddingBottom: 8,
+    paddingHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 8,
   },
   title: {
     color: '#111827',
-    fontSize: 20,
+    fontSize: 19,
     fontWeight: '700',
   },
   subtitle: {
     color: '#6B7280',
-    fontSize: 13,
-    marginTop: 4,
+    fontSize: 12,
+    marginTop: 2,
   },
   infoPill: {
-    marginHorizontal: 14,
-    marginBottom: 8,
+    marginHorizontal: 16,
+    marginBottom: 6,
     borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
     backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
     paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingVertical: 7,
   },
   infoPillText: {
     color: '#475569',
@@ -689,60 +762,61 @@ const styles = StyleSheet.create({
   },
   card: {
     flex: 1,
-    margin: 6,
+    marginHorizontal: 4,
+    marginVertical: 6,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: '#E2E8F0',
     backgroundColor: '#FFFFFF',
     padding: 8,
-    minHeight: 188,
+    minHeight: 172,
   },
   cardSelected: {
     borderColor: '#93C822',
-    borderWidth: 2,
     backgroundColor: '#F7FEE7',
   },
   cardImage: {
     width: '100%',
-    height: 104,
+    height: 92,
     borderRadius: 8,
-    backgroundColor: '#E2E8F0',
+    marginBottom: 6,
   },
   cardImagePlaceholder: {
+    width: '100%',
+    height: 92,
+    borderRadius: 8,
     backgroundColor: '#E2E8F0',
+    marginBottom: 6,
   },
   cardTitle: {
-    marginTop: 7,
     color: '#111827',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
-    minHeight: 34,
   },
   cardMeta: {
-    marginTop: 5,
-    color: '#6B7280',
-    fontSize: 11,
+    color: '#64748B',
+    fontSize: 10,
+    marginTop: 3,
   },
   selectedBadge: {
     marginTop: 6,
     alignSelf: 'flex-start',
-    borderRadius: 12,
-    backgroundColor: '#93C822',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+    backgroundColor: '#65A30D',
+    borderRadius: 999,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
   },
   selectedBadgeText: {
     color: '#FFFFFF',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
   },
   emptyState: {
-    marginTop: 30,
-    alignItems: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 18,
+    paddingVertical: 20,
   },
   emptyStateTitle: {
     color: '#111827',
@@ -750,118 +824,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   emptyStateBody: {
-    marginTop: 6,
     color: '#64748B',
-    fontSize: 13,
-    textAlign: 'center',
-  },
-  bottomSheet: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 14,
-    paddingTop: 12,
-  },
-  bottomTitle: {
-    color: '#111827',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  bottomDescription: {
-    marginTop: 4,
-    color: '#6B7280',
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  selectedRow: {
-    marginTop: 10,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
-    padding: 9,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  selectedThumb: {
-    width: 52,
-    height: 52,
-    borderRadius: 8,
-    backgroundColor: '#E2E8F0',
-  },
-  selectedTitle: {
-    color: '#111827',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  selectedMeta: {
-    color: '#6B7280',
     fontSize: 12,
-    marginTop: 3,
+    marginTop: 6,
   },
-  bottomActionsRow: {
-    marginTop: 12,
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'center',
-  },
-  primaryButton: {
-    flex: 1,
-    borderRadius: 10,
-    backgroundColor: '#93C822',
-    paddingVertical: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  primaryButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  secondaryButton: {
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    backgroundColor: '#FFFFFF',
-  },
-  secondaryButtonText: {
-    color: '#374151',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  refineInput: {
-    marginTop: 10,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    borderRadius: 10,
-    backgroundColor: '#F8FAFC',
-    color: '#111827',
-    fontSize: 13,
-    minHeight: 82,
-    textAlignVertical: 'top',
-    paddingHorizontal: 11,
-    paddingVertical: 10,
-  },
-  linkButton: {
-    marginTop: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-  },
-  linkButtonText: {
-    color: '#64748B',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  disabledButton: {
-    opacity: 0.55,
+  footerKeyboardWrap: {
+    width: '100%',
   },
 });

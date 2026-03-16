@@ -5,11 +5,11 @@ import {
   StyleSheet,
   TouchableOpacity,
   Image,
-  Platform,
   LayoutChangeEvent,
 } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import PlaceholderImage from './PlaceholderImage';
+import ShadowSurface from './ui/ShadowSurface';
 import PlatformAvatar from './PlatformAvatar';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Animated, { FadeInLeft, FadeOutLeft, Layout } from 'react-native-reanimated';
@@ -124,15 +124,22 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
   };
 
   return (
-    <TouchableOpacity
-      style={styles.cardContainer}
-      onPress={() => onPress(id)}
-      onLongPress={onLongPress ? () => onLongPress(id) : undefined}
-      activeOpacity={0.7}
-      delayLongPress={300}
-      onLayout={onLayout}
-    >
-      <View style={[styles.card, { backgroundColor: isSelected ? 'rgba(132, 204, 22, 0.1)' : 'rgba(228, 228, 228, 0.01)', borderColor: isSelected ? '#84CC16' : 'transparent', borderWidth: 1 }]}>
+    <ShadowSurface shadow="sm" radius={16} style={styles.cardOuter} innerStyle={styles.cardSurface}>
+      <TouchableOpacity
+        style={[
+          styles.cardContent,
+          {
+            backgroundColor: isSelected ? 'rgba(132, 204, 22, 0.1)' : 'rgba(228, 228, 228, 0.01)',
+            borderColor: isSelected ? '#84CC16' : 'transparent',
+            borderWidth: 1,
+          },
+        ]}
+        onPress={() => onPress(id)}
+        onLongPress={onLongPress ? () => onLongPress(id) : undefined}
+        activeOpacity={0.7}
+        delayLongPress={300}
+        onLayout={onLayout}
+      >
 
         {/* Selection Indicator */}
         {isSelectionMode && (
@@ -259,27 +266,22 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
             </View>
           </View>
         </View>
-      </View>
-    </TouchableOpacity>
+      </TouchableOpacity>
+    </ShadowSurface>
   );
 });
 
 const styles = StyleSheet.create({
-  cardContainer: {
+  cardOuter: {
     marginBottom: 12,
     marginHorizontal: 8,
+  },
+  cardSurface: {
     backgroundColor: 'rgba(228, 228, 228, 0.07)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
     borderRadius: 16,
   },
-  card: {
+  cardContent: {
     flexDirection: 'row',
-    borderRadius: 16,
-    overflow: 'hidden',
     padding: 12,
   },
   imageContainer: {

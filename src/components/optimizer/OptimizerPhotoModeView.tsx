@@ -16,6 +16,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useAuth } from '@clerk/clerk-expo';
 import { ensureSupabaseJwt, supabase } from '../../lib/supabase';
+import { OPTIMIZER_THRESHOLDS } from '../../hooks/useOptimizerQueues';
 
 const { width } = Dimensions.get('window');
 
@@ -31,9 +32,11 @@ const COLORS = {
 interface OptimizerPhotoModeViewProps {
     onBack: () => void;
     onComplete: (ids: string[]) => void;
+    /** When provided, use this list instead of fetching (real queue data from useOptimizerQueues) */
+    queueProducts?: any[];
 }
 
-export function OptimizerPhotoModeView({ onBack, onComplete }: OptimizerPhotoModeViewProps) {
+export function OptimizerPhotoModeView({ onBack, onComplete, queueProducts }: OptimizerPhotoModeViewProps) {
     const { getToken } = useAuth();
     const cameraRef = useRef<CameraView>(null);
     const [facing, setFacing] = useState<CameraType>('back');
@@ -52,41 +55,36 @@ export function OptimizerPhotoModeView({ onBack, onComplete }: OptimizerPhotoMod
     const shutterAnim = useRef(new Animated.Value(1)).current;
 
     useEffect(() => {
-        loadNeedPhotosProducts();
+        if (queueProducts && queueProducts.length > 0) {
+            setProducts(queueProducts);
+            setLoading(false);
+            Animated.spring(cardAnim, { toValue: 1, useNativeDriver: true, tension: 50, friction: 8 }).start();
+        } else {
+            loadNeedPhotosProducts();
+        }
     }, []);
 
     const loadNeedPhotosProducts = async () => {
         try {
             await ensureSupabaseJwt();
-
-            // Fetch products needing images
             const { data, error } = await supabase
                 .from('ProductVariants')
                 .select(`
                     Id, Title, Price, Sku,
                     ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl)
                 `)
-                .limit(20);
+                .limit(100);
 
             if (error) throw error;
-
-            // FIlter logic
-            const needingPhotos = data?.filter(p => !p.ProductImages || p.ProductImages.length < 3) || [];
-
+            const needingPhotos = (data || []).filter(
+                p => !p.ProductImages || (Array.isArray(p.ProductImages) ? p.ProductImages.length : 0) < OPTIMIZER_THRESHOLDS.minImages
+            );
             setProducts(needingPhotos);
-            setLoading(false);
-
-            // Animate card in
-            Animated.spring(cardAnim, {
-                toValue: 1,
-                useNativeDriver: true,
-                tension: 50,
-                friction: 8
-            }).start();
-
+            Animated.spring(cardAnim, { toValue: 1, useNativeDriver: true, tension: 50, friction: 8 }).start();
         } catch (err) {
             console.error('[OptimizerPhoto] Error loading products', err);
             Alert.alert('Error', 'Failed to load products.');
+        } finally {
             setLoading(false);
         }
     };

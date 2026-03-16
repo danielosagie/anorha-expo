@@ -5,10 +5,10 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  Platform,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
+import ShadowSurface from './ui/ShadowSurface';
 import ShopifySvg from '../assets/shopify.svg';
 import AmazonSvg from '../assets/amazon.svg';
 import FacebookSvg from '../assets/facebook.svg';
@@ -58,29 +58,31 @@ const PlatformFilterChips: React.FC<PlatformFilterChipsProps> = ({
         contentContainerStyle={styles.platformFiltersContent}
       >
         {/* All Filter - Always available */}
-        <TouchableOpacity
-          style={[
-            styles.platformFilterChip,
-            !selectedPlatform && {
-              backgroundColor: activeHighlightColor,
-              borderColor: activeHighlightColor,
-            },
-          ]}
-          onPress={() => onSelectPlatform(null)}
-          activeOpacity={0.7}
-        >
-          <Text
+        <ShadowSurface shadow="xs" radius={20} style={styles.platformFilterChipShadow} innerStyle={styles.platformFilterChipInner}>
+          <TouchableOpacity
             style={[
-              styles.platformFilterChipText,
+              styles.platformFilterChip,
               !selectedPlatform && {
-                color: '#FFFFFF',
-                fontWeight: '600',
+                backgroundColor: activeHighlightColor,
+                borderColor: activeHighlightColor,
               },
             ]}
+            onPress={() => onSelectPlatform(null)}
+            activeOpacity={0.7}
           >
-            All
-          </Text>
-        </TouchableOpacity>
+            <Text
+              style={[
+                styles.platformFilterChipText,
+                !selectedPlatform && {
+                  color: '#FFFFFF',
+                  fontWeight: '600',
+                },
+              ]}
+            >
+              All
+            </Text>
+          </TouchableOpacity>
+        </ShadowSurface>
 
         {/* Dynamic Platform Filters */}
         {platforms.map((platform) => {
@@ -88,79 +90,86 @@ const PlatformFilterChips: React.FC<PlatformFilterChipsProps> = ({
           const displayName = platform.name.charAt(0).toUpperCase() + platform.name.slice(1);
 
           return (
-            <TouchableOpacity
+            <ShadowSurface
               key={platform.type}
-              style={[
-                styles.platformFilterChip,
-                {
-                  opacity: 1,
-                  borderColor: '#E0E0E0',
-                },
-                isSelected && {
-                  backgroundColor: activeHighlightColor,
-                  borderColor: activeHighlightColor,
-                },
-              ]}
-              onPress={() => {
-                if (isSelected) {
-                  onSelectPlatform(null);
-                } else {
-                  onSelectPlatform(displayName);
-                }
-              }}
-              activeOpacity={0.7}
+              shadow="xs"
+              radius={20}
+              style={styles.platformFilterChipShadow}
+              innerStyle={styles.platformFilterChipInner}
             >
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                {(() => {
-                  const IconComponent = getPlatformIcon(platform.type);
-                  return IconComponent ? (
-                    <IconComponent
-                      width={16}
-                      height={16}
-                      fill={isSelected ? '#FFFFFF' : theme.colors.text}
-                      style={styles.platformIcon}
-                    />
-                  ) : (
-                    <Icon
-                      name="store"
-                      size={16}
-                      color={isSelected ? '#FFFFFF' : theme.colors.text}
-                      style={styles.platformIcon}
-                    />
-                  );
-                })()}
-                <Text
-                  style={[
-                    styles.platformFilterChipText,
-                    {
-                      color: isSelected ? '#FFFFFF' : theme.colors.text,
-                    },
-                    isSelected && {
-                      fontWeight: '600',
-                    },
-                  ]}
-                >
-                  {displayName}
-                </Text>
-                {platform.connectionCount && platform.connectionCount > 1 && (
-                  <View
+              <TouchableOpacity
+                style={[
+                  styles.platformFilterChip,
+                  {
+                    opacity: 1,
+                    borderColor: '#E0E0E0',
+                  },
+                  isSelected && {
+                    backgroundColor: activeHighlightColor,
+                    borderColor: activeHighlightColor,
+                  },
+                ]}
+                onPress={() => {
+                  if (isSelected) {
+                    onSelectPlatform(null);
+                  } else {
+                    onSelectPlatform(displayName);
+                  }
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  {(() => {
+                    const IconComponent = getPlatformIcon(platform.type);
+                    return IconComponent ? (
+                      <IconComponent
+                        width={16}
+                        height={16}
+                        fill={isSelected ? '#FFFFFF' : theme.colors.text}
+                        style={styles.platformIcon}
+                      />
+                    ) : (
+                      <Icon
+                        name="store"
+                        size={16}
+                        color={isSelected ? '#FFFFFF' : theme.colors.text}
+                        style={styles.platformIcon}
+                      />
+                    );
+                  })()}
+                  <Text
                     style={[
-                      styles.connectionCountBadge,
-                      isSelected && { backgroundColor: 'rgba(255,255,255,0.2)' },
+                      styles.platformFilterChipText,
+                      {
+                        color: isSelected ? '#FFFFFF' : theme.colors.text,
+                      },
+                      isSelected && {
+                        fontWeight: '600',
+                      },
                     ]}
                   >
-                    <Text
+                    {displayName}
+                  </Text>
+                  {platform.connectionCount && platform.connectionCount > 1 && (
+                    <View
                       style={[
-                        styles.connectionCountText,
-                        isSelected && { color: '#FFFFFF' },
+                        styles.connectionCountBadge,
+                        isSelected && { backgroundColor: 'rgba(255,255,255,0.2)' },
                       ]}
                     >
-                      {platform.connectionCount}
-                    </Text>
-                  </View>
-                )}
-              </View>
-            </TouchableOpacity>
+                      <Text
+                        style={[
+                          styles.connectionCountText,
+                          isSelected && { color: '#FFFFFF' },
+                        ]}
+                      >
+                        {platform.connectionCount}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </TouchableOpacity>
+            </ShadowSurface>
           );
         })}
       </ScrollView>
@@ -184,6 +193,12 @@ const styles = StyleSheet.create({
   platformFiltersContent: {
     paddingHorizontal: 8,
   },
+  platformFilterChipShadow: {
+    marginRight: 8,
+  },
+  platformFilterChipInner: {
+    borderRadius: 20,
+  },
   platformFilterChip: {
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -191,20 +206,8 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: '#E0E0E0',
     backgroundColor: '#FFFFFF',
-    marginRight: 8,
     flexDirection: 'row',
     alignItems: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
-      },
-      android: {
-        elevation: 1,
-      },
-    }),
   },
   platformIcon: {
     marginRight: 6,
@@ -213,6 +216,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
     color: '#333333',
+    lineHeight: 18,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
   connectionCountBadge: {
     backgroundColor: '#F0F0F0',
@@ -227,6 +233,9 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: 'bold',
     color: '#555555',
+    lineHeight: 12,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
 });
 

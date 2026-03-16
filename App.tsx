@@ -1,11 +1,11 @@
-import React, { useEffect, useRef, useState, useContext } from 'react';
+import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { NavigationContainer, NavigationContainerRef, CommonActions } from '@react-navigation/native';
-import { StatusBar, Linking, Alert, ActivityIndicator, View, Pressable } from 'react-native';
+import { AppState, AppStateStatus, StatusBar, Linking, Alert, ActivityIndicator, View, Pressable } from 'react-native';
 import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { LogBox } from 'react-native';
 import 'react-native-get-random-values';
-import { supabase } from './src/lib/supabase';
+import { ensureSupabaseJwt, supabase } from './src/lib/supabase';
 import { LegendStateContext } from './src/context/LegendStateContext';
 import { LegendStateControlContext } from './src/context/LegendStateControlContext';
 import { initializeLegendState, LegendStateObservables } from './src/utils/SupaLegend';
@@ -31,6 +31,13 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PostHogProvider, PostHogIdentify } from './src/providers/PostHogProvider';
 import * as WebBrowser from 'expo-web-browser';
 import { init as initFlowLogger } from './src/lib/mobileFlowLogger';
+import { LiveActivityProvider } from './src/context/LiveActivityContext';
+import {
+  ActiveFlowCheckpoint,
+  clearActiveFlowCheckpoint,
+  loadActiveFlowCheckpoint,
+  saveActiveFlowCheckpoint,
+} from './src/utils/activeFlowPersistence';
 
 // Complete any in-app browser auth session (e.g. OAuth redirect from Google Sign-In)
 WebBrowser.maybeCompleteAuthSession();
@@ -40,6 +47,7 @@ initFlowLogger().catch(() => { });
 
 // Feature flag to disable new functionality during debugging
 const ENABLE_PROCESS_FEATURES = false;
+const API_BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
 
 
 const App: React.FC = () => {
@@ -66,6 +74,90 @@ const App: React.FC = () => {
 
     // Use process resumption hook properly
     const processResumption = ENABLE_PROCESS_FEATURES ? useProcessResumption() : null;
+    const hasAttemptedAutoResumeRef = useRef(false);
+
+    const buildFallbackCompleteRoute = useCallback((processType: 'match' | 'generate' | 'match-and-generate', jobId: string) => {
+      if (processType === 'generate') {
+        return {
+          screen: 'GenerateDetailsScreen',
+          params: {
+            jobId,
+            status: 'processing',
+            results: [],
+            summary: [],
+            completedAt: '',
+          },
+        };
+      }
+
+      return {
+        screen: 'GenerateDetailsScreen',
+        params: {
+          jobId: '',
+          status: 'processing',
+          results: [],
+          summary: [],
+          completedAt: '',
+          matchJobId: jobId,
+          items: [],
+          jobMap: {},
+        },
+      };
+    }, []);
+
+    const fetchLatestActiveFlowFromBackend = useCallback(async (): Promise<ActiveFlowCheckpoint | null> => {
+      const token = await ensureSupabaseJwt();
+      if (!token) return null;
+
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      };
+
+      const fetchLatest = async (path: string) => {
+        const processingRes = await fetch(`${API_BASE_URL}${path}?status=processing&limit=1`, { headers }).catch(() => null);
+        const processingJson = processingRes && processingRes.ok ? await processingRes.json().catch(() => null) : null;
+        const processingJob = Array.isArray(processingJson?.jobs) ? processingJson.jobs[0] : null;
+        if (processingJob) return processingJob;
+
+        const queuedRes = await fetch(`${API_BASE_URL}${path}?status=queued&limit=1`, { headers }).catch(() => null);
+        const queuedJson = queuedRes && queuedRes.ok ? await queuedRes.json().catch(() => null) : null;
+        return Array.isArray(queuedJson?.jobs) ? queuedJson.jobs[0] : null;
+      };
+
+      const [latestMatch, latestGenerate] = await Promise.all([
+        fetchLatest('/api/products/match/jobs'),
+        fetchLatest('/api/products/generate/jobs'),
+      ]);
+
+      if (!latestMatch && !latestGenerate) {
+        return null;
+      }
+
+      const pickGenerate =
+        !!latestGenerate &&
+        (!latestMatch || (new Date(latestGenerate.createdAt).getTime() >= new Date(latestMatch.createdAt).getTime()));
+
+      const picked = pickGenerate ? latestGenerate : latestMatch;
+      const processType: 'match' | 'generate' = pickGenerate ? 'generate' : 'match';
+      const jobId = String(picked?.jobId || '');
+      if (!jobId.trim()) return null;
+
+      return {
+        version: 1,
+        updatedAt: Date.now(),
+        jobId,
+        processType,
+        status: picked?.currentStage === 'Waiting for user context' ? 'awaiting_user_input' : 'processing',
+        currentStage: picked?.currentStage,
+        payload: {
+          jobId,
+          firstPhotos: [],
+          bulkItems: [],
+        },
+        onCompleteRoute: buildFallbackCompleteRoute(processType, jobId) as any,
+      };
+    }, [buildFallbackCompleteRoute]);
 
     // Deep Link Handling scoped to AuthedApp
     useEffect(() => {
@@ -186,6 +278,117 @@ const App: React.FC = () => {
         }
       })();
     }, [clerkLoaded, isSignedIn, session?.ready]);
+
+    useEffect(() => {
+      if (!clerkLoaded || !isSignedIn || !session?.ready) return;
+      const userId = session?.user?.id;
+      if (!userId) return;
+
+      const nav = navigationRef.current;
+      if (!nav?.isReady?.()) return;
+      if (hasAttemptedAutoResumeRef.current) return;
+      hasAttemptedAutoResumeRef.current = true;
+
+      let cancelled = false;
+
+      (async () => {
+        try {
+          let checkpoint = await loadActiveFlowCheckpoint(userId);
+          if (!checkpoint) {
+            checkpoint = await fetchLatestActiveFlowFromBackend();
+            if (checkpoint) {
+              await saveActiveFlowCheckpoint(userId, checkpoint);
+            }
+          }
+
+          if (cancelled || !checkpoint) return;
+          if (checkpoint.status === 'completed') {
+            await clearActiveFlowCheckpoint(userId);
+            return;
+          }
+
+          const currentRouteName = navigationRef.current?.getCurrentRoute()?.name;
+          if (currentRouteName === 'LoadingScreen' || currentRouteName === 'MatchSelectionScreen') {
+            return;
+          }
+
+          const processType = checkpoint.processType;
+          const payload = {
+            ...(checkpoint.payload || {}),
+            jobId: checkpoint.jobId,
+            firstPhotos: Array.isArray(checkpoint.payload?.firstPhotos) ? checkpoint.payload.firstPhotos : [],
+            bulkItems: Array.isArray(checkpoint.payload?.bulkItems) ? checkpoint.payload.bulkItems : [],
+          };
+          const onCompleteRoute = checkpoint.onCompleteRoute || buildFallbackCompleteRoute(processType, checkpoint.jobId);
+
+          (navigationRef.current as any)?.navigate('AppStack', {
+            screen: 'LoadingScreen',
+            params: {
+              processType,
+              payload,
+              onCompleteRoute,
+            },
+          });
+        } catch (error) {
+          console.error('[App] Auto-resume failed:', error);
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [
+      buildFallbackCompleteRoute,
+      clerkLoaded,
+      fetchLatestActiveFlowFromBackend,
+      isSignedIn,
+      navigationRef,
+      session?.ready,
+      session?.user?.id,
+    ]);
+
+    useEffect(() => {
+      if (!clerkLoaded || !isSignedIn || !session?.ready) return;
+      const userId = session?.user?.id;
+      if (!userId) return;
+
+      let appState = AppState.currentState;
+      const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
+        const wasBackgrounded = appState.match(/inactive|background/);
+        appState = nextState;
+        if (!(nextState === 'active' && wasBackgrounded)) return;
+
+        void (async () => {
+          const checkpoint = await loadActiveFlowCheckpoint(userId);
+          if (!checkpoint || checkpoint.status === 'completed') return;
+
+          const routeName = navigationRef.current?.getCurrentRoute()?.name;
+          if (routeName === 'LoadingScreen' || routeName === 'MatchSelectionScreen') return;
+
+          const processType = checkpoint.processType;
+          const payload = {
+            ...(checkpoint.payload || {}),
+            jobId: checkpoint.jobId,
+            firstPhotos: Array.isArray(checkpoint.payload?.firstPhotos) ? checkpoint.payload.firstPhotos : [],
+            bulkItems: Array.isArray(checkpoint.payload?.bulkItems) ? checkpoint.payload.bulkItems : [],
+          };
+          const onCompleteRoute = checkpoint.onCompleteRoute || buildFallbackCompleteRoute(processType, checkpoint.jobId);
+
+          (navigationRef.current as any)?.navigate('AppStack', {
+            screen: 'LoadingScreen',
+            params: {
+              processType,
+              payload,
+              onCompleteRoute,
+            },
+          });
+        })();
+      });
+
+      return () => {
+        sub.remove();
+      };
+    }, [buildFallbackCompleteRoute, clerkLoaded, isSignedIn, navigationRef, session?.ready, session?.user?.id]);
 
     const resetLegendState = async () => {
       console.log('[App] Manually resetting Legend State by forcing re-initialization...');
@@ -387,9 +590,11 @@ const App: React.FC = () => {
             {isSignedIn ? (
               <WithSessionProvider>
                 {React.createElement(OrgProvider as any, null, (
-                  <JobsProvider>
-                    <AuthedAppContent navigationRef={navigationRef} />
-                  </JobsProvider>
+                  <LiveActivityProvider>
+                    <JobsProvider>
+                      <AuthedAppContent navigationRef={navigationRef} />
+                    </JobsProvider>
+                  </LiveActivityProvider>
                 ))}
               </WithSessionProvider>
             ) : (

@@ -13,7 +13,7 @@ import Card from '../components/Card'; // Import Card component
 import { useLegendState } from '../context/LegendStateContext';
 import { useOrg } from '../context/OrgContext'; // Import OrgContext
 import { LegendStateObservables, PlatformConnection } from '../utils/SupaLegend';
-import { useSyncProgress } from '../hooks/useSyncProgress';
+import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import Animated, { FadeInUp, Layout } from 'react-native-reanimated';
 import * as Progress from 'react-native-progress';
 import PlaceholderImage from '../components/PlaceholderImage';
@@ -33,6 +33,8 @@ const AnorhaLogo = require('../assets/rounded_anorha.png');
 import { CameraView } from 'expo-camera';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useImportSession } from '../hooks/useImportSession';
+import { ImportWizardSheet } from '../components/import/ImportWizardSheet';
 
 const ACTION_BAR_HEIGHT = 80;
 const ACTION_BAR_BOTTOM_OFFSET = 24;
@@ -76,7 +78,7 @@ interface MappingSuggestion {
   confidence?: number;
   // INTERNAL: resolution and restoration helpers (not sent to API)
   resolved?: boolean;
-  prevTab?: 'matched' | 'review' | 'ignore';
+  prevTab?: 'all' | 'needs_review' | 'matched' | 'ignored';
   originalData?: any; // For CSV Import storage
 }
 
@@ -109,23 +111,6 @@ interface ExistingMapping {
   };
 }
 
-// What you SEND to the backend after user review
-interface FinalizedMapping {
-  action: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE'; // Update to include all possible actions
-  platformProduct: {
-    id: string; // The platform's unique ID for the product/variant
-  };
-  sssyncProduct?: {  // Optional field for LINK_EXISTING action
-    id: string;
-  };
-}
-
-interface FinalizedMappingPayload {
-  approvedMappings: FinalizedMapping[];
-}
-
-// --- END REVISED ---
-
 // --- NEW: Type for Job Progress (Aligned with Backend) ---
 interface JobProgress {
   progress: number;
@@ -143,7 +128,11 @@ type MappingReviewScreenRouteProp = RouteProp<AppStackParamList, 'MappingReview'
 type MappingReviewScreenNavigationProp = StackNavigationProp<AppStackParamList, 'MappingReview'>;
 
 // Base URL for your SSSync API
-const SSSYNC_API_BASE_URL = 'https://api.sssync.app'; // Or your actual Railway URL
+const SSSYNC_API_BASE_URL = (
+  process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL ||
+  process.env.EXPO_PUBLIC_API_BASE_URL ||
+  'https://api.sssync.app'
+).replace(/\/+$/, '');
 
 // --- Helper: Wait for Supabase access token (bridge may need a moment) ---
 const waitForSupabaseToken = async (maxWaitMs: number = 8000, stepMs: number = 200): Promise<string | null> => {
@@ -166,7 +155,7 @@ const ensureBridge = async (getClerkToken: () => Promise<string | null>) => {
   } catch { }
 };
 
-type ActiveTab = 'matched' | 'review' | 'ignore';
+type ActiveTab = 'needs_review' | 'matched' | 'ignored';
 
 // Helper function to get platform colors
 const getPlatformColor = (platformType: string): string => {
@@ -184,18 +173,50 @@ const MappingReviewScreen = () => {
   const theme = useTheme();
   const route = useRoute<MappingReviewScreenRouteProp>();
   const navigation = useNavigation<MappingReviewScreenNavigationProp>();
-  const { connectionId, platformName, jobId, importedProducts, isCSVImport, isScanning, scanStartTime } = route.params as any;
+  const {
+    connectionId,
+    platformName,
+    jobId,
+    importedProducts,
+    isCSVImport,
+    isScanning,
+    scanStartTime,
+  } = route.params as any;
   const legendState: LegendStateObservables | null = useLegendState();
   const { currentOrg } = useOrg(); // Use Org Context
   const insets = useSafeAreaInsets();
   const bottomSafePadding = ACTION_BAR_HEIGHT + ACTION_BAR_BOTTOM_OFFSET + insets.bottom + 16;
-  const [connection, setConnection] = useState<any>()
+  const [connection, setConnection] = useState<any>();
+  const isScanningActiveEarly = isScanning || connection?.Status?.toLowerCase() === 'scanning' || connection?.Status?.toLowerCase() === 'syncing' || connection?.Status?.toLowerCase() === 'pending';
 
+  const importSession = useImportSession({
+    connectionId,
+    platformName,
+    isCSVImport,
+    importedProducts,
+    connection,
+    platformConnections: [] as any[],
+    skipInitialFetch: isScanningActiveEarly,
+    onNavigate: (screen, params) => navigation.navigate(screen as any, params),
+  });
+  const { suggestions, setSuggestions, wizardVisible, setWizardVisible, counts: sessionCounts } = importSession;
 
-  const [suggestions, setSuggestions] = useState<MappingSuggestion[] | null>(null);
+  // Sync connection from useImportSession hook (it fetches connection on mount)
+  useEffect(() => {
+    if (importSession.connection && !connection) {
+      setConnection(importSession.connection);
+    }
+  }, [importSession.connection]);
+
+  // ✅ CRITICAL: Sync hook loading state → screen loading state
+  // When the hook finishes fetching (loading=false), dismiss the screen's loading spinner too.
+  // Only sync when going from loading→done (not when the screen itself sets loading for actions).
+  useEffect(() => {
+    if (!importSession.loading && !isScanningActiveEarly) {
+      setLoading(false);
+    }
+  }, [importSession.loading]);
   const [missingMappings, setMissingMappings] = useState<Array<{ variantId: string; sku: string | null; title: string | null; productId: string | null }>>([]);
-  // Persist review progress
-  const [hasLoadedDraft, setHasLoadedDraft] = useState(false);
   // ✅ CHANGED: Start loading=true when scanning is detected
   const [loading, setLoading] = useState(true); // Will be updated based on isScanningActive
   const [error, setError] = useState<string | null>(null);
@@ -206,14 +227,10 @@ const MappingReviewScreen = () => {
   const [selectedConnectionIds, setSelectedConnectionIds] = useState<string[]>([]);
   const [isReconcileMode, setIsReconcileMode] = useState(false);
   const [previewingItem, setPreviewingItem] = useState<MappingSuggestion | null>(null);
-  const [activeTab, setActiveTab] = useState<ActiveTab>('matched');
-  const [reviewEntryStage, setReviewEntryStage] = useState<'summary' | 'details'>('summary');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('needs_review');
   // --- NEW: State for WebSocket sync progress ---
-  const { progress: syncProgress } = useSyncProgress(connectionId);
-
-  useEffect(() => {
-    setReviewEntryStage('summary');
-  }, [connectionId]);
+  const { progressByConnectionId } = usePlatformConnections();
+  const syncProgress = progressByConnectionId[connectionId];
 
   // ✅ FIX: Derive scanning state from BOTH route param AND connection status
   // This ensures progress bar shows even when navigating back to an active scan
@@ -237,57 +254,61 @@ const MappingReviewScreen = () => {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
 
-  const performProductSearch = useCallback(async (query: string) => {
-    if (!query || query.length < 2) return;
+  const performProductSearch = useCallback((query: string = '') => {
     setIsSearchingProducts(true);
-    setSearchModalResults([]);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-
-      const cleanQuery = query.trim();
-
-      // First try to get user's org ID for org-based products
-      const { data: orgMember } = await supabase
-        .from('OrgMembers')
-        .select('OrgId')
-        .eq('UserId', session.user.id)
-        .single();
-
-      const orgId = orgMember?.OrgId;
-
-      // Build query - search by UserId OR OrgId to catch all products
-      let query_builder = supabase
-        .from('ProductVariants')
-        .select('Id, Sku, Title, Price, Barcode, ProductId, Products(Title)')
-        .or(`Title.ilike.%${cleanQuery}%,Sku.ilike.%${cleanQuery}%`)
-        .limit(20);
-
-      // Filter by user or org
-      if (orgId) {
-        query_builder = query_builder.or(`UserId.eq.${session.user.id},OrgId.eq.${orgId}`);
-      } else {
-        query_builder = query_builder.eq('UserId', session.user.id);
+      if (!legendState) {
+        setSearchModalResults([]);
+        return;
       }
 
-      const { data, error } = await query_builder;
+      const cleanQuery = query.trim().toLowerCase();
+      
+      const allVariants = legendState.productVariants$?.get() || {};
+      const allProducts = legendState.products$?.get() || {};
+      const allMappings = legendState.platformProductMappings$?.get() || {};
 
-      if (error) throw error;
-      setSearchModalResults((data || []).map(v => ({
-        id: v.Id,
-        sku: v.Sku,
-        title: v.Title, // Variant title
-        productTitle: Array.isArray(v.Products) ? (v.Products[0] as any)?.Title : (v.Products as any)?.Title, // Parent title
-        price: v.Price,
-        imageUrl: null
-      })));
+      // Build a set of variant IDs already mapped to this connection
+      const mappedVariantIds = new Set<string>();
+      Object.values(allMappings).forEach((m: any) => {
+        if (m.PlatformConnectionId === connectionId && m.ProductVariantId) {
+          mappedVariantIds.add(m.ProductVariantId);
+        }
+      });
+
+      const matchedVariants = Object.values(allVariants).filter((v: any) => {
+        // Exclude archived and already mapped items
+        if (v.IsArchived || mappedVariantIds.has(v.Id)) return false;
+
+        // If no query, just return everything (up to the limit)
+        if (!cleanQuery) return true;
+
+        const matchTitle = v.Title?.toLowerCase().includes(cleanQuery);
+        const matchSku = v.Sku?.toLowerCase().includes(cleanQuery);
+        const matchBarcode = v.Barcode?.toLowerCase().includes(cleanQuery);
+        return matchTitle || matchSku || matchBarcode;
+      }).slice(0, 50); // increased limit to 50 for default view
+
+      console.log(`[performProductSearch] Local query "${cleanQuery}" returned ${matchedVariants.length} results from ${Object.keys(allVariants).length} total cache`);
+
+      setSearchModalResults(matchedVariants.map((v: any) => {
+        const parentProduct = allProducts[v.ProductId];
+        return {
+          id: v.Id,
+          sku: v.Sku,
+          title: v.Title,
+          productTitle: parentProduct?.Title || v.Title, // Fallback to variant title if no parent
+          price: v.Price,
+          imageUrl: v.PrimaryImageUrl || null,
+        };
+      }));
     } catch (err) {
-      console.error('Search error:', err);
+      console.error('[performProductSearch] Local search error:', err);
     } finally {
       setIsSearchingProducts(false);
     }
-  }, []);
+  }, [legendState]);
 
 
   const handleManualMatch = (canonicalVariant: any) => {
@@ -322,7 +343,6 @@ const MappingReviewScreen = () => {
     setSearchModalQuery('');
     setSearchModalResults([]);
   };
-  const [currentJobId, setCurrentJobId] = useState<string | undefined>(jobId);
   const [isPolling, setIsPolling] = useState(!!jobId); // Will be set to true when isScanningActive is detected
   const [jobProgress, setJobProgress] = useState<JobProgress | null>(null); // Keep for compatibility
   // --- END NEW ---
@@ -330,13 +350,7 @@ const MappingReviewScreen = () => {
   const [existingMappings, setExistingMappings] = useState<ExistingMapping[]>([]);
   const [loadingExistingMappings, setLoadingExistingMappings] = useState(false);
   // --- NEW: Add state for search functionality ---
-  const [searchQuery, setSearchQuery] = useState('');
-  const [showSearchResults, setShowSearchResults] = useState(false);
-  const [searchResults, setSearchResults] = useState<any[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
   // --- NEW: Add state for custom notification ---
-  const [showSuccessNotification, setShowSuccessNotification] = useState(false);
-  const [notificationMessage, setNotificationMessage] = useState('');
   // --- NEW: Sync Rules State ---
   type SyncDirection = 'two-way' | 'push-only' | 'pull-only';
   type SourceOfTruth = 'sssync' | 'platform';
@@ -359,25 +373,25 @@ const MappingReviewScreen = () => {
   const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
   const [showEffectAllDropdown, setShowEffectAllDropdown] = useState(false);
   const [sortBy, setSortBy] = useState<'title' | 'sku'>('title');
+  // NEW: Email-inbox accordion state — only one item expanded at a time
+  const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
   // NEW: Scan summary
   const [scanSummary, setScanSummary] = useState<{ countProducts?: number; countVariants?: number; countLocations?: number } | null>(null);
   // NEW: State for refresh/rescan
   const [isRefreshing, setIsRefreshing] = useState(false);
-  // Inline bottom-sheet wizard state
-  const [wizardVisible, setWizardVisible] = useState(false);
   const [wizardStep, setWizardStep] = useState(0); // 0 platforms, 1 sync mode, 2 delist, 3 buffer, 4 review
   const [selectedPlatformsState, setSelectedPlatformsState] = useState<string[]>([]);
   const [inventoryMergeMode, setInventoryMergeMode] = useState<'merged' | 'separate' | null>('merged');
 
   // Wizard step configuration - centralized titles and descriptions (description shown above divider)
   const WIZARD_STEP_CONFIG: Record<number, { title: string; description?: string }> = {
-    0: { title: 'Should We Add Missing Items?', description: 'What happens when a product is missing from your platforms?' },
-    1: { title: 'Add Platform To Pool', description: 'Which pool should this platform be added to?' },
-    2: { title: 'Set Sync Settings', description: 'Sync updates automatically or only on approval' },
-    3: { title: 'Set Sync Settings', description: 'Choose how auction listings behave (like FB, Ebay, Whatnot) ' },
-    4: { title: 'Set Sync Settings', description: 'Adjust prices by % per platform (Optional)' },
-    5: { title: 'Set Sync Settings', description: 'Final sync configuration' },
-    6: { title: 'Is This Right?', description: 'Review and confirm your settings' },
+    0: { title: 'Choose Import Direction', description: 'Pick how products should flow between this platform and Anorha.' },
+    1: { title: 'Assign Pool & Locations', description: 'Map this connection and locations to the right pool.' },
+    2: { title: 'Advanced Settings', description: 'Optional sync behavior controls.' },
+    3: { title: 'Advanced Settings', description: 'Optional delist behavior controls.' },
+    4: { title: 'Advanced Settings', description: 'Optional price adjustment controls.' },
+    5: { title: 'Advanced Settings', description: 'Optional inventory buffer controls.' },
+    6: { title: 'Review & Complete', description: 'Confirm mappings and start the import sync.' },
   };
 
 
@@ -469,6 +483,34 @@ const MappingReviewScreen = () => {
   const [priceBuffer, setPriceBuffer] = useState<Record<string, number>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // ✅ Sync hook state → local state for pools, locations, and settings
+  // The hook fetches this data; we sync it into local state used by handleCreatePool and the wizard UI.
+  useEffect(() => {
+    if (importSession.pools && importSession.pools.length > 0 && pools.length === 0) {
+      setPools(importSession.pools);
+    }
+  }, [importSession.pools]);
+
+  useEffect(() => {
+    if (importSession.selectedPool && !selectedPool) {
+      setSelectedPool(importSession.selectedPool);
+    }
+  }, [importSession.selectedPool]);
+
+  useEffect(() => {
+    const hookLocations = importSession.connectionLocations || [];
+    if (hookLocations.length > 0 && connectionLocations.length === 0) {
+      setConnectionLocations(hookLocations as ConnectionLocation[]);
+    }
+  }, [importSession.connectionLocations]);
+
+  useEffect(() => {
+    const hookAssignments = importSession.locationPoolAssignments || {};
+    if (Object.keys(hookAssignments).length > 0 && Object.keys(locationPoolAssignments).length === 0) {
+      setLocationPoolAssignments(hookAssignments);
+    }
+  }, [importSession.locationPoolAssignments]);
+
 
   const renderProgressCard = () => {
     // If job completed or no progress, don't show card
@@ -511,7 +553,7 @@ const MappingReviewScreen = () => {
       try {
         const token = await ensureSupabaseJwt();
         const response = await fetch(
-          `https://api.sssync.app/api/platform-connections/${connectionId}`,
+          `${SSSYNC_API_BASE_URL}/api/platform-connections/${connectionId}`,
           {
             method: 'GET',
             headers: {
@@ -547,7 +589,7 @@ const MappingReviewScreen = () => {
               pollingInterval = null;
             }
             // Fetch suggestions - this will set loading=false when done
-            fetchMappingSuggestions(connectionId);
+            importSession.refreshSuggestions();
           } else if (isScanningActive && status === 'error') {
             console.log('[MappingReviewScreen] ❌ Scan failed');
             setError('Scan failed. Please try again.');
@@ -587,7 +629,7 @@ const MappingReviewScreen = () => {
     if (syncProgress?.status === 'review' || syncProgress?.status === 'active' || syncProgress?.status === 'completed') {
       console.log(`[MappingReviewScreen] WebSocket status: ${syncProgress.status} - fetching suggestions`);
       if (loading && (isScanningActive || isPolling)) {
-        fetchMappingSuggestions(connectionId);
+        importSession.refreshSuggestions();
       }
     }
   }, [syncProgress?.status]);
@@ -601,218 +643,8 @@ const MappingReviewScreen = () => {
     }
   }, [isScanningActive]);
 
-  // Fetch current Pools on mount
-  useEffect(() => {
-    const fetchPools = async () => {
-      try {
-        setIsLoadingPools(true);
-        const token = await ensureSupabaseJwt();
-
-        let orgId = connection?.OrgId;
-        console.log('[MappingReviewScreen] Initial orgId from connection:', orgId);
-
-        // If connection doesn't have orgId, fetch user's active org
-        if (!orgId) {
-          console.log('[MappingReviewScreen] No orgId from connection, fetching active org...');
-          const activeOrgResponse = await fetch(`https://api.sssync.app/api/organizations/me/active`, {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            }
-          });
-
-          if (activeOrgResponse.ok) {
-            const activeOrgData = await activeOrgResponse.json();
-            orgId = activeOrgData.id || activeOrgData.orgId;
-            console.log('[MappingReviewScreen] Got active orgId:', orgId);
-          } else {
-            console.error('[MappingReviewScreen] Failed to fetch active org:', activeOrgResponse.status);
-            Alert.alert('Error', 'Could not determine organization. Please try again.');
-            setPools([]);
-            return;
-          }
-        }
-
-        console.log('[MappingReviewScreen] Fetching pools for orgId:', orgId);
-
-        const response = await fetch(`https://api.sssync.app/api/pools/org/${orgId}`,
-          {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            }
-          });
-
-        console.log('[MappingReviewScreen] Pools API response status:', response.status);
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error('[MappingReviewScreen] Failed to fetch pools:', response.status, errorText);
-          Alert.alert('Error', `Failed to fetch pools: ${response.status}`);
-          setPools([]);
-          return;
-        }
-
-        const data = await response.json();
-        const poolsList = Array.isArray(data) ? data : [];
-        setPools(poolsList);
-        console.log('[MappingReviewScreen] ✅ Loaded pools from API:', poolsList.length, poolsList);
-
-        // Auto-select first pool if available and none selected
-        if (poolsList.length > 0 && !selectedPool) {
-          console.log('[MappingReviewScreen] Auto-selecting first pool:', poolsList[0].id);
-          setSelectedPool(poolsList[0].id);
-        }
-
-      } catch (error) {
-        console.error('[MappingReviewScreen] Error fetching pools:', error);
-        Alert.alert('Error', 'Failed to load pools: ' + (error instanceof Error ? error.message : String(error)));
-        setPools([]);
-      } finally {
-        setIsLoadingPools(false);
-      }
-    };
-
-    fetchPools();
-  }, [connectionId]); // Only depend on connectionId
-
-  // Load locations for this connection (for pool assignment)
-  // IMPORTANT: This now also loads EXISTING pool assignments from the backend
-  useEffect(() => {
-    const fetchConnectionLocations = async () => {
-      if (!connectionId) return;
-      // Wait for pools to be loaded before we can cross-reference
-      if (pools.length === 0 && !isLoadingPools) {
-        // Pools finished loading but none exist - still load locations
-        console.log('[MappingReviewScreen] No pools available, loading locations without assignments');
-      }
-
-      try {
-        setIsLoadingLocations(true);
-        const token = await ensureSupabaseJwt();
-
-        // Fetch locations from PlatformLocations table for this connection
-        const { data: locations, error } = await supabase
-          .from('PlatformLocations')
-          .select('PlatformLocationId, Name, Timezone')
-          .eq('PlatformConnectionId', connectionId);
-
-        if (error) {
-          console.error('[MappingReviewScreen] Error fetching locations:', error);
-          setConnectionLocations([]);
-          return;
-        }
-
-        const formattedLocations: ConnectionLocation[] = (locations || []).map(loc => ({
-          platformLocationId: loc.PlatformLocationId,
-          locationName: loc.Name || 'Unnamed Location',
-          timezone: loc.Timezone || undefined,
-        }));
-
-        setConnectionLocations(formattedLocations);
-        console.log('[MappingReviewScreen] ✅ Loaded connection locations:', formattedLocations.length);
-
-        // CRITICAL: Load EXISTING pool assignments by cross-referencing with pools
-        // Each pool has a locationIds array containing assigned location IDs
-        const existingAssignments: Record<string, string> = {};
-        let foundAnyExisting = false;
-
-        for (const location of formattedLocations) {
-          // Find which pool (if any) this location is assigned to
-          const assignedPool = pools.find((pool: any) => {
-            const poolLocationIds = pool.locationIds || pool.location_ids || [];
-            return poolLocationIds.includes(location.platformLocationId);
-          });
-
-          if (assignedPool) {
-            existingAssignments[location.platformLocationId] = assignedPool.id;
-            foundAnyExisting = true;
-            console.log(`[MappingReviewScreen] Location "${location.locationName}" already assigned to pool "${assignedPool.name}"`);
-          }
-        }
-
-        if (foundAnyExisting) {
-          // Use existing assignments from the backend - don't modify them
-          console.log('[MappingReviewScreen] ✅ Loaded existing pool assignments:', Object.keys(existingAssignments).length);
-          setLocationPoolAssignments(existingAssignments);
-
-          // Also set selectedPool to match the first assigned pool (for consistency)
-          const firstAssignedPoolId = Object.values(existingAssignments)[0];
-          if (firstAssignedPoolId && !selectedPool) {
-            setSelectedPool(firstAssignedPoolId);
-          }
-        } else {
-          // No existing assignments found - leave them unassigned
-          // User can manually assign via the wizard if needed
-          console.log('[MappingReviewScreen] No existing pool assignments found, leaving locations unassigned');
-          setLocationPoolAssignments({});
-        }
-      } catch (error) {
-        console.error('[MappingReviewScreen] Error loading locations:', error);
-        setConnectionLocations([]);
-      } finally {
-        setIsLoadingLocations(false);
-      }
-    };
-
-    // Only run when we have connectionId and pools are done loading
-    if (connectionId && connectionId !== 'csv-import' && !isLoadingPools) {
-      fetchConnectionLocations();
-    }
-  }, [connectionId, pools, isLoadingPools]); // Depend on pools being loaded
-
-  // Load existing quick settings on mount (for wizard pre-population)
-  useEffect(() => {
-    const loadExistingSettings = async () => {
-      if (!connectionId || connectionId === 'csv-import') return;
-
-      try {
-        const token = await ensureSupabaseJwt();
-        const response = await fetch(`https://api.sssync.app/api/connections/${connectionId}/quick-settings`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          }
-        });
-
-        if (response.ok) {
-          const quickSettings = await response.json();
-          console.log('[MappingReviewScreen] Loaded existing quick settings:', quickSettings);
-
-          // Pre-populate wizard state with existing settings
-          setSelectedPool(quickSettings.poolId || null);
-          setSyncMode(quickSettings.autoSyncMode ? 'auto' : 'manual');
-          setDelistMode(quickSettings.autoDelist ? 'auto' : 'manual');
-          setPriceBuffer(quickSettings.priceAdjustment || {});
-          setInventoryBuffer(quickSettings.inventoryBuffer || {});
-
-          const direction = quickSettings?.syncRules?.syncDirection;
-          const canPush = quickSettings?.syncRules?.allowPushToPlatform !== false;
-          const canPull = quickSettings?.syncRules?.allowPullFromPlatform !== false;
-          if (direction === 'push_only' || (canPush && !canPull)) {
-            setProductCreationMode('push_only');
-          } else if (direction === 'pull_only' || (!canPush && canPull)) {
-            setProductCreationMode('pull_only');
-          } else if (quickSettings?.syncRules?.propagateCreates === false) {
-            setProductCreationMode('do_nothing');
-          } else {
-            setProductCreationMode('sync_everywhere');
-          }
-        } else {
-          console.log('[MappingReviewScreen] No existing quick settings found, using defaults');
-          // Keep default values for new connections
-        }
-      } catch (error) {
-        console.error('[MappingReviewScreen] Error loading existing quick settings:', error);
-        // Keep default values on error
-      }
-    };
-
-    loadExistingSettings();
-  }, [connectionId]);
+  // NOTE: Pools, locations, and quick-settings are loaded by useImportSession hook.
+  // No duplicate fetching here — see importSession.pools, importSession.connectionLocations, etc.
 
   // ✅ SYNC EVERYWHERE FIX: Update suggestions selection based on productCreationMode
   // This ensures the correct items are selected for import based on the user's mode choice in wizard step 0
@@ -884,7 +716,7 @@ const MappingReviewScreen = () => {
       let orgId = connection?.OrgId;
       if (!orgId) {
         console.warn('[MappingReviewScreen] Connection missing OrgId, fetching user active org...');
-        const response = await fetch(`https://api.sssync.app/api/organizations/me/active`, {
+        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/organizations/me/active`, {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -913,7 +745,7 @@ const MappingReviewScreen = () => {
 
       console.log('[MappingReviewScreen] Creating pool with locations:', locationIdsForNewPool);
 
-      const response = await fetch('https://api.sssync.app/api/pools', {
+      const response = await fetch(`${SSSYNC_API_BASE_URL}/api/pools`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -937,7 +769,7 @@ const MappingReviewScreen = () => {
       const newPool = await response.json();
 
       // Refresh pools list from API to ensure consistency
-      const poolsResponse = await fetch(`https://api.sssync.app/api/pools/org/${orgId}`, {
+      const poolsResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/pools/org/${orgId}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -970,468 +802,34 @@ const MappingReviewScreen = () => {
   };
 
 
-  // Effect to load platform connections
+  // NOTE: Platform connections are loaded by useImportSession hook (importSession.platformConnections).
+  // Sync local multi-platform state from the hook's data.
   useEffect(() => {
-    const loadConnections = async () => {
-      const targetOrgId = currentOrg?.id; // Prioritize Org context
-      const targetUserId = legendState?.userId;
-
-      if (targetOrgId || targetUserId) {
-        try {
-          let query = supabase
-            .from('PlatformConnections')
-            .select('Id, UserId, OrgId, PlatformType, DisplayName, Status, IsEnabled, LastSyncAttemptAt, LastSyncSuccessAt, CreatedAt, UpdatedAt')
-            .eq('IsEnabled', true);
-
-          if (targetOrgId) {
-            console.log('[MappingReview] Loading connections for Org:', targetOrgId);
-            query = query.eq('OrgId', targetOrgId);
-          } else {
-            console.log('[MappingReview] Loading connections for User:', targetUserId);
-            query = query.eq('UserId', targetUserId);
-          }
-
-          const { data, error } = await query;
-
-          if (error) {
-            console.error('[MappingReviewScreen] Error loading connections:', error);
-            return;
-          }
-
-          const connections = data as PlatformConnection[];
-          setPlatformConnections(connections);
-
-          // Check if we have multiple platform types connected
-          const platformTypes = new Set(connections.map(conn => conn.PlatformType));
-          setMultiPlatformMode(platformTypes.size > 1);
-
-          // Pre-select the current connection
-          setSelectedConnectionIds([connectionId]);
-
-        } catch (err) {
-          console.error('[MappingReviewScreen] Error in loadConnections:', err);
-        }
-      }
-    };
-
-    loadConnections();
-  }, [legendState, connectionId]);
-
-  // --- Function to fetch mapping suggestions ---
-  // This is the main data-loading function that tries the API first,
-  // then falls back to Supabase if the API returns no results
-  const fetchMappingSuggestions = useCallback(async (currentConnectionId: string) => {
-    // If CSV import, we don't fetch from backend
-    if (isCSVImport) return;
-
-    // Use currentConnectionId or fall back to route param
-    const connId = currentConnectionId || connectionId;
-    console.log(`[MappingReviewScreen] Fetching suggestions for connection: ${connId}`);
-    setLoading(true);
-    setError(null);
-    setSuggestions(null); // Clear previous suggestions
-    setSummaryData(null); // Clear previous summary
-
-    try {
-      // Ensure the bridge has created/attached a Supabase JWT
-      const token = await ensureSupabaseJwt();
-      if (!token) throw new Error("Authentication token not found. Please log in again.");
-
-      const response = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connId}/mapping-suggestions`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
-        throw new Error(errorData.message || `Failed to fetch mapping suggestions. Status: ${response.status}`);
-      }
-
-      // Get response data - could be an array or object structure
-      const data = await response.json();
-      console.log('[MappingReviewScreen] Suggestions response type:', Array.isArray(data) ? 'Array' : typeof data);
-      console.log('[MappingReviewScreen] Suggestions sample:', JSON.stringify(data).substring(0, 300));
-
-      // Handle different response formats
-      let suggestionsArray: MappingSuggestion[] = [];
-
-      if (Array.isArray(data)) {
-        // Direct array of suggestions (newer API format)
-        suggestionsArray = data.map((item: any): MappingSuggestion => {
-          // Determine action based on matchType and confidence
-          let action: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE' | 'UNMATCHED';
-          let isSelected = true;
-
-          // NEW: Handle anorha_to_platform direction (push Anorha items to platform)
-          const direction = item.direction || 'platform_to_anorha';
-
-          // Extract parent info for grouping
-          const parentId = item.platformProduct?.parentId || null;
-          const parentTitle = item.platformProduct?.parentTitle || null;
-
-          if (direction === 'anorha_to_platform') {
-            // Anorha item to push to platform - default to UNMATCHED so user picks link target
-            action = 'UNMATCHED';
-            isSelected = false; // Don't auto-select push items
-
-            // Extract parent product title - handle both object and array forms from Supabase
-            const productData = item.anorhaVariant?.Product;
-            const parentProductTitle = Array.isArray(productData)
-              ? productData[0]?.Title
-              : productData?.Title || null;
-
-            return {
-              action,
-              platformProduct: {
-                id: item.anorhaVariant?.Id || item.anorhaVariant?.id || `anorha-${Date.now()}`,
-                sku: item.anorhaVariant?.Sku || item.anorhaVariant?.sku || '',
-                title: item.anorhaVariant?.Title || item.anorhaVariant?.title || 'Unnamed Item',
-                price: item.anorhaVariant?.Price || item.anorhaVariant?.price || 0,
-                imageUrl: item.anorhaVariant?.ImageUrl || item.anorhaVariant?.imageUrl || null,
-                // Use ProductId from anorhaVariant for grouping variants together
-                parentId: item.anorhaVariant?.ProductId || item.anorhaVariant?.productId || null,
-                parentTitle: parentProductTitle,
-              },
-              anorhaVariant: item.anorhaVariant ? {
-                id: item.anorhaVariant.Id || item.anorhaVariant.id,
-                sku: item.anorhaVariant.Sku || item.anorhaVariant.sku,
-                title: item.anorhaVariant.Title || item.anorhaVariant.title,
-                price: item.anorhaVariant.Price || item.anorhaVariant.price,
-                barcode: item.anorhaVariant.Barcode || item.anorhaVariant.barcode,
-                imageUrl: item.anorhaVariant.ImageUrl || item.anorhaVariant.imageUrl,
-              } : null,
-              suggestedCanonicalProduct: null, // No canonical match for Anorha→platform push
-              direction: 'anorha_to_platform',
-              isSelected,
-              matchType: item.matchType || 'NONE',
-              confidence: 0,
-            };
-          }
-
-          // Standard platform_to_anorha or bidirectional handling
-          if (item.matchType === 'NONE' || item.confidence === 0) {
-            // No match found -> default to UNMATCHED (User intervention required)
-            action = 'UNMATCHED';
-            isSelected = false; // Do not auto-select
-          } else if ((item.matchType === 'SKU' || item.matchType === 'BARCODE') && item.suggestedCanonicalVariant) {
-            // Perfect match found - link to existing product
-            action = 'LINK_EXISTING';
-            isSelected = true;
-          } else if (item.confidence > 0 && item.confidence < 0.8) {
-            // Low confidence match - needs review, show empty slot for user to pick
-            action = 'UNMATCHED';
-            isSelected = false;
-          } else {
-            // Default to UNMATCHED for anything else - user should review
-            action = 'UNMATCHED';
-            isSelected = false;
-          }
-
-          return {
-            action,
-            platformProduct: {
-              id: item.platformProduct?.id || '',
-              sku: item.platformProduct?.sku || '', // Ensure SKU is not null
-              title: item.platformProduct?.title || '',
-              price: item.platformProduct?.price ? parseFloat(String(item.platformProduct.price)) : 0,
-              imageUrl: item.platformProduct?.imageUrl || null,
-              parentId,
-              parentTitle,
-            },
-            suggestedCanonicalProduct: item.suggestedCanonicalVariant ? {
-              id: item.suggestedCanonicalVariant.Id,
-              sku: item.suggestedCanonicalVariant.Sku,
-              title: item.suggestedCanonicalVariant.Title,
-            } : null,
-            direction: direction === 'bidirectional' ? 'bidirectional' : 'platform_to_anorha',
-            isSelected,
-            matchType: item.matchType,
-            confidence: typeof item.confidence === 'number' ? item.confidence : undefined,
-          };
-        });
-
-        // DEBUG: Log parentId values to verify backend is sending them
-        const itemsWithParentId = suggestionsArray.filter(s => s.platformProduct.parentId);
-        console.log(`[MappingReviewScreen] DEBUG: ${itemsWithParentId.length}/${suggestionsArray.length} items have parentId`);
-
-        // DEBUG: Specifically log Anorha items (anorha_to_platform direction)
-        const anorhaItems = suggestionsArray.filter(s => s.direction === 'anorha_to_platform');
-        const anorhaWithParent = anorhaItems.filter(s => s.platformProduct.parentId);
-        console.log(`[MappingReviewScreen] DEBUG Anorha items: ${anorhaWithParent.length}/${anorhaItems.length} have parentId`);
-        if (anorhaItems.length > 0) {
-          console.log('[MappingReviewScreen] DEBUG Sample Anorha item:', JSON.stringify({
-            title: anorhaItems[0].platformProduct.title,
-            parentId: anorhaItems[0].platformProduct.parentId,
-            parentTitle: anorhaItems[0].platformProduct.parentTitle,
-            direction: anorhaItems[0].direction,
-          }));
-        }
-
-        if (suggestionsArray.length > 0) {
-          console.log('[MappingReviewScreen] DEBUG Sample item:', JSON.stringify({
-            title: suggestionsArray[0].platformProduct.title,
-            parentId: suggestionsArray[0].platformProduct.parentId,
-            parentTitle: suggestionsArray[0].platformProduct.parentTitle,
-          }));
-        }
-
-        console.log(`[MappingReviewScreen] Processed ${suggestionsArray.length} suggestions from array response`);
-      } else if (data && typeof data === 'object') {
-        // Legacy format with separate arrays for different suggestion types
-        const perfectMatches = Array.isArray(data.perfectMatches) ? data.perfectMatches : [];
-        const newFromPlatform = Array.isArray(data.newFromPlatform) ? data.newFromPlatform : [];
-        const needsReview = Array.isArray(data.needsReview) ? data.needsReview : [];
-
-        // Combine all suggestion types into a single array for our UI
-        suggestionsArray = [
-          ...perfectMatches.map((item: any) => ({ ...item, action: 'LINK_EXISTING', isSelected: true })),
-          ...newFromPlatform.map((item: any) => {
-            const isPush = item.direction === 'anorha_to_platform';
-            // Default to UNMATCHED for push items (so they show 'Link Product' / empty slot)
-            // Default to CREATE_NEW for platform items (so they show 'New Item')
-            return {
-              ...item,
-              action: isPush ? 'UNMATCHED' : 'CREATE_NEW',
-              isSelected: !isPush, // Don't select push items by default
-              platformProduct: {
-                ...item.platformProduct,
-                // Ensure parentId is populated from anorhaVariant if missing (crucial for grouping)
-                parentId: item.platformProduct.parentId || item.anorhaVariant?.ProductId,
-                parentTitle: item.platformProduct.parentTitle || item.anorhaVariant?.Product?.Title,
-              }
-            };
-          }),
-          ...needsReview.map((item: any) => ({ ...item, action: 'UNMATCHED', isSelected: false }))
-        ];
-
-        // Keep the summary data for backward compatibility
-        setSummaryData(data.summary || null);
-        console.log(`[MappingReviewScreen] Processed legacy format: ${perfectMatches.length} matches, ${newFromPlatform.length} new, ${needsReview.length} review`);
-      }
-
-      // Deduplicate suggestions by platformProduct.id to prevent duplicate entries
-      const seenIds = new Set<string>();
-      const deduplicatedSuggestions = suggestionsArray.filter(suggestion => {
-        const id = suggestion.platformProduct?.id;
-        if (!id || seenIds.has(id)) {
-          return false;
-        }
-        seenIds.add(id);
-        return true;
-      });
-
-      if (deduplicatedSuggestions.length < suggestionsArray.length) {
-        console.log(`[MappingReviewScreen] Removed ${suggestionsArray.length - deduplicatedSuggestions.length} duplicate suggestions`);
-      }
-
-      // Set the processed and deduplicated suggestions
-      setSuggestions(deduplicatedSuggestions);
-      // Fetch scan summary for header counts
-      try {
-        const token2 = await ensureSupabaseJwt();
-        if (token2) {
-          const sumResp = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connId}/scan-summary`, { headers: { 'Authorization': `Bearer ${token2}` } });
-          if (sumResp.ok) setScanSummary(await sumResp.json());
-        }
-      } catch { }
-
-      // Add detailed logging for debugging empty suggestions
-      console.log(`[MappingReviewScreen] Final suggestions count: ${suggestionsArray.length}`);
-      if (suggestionsArray.length === 0) {
-        console.log('[MappingReviewScreen] No mapping suggestions found. Checking connection status...');
-
-        // Check connection status to understand why no suggestions
-        try {
-          const connectionResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections/${connId}`, {
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${token}` },
-          });
-
-          if (connectionResponse.ok) {
-            const connectionData = await connectionResponse.json();
-            console.log(`[MappingReviewScreen] Connection status: ${connectionData.Status}, PlatformSpecificData:`, connectionData.PlatformSpecificData);
-          }
-        } catch (connErr) {
-          console.error('[MappingReviewScreen] Error checking connection status:', connErr);
-        }
-
-        console.log('[MappingReviewScreen] Fetching existing mappings from Supabase as fallback...');
-        await fetchExistingMappingsFromSupabase(connId);
-      } else {
-        console.log(`[MappingReviewScreen] Successfully loaded ${suggestionsArray.length} suggestions:`,
-          suggestionsArray.map(s => ({ action: s.action, title: s.platformProduct.title })));
-      }
-
-      // Fix 4: Fetch missing mappings (org products with no mapping for this connection)
-      try {
-        const missingResp = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connId}/missing-mappings`, {
-          method: 'GET',
-          headers: { 'Authorization': `Bearer ${token}` },
-        });
-        if (missingResp.ok) {
-          const missing = await missingResp.json();
-          setMissingMappings(Array.isArray(missing) ? missing : []);
-        }
-      } catch { /* non-blocking */ }
-
-    } catch (err: any) {
-      console.error('[MappingReviewScreen] Error fetching mapping suggestions:', err);
-      setError(err.message || 'An unexpected error occurred.');
-
-      // If there was an error fetching suggestions, try to get existing mappings as fallback
-      console.log('[MappingReviewScreen] Error fetching suggestions, trying to get existing mappings as fallback...');
-      await fetchExistingMappingsFromSupabase(connId);
-    } finally {
-      setLoading(false);
+    const hookConnections = importSession.platformConnections || [];
+    if (hookConnections.length > 0) {
+      setPlatformConnections(hookConnections as PlatformConnection[]);
+      const platformTypes = new Set(hookConnections.map((conn: any) => conn.PlatformType));
+      setMultiPlatformMode(platformTypes.size > 1);
+      setSelectedConnectionIds([connectionId]);
     }
-  }, [connectionId, isCSVImport]);
+  }, [importSession.platformConnections, connectionId]);
 
-  // Load any saved draft selections on mount/when connection changes
-  useEffect(() => {
-    (async () => {
-      if (!connectionId || hasLoadedDraft || isCSVImport) return; // Skip draft loading for CSV import
-      try {
-        const token = await ensureSupabaseJwt();
-        if (!token) return;
-        const resp = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/draft-mappings`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (!resp.ok) { setHasLoadedDraft(true); return; }
-        const data = await resp.json();
-        const draftMatches = Array.isArray(data?.confirmedMatches) ? data.confirmedMatches : [];
-        if (draftMatches.length > 0 && Array.isArray(suggestions)) {
-          // Merge draft into current suggestions by platformProductId
-          const mapById: Record<string, any> = {};
-          for (const d of draftMatches) {
-            mapById[d.platformProductId || d.sourceId] = d;
-          }
-          setSuggestions(prev => (prev || []).map(s => {
-            const d = mapById[s.platformProduct.id];
-            if (!d) return s;
-            const action = d.action?.toUpperCase?.() === 'LINK' ? 'LINK_EXISTING' : d.action?.toUpperCase?.() === 'CREATE' ? 'CREATE_NEW' : 'IGNORE';
-            return {
-              ...s,
-              action: action as any,
-              isSelected: action !== 'IGNORE',
-              suggestedCanonicalProduct: d.sssyncVariantId ? { id: d.sssyncVariantId, sku: s.suggestedCanonicalProduct?.sku || '', title: s.suggestedCanonicalProduct?.title || '' } : s.suggestedCanonicalProduct,
-            };
-          }));
-        }
-      } catch { }
-      setHasLoadedDraft(true);
-    })();
-  }, [connectionId, suggestions, hasLoadedDraft, isCSVImport]);
-
-  // Debounced autosave of current review selections as draft
-  useEffect(() => {
-    const handle = setTimeout(async () => {
-      try {
-        if (!connectionId || !Array.isArray(suggestions) || isCSVImport) return; // Skip draft saving for CSV import
-        const confirmedMatches = suggestions.map(s => ({
-          platformProductId: s.platformProduct.id,
-          sssyncVariantId: s.action === 'LINK_EXISTING' ? s.suggestedCanonicalProduct?.id : null,
-          action: s.action === 'LINK_EXISTING' ? 'link' : (s.action === 'CREATE_NEW' ? 'create' : 'ignore'),
-        }));
-        const token = await ensureSupabaseJwt();
-        if (!token) return;
-        await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/draft-mappings`, {
-          method: 'PUT',
-          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ confirmedMatches }),
-        });
-      } catch { }
-    }, 600);
-    return () => clearTimeout(handle);
-  }, [suggestions, connectionId, isCSVImport]);
-
-  // --- NEW: Function to fetch existing mappings from Supabase ---
-  // This is the fallback data source when the API returns no results
-  // It queries the PlatformProductMappings table and joins with product data
-  const fetchExistingMappingsFromSupabase = useCallback(async (connectionId: string) => {
-    console.log(`[MappingReviewScreen] Fetching existing mappings from Supabase for connection: ${connectionId}`);
-    setLoadingExistingMappings(true);
-
-    try {
-      // First get user ID to filter query
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        throw new Error("User not authenticated");
-      }
-
-      // Fetch existing mappings from Supabase - simplified query to avoid SQL alias issues
-      const { data, error } = await supabase
-        .from('PlatformProductMappings')
-        .select(`
-          *,
-          ProductVariants!inner (
-            Id,
-            ProductId,
-            Sku,
-            Title,
-            Price
-          )
-        `)
-        .eq('PlatformConnectionId', connectionId);
-
-      if (error) {
-        console.error('[MappingReviewScreen] Error fetching existing mappings:', error);
-        throw new Error(`Failed to fetch existing mappings: ${error.message}`);
-      }
-
-      console.log(`[MappingReviewScreen] Fetched ${data?.length || 0} existing mappings from Supabase`);
-      console.log('[MappingReviewScreen] First mapping sample:', data && data.length > 0 ? JSON.stringify(data[0]).substring(0, 300) : 'No mappings');
-
-      if (data && data.length > 0) {
-        setExistingMappings(data as any); // Cast as any to handle Supabase type complexities
-
-        // Convert existing mappings to suggestion format for display compatibility
-        // This allows us to reuse the existing UI components
-        const mappingsAsSuggestions: MappingSuggestion[] = data.map((mapping: any) => ({
-          action: 'LINK_EXISTING' as const,
-          isSelected: true,
-          platformProduct: {
-            id: mapping.PlatformProductId,
-            sku: mapping.PlatformSku || 'N/A',
-            title: mapping.ProductVariants?.Title || 'Unknown Product',
-            price: mapping.ProductVariants?.Price || 0,
-            imageUrl: (mapping.PlatformSpecificData as any)?.imageUrl || null,
-          },
-          suggestedCanonicalProduct: {
-            id: mapping.ProductVariantId,
-            sku: mapping.ProductVariants?.Sku || 'N/A',
-            title: mapping.ProductVariants?.Title || 'Unknown Product',
-          }
-        }));
-
-        console.log(`[MappingReviewScreen] Converted ${mappingsAsSuggestions.length} mappings to suggestions format`);
-        setSuggestions(mappingsAsSuggestions);
-
-        // Set summary data with counts
-        setSummaryData({
-          totalPlatformProducts: data.length,
-          perfectMatchCount: data.length,
-          newFromPlatformCount: 0,
-          needsReviewCount: 0
-        });
-      }
-    } catch (err: any) {
-      console.error('[MappingReviewScreen] Error in fetchExistingMappingsFromSupabase:', err);
-      // Don't set error state here to avoid blocking the UI - we just show empty state
-    } finally {
-      setLoadingExistingMappings(false);
-    }
-  }, []);
+  // ═══════════════════════════════════════════════════════════════
+  // Data loading is handled by useImportSession hook (DB-first architecture).
+  // The hook always loads from PlatformProductMappings + /missing-mappings
+  // as the primary source, with scan suggestions overlaid on top.
+  // Use importSession.refreshSuggestions() to re-fetch.
+  // ═══════════════════════════════════════════════════════════════
 
   // Effect to trigger initial data loading
+  // NOTE: useImportSession already fetches suggestions on mount when skipInitialFetch is false.
+  // This effect only handles: CSV import, scanning/polling transitions, and missing connectionId.
+  const initialFetchDoneRef = React.useRef(false);
   useEffect(() => {
     console.log(`[MappingReviewScreen] Effect triggered - isPolling: ${isPolling}, connectionId: ${connectionId}, jobId: ${jobId}, loading: ${loading}`);
 
-    // Initial fetch
+    // CSV import handling
     if ((isCSVImport || connectionId === 'csv-import') && importedProducts) {
-      // Initialize suggestions from CSV data
       setLoading(true);
       try {
         const mappedSuggestions: MappingSuggestion[] = importedProducts.map((p: any, index: number) => ({
@@ -1447,7 +845,7 @@ const MappingReviewScreen = () => {
           isSelected: true,
           matchType: 'NONE',
           confidence: 1.0,
-          originalData: p, // Store full data for import (added to interface implicitly via casting)
+          originalData: p,
         }));
         setSuggestions(mappedSuggestions);
         setLoading(false);
@@ -1456,25 +854,29 @@ const MappingReviewScreen = () => {
         setLoading(false);
       }
     } else if (connectionId) {
-      // Only fetch if we are NOT polling and NOT scanning
-      // connection?.Status check ensures we don't race against the initial poll check
-      if (!isPolling && !isScanningActive && connection) {
-        console.log(`[MappingReviewScreen] Not polling and not scanning, fetching suggestions directly for connection: ${connectionId}`);
-        fetchMappingSuggestions(connectionId);
-      } else if (!connection) {
-        // Wait for connection to load...
-        console.log('[MappingReviewScreen] Waiting for connection status to load...');
+      // For non-scanning connections, useImportSession already calls fetchMappingSuggestions on mount.
+      // We only need to handle scanning/polling transitions here.
+      if (isPolling || isScanningActive) {
+        console.log(`[MappingReviewScreen] Scanning/Polling active, keeping loading state`);
         setLoading(true);
-      } else {
-        console.log(`[MappingReviewScreen] Scanning/Polling active (Status: ${connection?.Status}), skipping suggestion fetch`);
-        setLoading(true); // Ensure loading stays true
+      } else if (!initialFetchDoneRef.current && !isScanningActiveEarly) {
+        // The hook handles the initial fetch via skipInitialFetch logic.
+        // If skipInitialFetch was true (scanning) but scanning ended before mount,
+        // trigger a manual refresh. Otherwise the hook already did it.
+        if (isScanningActiveEarly) {
+          // skipInitialFetch was true, scanning may still be active
+          setLoading(true);
+        } else {
+          // Hook already fetched (skipInitialFetch=false), just track it
+          initialFetchDoneRef.current = true;
+        }
       }
-    } else if (!connectionId) {
+    } else {
       console.error(`[MappingReviewScreen] No connection ID provided`);
       setError("Connection ID is missing.");
       setLoading(false);
     }
-  }, [connectionId, isPolling, isScanningActive, connection]); // Added connection and isScanningActive dependencies
+  }, [connectionId, isPolling, isScanningActive]); // Removed `connection` dependency to prevent cascading
 
   // --- WebSocket sync progress handling ---
   useEffect(() => {
@@ -1499,11 +901,11 @@ const MappingReviewScreen = () => {
         setLoading(false);
         setIsPolling(false); // Stop polling
         // Fetch suggestions to populate the review screen
-        fetchMappingSuggestions(connectionId);
+        importSession.refreshSuggestions();
       } else if (syncProgress.status === 'active') {
         console.log('[MappingReviewScreen] Sync activated');
         setLoading(false);
-        fetchMappingSuggestions(connectionId);
+        importSession.refreshSuggestions();
       } else if (syncProgress.status === 'error') {
         console.log('[MappingReviewScreen] Scan/Sync failed');
         setLoading(false);
@@ -1515,7 +917,7 @@ const MappingReviewScreen = () => {
         setIsPolling(true);
       }
     }
-  }, [syncProgress, connectionId, fetchMappingSuggestions]);
+  }, [syncProgress, connectionId]);
 
   useEffect(() => {
     navigation.setOptions({
@@ -1534,71 +936,6 @@ const MappingReviewScreen = () => {
   };
 
   // --- API-RELATED FUNCTIONS ---
-
-  /**
-   * Handles submitting the user's final approved mappings to start the sync.
-   * This sends the selected products to the backend for processing.
-   */
-  const handleConfirmAndSync = async () => {
-    if (!suggestions) {
-      Alert.alert("Error", "No suggestions available to sync.");
-      return;
-    }
-
-    const approvedItems = suggestions.filter(s => s.isSelected && s.action === 'CREATE_NEW');
-
-    if (approvedItems.length === 0) {
-      Alert.alert("Nothing to Sync", "No new products were selected for creation.");
-      return;
-    }
-
-    const payload: FinalizedMappingPayload = {
-      approvedMappings: approvedItems.map(item => ({
-        action: 'CREATE_NEW',
-        platformProduct: {
-          id: item.platformProduct.id,
-        },
-      })),
-    };
-
-    console.log(`[MappingReviewScreen] Submitting ${payload.approvedMappings.length} mappings for final sync...`);
-    setSyncing(true);
-    setError(null);
-
-    try {
-      const token = await ensureSupabaseJwt();
-      if (!token) throw new Error("Authentication token not found.");
-
-      const response = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/sync`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
-        throw new Error(errorData.message || `Failed to start final sync. Status: ${response.status}`);
-      }
-
-      const { jobId: finalSyncJobId } = await response.json();
-      console.log(`[MappingReviewScreen] Final sync started with new job ID: ${finalSyncJobId}`);
-
-      // Start polling the new job ID
-      setSuggestions(null); // Clear old suggestions
-      setJobProgress(null); // Reset progress
-      setCurrentJobId(finalSyncJobId);
-      setIsPolling(true);
-
-    } catch (err: any) {
-      console.error('[MappingReviewScreen] Error during final sync confirmation:', err);
-      setError(err.message || 'An unexpected error occurred.');
-    } finally {
-      setSyncing(false);
-    }
-  };
 
   // --- NEW: Function to handle batch approval of perfect matches ---
   const handleApproveAllLinks = async () => {
@@ -1648,7 +985,7 @@ const MappingReviewScreen = () => {
           text: "OK",
           onPress: () => {
             if (connectionId) {
-              fetchMappingSuggestions(connectionId);
+              importSession.refreshSuggestions();
             }
           }
         }]
@@ -1715,7 +1052,7 @@ const MappingReviewScreen = () => {
           text: "OK",
           onPress: () => {
             if (connectionId) {
-              fetchMappingSuggestions(connectionId);
+              importSession.refreshSuggestions();
             }
           }
         }]
@@ -1861,186 +1198,6 @@ const MappingReviewScreen = () => {
     }
   };
 
-  /**
-   * Handles confirming individual item mappings
-   */
-  const handleConfirmMappings = async (mappingsToConfirm: any) => { // Type this based on actual payload
-    console.log("[MappingReviewScreen] Confirming mappings:", mappingsToConfirm);
-    setLoading(true);
-    setError(null);
-    try {
-      const token = await ensureSupabaseJwt();
-      if (!token) throw new Error("Authentication token not found.");
-
-      // ✅ Step 1: Confirm mappings
-      const response = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/confirm-mappings`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ confirmedMatches: mappingsToConfirm }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
-        throw new Error(errorData.message || `Failed to confirm mappings. Status: ${response.status}`);
-      }
-
-      console.log("[MappingReviewScreen] Mappings confirmed successfully. Now activating sync...");
-
-      // ✅ Step 2: Automatically activate sync so status moves: ready_to_sync → syncing → active
-      const activateResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/activate-sync`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!activateResponse.ok) {
-        const errorData = await activateResponse.json().catch(() => ({ message: `HTTP error! Status: ${activateResponse.status}` }));
-        throw new Error(errorData.message || `Failed to activate sync. Status: ${activateResponse.status}`);
-      }
-
-      console.log("[MappingReviewScreen] Sync activated successfully!");
-      Alert.alert("Success", "Mappings confirmed and sync activated. Processing has started.");
-
-      // Optionally refresh suggestions or navigate
-      fetchMappingSuggestions(connectionId);
-    } catch (err: any) {
-      console.error("[MappingReviewScreen] Error confirming/activating mappings:", err);
-      setError(err.message || "An unexpected error occurred while confirming mappings.");
-      Alert.alert("Error", err.message || "Failed to confirm mappings. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  /**
-   * Activates sync process for selected connections
-   */
-  const handleActivateSync = async () => {
-    if (!suggestions || suggestions.filter(s => s.isSelected).length === 0) {
-      Alert.alert("Error", "No products selected for sync. Please select some items first.");
-      return;
-    }
-
-    setSyncing(true);
-    setError(null);
-
-    try {
-      const session = await supabase.auth.getSession();
-      const token = session?.data.session?.access_token;
-
-      if (!token) {
-        throw new Error("Authentication token not found.");
-      }
-
-      // Prepare the mappings from selected suggestions
-      const selectedSuggestions = suggestions.filter(s => s.isSelected);
-      console.log(`[MappingReviewScreen] Activating sync with ${selectedSuggestions.length} selected items...`);
-
-      // Group the mappings by action type for the payload
-      const mappingsPayload = selectedSuggestions.map(s => ({
-        platformProductId: s.platformProduct.id,
-        sssyncVariantId: s.action === 'LINK_EXISTING' ? s.suggestedCanonicalProduct?.id : null,
-        action: s.action === 'LINK_EXISTING' ? 'link' : (s.action === 'CREATE_NEW' ? 'create' : 'ignore')
-      }));
-
-      // Step 1: Confirm all mappings (mappings only, no sync rules)
-      const confirmResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/confirm-mappings`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ confirmedMatches: mappingsPayload }),
-      });
-
-      if (!confirmResponse.ok) {
-        const errorData = await confirmResponse.json().catch(() => ({ message: `HTTP error! Status: ${confirmResponse.status}` }));
-        throw new Error(errorData.message || `Failed to confirm mappings. Status: ${confirmResponse.status}`);
-      }
-
-      console.log('[MappingReviewScreen] Mappings confirmed successfully.');
-
-      // Step 2: Update quick settings (settings already configured during wizard)
-      // CRITICAL: Include propagateCreates and propagateChanges to enable cross-platform sync
-      const directionPatch = getSyncRuleDirectionPatch(productCreationMode);
-      const quickSettings = {
-        poolId: selectedPool || undefined,
-        autoSyncMode: syncMode === 'auto',
-        autoDelist: delistMode === 'auto',
-        priceAdjustment: priceBuffer,
-        inventoryBuffer: inventoryBuffer,
-        // Sync direction + propagation derived from wizard selection
-        syncRules: {
-          syncInventory: true,
-          syncPricing: true,
-          ...directionPatch,
-          productCreationMode: productCreationMode,
-        }
-      };
-
-      const settingsResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/connections/${connectionId}/quick-settings`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(quickSettings)
-      });
-
-      if (!settingsResponse.ok) {
-        const errorText = await settingsResponse.text();
-        throw new Error(`Failed to update quick settings: ${errorText || settingsResponse.status}`);
-      }
-
-      console.log('[MappingReviewScreen] Quick settings updated successfully.');
-
-      // Step 3: Activate the sync (no sync rules needed - settings are in connection data)
-      const activateResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/activate-sync`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        }
-      });
-
-      if (!activateResponse.ok) {
-        const errorData = await activateResponse.json().catch(() => ({ message: `HTTP error! Status: ${activateResponse.status}` }));
-        throw new Error(errorData.message || `Failed to activate sync. Status: ${activateResponse.status}`);
-      }
-
-      const { jobId: activationJobId } = await activateResponse.json();
-      console.log(`[MappingReviewScreen] Sync activated successfully. New Job ID: ${activationJobId}`);
-
-      capture(AnalyticsEvents.SYNC_ACTIVATED, { source: 'import', connection_id: connectionId });
-
-      // Show custom success notification and navigate back properly
-      setNotificationMessage(`Your ${platformName} connection is now active and syncing!`);
-      setShowSuccessNotification(true);
-
-      // Navigate back to the root of the stack (Profile screen) after a short delay
-      setTimeout(() => {
-        setShowSuccessNotification(false);
-        // Use reset to ensure we go to the bottom of the stack
-        navigation.reset({
-          index: 0,
-          routes: [{ name: 'TabNavigator', params: { refresh: Date.now() } }],
-        });
-      }, 2500);
-
-    } catch (err: any) {
-      console.error('[MappingReviewScreen] Error during activation:', err);
-      setError(err.message || 'An unexpected error occurred during activation.');
-      Alert.alert("Activation Error", err.message || "Failed to activate sync. Please try again later.");
-    } finally {
-      setSyncing(false);
-    }
-  };
-
   // --- END API-RELATED FUNCTIONS ---
 
   const handleReviewItem = (item: MappingSuggestion) => {
@@ -2064,29 +1221,41 @@ const MappingReviewScreen = () => {
   // Get counts for tabs
   const counts = useMemo(() => {
     const list = suggestions || [];
-    const matched = list.filter(s => s.action === 'LINK_EXISTING' || s.resolved === true).length;
-    const ignore = list.filter(s => s.action === 'IGNORE').length;
-    const review = Math.max(0, list.filter(s => s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved).length) + missingMappings.length;
+    const all = list.length;
+    const matched = list.filter(s => s.action === 'LINK_EXISTING' || (s.action === 'CREATE_NEW' && s.resolved === true)).length;
+    const needs_review = list.filter(s => s.action === 'UNMATCHED' || (s.action === 'CREATE_NEW' && !s.resolved)).length;
+    const ignored = list.filter(s => s.action === 'IGNORE').length;
+
     // NEW: Count push items (Anorha items to push to this platform)
     const push = list.filter(s => s.direction === 'anorha_to_platform' && s.isSelected).length;
     const pushTotal = list.filter(s => s.direction === 'anorha_to_platform').length;
-    return { matched, review, ignore, push, pushTotal } as any;
-  }, [suggestions, missingMappings]);
+    return { all, matched, needs_review, ignored, push, pushTotal } as any;
+  }, [suggestions]);
 
   // Current list by active tab + query + sort (review tab includes missing mappings)
   const currentList = useMemo(() => {
     const base = (suggestions || []).filter(s => {
-      if (activeTab === 'matched') return s.action === 'LINK_EXISTING' || s.resolved === true;
-      if (activeTab === 'review') return s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved;
-      return s.action === 'IGNORE';
+      if (activeTab === 'matched') return s.action === 'LINK_EXISTING' || (s.action === 'CREATE_NEW' && s.resolved === true);
+      if (activeTab === 'needs_review') return s.action === 'UNMATCHED' || (s.action === 'CREATE_NEW' && !s.resolved);
+      if (activeTab === 'ignored') return s.action === 'IGNORE';
+      return true;
     });
 
     const filtered = listQuery
-      ? base.filter(item =>
-        (item.platformProduct.title || '').toLowerCase().includes(listQuery.toLowerCase()) ||
-        (item.platformProduct.sku || '').toLowerCase().includes(listQuery.toLowerCase()) ||
-        (item.suggestedCanonicalProduct?.title || '').toLowerCase().includes(listQuery.toLowerCase())
-      )
+      ? base.filter(item => {
+        const q = listQuery.toLowerCase();
+        // Search platform product fields
+        if ((item.platformProduct.title || '').toLowerCase().includes(q)) return true;
+        if ((item.platformProduct.sku || '').toLowerCase().includes(q)) return true;
+        // Search matched/suggested Anorha product fields
+        if ((item.suggestedCanonicalProduct?.title || '').toLowerCase().includes(q)) return true;
+        if ((item.suggestedCanonicalProduct?.sku || '').toLowerCase().includes(q)) return true;
+        // Search anorhaVariant fields (bidirectional sync items)
+        if ((item.anorhaVariant?.title || '').toLowerCase().includes(q)) return true;
+        if ((item.anorhaVariant?.sku || '').toLowerCase().includes(q)) return true;
+        if ((item.anorhaVariant?.barcode || '').toLowerCase().includes(q)) return true;
+        return false;
+      })
       : base;
 
     const sorted = [...filtered].sort((a, b) => {
@@ -2166,24 +1335,8 @@ const MappingReviewScreen = () => {
     // Add loose items (no header needed for individual items)
     result.push(...looseItems.map(s => ({ type: 'item', suggestion: s, isChild: false })));
 
-    // Include missing mappings in review tab
-    if (activeTab === 'review' && missingMappings.length > 0) {
-      const filteredMissing = listQuery
-        ? missingMappings.filter(m =>
-            (m.title || '').toLowerCase().includes(listQuery.toLowerCase()) ||
-            (m.sku || '').toLowerCase().includes(listQuery.toLowerCase())
-          )
-        : missingMappings;
-      const sortedMissing = [...filteredMissing].sort((a, b) =>
-        sortBy === 'title'
-          ? (a.title || '').localeCompare(b.title || '')
-          : (a.sku || '').localeCompare(b.sku || '')
-      );
-      result.push(...sortedMissing.map(m => ({ type: 'missing', ...m })));
-    }
-
     return result;
-  }, [currentList, expandedGroups, activeTab, missingMappings, listQuery, sortBy]);
+  }, [currentList, expandedGroups, activeTab, listQuery, sortBy]);
 
   // --- END ALWAYS-CALLED HOOKS ---
 
@@ -2293,9 +1446,12 @@ const MappingReviewScreen = () => {
           <TouchableOpacity
             style={[styles.miniCard, styles.sssyncMiniCard, styles.linkedMiniCard]}
             onPress={() => {
-              setShowSearchResults(true);
-              setSearchQuery('');
-              (global as any).currentPlatformProduct = item.platformProduct;
+              setItemToMatch(item);
+              setGroupItemsToMatch(null);
+              setSearchModalQuery('');
+              setSearchModalResults([]);
+              performProductSearch('');
+              setShowSearchModal(true);
             }}
           >
             <PlaceholderImage
@@ -2318,9 +1474,12 @@ const MappingReviewScreen = () => {
           <TouchableOpacity
             style={[styles.emptyMiniCard, item.action === 'IGNORE' && styles.ignoredMiniCard]}
             onPress={() => {
-              setShowSearchResults(true);
-              setSearchQuery('');
-              (global as any).currentPlatformProduct = item.platformProduct;
+              setItemToMatch(item);
+              setGroupItemsToMatch(null);
+              setSearchModalQuery('');
+              setSearchModalResults([]);
+              performProductSearch('');
+              setShowSearchModal(true);
             }}
           >
             <Icon
@@ -2482,160 +1641,6 @@ const MappingReviewScreen = () => {
   // --- NEW: Function to prepare and show final review ---
   // REMOVED: prepareFinalReview function - using direct activation instead
 
-  // --- NEW: Search functionality ---
-  const searchProducts = async (query: string) => {
-    if (!query.trim() || query.length < 2) {
-      // Keep modal open; just clear results until enough characters
-      setShowSearchResults(true);
-      setSearchResults([]);
-      return;
-    }
-
-    setIsSearching(true);
-    try {
-      const session = await supabase.auth.getSession();
-      const { data: { user } } = await supabase.auth.getUser();
-
-      if (!user) {
-        throw new Error("User not authenticated");
-      }
-
-      // Search in ProductVariants table
-      const { data, error } = await supabase
-        .from('ProductVariants')
-        .select('Id, Sku, Title, Price, Barcode')
-        .eq('UserId', user.id)
-        // Use simple ILIKE for broad matching on Title or SKU
-        .or(`Title.ilike.%${query}%,Sku.ilike.%${query}%`)
-        .limit(20);
-
-      if (error) {
-        console.error('[MappingReviewScreen] Error searching products:', error);
-        throw error;
-      }
-
-      setSearchResults(data || []);
-      setShowSearchResults(true);
-    } catch (err: any) {
-      console.error('[MappingReviewScreen] Search error:', err);
-      Alert.alert('Search Error', err.message || 'Failed to search products');
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  const handleSearchChange = (text: string) => {
-    setShowSearchResults(true); // ensure it stays visible
-    setSearchQuery(text);
-    clearTimeout((handleSearchChange as any)._t);
-    (handleSearchChange as any)._t = setTimeout(() => {
-      searchProducts(text);
-    }, 350);
-  };
-
-  const handleLinkProduct = (searchResult: any, platformProduct: any) => {
-    // Update the suggestion to link to the selected product
-    setSuggestions(currentSuggestions => {
-      if (!currentSuggestions) return null;
-      return currentSuggestions.map(suggestion => {
-        if (suggestion.platformProduct.id === platformProduct.id) {
-          return {
-            ...suggestion,
-            action: 'LINK_EXISTING' as const,
-            isSelected: true,
-            suggestedCanonicalProduct: {
-              id: searchResult.Id,
-              sku: searchResult.Sku,
-              title: searchResult.Title,
-            }
-          };
-        }
-        return suggestion;
-      });
-    });
-
-    // Close search
-    setShowSearchResults(false);
-    setSearchQuery('');
-    setSearchResults([]);
-
-    Alert.alert('Product Linked', `${platformProduct.title} has been linked to ${searchResult.Title}`);
-  };
-
-  const renderSearchResults = () => {
-    if (!showSearchResults) return null;
-
-    return (
-      <Modal visible={showSearchResults} animationType="slide" presentationStyle="pageSheet">
-        <View style={styles.searchModal}>
-          <View style={styles.searchModalHeader}>
-            <Text style={styles.searchModalTitle}>Search Products to Link</Text>
-            <TouchableOpacity onPress={() => setShowSearchResults(false)}>
-              <Icon name="close" size={24} color={theme.colors.text} />
-            </TouchableOpacity>
-          </View>
-
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search by SKU, name, or barcode..."
-            value={searchQuery}
-            onChangeText={handleSearchChange}
-            autoFocus
-          />
-
-          {isSearching ? (
-            <View style={styles.searchSpinner}>
-              <ActivityIndicator size="large" color={theme.colors.primary} />
-              <Text style={styles.searchingText}>Searching your products...</Text>
-            </View>
-          ) : (
-            <FlatList
-              data={searchResults}
-              keyExtractor={(item) => item.Id}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.searchResultItem}
-                  onPress={() => {
-                    const platformProduct = (global as any).currentPlatformProduct;
-                    if (platformProduct) {
-                      handleLinkProduct(item, platformProduct);
-                    } else {
-                      Alert.alert('Error', 'No platform product selected for linking');
-                    }
-                  }}
-                >
-                  <View style={styles.searchResultContent}>
-                    <View style={styles.searchResultMain}>
-                      <Text style={styles.searchResultTitle}>{item.Title}</Text>
-                      <Text style={styles.searchResultSku}>SKU: {item.Sku || 'N/A'}</Text>
-                      <Text style={styles.searchResultPrice}>Price: ${item.Price || '0.00'}</Text>
-                    </View>
-                    <Icon name="link-variant" size={20} color={theme.colors.primary} />
-                  </View>
-                </TouchableOpacity>
-              )}
-              ListEmptyComponent={
-                <View style={styles.searchEmptyContainer}>
-                  <Icon name="magnify" size={48} color={theme.colors.textSecondary} />
-                  <Text style={styles.searchEmptyText}>
-                    {searchQuery.length > 0 ? 'No products found' : 'Start typing to search...'}
-                  </Text>
-                  {searchQuery.length > 0 && (
-                    <Text style={styles.searchEmptySubtext}>
-                      Try searching by product name, SKU, or barcode
-                    </Text>
-                  )}
-                </View>
-              }
-            />
-          )}
-        </View>
-      </Modal>
-    );
-  };
-
-  // --- End search functionality ---
-
   // --- NEW: Function to reset connection and fetch suggestions directly ---
   const resetConnectionAndFetch = async () => {
     console.log(`[MappingReviewScreen] Resetting connection ${connectionId} and fetching suggestions directly`);
@@ -2664,7 +1669,7 @@ const MappingReviewScreen = () => {
       }
 
       // Now try to fetch mapping suggestions directly
-      await fetchMappingSuggestions(connectionId);
+      await importSession.refreshSuggestions();
 
     } catch (err: any) {
       console.error('[MappingReviewScreen] Error in resetConnectionAndFetch:', err);
@@ -2684,8 +1689,8 @@ const MappingReviewScreen = () => {
       const token = await waitForSupabaseToken();
       if (!token) throw new Error("Authentication required");
 
-      // Trigger a platform scan
-      const scanResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/scan`, {
+      // Trigger a platform rescan
+      const scanResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/rescan`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -2697,11 +1702,11 @@ const MappingReviewScreen = () => {
         console.log(`[MappingReviewScreen] Scan triggered successfully, fetching suggestions...`);
         // Wait a moment then fetch fresh suggestions
         await new Promise(resolve => setTimeout(resolve, 500));
-        await fetchMappingSuggestions(connectionId);
+        await importSession.refreshSuggestions();
       } else {
         // If scan endpoint fails, just refresh suggestions
         console.warn(`[MappingReviewScreen] Scan trigger failed, refreshing suggestions directly`);
-        await fetchMappingSuggestions(connectionId);
+        await importSession.refreshSuggestions();
       }
 
     } catch (err: any) {
@@ -4228,6 +3233,13 @@ const MappingReviewScreen = () => {
   if (loading) {
     return (
       <View style={[styles.container, styles.centered]}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={[styles.backButton, { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, position: 'absolute', top: insets.top + 8, left: 16, zIndex: 10 }]}
+        >
+          <Icon name="arrow-left" size={20} color={theme.colors.text} />
+          <Text style={{ marginLeft: 6, fontSize: 16, fontWeight: '500', color: theme.colors.text }}>Back</Text>
+        </TouchableOpacity>
         <ActivityIndicator size="large" color={theme.colors.primary} />
         <Text style={[styles.loadingText, { color: theme.colors.text }]}>Loading {platformName} Suggestions...</Text>
         {renderProgressCard()}
@@ -4240,7 +3252,7 @@ const MappingReviewScreen = () => {
       <View style={[styles.container, styles.centered]}>
         <Icon name="alert-circle-outline" size={48} color={theme.colors.error} />
         <Text style={[styles.errorText, { color: theme.colors.error }]}>Error: {error}</Text>
-        <Button title="Retry" onPress={() => fetchMappingSuggestions(connectionId)} />
+        <Button title="Retry" onPress={() => importSession.refreshSuggestions()} />
       </View>
     );
   }
@@ -4249,7 +3261,7 @@ const MappingReviewScreen = () => {
   // MappingReviewScreen is used for ongoing settings, not just product mapping
 
   // --- MODIFIED: If we have existing mappings but no API suggestions, show them ---
-  if (existingMappings.length > 0 && (!suggestions || (Array.isArray(suggestions) && suggestions.length === 0))) {
+  if (false && existingMappings.length > 0 && (!suggestions || (Array.isArray(suggestions) && suggestions.length === 0))) {
     return (
       <View style={styles.container}>
         <ScrollView style={styles.container}>
@@ -4301,12 +3313,7 @@ const MappingReviewScreen = () => {
       {/* Show the final review UI when in that state */}
       {/* {showFinalReview && renderFinalReview()} */}
 
-      <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-        <Icon name="arrow-left" size={22} color={theme.colors.text} />
-      </TouchableOpacity>
 
-      {/* Search Modal */}
-      {renderSearchResults()}
 
       {/* Sync Rules Modal 
       {renderSyncRulesModal()}
@@ -4344,75 +3351,19 @@ const MappingReviewScreen = () => {
       {/* Content */}
       {!loading && !error && suggestions && (
         <>
-          {reviewEntryStage === 'summary' ? (
-            <View style={{ paddingHorizontal: 20, paddingTop: 16, gap: 12 }}>
-              <View style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, padding: 16, backgroundColor: '#fff' }}>
-                <Text style={{ fontSize: 18, fontWeight: '700', color: '#111827' }}>Here&apos;s what we got</Text>
-                <Text style={{ marginTop: 6, fontSize: 13, color: '#6B7280' }}>
-                  Triage this import first, then open detailed mapping cards.
-                </Text>
-                <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
-                  <View style={{ flex: 1, borderRadius: 10, padding: 12, backgroundColor: '#ECFDF3' }}>
-                    <Text style={{ fontSize: 20, fontWeight: '700', color: '#065F46' }}>{counts.matched}</Text>
-                    <Text style={{ marginTop: 2, fontSize: 12, color: '#065F46' }}>Ready to confirm</Text>
-                  </View>
-                  <View style={{ flex: 1, borderRadius: 10, padding: 12, backgroundColor: '#FEF3C7' }}>
-                    <Text style={{ fontSize: 20, fontWeight: '700', color: '#92400E' }}>{counts.review}</Text>
-                    <Text style={{ marginTop: 2, fontSize: 12, color: '#92400E' }}>Needs attention</Text>
-                  </View>
-                </View>
-              </View>
+          {/* Map Products Header */}
+          <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4 }}>
+            <Text style={{ fontSize: 20, fontWeight: '700', color: '#111827', textAlign: 'center' }}>Map Products</Text>
+            <Text style={{ fontSize: 13, color: '#6B7280', textAlign: 'center', marginTop: 2 }}>
+              {counts.all} items to review
+            </Text>
+          </View>
 
-              <View style={{ gap: 8 }}>
-                <TouchableOpacity
-                  style={{ backgroundColor: '#93C822', borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}
-                  onPress={() => {
-                    setActiveTab('matched');
-                    setReviewEntryStage('details');
-                  }}
-                >
-                  <Text style={{ color: '#fff', fontWeight: '700' }}>Open Ready Queue</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={{ backgroundColor: '#F59E0B', borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}
-                  onPress={() => {
-                    setActiveTab('review');
-                    setReviewEntryStage('details');
-                  }}
-                >
-                  <Text style={{ color: '#fff', fontWeight: '700' }}>Open Needs Attention Queue</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={{ backgroundColor: '#fff', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}
-                  onPress={() => {
-                    setSuggestions(prev => (prev || []).map(s => {
-                      if (s.action === 'UNMATCHED' || !s.suggestedCanonicalProduct?.id) return s;
-                      return { ...s, action: 'LINK_EXISTING', isSelected: true, resolved: true };
-                    }));
-                  }}
-                >
-                  <Text style={{ color: '#111827', fontWeight: '700' }}>Bulk resolve ready matches</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={{ backgroundColor: '#fff', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}
-                  onPress={() => {
-                    setSuggestions(prev => (prev || []).map(s => {
-                      const inReview = s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved;
-                      return inReview ? { ...s, action: 'CREATE_NEW', isSelected: true, resolved: true } : s;
-                    }));
-                  }}
-                >
-                  <Text style={{ color: '#111827', fontWeight: '700' }}>Bulk set review queue to create new</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ) : (
-            <>
           <PillTabs
             tabs={[
-              { key: 'matched', label: 'Matches', count: counts.matched, tone: 'success' },
-              { key: 'review', label: 'Review', count: counts.review, tone: 'warning' },
-              { key: 'ignore', label: 'Ignore', count: counts.ignore, tone: 'danger' },
+              { key: 'needs_review', label: 'Review', count: counts.needs_review, tone: 'warning' },
+              { key: 'matched', label: 'Matched', count: counts.matched, tone: 'success' },
+              { key: 'ignored', label: 'Ignored', count: counts.ignored, tone: 'default' },
             ]}
             value={activeTab}
             onChange={(k) => setActiveTab(k as ActiveTab)}
@@ -4422,30 +3373,15 @@ const MappingReviewScreen = () => {
             <SearchBarWithScanner
               value={listQuery}
               onChangeText={setListQuery}
-              placeholder={`Search this account's products`}
+              placeholder="Search by name, SKU, or barcode..."
               onScan={(barcode) => setListQuery(barcode)}
               onScannerOpen={() => setShowBarcodeScanner(true)}
             />
           </View>
 
 
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 12, marginTop: 4, }}>
-            {activeTab === 'matched' && (
-              <Text style={{ fontWeight: "600", color: theme.colors.textSecondary }}>
-                Review Matches
-              </Text>
-            )}
-            {activeTab === 'review' && (
-              <Text style={{ fontWeight: "600", color: theme.colors.textSecondary }}>
-                Verify/Review
-              </Text>
-            )}
-            {activeTab === 'ignore' && (
-              <Text style={{ fontWeight: "600", color: theme.colors.textSecondary }}>
-                Ignored Products
-              </Text>
-            )}
-
+          {/* No section titles — pills handle context */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 20, marginBottom: 8, marginTop: 4 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               {/* Effect All Dropdown */}
               <View style={{ position: 'relative' }}>
@@ -4511,10 +3447,10 @@ const MappingReviewScreen = () => {
                       onPress={() => {
                         setSuggestions(prev => (prev || []).map(s => {
                           const isInCurrentTab = activeTab === 'matched'
-                            ? (s.action === 'LINK_EXISTING' || s.resolved === true)
-                            : activeTab === 'review'
-                              ? (s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved)
-                              : s.action === 'IGNORE';
+                            ? (s.action === 'LINK_EXISTING' || (s.action === 'CREATE_NEW' && s.resolved === true))
+                            : activeTab === 'needs_review'
+                              ? (s.action === 'UNMATCHED' || (s.action === 'CREATE_NEW' && !s.resolved))
+                              : activeTab === 'ignored' ? s.action === 'IGNORE' : true;
                           if (isInCurrentTab && s.action !== 'IGNORE') {
                             return { ...s, prevAction: s.action, action: 'IGNORE', isSelected: false, resolved: false };
                           }
@@ -4529,7 +3465,7 @@ const MappingReviewScreen = () => {
                   </View>
                 )}
               </View>
-              {/* Sort Button - Removed Rescan button per user request */}
+              {/* Sort Button */}
               <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8 }} onPress={() => setSortBy(sortBy === 'title' ? 'sku' : 'title')} accessibilityLabel="Sort by">
                 <Icon name="sort" size={18} color={theme.colors.textSecondary} />
                 <Text style={{ marginLeft: 6, color: theme.colors.textSecondary, fontWeight: '600' }}>Sort By: {sortBy === 'title' ? 'Title' : 'SKU'}</Text>
@@ -4539,25 +3475,8 @@ const MappingReviewScreen = () => {
 
           <FlatList
             data={groupedList}
-            keyExtractor={(item, index) => (item as any).type === 'missing'
-              ? `missing-${(item as any).variantId}-${index}`
-              : (item as any).type === 'header' ? `header-${(item as any).id}` : `item-${(item as any).suggestion.platformProduct.id}-${index}`}
+            keyExtractor={(item, index) => (item as any).type === 'header' ? `header-${(item as any).id}` : `item-${(item as any).suggestion.platformProduct.id}-${index}`}
             renderItem={({ item }) => {
-              if ((item as any).type === 'missing') {
-                const m = item as { variantId: string; sku: string | null; title: string | null; productId: string | null };
-                return (
-                  <View style={[styles.reviewItemCard, { marginHorizontal: 20, marginBottom: 12 }]}>
-                    <View style={styles.reviewItemSection}>
-                      <PlaceholderImage uri={'/src/assets/rounded_anorha.png'} size={40} borderRadius={6} />
-                      <View style={styles.reviewItemDetails}>
-                        <Text style={styles.reviewItemTitle} numberOfLines={2}>{m.title || 'Unnamed'}</Text>
-                        <Text style={styles.reviewItemSku}>SKU: {m.sku || 'N/A'}</Text>
-                        <Text style={{ fontSize: 12, color: theme.colors.warning, marginTop: 4 }}>No mapping for this connection</Text>
-                      </View>
-                    </View>
-                  </View>
-                );
-              }
               if ((item as any).type === 'header') {
                 // Format price range for display
                 let priceText = '';
@@ -4661,6 +3580,7 @@ const MappingReviewScreen = () => {
                       setGroupItemsToMatch(groupItems);  // Pass all group items
                       setSearchModalQuery('');
                       setSearchModalResults([]);
+                      performProductSearch('');
                       setShowSearchModal(true);
                     }}
                     // Click the card itself (not buttons) to expand
@@ -4711,7 +3631,7 @@ const MappingReviewScreen = () => {
                   onRestore={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, action: prevS.prevAction || 'UNMATCHED', isSelected: false } : prevS))}
                   onCreate={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, action: 'CREATE_NEW', isSelected: true, resolved: true } : prevS))}
                   onApproveMatch={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, action: 'LINK_EXISTING', resolved: true, isSelected: true } : prevS))}
-                  onSearch={() => { setItemToMatch(s); setGroupItemsToMatch(null); setSearchModalQuery(''); setSearchModalResults([]); setShowSearchModal(true); }}
+                  onSearch={() => { setItemToMatch(s); setGroupItemsToMatch(null); setSearchModalQuery(''); performProductSearch(''); setShowSearchModal(true); }}
                 />
               );
             }}
@@ -4767,7 +3687,7 @@ const MappingReviewScreen = () => {
                     value={searchModalQuery}
                     onChangeText={(text) => {
                       setSearchModalQuery(text);
-                      if (text.length > 2) performProductSearch(text);
+                      performProductSearch(text);
                     }}
                     onScan={(code) => {
                       setSearchModalQuery(code);
@@ -4787,8 +3707,12 @@ const MappingReviewScreen = () => {
                       style={{ flexDirection: 'row', padding: 16, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' }}
                       onPress={() => handleManualMatch(item)}
                     >
-                      <View style={{ width: 48, height: 48, backgroundColor: '#f0f0f0', borderRadius: 8, marginRight: 12, alignItems: 'center', justifyContent: 'center' }}>
-                        <Icon name="package-variant" size={24} color="#9CA3AF" />
+                      <View style={{ width: 48, height: 48, backgroundColor: '#f0f0f0', borderRadius: 8, marginRight: 12, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                        {item.imageUrl ? (
+                          <RNImage source={{ uri: item.imageUrl }} style={{ width: 48, height: 48, borderRadius: 8 }} resizeMode="cover" />
+                        ) : (
+                          <Icon name="package-variant" size={24} color="#9CA3AF" />
+                        )}
                       </View>
                       <View style={{ flex: 1 }}>
                         <Text style={{ fontSize: 16, fontWeight: '600', color: theme.colors.text }}>{item.title}</Text>
@@ -4807,7 +3731,7 @@ const MappingReviewScreen = () => {
                       <View style={{ padding: 40, alignItems: 'center' }}>
                         <Icon name="magnify" size={48} color="#E5E7EB" />
                         <Text style={{ textAlign: 'center', marginTop: 16, color: theme.colors.textSecondary }}>
-                          {searchModalQuery.length < 3 ? 'Type at least 3 characters to search' : 'No products found'}
+                          {searchModalQuery.length < 1 ? 'Start typing to search your products' : 'No products found'}
                         </Text>
                       </View>
                   }
@@ -4830,1101 +3754,50 @@ const MappingReviewScreen = () => {
               setWizardVisible(true);
             }}
             primaryDisabled={false}
-            secondaryLabel="Cancel import"
+            secondaryLabel="Back"
             secondaryDisabled={false}
             onSecondary={() => navigation.goBack()}
           />
 
-          {/* Inline Bottom-Sheet Wizard */}
-          <Modal visible={wizardVisible} transparent animationType="fade" onRequestClose={() => setWizardVisible(false)}>
-            <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0, 0, 0, 0.7)' }}>
-              <Pressable style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0)' }} onPress={() => setWizardVisible(false)} />
-              <KeyboardAvoidingView
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                style={{ maxHeight: '90%' }}
-              >
-                <ScrollView
-                  contentContainerStyle={{ flexGrow: 1 }}
-                  scrollEnabled={true}
-                  nestedScrollEnabled={true}
-                >
-                  <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 20, ...Platform.select({ ios: { shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4 }, android: { elevation: 3 } }), paddingBottom: 32, }}>
-                    {/* Wizard Header */}
-                    <View style={{ paddingVertical: 12, alignItems: 'center' }}>
-                      {/* Back link - ONLY on Step 0 */}
-                      {wizardStep === 0 && (
-                        <TouchableOpacity
-                          style={{ alignSelf: 'center', marginBottom: 12 }}
-                          onPress={() => setWizardVisible(false)}
-                        >
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                            <Icon name="arrow-u-left-top" size={16} color="#6B7280" />
-                            <Text style={{ color: '#6B7280', fontSize: 14 }}>Reselect Matches</Text>
-                          </View>
-                        </TouchableOpacity>
-                      )}
-
-                      {/* Title */}
-                      <Text style={{ fontSize: 18, fontWeight: '700', color: theme.colors.text, textAlign: 'center' }}>
-                        {WIZARD_STEP_CONFIG[wizardStep]?.title || 'Setup'}
-                      </Text>
-
-                      {/* Description - ABOVE divider */}
-                      {WIZARD_STEP_CONFIG[wizardStep]?.description && (
-                        <Text style={{ color: theme.colors.textSecondary, textAlign: 'center', fontSize: 14, marginTop: 8 }}>
-                          {WIZARD_STEP_CONFIG[wizardStep]?.description}
-                        </Text>
-                      )}
-                    </View>
-
-                    {/* Divider */}
-                    <View style={{ height: 1, backgroundColor: '#E5E5E5', marginBottom: 16 }} />
-
-                    {/* Step 0: Product Creation Mode - 3 cards + skip button */}
-                    {wizardStep === 0 && (
-                      <View style={{ paddingHorizontal: 0, minHeight: 300 }}>
-                        {/* Three horizontal option cards */}
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 10, marginBottom: 24 }}>
-              
-
-                          {/* Option 2: Pull Only - Other platforms → arrow → This platform */}
-                          <TouchableOpacity
-                            style={{
-                              flex: 1,
-                              borderWidth: 2,
-                              borderColor: productCreationMode === 'pull_only' ? theme.colors.primary : '#E5E7EB',
-                              borderRadius: 12,
-                              paddingVertical: 16,
-                              paddingHorizontal: 4,
-                              backgroundColor: productCreationMode === 'pull_only' ? theme.colors.primary + '15' : '#fff',
-                              alignItems: 'center',
-                            }}
-                            onPress={() => setProductCreationMode('pull_only')}
-                          >
-                            {/* Visual flow: This platform → arrow → Anorha */}
-                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 10, height: 52, gap: 2 }}>
-                              {/* Current platform (Square/Shopify/etc) on LEFT */}
-                              <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 1.5, borderColor: '#E5E7EB' }}>
-                                {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={32} height={32} />}
-                                {platformName?.toLowerCase().includes('square') && <SquareSvg width={32} height={32} />}
-                                {platformName?.toLowerCase().includes('clover') && <CloverSvg width={32} height={32} />}
-                                {platformName?.toLowerCase().includes('ebay') && <EbaySvg width={32} height={32} />}
-                                {platformName?.toLowerCase().includes('facebook') && <FacebookSvg width={32} height={32} />}
-                                {platformName?.toLowerCase().includes('amazon') && <AmazonSvg width={32} height={32} />}
-                                {!platformName?.toLowerCase().match(/shopify|square|clover|ebay|facebook|amazon/) && <Icon name="store" size={32} color="#9CA3AF" />}
-                              </View>
-                              {/* Arrow pointing right */}
-                              <Icon name="arrow-right" size={20} color={theme.colors.primary} />
-                              {/* Anorha logo on RIGHT */}
-                              <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 2, borderColor: theme.colors.primary }}>
-                                <RNImage source={AnorhaLogo} style={{ width: 32, height: 32, borderRadius: 6 }} />
-                              </View>
-                            </View>
-                            <Text style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text, textAlign: 'center' }}>
-                              Import to Anorha
-                            </Text>
-                            <Text style={{ fontSize: 11, color: theme.colors.textSecondary, textAlign: 'center', marginTop: 4 }}>
-                              Pull items from {platformName || 'platform'}
-                            </Text>
-                          </TouchableOpacity>
-
-                          {/* Option 1: Sync Everywhere - Dynamic platform icon stack */}
-                          <TouchableOpacity
-                            style={{
-                              flex: 1,
-                              borderWidth: 2,
-                              borderColor: productCreationMode === 'sync_everywhere' ? theme.colors.primary : '#E5E7EB',
-                              borderRadius: 12,
-                              paddingVertical: 16,
-                              paddingHorizontal: 8,
-                              backgroundColor: productCreationMode === 'sync_everywhere' ? theme.colors.primary + '15' : '#fff',
-                              alignItems: 'center',
-                            }}
-                            onPress={() => setProductCreationMode('sync_everywhere')}
-                          >
-                            {/* Dynamic platform icons - photo stack style */}
-                            <View style={{
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              marginBottom: 10,
-                              height: 52,
-                              width: '100%',
-                            }}>
-                              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
-                                {/* Anorha logo first in the stack */}
-                                <View style={{
-                                  backgroundColor: '#fff',
-                                  borderRadius: 8,
-                                  padding: 3,
-                                  borderWidth: 2,
-                                  borderColor: theme.colors.primary,
-                                  zIndex: 5,
-                                  ...Platform.select({
-                                    ios: { shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } },
-                                    android: { elevation: 2 },
-                                  }),
-                                }}>
-                                  <RNImage source={AnorhaLogo} style={{ width: 32, height: 32, borderRadius: 6 }} />
-                                </View>
-                                {platformConnections.slice(0, 2).map((conn, index) => {
-                                  const platformType = conn.PlatformType?.toLowerCase() || '';
-                                  return (
-                                    <View
-                                      key={conn.Id}
-                                      style={{
-                                        marginLeft: -12,
-                                        backgroundColor: '#fff',
-                                        borderRadius: 8,
-                                        padding: 3,
-                                        borderWidth: 1.5,
-                                        borderColor: '#E5E7EB',
-                                        zIndex: 3 - index,
-                                        ...Platform.select({
-                                          ios: { shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } },
-                                          android: { elevation: 2 },
-                                        }),
-                                      }}
-                                    >
-                                      {platformType.includes('shopify') && <ShopifySvg width={32} height={32} />}
-                                      {platformType.includes('square') && <SquareSvg width={32} height={32} />}
-                                      {platformType.includes('clover') && <CloverSvg width={32} height={32} />}
-                                      {platformType.includes('ebay') && <EbaySvg width={32} height={32} />}
-                                      {platformType.includes('facebook') && <FacebookSvg width={32} height={32} />}
-                                      {platformType.includes('amazon') && <AmazonSvg width={32} height={32} />}
-                                      {!platformType.match(/shopify|square|clover|ebay|facebook|amazon/) && (
-                                        <Icon name="store" size={32} color={getPlatformColor(platformType)} />
-                                      )}
-                                    </View>
-                                  );
-                                })}
-                                {platformConnections.length > 3 && (
-                                  <View style={{
-                                    marginLeft: -10,
-                                    backgroundColor: '#F3F4F6',
-                                    borderRadius: 8,
-                                    padding: 3,
-                                    width: 38,
-                                    height: 38,
-                                    borderWidth: 1.5,
-                                    borderColor: '#E5E7EB',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    zIndex: 0,
-                                  }}>
-                                    <Text style={{ fontSize: 12, fontWeight: '700', color: '#6B7280' }}>
-                                      +{platformConnections.length - 3}
-                                    </Text>
-                                  </View>
-                                )}
-                              </View>
-                            </View>
-                            <Text style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text, textAlign: 'center' }}>
-                              Sync Everywhere
-                            </Text>
-                            <Text style={{ fontSize: 10, color: '#4A6C1C', marginTop: 2, fontWeight: '700' }}>
-                              Recommended
-                            </Text>
-                            <Text style={{ fontSize: 11, color: theme.colors.textSecondary, textAlign: 'center', marginTop: 4 }}>
-                              Adds missing items to ALL platforms
-                            </Text>
-                          </TouchableOpacity>
-
-                          {/* Option 3: Push Only - Anorha → arrow → This platform */}
-                          <TouchableOpacity
-                            style={{
-                              flex: 1,
-                              borderWidth: 2,
-                              borderColor: productCreationMode === 'push_only' ? theme.colors.primary : '#E5E7EB',
-                              borderRadius: 12,
-                              paddingVertical: 16,
-                              paddingHorizontal: 4,
-                              backgroundColor: productCreationMode === 'push_only' ? theme.colors.primary + '15' : '#fff',
-                              alignItems: 'center',
-                            }}
-                            onPress={() => setProductCreationMode('push_only')}
-                          >
-                            {/* Visual flow: Anorha → arrow → This platform */}
-                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 10, height: 52, gap: 6 }}>
-                              {/* Anorha logo on LEFT */}
-                              <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 1.5, borderColor: '#E5E7EB' }}>
-                                <RNImage source={AnorhaLogo} style={{ width: 32, height: 32, borderRadius: 6 }} />
-                              </View>
-                              {/* Arrow pointing right */}
-                              <Icon name="arrow-right" size={20} color={theme.colors.primary} />
-                              {/* Current platform on RIGHT */}
-                              <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 2, borderColor: theme.colors.primary }}>
-                                {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={32} height={32} />}
-                                {platformName?.toLowerCase().includes('square') && <SquareSvg width={32} height={32} />}
-                                {platformName?.toLowerCase().includes('clover') && <CloverSvg width={32} height={32} />}
-                                {platformName?.toLowerCase().includes('ebay') && <EbaySvg width={32} height={32} />}
-                                {platformName?.toLowerCase().includes('facebook') && <FacebookSvg width={32} height={32} />}
-                                {platformName?.toLowerCase().includes('amazon') && <AmazonSvg width={32} height={32} />}
-                                {!platformName?.toLowerCase().match(/shopify|square|clover|ebay|facebook|amazon/) && <Icon name="store" size={32} color={theme.colors.primary} />}
-                              </View>
-                            </View>
-                            <Text style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text, textAlign: 'center' }}>
-                              Push to {platformName || 'Platform'}
-                            </Text>
-                            <Text style={{ fontSize: 11, color: theme.colors.textSecondary, textAlign: 'center', marginTop: 4 }}>
-                              Send Anorha items here
-                            </Text>
-                          </TouchableOpacity>
-                        </View>
-
-                        {/* Continue button
-                        <Text style={{ color: theme.colors.textSecondary, fontSize: 12, textAlign: 'center', marginBottom: 10 }}>
-                          You can change this later
-                        </Text>
-                        */}
-                        <TouchableOpacity
-                          style={{
-                            backgroundColor: "#5C9B00",
-                            borderRadius: 12,
-                            paddingVertical: 14,
-                            alignItems: 'center',
-                            marginBottom: 10,
-                          }}
-                          onPress={() => setWizardStep(1)}
-                        >
-                          <Text style={{ color: '#fff', fontWeight: '600', fontSize: 16 }}>
-                            Continue
-                          </Text>
-                        </TouchableOpacity>
-
-                        {/* Gray Skip button for "Do Nothing" */}
-                        <TouchableOpacity
-                          style={{
-                            backgroundColor: '#E5E5E5',
-                            borderRadius: 12,
-                            paddingVertical: 14,
-                            alignItems: 'center',
-                          }}
-                          onPress={() => {
-                            setProductCreationMode('do_nothing');
-                            setWizardStep(1);
-                          }}
-                        >
-                          <Text style={{ color: '#71717A', fontWeight: '600', fontSize: 16 }}>
-                            Skip - Don't create missing items
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-
-                    {/* Step 1: Pool Assignment (was Step 0) */}
-                    {wizardStep === 1 && (
-                      <View style={{ paddingHorizontal: 0, paddingTop: 0 }}>
-                        {(isLoadingPools || isLoadingLocations) ? (
-                          <View style={{ padding: 40, alignItems: 'center' }}>
-                            <ActivityIndicator size="large" color={theme.colors.primary} />
-                            <Text style={{ marginTop: 12, color: theme.colors.textSecondary }}>
-                              Loading locations and pools...
-                            </Text>
-                          </View>
-                        ) : displayConnectionLocations.length === 0 ? (
-                          <View style={{ padding: 0, alignItems: 'center' }}>
-
-                            {/*<Icon name="map-marker-off" size={48} color={theme.colors.textSecondary} />
-                            <Text style={{ marginTop: 12, color: theme.colors.textSecondary, textAlign: 'center' }}>
-                              No locations found for this connection.{'\n'}Sync will use default location.
-                            </Text>
-                            */}
-                            {/* Show simple pool selection */}
-                            <View style={{ width: '100%', marginTop: 20 }}>
-                              {pools.length > 0 && pools.map((pool) => (
-                                <TouchableOpacity
-                                  key={pool.id}
-                                  style={{
-                                    borderWidth: 1,
-                                    borderColor: selectedPool === pool.id ? theme.colors.primary : '#E5E7EB',
-                                    borderRadius: 12,
-                                    padding: 16,
-                                    marginBottom: 8,
-                                    backgroundColor: selectedPool === pool.id ? theme.colors.primary + '10' : '#fff',
-                                    flexDirection: 'row',
-                                    alignItems: 'center',
-                                  }}
-                                  onPress={() => setSelectedPool(pool.id)}
-                                >
-                                  <Text style={{ flex: 1, fontWeight: '600', color: theme.colors.text }}>{pool.name}</Text>
-                                  <View style={{
-                                    width: 20, height: 20, borderRadius: 10, borderWidth: 2,
-                                    borderColor: selectedPool === pool.id ? theme.colors.primary : '#E5E7EB',
-                                    backgroundColor: selectedPool === pool.id ? theme.colors.primary : 'transparent',
-                                    alignItems: 'center', justifyContent: 'center'
-                                  }}>
-                                    {selectedPool === pool.id && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#fff' }} />}
-                                  </View>
-                                </TouchableOpacity>
-                              ))}
-                            </View>
-                          </View>
-                        ) : (
-                          <>
-                            {/* Location-to-Pool Assignment Section */}
-                            <View style={{ marginBottom: 20 }}>
-                              <Text style={{ fontWeight: '700', fontSize: 14, color: theme.colors.text, marginBottom: 12, textTransform: 'uppercase' }}>
-                                {connection?.DisplayName || platformName} Locations ({displayConnectionLocations.length})
-                              </Text>
-
-                              {displayConnectionLocations.map((location) => {
-                                const assignedPoolId = locationPoolAssignments[location.platformLocationId] || selectedPool;
-                                const assignedPool = pools.find(p => p.id === assignedPoolId);
-
-                                return (
-                                  <View
-                                    key={location.platformLocationId}
-                                    style={{
-                                      borderWidth: 1,
-                                      borderColor: '#E5E7EB',
-                                      borderRadius: 12,
-                                      padding: 16,
-                                      marginBottom: 10,
-                                      backgroundColor: '#fff',
-                                    }}
-                                  >
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-                                      <Icon name="map-marker" size={20} color={theme.colors.primary} style={{ marginRight: 8 }} />
-                                      <View style={{ flex: 1 }}>
-                                        <Text style={{ fontWeight: '600', fontSize: 15, color: theme.colors.text }}>
-                                          {location.locationName}
-                                        </Text>
-                                        {location.timezone && (
-                                          <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 2 }}>
-                                            {location.timezone}
-                                          </Text>
-                                        )}
-                                      </View>
-                                    </View>
-
-                                    {/* Pool selector for this location */}
-                                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                                      {pools.map((pool) => (
-                                        <TouchableOpacity
-                                          key={pool.id}
-                                          style={{
-                                            paddingHorizontal: 12,
-                                            paddingVertical: 8,
-                                            borderRadius: 20,
-                                            borderWidth: 1,
-                                            borderColor: assignedPoolId === pool.id ? theme.colors.primary : '#D1D5DB',
-                                            backgroundColor: assignedPoolId === pool.id ? theme.colors.primary + '15' : '#F9FAFB',
-                                          }}
-                                          onPress={() => {
-                                            setLocationPoolAssignments(prev => ({
-                                              ...prev,
-                                              [location.platformLocationId]: pool.id,
-                                            }));
-                                          }}
-                                        >
-                                          <Text style={{
-                                            fontSize: 13,
-                                            fontWeight: '600',
-                                            color: assignedPoolId === pool.id ? theme.colors.primary : theme.colors.textSecondary
-                                          }}>
-                                            {pool.name}
-                                          </Text>
-                                        </TouchableOpacity>
-                                      ))}
-
-                                      {/* Create New Pool option */}
-                                      <TouchableOpacity
-                                        style={{
-                                          paddingHorizontal: 12,
-                                          paddingVertical: 8,
-                                          borderRadius: 20,
-                                          borderWidth: 1,
-                                          borderStyle: 'dashed',
-                                          borderColor: assignedPoolId === 'create-new' ? theme.colors.primary : '#D1D5DB',
-                                          backgroundColor: assignedPoolId === 'create-new' ? theme.colors.primary + '15' : 'transparent',
-                                          flexDirection: 'row',
-                                          alignItems: 'center',
-                                          gap: 4,
-                                        }}
-                                        onPress={() => {
-                                          setLocationPoolAssignments(prev => ({
-                                            ...prev,
-                                            [location.platformLocationId]: 'create-new',
-                                          }));
-                                          setSelectedPool('create-new');
-                                        }}
-                                      >
-                                        <Icon name="plus" size={14} color={assignedPoolId === 'create-new' ? theme.colors.primary : theme.colors.textSecondary} />
-                                        <Text style={{
-                                          fontSize: 13,
-                                          fontWeight: '600',
-                                          color: assignedPoolId === 'create-new' ? theme.colors.primary : theme.colors.textSecondary
-                                        }}>
-                                          New Pool
-                                        </Text>
-                                      </TouchableOpacity>
-                                    </View>
-                                  </View>
-                                );
-                              })}
-                            </View>
-
-                            {/* Create New Pool Name Input - Show when any location assigned to create-new */}
-                            {(selectedPool === 'create-new' || Object.values(locationPoolAssignments).includes('create-new')) && (
-                              <View style={{
-                                marginBottom: 16,
-                                padding: 16,
-                                backgroundColor: theme.colors.primary + '10',
-                                borderRadius: 12,
-                                borderWidth: 1,
-                                borderColor: theme.colors.primary + '30',
-                              }}>
-                                <Text style={{ fontWeight: '600', color: theme.colors.text, marginBottom: 8 }}>
-                                  New Pool Name
-                                </Text>
-                                <TextInput
-                                  style={{
-                                    borderWidth: 1,
-                                    borderColor: '#E5E7EB',
-                                    borderRadius: 8,
-                                    paddingHorizontal: 16,
-                                    paddingVertical: 12,
-                                    color: theme.colors.text,
-                                    fontSize: 16,
-                                    backgroundColor: '#fff'
-                                  }}
-                                  placeholder="e.g., 'Main Retail', 'Wholesale', 'Markets'"
-                                  placeholderTextColor={theme.colors.textSecondary}
-                                  value={poolNameInput}
-                                  onChangeText={setPoolNameInput}
-                                  editable={!isCreatingPool}
-                                />
-                                <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 8 }}>
-                                  {Object.values(locationPoolAssignments).filter(p => p === 'create-new').length} location(s) will be added to this new pool
-                                </Text>
-                              </View>
-                            )}
-
-                            {/* Quick assign all to one pool */}
-                            {displayConnectionLocations.length > 1 && pools.length > 0 && (
-                              <View style={{ marginBottom: 16 }}>
-                                <Text style={{ fontSize: 13, color: theme.colors.textSecondary, marginBottom: 8 }}>
-                                  Quick assign all locations:
-                                </Text>
-                                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                                  <View style={{ flexDirection: 'row', gap: 8 }}>
-                                    {pools.map((pool) => (
-                                      <TouchableOpacity
-                                        key={`quick-${pool.id}`}
-                                        style={{
-                                          paddingHorizontal: 16,
-                                          paddingVertical: 10,
-                                          borderRadius: 8,
-                                          backgroundColor: '#F3F4F6',
-                                          borderWidth: 1,
-                                          borderColor: '#E5E7EB',
-                                        }}
-                                        onPress={() => {
-                                          const newAssignments: Record<string, string> = {};
-                                          displayConnectionLocations.forEach(loc => {
-                                            newAssignments[loc.platformLocationId] = pool.id;
-                                          });
-                                          setLocationPoolAssignments(newAssignments);
-                                          setSelectedPool(pool.id);
-                                        }}
-                                      >
-                                        <Text style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text }}>
-                                          All → {pool.name}
-                                        </Text>
-                                      </TouchableOpacity>
-                                    ))}
-                                  </View>
-                                </ScrollView>
-                              </View>
-                            )}
-
-                            {/* Note: Navigation uses the arrow buttons below, not a separate Continue button */}
-                          </>
-                        )}
-                      </View>
-                    )}
-
-                    {wizardStep === 2 && (
-                      <View style={{ paddingTop: 8 }}>
-                        <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
-                          <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: syncMode === 'auto' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setSyncMode('auto')}>
-
-                            <View style={{ marginBottom: 12 }}>
-                              <Sparkles width={32} height={32}></Sparkles>
-                            </View>
-                            <Text style={{ fontWeight: '600', color: theme.colors.text }}>Auto</Text>
-                            <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>(timestamp-based)</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: syncMode === 'manual' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setSyncMode('manual')}>
-                            <View style={{ marginBottom: 12 }}>
-                              <Hammer width={32} height={32}></Hammer>
-                            </View>
-
-                            <Text style={{ fontWeight: '600', color: theme.colors.text }}>Manual</Text>
-                            <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>(Manual Approval)</Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    )}
-
-                    {wizardStep === 3 && (
-                      <View style={{ paddingTop: 20 }}>
-                        {/*<Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Choose how auction listings behave (FB & Ebay) </Text>*/}
-                        <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
-                          <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: delistMode === 'auto' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setDelistMode('auto')}>
-                            <View style={{ marginBottom: 12 }}>
-                              <Unlink width={32} height={32}></Unlink>
-                            </View>
-                            <Text style={{ fontWeight: '600', color: theme.colors.text }}>Auto Delist</Text>
-                            <Text style={{ textAlign: 'center', color: theme.colors.textSecondary, marginTop: 4 }}>Sold listings are automatically removed</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity style={{ flex: 1, flexDirection: "column", gap: 6, alignItems: 'center', borderWidth: 1, borderColor: delistMode === 'manual' ? theme.colors.primary : '#E5E7EB', borderRadius: 12, padding: 18 }} onPress={() => setDelistMode('manual')}>
-                            <View style={{ marginBottom: 12 }}>
-                              <Link width={32} height={32}></Link>
-                            </View>
-                            <Text style={{ fontWeight: '600', color: theme.colors.text }}>Manual Delist</Text>
-                            <Text style={{ color: theme.colors.textSecondary, marginTop: 4 }}>Sold listings stay up</Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    )}
-
-                    {wizardStep === 4 && (
-                      <View style={{ paddingTop: 20 }}>
-                        {/*<Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Adjust prices by % per platform (Optional)</Text>*/}
-                        <View style={{ marginBottom: 24 }}>
-                          {platformConnections.map((connection) => (
-                            <View key={connection.Id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 12 }}>
-                              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-                                <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: getPlatformColor(connection.PlatformType), marginRight: 12 }} />
-                                <View>
-                                  <Text style={{ fontWeight: '600', color: theme.colors.text }}>{connection.DisplayName}</Text>
-                                  <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>{connection.PlatformType}</Text>
-                                </View>
-                              </View>
-                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                                <TouchableOpacity style={{ padding: 8 }} onPress={() => setPriceBuffer(prev => ({ ...prev, [connection.Id]: (prev[connection.Id] || 0) - 1 }))}>
-                                  <Icon name="minus" size={18} />
-                                </TouchableOpacity>
-                                <TextInput
-                                  style={{ width: 60, textAlign: 'center', fontWeight: '700', color: theme.colors.text, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 6, paddingVertical: 4 }}
-                                  value={`${(priceBuffer[connection.Id] || 0).toFixed(1)}%`}
-                                  onChangeText={(text) => {
-                                    const numericValue = parseFloat(text.replace('%', '')) || 0;
-                                    setPriceBuffer(prev => ({ ...prev, [connection.Id]: numericValue }));
-                                  }}
-                                  keyboardType="numeric"
-                                />
-                                <TouchableOpacity style={{ padding: 8 }} onPress={() => setPriceBuffer(prev => ({ ...prev, [connection.Id]: (prev[connection.Id] || 0) + 1 }))}>
-                                  <Icon name="plus" size={18} />
-                                </TouchableOpacity>
-                              </View>
-                            </View>
-                          ))}
-                        </View>
-                      </View>
-                    )}
-
-                    {wizardStep === 5 && (
-                      <View style={{ paddingTop: 20 }}>
-                        <Text style={{ color: theme.colors.textSecondary, marginBottom: 20, textAlign: 'center' }}>Adjust inventory buffer per platform (Optional)</Text>
-                        <View style={{ marginBottom: 24 }}>
-                          {platformConnections.map((connection) => (
-                            <View key={connection.Id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 12 }}>
-                              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-                                <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: getPlatformColor(connection.PlatformType), marginRight: 12 }} />
-                                <View>
-                                  <Text style={{ fontWeight: '600', color: theme.colors.text }}>{connection.DisplayName}</Text>
-                                  <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>{connection.PlatformType}</Text>
-                                </View>
-                              </View>
-                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                                <TouchableOpacity style={{ padding: 8 }} onPress={() =>
-                                  setInventoryBuffer(prev => ({ ...prev, [connection.Id]: Math.max(0, (prev[connection.Id] || 0) - 1) }))}>
-                                  <Icon name="minus" size={18} />
-                                </TouchableOpacity>
-                                <TextInput
-                                  style={{ width: 60, textAlign: 'center', fontWeight: '700', color: theme.colors.text, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 6, paddingVertical: 4 }}
-                                  value={`${(inventoryBuffer[connection.Id] || 0)}`}
-                                  onChangeText={(text) => {
-                                    const numericValue = parseInt(text) || 0;
-                                    setInventoryBuffer(prev => ({ ...prev, [connection.Id]: Math.max(0, numericValue) }));
-                                  }}
-                                  keyboardType="numeric"
-                                  placeholder="0"
-                                />
-                                <TouchableOpacity style={{ padding: 8 }} onPress={() =>
-                                  setInventoryBuffer(prev => ({ ...prev, [connection.Id]: (prev[connection.Id] || 0) + 1 }))}>
-                                  <Icon name="plus" size={18} />
-                                </TouchableOpacity>
-                              </View>
-                            </View>
-                          ))}
-                        </View>
-                      </View>
-                    )}
-
-                    {wizardStep === 6 && (
-                      <View style={{ paddingTop: 20 }}>
-                        {/* Dynamic sync action summary */}
-                        <View style={{ backgroundColor: '#F0F9EB', borderRadius: 12, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: '#93C822' }}>
-                          <Text style={{ fontWeight: '700', color: '#4A6C1C', marginBottom: 8 }}>What will happen:</Text>
-                          <Text style={{ color: '#5B8325', fontSize: 14, lineHeight: 22 }}>
-                            {productCreationMode === 'sync_everywhere'
-                              ? `• Importing ${counts.matched + counts.review} items from ${platformName || 'platform'} → Anorha\n• Creating ${counts.review} new items on Anorha\n• Pushing ${counts.push} Anorha items → ${platformName || 'platform'}\n• All platforms will share the same unified inventory`
-                              : productCreationMode === 'pull_only'
-                                ? `• Importing ${counts.matched + counts.review} items from ${platformName || 'platform'} → Anorha\n• Creating ${counts.review} new items on Anorha\n• Linking ${counts.matched} existing matches`
-                                : productCreationMode === 'push_only'
-                                  ? `• Pushing ${counts.push} Anorha items → ${platformName || 'platform'}\n• Linking ${counts.matched} matched items`
-                                  : `• Linking ${counts.matched} matched items\n• ${counts.review} items need review`
-                            }
-                          </Text>
-                        </View>
-                        <View style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, padding: 16, marginBottom: 24 }}>
-                          <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Items Summary</Text>
-                          <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>
-                            {counts.matched} matched • {counts.review} new from {platformName || 'platform'} • {counts.push > 0 ? `${counts.push} push to ${platformName || 'platform'} • ` : ''}{counts.ignore} ignored
-                          </Text>
-
-                          <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Sync Direction</Text>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16, gap: 8 }}>
-                            {productCreationMode === 'sync_everywhere' && (
-                              <>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                  <View style={{ backgroundColor: '#fff', borderRadius: 6, padding: 2, borderWidth: 1.5, borderColor: theme.colors.primary }}>
-                                    <RNImage source={AnorhaLogo} style={{ width: 20, height: 20, borderRadius: 4 }} />
-                                  </View>
-                                  <Icon name="sync" size={14} color={theme.colors.primary} />
-                                  <View style={{ backgroundColor: '#fff', borderRadius: 6, padding: 2, borderWidth: 1.5, borderColor: '#E5E7EB' }}>
-                                    {platformName?.toLowerCase().includes('square') && <SquareSvg width={20} height={20} />}
-                                    {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={20} height={20} />}
-                                    {!platformName?.toLowerCase().match(/square|shopify/) && <Icon name="store" size={20} color="#6B7280" />}
-                                  </View>
-                                </View>
-                                <Text style={{ color: theme.colors.textSecondary, fontSize: 13 }}>Sync Everywhere</Text>
-                              </>
-                            )}
-                            {productCreationMode === 'pull_only' && (
-                              <>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                  <View style={{ backgroundColor: '#fff', borderRadius: 6, padding: 2, borderWidth: 1.5, borderColor: theme.colors.primary }}>
-                                    {platformName?.toLowerCase().includes('square') && <SquareSvg width={20} height={20} />}
-                                    {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={20} height={20} />}
-                                    {!platformName?.toLowerCase().match(/square|shopify/) && <Icon name="store" size={20} color={theme.colors.primary} />}
-                                  </View>
-                                  <Icon name="arrow-right" size={14} color={theme.colors.primary} />
-                                  <View style={{ backgroundColor: '#fff', borderRadius: 6, padding: 2, borderWidth: 1.5, borderColor: theme.colors.primary }}>
-                                    <RNImage source={AnorhaLogo} style={{ width: 20, height: 20, borderRadius: 4 }} />
-                                  </View>
-                                </View>
-                                <Text style={{ color: theme.colors.textSecondary, fontSize: 13 }}>Import to Anorha</Text>
-                              </>
-                            )}
-                            {productCreationMode === 'push_only' && (
-                              <>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                  <View style={{ backgroundColor: '#fff', borderRadius: 6, padding: 2, borderWidth: 1.5, borderColor: theme.colors.primary }}>
-                                    <RNImage source={AnorhaLogo} style={{ width: 20, height: 20, borderRadius: 4 }} />
-                                  </View>
-                                  <Icon name="arrow-right" size={14} color={theme.colors.primary} />
-                                  <View style={{ backgroundColor: '#fff', borderRadius: 6, padding: 2, borderWidth: 1.5, borderColor: theme.colors.primary }}>
-                                    {platformName?.toLowerCase().includes('square') && <SquareSvg width={20} height={20} />}
-                                    {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={20} height={20} />}
-                                    {!platformName?.toLowerCase().match(/square|shopify/) && <Icon name="store" size={20} color={theme.colors.primary} />}
-                                  </View>
-                                </View>
-                                <Text style={{ color: theme.colors.textSecondary, fontSize: 13 }}>Push to {platformName}</Text>
-                              </>
-                            )}
-                            {productCreationMode === 'do_nothing' && (
-                              <Text style={{ color: theme.colors.textSecondary, fontSize: 13 }}>Link Only (no new items)</Text>
-                            )}
-                          </View>
-
-                          <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Selected Platforms</Text>
-                          <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>{selectedPlatformsState.join(', ') || 'None'}</Text>
-
-                          <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Sync Settings</Text>
-                          <Text style={{ color: theme.colors.textSecondary, marginBottom: 16 }}>Mode: {syncMode === 'auto' ? 'Auto' : 'Manual'} • Delist: {delistMode === 'auto' ? 'Auto' : 'Manual'}</Text>
-
-                          {Object.keys(priceBuffer).length > 0 && (
-                            <>
-                              <Text style={{ fontWeight: '700', color: theme.colors.text, marginBottom: 8 }}>Price Adjustments</Text>
-                              <Text style={{ color: theme.colors.textSecondary }}>
-                                {platformConnections
-                                  .filter(conn => priceBuffer[conn.Id] !== 0)
-                                  .map(conn => `${conn.DisplayName}: ${priceBuffer[conn.Id] > 0 ? '+' : ''}${priceBuffer[conn.Id]}%`)
-                                  .join(', ') || 'No adjustments'}
-                              </Text>
-                            </>
-                          )}
-                        </View>
-                        <View style={{ marginTop: 20 }}>
-                          <Button
-                            title="Complete Import"
-                            loading={isSubmitting}
-                            onPress={async () => {
-                              setIsSubmitting(true);
-                              try {
-                                // Get the confirmed mappings from suggestions (all selected items)
-                                // Transform to match backend DTO: ConfirmMappingsDto
-                                const confirmedMappings = (suggestions || [])
-                                  .filter(item => item.isSelected)
-                                  .map(item => {
-                                    // For anorha_to_platform direction, send 'push' action
-                                    let action: string;
-                                    if (item.direction === 'anorha_to_platform') {
-                                      action = 'push';
-                                    } else if (item.action === 'CREATE_NEW') {
-                                      action = 'create';
-                                    } else if (item.action === 'LINK_EXISTING') {
-                                      action = 'link';
-                                    } else {
-                                      action = 'ignore';
-                                    }
-
-                                    return {
-                                      platformProductId: item.platformProduct.id,
-                                      platformVariantId: item.platformProduct.id, // Same as product ID for now
-                                      platformProductSku: item.platformProduct.sku,
-                                      platformProductTitle: item.platformProduct.title,
-                                      // For push action, sssyncVariantId is the Anorha variant ID to push
-                                      sssyncVariantId: item.direction === 'anorha_to_platform'
-                                        ? item.anorhaVariant?.id || item.platformProduct.id  // Use anorhaVariant ID for push
-                                        : item.suggestedCanonicalProduct?.id || null,
-                                      action: action as 'link' | 'create' | 'ignore' | 'push'
-                                    };
-                                  });
-
-                                console.log('[MappingReview] Confirming mappings:', confirmedMappings.length);
-
-                                // Call the confirm-mappings endpoint (mappings only, no sync rules)
-                                const token = await ensureSupabaseJwt();
-                                const confirmResponse = await fetch(`https://api.sssync.app/api/sync/connections/${connectionId}/confirm-mappings`, {
-                                  method: 'POST',
-                                  headers: {
-                                    'Authorization': `Bearer ${token}`,
-                                    'Content-Type': 'application/json',
-                                  },
-                                  body: JSON.stringify({
-                                    confirmedMatches: confirmedMappings
-                                  })
-                                });
-
-                                if (!confirmResponse.ok) {
-                                  const error = await confirmResponse.text();
-                                  throw new Error(`Failed to confirm mappings: ${error}`);
-                                }
-
-                                console.log('[MappingReview] Mappings confirmed, updating quick settings...');
-
-                                // Step 2: Handle Pool Assignments & Quick Settings
-                                console.log('[MappingReview] Processing pool assignments...');
-
-                                // 2a. Determine correct pool IDs (handle creation if needed)
-                                let mapPoolId = selectedPool;
-                                const assignments = { ...locationPoolAssignments };
-
-                                // Check if we need to create a new pool
-                                const needsNewPool =
-                                  selectedPool === 'create-new' ||
-                                  Object.values(assignments).some(id => id === 'create-new');
-
-                                if (needsNewPool && poolNameInput) {
-                                  try {
-                                    console.log(`[MappingReview] Creating new pool: "${poolNameInput}"`);
-                                    const createPoolRes = await fetch(`${SSSYNC_API_BASE_URL}/api/pools`, {
-                                      method: 'POST',
-                                      headers: {
-                                        'Authorization': `Bearer ${token}`,
-                                        'Content-Type': 'application/json',
-                                      },
-                                      body: JSON.stringify({
-                                        orgId: 'current', // Backend resolves this from user context or we can pass currentOrg.id
-                                        name: poolNameInput,
-                                        description: `Created during import from ${platformName}`,
-                                        syncInventory: true,
-                                        syncPricing: true,
-                                        inventoryMode: 'shared'
-                                      }),
-                                    });
-
-                                    if (!createPoolRes.ok) {
-                                      throw new Error(`Failed to create pool: ${createPoolRes.status}`);
-                                    }
-
-                                    const newPool = await createPoolRes.json();
-                                    console.log('[MappingReview] New pool created:', newPool.id);
-
-                                    // Update our references to use the real ID
-                                    if (mapPoolId === 'create-new') {
-                                      mapPoolId = newPool.id;
-                                    }
-
-                                    // Update any 'create-new' assignments to the new ID
-                                    Object.keys(assignments).forEach(locId => {
-                                      if (assignments[locId] === 'create-new') {
-                                        assignments[locId] = newPool.id;
-                                      }
-                                    });
-
-                                  } catch (poolErr) {
-                                    console.error('[MappingReview] Failed to create new pool:', poolErr);
-                                    Alert.alert('Warning', 'Failed to create new pool. Locations may use default pool.');
-                                    // Fallback to undefined or existing logic
-                                  }
-                                }
-
-                                // 2b. Assign locations to their respective pools
-                                // Group locations by pool ID
-                                const poolToLocations = new Map<string, string[]>();
-
-                                Object.entries(assignments).forEach(([locId, poolId]) => {
-                                  if (!poolId || poolId === 'create-new') return; // Skip invalid or unhandled 'create-new'
-                                  const list = poolToLocations.get(poolId) || [];
-                                  list.push(locId);
-                                  poolToLocations.set(poolId, list);
-                                });
-
-                                // If user picked a main pool but didn't explicitly map some locations, 
-                                // maybe we should map unassigned ones to mapPoolId? 
-                                // For now, we only map explicit assignments + selectedPool as global default in quickSettings.
-
-                                // Send assignments to backend
-                                for (const [pId, locIds] of poolToLocations.entries()) {
-                                  try {
-                                    if (locIds.length > 0) {
-                                      console.log(`[MappingReview] Assigning ${locIds.length} locations to pool ${pId}`);
-                                      await fetch(`${SSSYNC_API_BASE_URL}/api/pools/${pId}/locations`, {
-                                        method: 'POST',
-                                        headers: {
-                                          'Authorization': `Bearer ${token}`,
-                                          'Content-Type': 'application/json',
-                                        },
-                                        body: JSON.stringify({ location_ids: locIds }),
-                                      });
-                                    }
-                                  } catch (assignErr) {
-                                    console.error(`[MappingReview] Failed to assign locations to pool ${pId}:`, assignErr);
-                                    // Don't block flow, just log
-                                  }
-                                }
-
-                                // Step 3: Update quick settings with wizard selections
-                                const directionPatch = getSyncRuleDirectionPatch(productCreationMode);
-
-                                const quickSettings = {
-                                  poolId: mapPoolId || undefined, // Use resolved ID (real existing or newly created)
-                                  autoSyncMode: syncMode === 'auto',
-                                  autoDelist: delistMode === 'auto',
-                                  priceAdjustment: priceBuffer,
-                                  inventoryBuffer: inventoryBuffer,
-                                  // Direction + propagation rules from wizard Step 0 choice
-                                  syncRules: {
-                                    syncInventory: true,
-                                    syncPricing: true,
-                                    ...directionPatch,
-                                    productCreationMode: productCreationMode, // Store the raw choice for reference
-                                  }
-                                };
-
-                                const settingsResponse = await fetch(`https://api.sssync.app/api/connections/${connectionId}/quick-settings`, {
-                                  method: 'PUT',
-                                  headers: {
-                                    'Authorization': `Bearer ${token}`,
-                                    'Content-Type': 'application/json',
-                                  },
-                                  body: JSON.stringify(quickSettings)
-                                });
-
-                                if (!settingsResponse.ok) {
-                                  const error = await settingsResponse.text();
-                                  throw new Error(`Failed to update quick settings: ${error}`);
-                                }
-
-                                console.log('[MappingReview] Quick settings updated, activating sync...');
-
-                                // Step 3: Activate the sync
-                                const syncResponse = await fetch(`https://api.sssync.app/api/sync/connections/${connectionId}/activate-sync`, {
-                                  method: 'POST',
-                                  headers: {
-                                    'Authorization': `Bearer ${token}`,
-                                    'Content-Type': 'application/json',
-                                  }
-                                });
-
-                                if (!syncResponse.ok) {
-                                  const error = await syncResponse.text();
-                                  throw new Error(`Failed to activate sync: ${error}`);
-                                }
-
-                                const { jobId } = await syncResponse.json();
-                                console.log('[MappingReview] Sync activated with job ID:', jobId);
-
-                                // Close wizard and navigate to confirmation
-                                setWizardVisible(false);
-                                navigation.navigate('PublishConfirmation', {
-                                  platforms: selectedPlatformsState,
-                                  priceBuffer,
-                                  syncMode,
-                                  delistMode,
-                                  jobId,
-                                  origin: 'import'
-                                } as any);
-                              } catch (error: any) {
-                                console.error('[MappingReview] Error completing import:', error);
-                                Alert.alert('Import Error', error.message || 'Failed to complete import. Please try again.');
-                              } finally {
-                                setIsSubmitting(false);
-                              }
-                            }}
-                          />
-                        </View>
-                      </View>
-                    )}
-
-                    {/* Nav controls - only show for steps 1-6 */}
-                    {wizardStep > 0 && (
-                      <>
-                        <Text style={{ color: theme.colors.textSecondary, textAlign: 'center', marginTop: 20, marginBottom: 8 }}>
-                          {wizardStep === 1 && 'Pool Assignment'}
-                          {wizardStep === 2 && 'Auto/Manual Sync'}
-                          {wizardStep === 3 && 'Auto Delist'}
-                          {wizardStep === 4 && 'Price Buffer'}
-                          {wizardStep === 5 && 'Inventory Buffer'}
-                          {wizardStep === 6 && 'Review'}
-                        </Text>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, paddingHorizontal: 30 }}>
-                          {/* Large Back Button */}
-                          <TouchableOpacity
-                            onPress={async () => {
-                              if (wizardStep === 1) {
-                                // If going back from step 1 (pool), go to step 0 (product creation mode)
-                                setWizardStep(0);
-                              } else {
-                                setWizardStep((s) => Math.max(1, s - 1));
-                              }
-                            }}
-                            style={{
-                              width: 60,
-                              height: 60,
-                              borderRadius: 12,
-                              backgroundColor: '#9CA3AF',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                            }}
-                          >
-                            <Icon name="chevron-left" size={28} color="#fff" />
-                          </TouchableOpacity>
-
-                          {/* Dots indicator */}
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                            {[0, 1, 2, 3, 4, 5, 6].map(i => (
-                              <View
-                                key={`dot-${i}`}
-                                style={{
-                                  width: 10,
-                                  height: 10,
-                                  borderRadius: 5,
-                                  backgroundColor: i === wizardStep ? theme.colors.primary : '#E5E7EB'
-                                }}
-                              />
-                            ))}
-                          </View>
-
-                          {/* Large Next Button */}
-                          <TouchableOpacity
-                            disabled={wizardStep === 6 || (wizardStep === 1 && Object.values(locationPoolAssignments).includes('create-new') && !poolNameInput.trim())}
-                            onPress={async () => {
-                              // Handle pool creation when on step 1 and creating new pool
-                              if (wizardStep === 1 && Object.values(locationPoolAssignments).includes('create-new')) {
-                                if (!poolNameInput.trim()) {
-                                  Alert.alert('Error', 'Please enter a name for the new pool');
-                                  return;
-                                }
-                                await handleCreatePool();
-                              } else if (wizardStep === 1) {
-                                // Add locations to selected existing pool(s)
-                                const poolLocationMap: Record<string, string[]> = {};
-                                Object.entries(locationPoolAssignments).forEach(([locId, poolId]) => {
-                                  if (!poolLocationMap[poolId]) poolLocationMap[poolId] = [];
-                                  poolLocationMap[poolId].push(locId);
-                                });
-
-                                // Update each pool with its assigned locations
-                                const token = await ensureSupabaseJwt();
-                                for (const [poolId, locationIds] of Object.entries(poolLocationMap)) {
-                                  try {
-                                    await fetch(`https://api.sssync.app/api/pools/${poolId}/locations`, {
-                                      method: 'POST',
-                                      headers: {
-                                        'Authorization': `Bearer ${token}`,
-                                        'Content-Type': 'application/json',
-                                      },
-                                      body: JSON.stringify({ location_ids: locationIds }),
-                                    });
-                                    console.log(`[MappingReviewScreen] Added ${locationIds.length} locations to pool ${poolId}`);
-                                  } catch (e) {
-                                    console.error(`[MappingReviewScreen] Failed to add locations to pool ${poolId}:`, e);
-                                  }
-                                }
-                                setWizardStep(2);
-                              } else {
-                                setWizardStep((s) => Math.min(6, s + 1));
-                              }
-                            }}
-                            style={{
-                              width: 60,
-                              height: 60,
-                              borderRadius: 12,
-                              backgroundColor: (wizardStep === 6 || (wizardStep === 1 && selectedPool === 'create-new' && !poolNameInput.trim())) ? '#D1D5DB' : theme.colors.primary,
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                            }}
-                          >
-                            <Icon name="chevron-right" size={28} color="#fff" />
-                          </TouchableOpacity>
-                        </View>
-                      </>
-                    )}
-
-                  </View>
-                </ScrollView>
-              </KeyboardAvoidingView>
-            </View>
-          </Modal>
-            </>
-          )}
+          {/* Import Wizard - shared component */}
+          <ImportWizardSheet
+            visible={wizardVisible}
+            onClose={() => setWizardVisible(false)}
+            platformName={platformName}
+            connection={importSession.connection}
+            counts={sessionCounts}
+            session={importSession}
+            showReselectMatches={true}
+          />
         </>
       )}
 
       {/* Barcode Scanner Modal */}
-      {
-        showBarcodeScanner && (
-          <View style={scannerStyles.scannerDock} pointerEvents="box-none">
-            <View style={scannerStyles.scannerCard}>
-              <CameraView
-                style={{ width: '100%', height: 240 }}
-                facing="back"
-                onBarcodeScanned={(result: any) => {
-                  const code = result?.data || result?.rawValue;
-                  if (code) {
-                    setListQuery(code);
-                    setShowBarcodeScanner(false);
-                  }
-                }}
-                barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'] }}
-              />
-              <TouchableOpacity
-                onPress={() => setShowBarcodeScanner(false)}
-                style={scannerStyles.scannerClose}
-              >
-                <Text style={{ color: '#fff', fontSize: 24 }}>×</Text>
-              </TouchableOpacity>
-            </View>
+      {showBarcodeScanner && (
+        <View style={scannerStyles.scannerDock} pointerEvents="box-none">
+          <View style={scannerStyles.scannerCard}>
+            <CameraView
+              style={{ width: '100%', height: 240 }}
+              facing="back"
+              onBarcodeScanned={(result: any) => {
+                const code = result?.data || result?.rawValue;
+                if (code) {
+                  setListQuery(code);
+                  setShowBarcodeScanner(false);
+                }
+              }}
+              barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'] }}
+            />
+            <TouchableOpacity
+              onPress={() => setShowBarcodeScanner(false)}
+              style={scannerStyles.scannerClose}
+            >
+              <Text style={{ color: '#fff', fontSize: 24 }}>×</Text>
+            </TouchableOpacity>
           </View>
-        )}
-    </View>
+        </View>
+      )}
+    </View >
   );
 };
 

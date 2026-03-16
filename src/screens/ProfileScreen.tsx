@@ -26,7 +26,6 @@ import * as WebBrowser from 'expo-web-browser';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
-import { RealtimeChannel } from '@supabase/supabase-js';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import * as Crypto from 'expo-crypto'; // For generating random string
 import { showMessage } from 'react-native-flash-message';
@@ -39,15 +38,12 @@ import BottomNav from '../components/BottomNav';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { useOrg } from '../context/OrgContext';
 import CreateLocationPoolModal from '../components/CreateLocationPoolModal';
-import { useSyncProgress } from '../hooks/useSyncProgress';
-import * as Progress from 'react-native-progress';
 import { useSystemNotifications } from '../context/SystemNotificationContext';
 import { Zap, ShieldCheck, CheckCircle as LucideCheckCircle, Bell as LucideBell } from 'lucide-react-native';
 
 import LocationsManagerV2 from '../components/LocationsManagerV2';
 import ConnectedPlatformList from '../components/ConnectedPlatformList';
 import BaseModal from '../components/BaseModal';
-import ConnectedPlatformItem from '../components/ConnectedPlatformItem';
 import { AppDropdown } from '../components/ui/AppDropdown';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -59,7 +55,10 @@ const TAB_BAR_BOTTOM_OFFSET = 18;
 
 
 
-const SSSYNC_API_BASE_URL = "https://api.sssync.app"; // Keep if used for constructing backend URLs
+const SSSYNC_API_BASE_URL =
+  process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL ||
+  process.env.EXPO_PUBLIC_API_BASE_URL ||
+  'https://api.sssync.app';
 // --- Constants for Feature Flags / Testing ---
 const USE_EXTERNAL_BROWSER_FOR_FACEBOOK = true; // Set to true to use Chrome/Safari instead of in-app session
 // --- END Re-inlined Constants ---
@@ -366,7 +365,7 @@ const ProfileScreen = () => {
   const authContext = useContext(AuthContext);
   const route = useRoute<RouteProp<ProfileScreenRouteParams, 'Profile'>>();
   const { resetLegendState } = useLegendStateControl();
-  const { toggles } = usePlatformConnections();
+  const { toggles, liveConnections: platformConnections, refresh: refreshConnections, loading: isLoadingConnections } = usePlatformConnections();
   // Use switchOrg from OrgContext for switching orgs
   const { currentOrg, switchOrg, availableOrgs } = useOrg();
   const { showAlert, showToast, showWelcome } = useSystemNotifications();
@@ -400,8 +399,6 @@ const ProfileScreen = () => {
     setArchiveProductsMobile(false);
     setDisconnectModalVisible(true);
   };
-  const [platformConnections, setPlatformConnections] = useState<PlatformConnection[]>([]);
-  const [isLoadingConnections, setIsLoadingConnections] = useState(true);
   const [isEditMode, setIsEditMode] = useState(false);
   const [entitlements, setEntitlements] = useState<{ planName: string | null; maxConnections: number; aiScanLimit: number | null; isPaid: boolean } | null>(null);
   const [userName, setUserName] = useState('');
@@ -621,90 +618,11 @@ const ProfileScreen = () => {
     },
   ];
 
-  // Define loadConnections function that will be used by fetchConnections
-  const loadConnections = async () => {
-    setIsLoadingConnections(true);
-
-    try {
-      console.log('[ProfileScreen] Attempting to fetch user connections');
-
-      // Add a small delay to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, 300));
-
-      // First try to get connections from SSSync API for most up-to-date status
-      const session = await supabase.auth.getSession();
-      const token = session?.data?.session?.access_token;
-
-      if (token) {
-        try {
-          const apiResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections`, {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-          });
-
-          if (apiResponse.ok) {
-            const apiData = await apiResponse.json();
-            console.log('[ProfileScreen] Successfully fetched connections from API:', apiData.length);
-            setPlatformConnections(apiData);
-            setIsLoadingConnections(false);
-            return; // Exit early if API succeeds
-          } else {
-            console.warn(`[ProfileScreen] API returned status ${apiResponse.status}, falling back to DB`);
-            // Continue to fallback mechanism
-          }
-        } catch (apiError) {
-          console.warn('[ProfileScreen] Error fetching connections from API, falling back to DB:', apiError);
-          // Continue to fallback mechanism
-        }
-      }
-
-      // Fallback: Get connections directly from Supabase if API fails
-      console.log('[ProfileScreen] Using fallback: Fetching connections directly from DB');
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
-
-      if (userError || !user) {
-        throw new Error("Authentication required to fetch connections");
-      }
-
-      const { data, error } = await supabase
-        .from('PlatformConnections')
-        .select('Id, UserId, OrgId, PlatformType, DisplayName, Status, IsEnabled, LastSyncAttemptAt, LastSyncSuccessAt, CreatedAt, UpdatedAt')
-        .eq('UserId', user.id)
-        .order('CreatedAt', { ascending: false });
-
-      if (error) {
-        console.error('[ProfileScreen] Error fetching connections from DB:', error);
-        throw new Error(`Database error: ${error.message}`);
-      } else {
-        console.log('[ProfileScreen] Successfully fetched connections from DB:', data?.length);
-        setPlatformConnections(data || []);
-      }
-    } catch (err: any) {
-      console.error('[ProfileScreen] Critical error loading connections:', err);
-      Alert.alert(
-        "Connection Error",
-        "Unable to load your platform connections. Please check your internet connection and try again."
-      );
-      setPlatformConnections([]);
-    } finally {
-      setIsLoadingConnections(false);
-    }
-  };
-
-  // Create a fetchConnections function that calls loadConnections
-  // This maintains compatibility with existing code that calls fetchConnections
-  const fetchConnections = useCallback(() => {
-    loadConnections();
-  }, []);
-
-  // Load platform connections from Supabase
+  // Refresh platform connections on focus / refresh trigger
   useFocusEffect(
     useCallback(() => {
-      loadConnections();
-    }, [refreshTrigger])
+      refreshConnections();
+    }, [refreshConnections, refreshTrigger])
   );
 
   // --- Calculate active counts by platform for BottomNav ---
@@ -811,13 +729,13 @@ const ProfileScreen = () => {
             type: 'error'
           });
         } else if (parsed.success) {
-          loadConnections(); // Refresh connections on success
+          refreshConnections(); // Refresh connections on success
         }
       })();
     } else {
       Alert.alert('Connect', `Connect logic for ${platform} not implemented yet.`);
     }
-  }, [setShopifyFlowStep, setPastedShopifyUrl, setManualShopName, navigation]);
+  }, [setShopifyFlowStep, setPastedShopifyUrl, setManualShopName, navigation, refreshConnections, currentOrg?.id]);
 
   // Use a ref to hold the handler to avoid infinite loop
   const handleStartConnectRef = React.useRef(handleStartConnectPlatform);
@@ -969,8 +887,8 @@ const ProfileScreen = () => {
 
       console.log(`[ProfileScreen] Successfully disconnected connection ID: ${disconnectTarget.id}`);
 
-      // Update UI
-      setPlatformConnections(prev => prev.filter(c => c.Id !== disconnectTarget.id));
+      // Refresh list after disconnect
+      await refreshConnections();
       showStatusNotification('Disconnected', `${disconnectTarget.name} connection removed.`, 'success');
 
       // Close modal and exit edit mode
@@ -1016,7 +934,7 @@ const ProfileScreen = () => {
       }
       logInfo('connection_enable', 'Connection enabled, resuming scan', { connectionId, platformName });
       // Refresh local list first
-      await loadConnections();
+      await refreshConnections();
       // Kick off scan to make it seamless
       await startPlatformScan(connectionId, platformName);
     } catch (err) {
@@ -1186,7 +1104,7 @@ const ProfileScreen = () => {
       if (!parsed.success && parsed.errorMessage) {
         Alert.alert('Shopify Connection Failed', parsed.errorMessage);
       } else if (parsed.success) {
-        loadConnections(); // Refresh connections on success
+        refreshConnections(); // Refresh connections on success
       }
 
     } catch (error: unknown) {
@@ -1265,11 +1183,9 @@ const ProfileScreen = () => {
 
     // ✅ NAVIGATE IMMEDIATELY - Don't wait for API response
     // The MappingReviewScreen will show loading state and receive progress updates via WebSocket
-    navigation.navigate('MappingReview', {
+    navigation.navigate('ImportOverview', {
       connectionId,
       platformName,
-      isScanning: true, // Flag to indicate scan is in progress
-      scanStartTime: Date.now(), // NEW: Timestamp to prevent race condition
     });
 
     // Start the scan in the background (non-blocking)
@@ -1367,7 +1283,7 @@ const ProfileScreen = () => {
             // Call startPlatformScan
             await startPlatformScan(connectionId, 'Clover');
           }
-          fetchConnections(); // Refresh connections list
+          refreshConnections(); // Refresh connections list
         } else {
           Alert.alert("Connection Failed", message || "Failed to connect Clover account.");
           console.error("[ProfileScreen] Clover Connect: Connection failed via backend callback:", { status, message });
@@ -1459,7 +1375,7 @@ const ProfileScreen = () => {
             // Call startPlatformScan
             await startPlatformScan(connectionId, 'Square');
           }
-          fetchConnections(); // Refresh connections list
+          refreshConnections(); // Refresh connections list
         } else {
           // Check for ALREADY_CONNECTED error code
           if (errorCode === 'ALREADY_CONNECTED') {
@@ -1558,7 +1474,7 @@ const ProfileScreen = () => {
     console.log(`[ProfileScreen] Initiating Review & Sync for Connection ID: ${connectionId}, Platform: ${platformName}`);
 
     // Navigate to the MappingReview screen
-    navigation.navigate('MappingReview', { connectionId, platformName });
+    navigation.navigate('ImportOverview', { connectionId, platformName });
   };
   // --- END Handler for Review & Sync ---
 
@@ -1671,6 +1587,7 @@ const ProfileScreen = () => {
   const [showBillingPortal, setShowBillingPortal] = useState(false);
   const [billingPortalUrl, setBillingPortalUrl] = useState<string | null>(null);
   const [billingLoading, setBillingLoading] = useState(false);
+  const [devBundleLoading, setDevBundleLoading] = useState(false);
 
   // Load dev mode setting on component mount
   useEffect(() => {
@@ -1729,7 +1646,7 @@ const ProfileScreen = () => {
     },
     {
       icon: 'help-circle',
-      title: 'Please Give Feedback',
+      title: 'Give Feedback',
       onPress: async () => {
         await WebBrowser.openBrowserAsync('https://anorha.userjot.com/');
       }
@@ -1789,8 +1706,46 @@ const ProfileScreen = () => {
     </TouchableOpacity>
   );
 
-  // Add a state for the realtime channel
-  const [realtimeChannel, setRealtimeChannel] = useState<RealtimeChannel | null>(null);
+  const showDevTools =
+    isDevMode ||
+    (typeof __DEV__ !== 'undefined' && __DEV__) ||
+    process.env.EXPO_PUBLIC_ENABLE_DEV_TOOLS === 'true';
+
+  const copyDevBundle = async () => {
+    try {
+      setDevBundleLoading(true);
+      const token = await getApiToken();
+      if (!token) {
+        throw new Error('Authentication token not found.');
+      }
+
+      const response = await fetch(`${SSSYNC_API_BASE_URL}/api/dev/agent-bundle`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body?.message || `Failed to fetch dev bundle (${response.status})`);
+      }
+
+      const bundle = await response.json();
+      const payload = {
+        apiBaseUrl: SSSYNC_API_BASE_URL,
+        supabaseJwt: token,
+        ...bundle,
+      };
+
+      const text = JSON.stringify(payload, null, 2);
+      await Clipboard.setStringAsync(text);
+      Alert.alert('Copied', 'Developer bundle copied to clipboard.');
+    } catch (error: any) {
+      Alert.alert('Dev Bundle Error', error?.message || 'Failed to copy developer bundle.');
+    } finally {
+      setDevBundleLoading(false);
+    }
+  };
 
   // Hide tab bar when platform picker overlay is visible; always restore on close or unmount
   useEffect(() => {
@@ -1806,89 +1761,6 @@ const ProfileScreen = () => {
       } catch { }
     };
   }, [overlay.visible, navigation]);
-
-  // Add this function to set up the real-time subscription
-  const setupRealtimeSubscription = async () => {
-    try {
-      // Get the current user
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
-      if (userError || !user) {
-        console.error('[ProfileScreen] No authenticated user for realtime subscription');
-        return;
-      }
-
-      // Unsubscribe from any existing channel
-      if (realtimeChannel) {
-        realtimeChannel.unsubscribe();
-      }
-
-      // Subscribe to changes on the PlatformConnections table for this user
-      console.log('[ProfileScreen] Setting up realtime subscription for PlatformConnections');
-      const channel = supabase
-        .channel('platform-connections-changes')
-        .on(
-          'postgres_changes',
-          {
-            event: 'UPDATE', // Listen to UPDATE events
-            schema: 'public',
-            table: 'PlatformConnections',
-            filter: `UserId=eq.${user.id}`, // Only listen to changes for this user
-          },
-          (payload) => {
-            console.log('[ProfileScreen] Received realtime update:', payload);
-            const newRecord = payload.new as any; // Cast to any to handle potential casing mismatch if needed, but usually matches DB cols
-
-            const oldStatus = payload.old.Status;
-            const newStatus = newRecord.Status;
-            const platformName = newRecord.DisplayName || newRecord.PlatformType;
-
-            if (oldStatus !== newStatus) {
-              showStatusNotification(
-                `${platformName} Status Update`,
-                `Your connection is now ${newStatus}.`,
-                'info'
-              );
-            }
-
-            // Optimistically update local state to ensure "live" feel
-            setPlatformConnections(prevConnections => {
-              return prevConnections.map(conn =>
-                conn.Id === newRecord.Id ? { ...conn, ...newRecord } : conn
-              );
-            });
-
-            // Also refresh connections to be safe (sync with API logic)
-            // But debounced or delayed slightly to avoid overwriting the optimistic update with stale data immediately
-            // effectively we trust the realtime stream for specific row updates
-            // loadConnections(); 
-          }
-        )
-        .subscribe((status) => {
-          console.log('[ProfileScreen] Realtime subscription status:', status);
-        });
-
-      setRealtimeChannel(channel);
-    } catch (error) {
-      console.error('[ProfileScreen] Error setting up realtime subscription:', error);
-    }
-  };
-
-  // Note: Clerk team sync is now handled automatically via backend webhooks
-  // The sync-clerk-teams endpoint was removed - orgs are synced on login
-
-  // Clean up the subscription when the component unmounts
-  useEffect(() => {
-    setupRealtimeSubscription();
-
-    return () => {
-      if (realtimeChannel) {
-        console.log('[ProfileScreen] Cleaning up realtime subscription');
-        realtimeChannel.unsubscribe();
-        setRealtimeChannel(null);
-      }
-    };
-  }, []);  // Empty dependency array means this runs once on mount and cleanup on unmount
-
 
   return (
     <ScrollView
@@ -2137,6 +2009,42 @@ const ProfileScreen = () => {
         </Card>
       </Animated.View>
 
+      {showDevTools && (
+        <Animated.View entering={FadeInUp.delay(450).duration(500)}>
+          <Card style={styles.card}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Developer Tools</Text>
+            </View>
+            <View style={styles.menuContainer}>
+              <TouchableOpacity
+                style={[styles.menuItem, styles.menuItemBorder]}
+                onPress={copyDevBundle}
+                disabled={devBundleLoading}
+              >
+                <View style={styles.menuItemLeft}>
+                  <Icon name="clipboard-text-outline" size={24} color="#555" style={styles.menuIcon} />
+                  <Text style={styles.menuText}>
+                    {devBundleLoading ? 'Preparing Dev Bundle...' : 'Copy Dev Bundle'}
+                  </Text>
+                </View>
+                {devBundleLoading && <ActivityIndicator size="small" color="#93C822" />}
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.menuItem} onPress={logCurrentUserToken}>
+                <View style={styles.menuItemLeft}>
+                  <Icon name="key-outline" size={24} color="#555" style={styles.menuIcon} />
+                  <Text style={styles.menuText}>Show Auth Token (Console)</Text>
+                </View>
+                <Icon name="chevron-right" size={22} color="#9ca3af" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.helperText}>
+              Tip: Set `DEV_DIAGNOSTICS_ENABLED=true` on the API to enable the dev bundle endpoint.
+            </Text>
+          </Card>
+        </Animated.View>
+      )}
+
       {/* --- NEW: Add Connection Modal --- */}
 
       {/* --- CSV Manage Modal --- */}
@@ -2227,7 +2135,7 @@ const ProfileScreen = () => {
                         type: 'error'
                       });
                     } else if (parsed.success) {
-                      loadConnections(); // Refresh connections on success
+                      refreshConnections(); // Refresh connections on success
                     }
                   })();
                 } else {
@@ -2636,11 +2544,11 @@ const styles = StyleSheet.create({
   card: {
     marginBottom: 24,
     backgroundColor: '#FFFFFF',
-    borderRadius: 0,
+    borderRadius: 12,
     borderTopWidth: 1,
     borderBottomWidth: 1,
     borderColor: '#F2F2F7',
-    paddingHorizontal: 16,
+    paddingHorizontal: 4,
     paddingVertical: 8,
   },
   title: {
@@ -3218,6 +3126,11 @@ const styles = StyleSheet.create({
   manageText: {
     fontSize: 12,
     fontWeight: '600',
+  },
+  helperText: {
+    marginTop: 10,
+    fontSize: 12,
+    color: '#6b7280',
   },
   connectionInfoContainer: {
     flex: 1,

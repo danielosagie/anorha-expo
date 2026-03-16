@@ -60,7 +60,7 @@ const SyncRulesScreen = () => {
         const rows = (data || []).map((r: any) => ({ Id: r.Id, DisplayName: r.DisplayName, PlatformType: r.PlatformType }));
         setAvailableConnections(rows);
         setSelectedDestinations((prev) => (prev.length ? prev : [connectionId]));
-      } catch {}
+      } catch { }
     })();
   }, [connectionId]);
 
@@ -75,7 +75,7 @@ const SyncRulesScreen = () => {
         setDisplayName(data.DisplayName || '');
         setPlatformName(data.PlatformType || 'Platform');
       }
-    } catch {}
+    } catch { }
   };
 
   const loadSyncRules = async () => {
@@ -147,7 +147,7 @@ const SyncRulesScreen = () => {
   };
 
   const gotoReview = () => {
-    navigation.navigate('MappingReview', { connectionId, platformName });
+    navigation.navigate('ImportOverview', { connectionId, platformName });
   };
 
   const disconnectPlatform = async () => {
@@ -172,20 +172,20 @@ const SyncRulesScreen = () => {
       style={[styles.optionButton, syncDirection === option && styles.optionButtonSelected]}
       onPress={() => setSyncDirection(option)}
     >
-      <Icon 
-        name={icon} 
-        size={24} 
-        color={syncDirection === option ? theme.colors.primary : theme.colors.textSecondary} 
+      <Icon
+        name={icon}
+        size={24}
+        color={syncDirection === option ? theme.colors.primary : theme.colors.textSecondary}
         style={styles.optionIcon}
       />
       <View style={{ flex: 1 }}>
         <Text style={[styles.optionTitle, syncDirection === option && styles.optionTitleSelected]}>{title}</Text>
         <Text style={[styles.optionSubtitle, syncDirection === option && styles.optionSubtitleSelected]}>{subtitle}</Text>
       </View>
-      <Icon 
-        name={syncDirection === option ? 'radiobox-marked' : 'radiobox-blank'} 
-        size={20} 
-        color={syncDirection === option ? theme.colors.primary : theme.colors.textSecondary} 
+      <Icon
+        name={syncDirection === option ? 'radiobox-marked' : 'radiobox-blank'}
+        size={20}
+        color={syncDirection === option ? theme.colors.primary : theme.colors.textSecondary}
       />
     </TouchableOpacity>
   );
@@ -195,20 +195,20 @@ const SyncRulesScreen = () => {
       style={[styles.optionButton, sourceOfTruth === option && styles.optionButtonSelected]}
       onPress={() => setSourceOfTruth(option)}
     >
-      <Icon 
-        name={icon} 
-        size={24} 
-        color={sourceOfTruth === option ? theme.colors.primary : theme.colors.textSecondary} 
+      <Icon
+        name={icon}
+        size={24}
+        color={sourceOfTruth === option ? theme.colors.primary : theme.colors.textSecondary}
         style={styles.optionIcon}
       />
       <View style={{ flex: 1 }}>
         <Text style={[styles.optionTitle, sourceOfTruth === option && styles.optionTitleSelected]}>{title}</Text>
         <Text style={[styles.optionSubtitle, sourceOfTruth === option && styles.optionSubtitleSelected]}>{subtitle}</Text>
       </View>
-      <Icon 
-        name={sourceOfTruth === option ? 'radiobox-marked' : 'radiobox-blank'} 
-        size={20} 
-        color={sourceOfTruth === option ? theme.colors.primary : theme.colors.textSecondary} 
+      <Icon
+        name={sourceOfTruth === option ? 'radiobox-marked' : 'radiobox-blank'}
+        size={20}
+        color={sourceOfTruth === option ? theme.colors.primary : theme.colors.textSecondary}
       />
     </TouchableOpacity>
   );
@@ -404,9 +404,9 @@ const SyncRulesScreen = () => {
           <Text style={styles.sectionTitle}>Setup</Text>
           <Text style={styles.sectionSubtitle}>Step {step} of 4</Text>
           <View style={{ flexDirection: 'row', gap: 8 }}>
-            {[1,2,3,4].map((n) => (
+            {[1, 2, 3, 4].map((n) => (
               <TouchableOpacity key={n} onPress={() => setStep(n)}>
-                <Icon name={step===n? 'checkbox-marked-circle' : 'checkbox-blank-circle-outline'} size={18} color={step===n? theme.colors.primary : theme.colors.textSecondary} />
+                <Icon name={step === n ? 'checkbox-marked-circle' : 'checkbox-blank-circle-outline'} size={18} color={step === n ? theme.colors.primary : theme.colors.textSecondary} />
               </TouchableOpacity>
             ))}
           </View>
@@ -430,8 +430,8 @@ const SyncRulesScreen = () => {
             {availableConnections.map((c) => {
               const selected = selectedDestinations.includes(c.Id);
               return (
-                <TouchableOpacity key={c.Id} style={styles.optionButton} onPress={() => setSelectedDestinations((prev) => selected ? prev.filter(id => id!==c.Id) : [...prev, c.Id])}>
-                  <Icon name={selected? 'checkbox-marked' : 'checkbox-blank-outline'} size={20} color={selected? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
+                <TouchableOpacity key={c.Id} style={styles.optionButton} onPress={() => setSelectedDestinations((prev) => selected ? prev.filter(id => id !== c.Id) : [...prev, c.Id])}>
+                  <Icon name={selected ? 'checkbox-marked' : 'checkbox-blank-outline'} size={20} color={selected ? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.optionTitle}>{c.DisplayName}</Text>
                     <Text style={styles.optionSubtitle}>{c.PlatformType}</Text>
@@ -451,27 +451,27 @@ const SyncRulesScreen = () => {
             <Text style={styles.sectionSubtitle}>Pick how and when changes flow.</Text>
             {/* Mode */}
             <TouchableOpacity style={styles.optionButton} onPress={() => setSyncMode('manual')}>
-              <Icon name={syncMode==='manual' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode==='manual'? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
+              <Icon name={syncMode === 'manual' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode === 'manual' ? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.optionTitle}>Manual only</Text>
                 <Text style={styles.optionSubtitle}>You decide when to sync</Text>
               </View>
             </TouchableOpacity>
             <TouchableOpacity style={styles.optionButton} onPress={() => setSyncMode('auto')}>
-              <Icon name={syncMode==='auto' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode==='auto'? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
+              <Icon name={syncMode === 'auto' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode === 'auto' ? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.optionTitle}>Automatic</Text>
                 <Text style={styles.optionSubtitle}>Sync as changes happen</Text>
               </View>
             </TouchableOpacity>
             <TouchableOpacity style={styles.optionButton} onPress={() => setSyncMode('batch')}>
-              <Icon name={syncMode==='batch' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode==='batch'? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
+              <Icon name={syncMode === 'batch' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode === 'batch' ? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.optionTitle}>Batched</Text>
                 <Text style={styles.optionSubtitle}>Run once daily</Text>
               </View>
             </TouchableOpacity>
-            {syncMode==='batch' && (
+            {syncMode === 'batch' && (
               <View style={{ marginTop: 8 }}>
                 <Text style={styles.optionSubtitle}>Time (UTC): {batchTime}</Text>
               </View>
@@ -494,7 +494,7 @@ const SyncRulesScreen = () => {
             <Text style={styles.sectionTitle}>Confirm</Text>
             <Text style={styles.sectionSubtitle}>Summary</Text>
             <Text style={styles.optionTitle}>Destinations</Text>
-            {availableConnections.filter(c=>selectedDestinations.includes(c.Id)).map(c => (
+            {availableConnections.filter(c => selectedDestinations.includes(c.Id)).map(c => (
               <Text key={c.Id} style={styles.optionSubtitle}>• {c.DisplayName} ({c.PlatformType})</Text>
             ))}
             <Text style={[styles.optionTitle, { marginTop: 8 }]}>Mode</Text>
@@ -509,20 +509,20 @@ const SyncRulesScreen = () => {
         )}
       </ScrollView>
 
-        <Button
+      <Button
         title="Save Sync Rules"
         onPress={saveSyncRules}
         loading={saving}
         style={styles.saveButton}
         icon="content-save"
-        />
+      />
 
-        <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>
-          <Button title="Review & Sync" onPress={gotoReview} icon="playlist-check" />
-          <View style={{ height: 10 }} />
-          <Button title={`Disconnect ${platformName}`} onPress={disconnectPlatform} icon="link-off" />
-        </View>
+      <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>
+        <Button title="Review & Sync" onPress={gotoReview} icon="playlist-check" />
+        <View style={{ height: 10 }} />
+        <Button title={`Disconnect ${platformName}`} onPress={disconnectPlatform} icon="link-off" />
       </View>
+    </View>
   );
 };
 

@@ -33,8 +33,8 @@ export const ItemNavigationBar: React.FC<ItemNavigationBarProps> = ({
     // Determine the continue button text (item count, not photo count, for clarity)
     const getContinueText = () => {
         if (!hasPhotos) return 'Take a photo to get started';
-        if (totalItems > 1) return `Continue with ${totalItems} items`;
-        return 'Manage items';
+        if (totalItems > 0) return `Manage ${totalItems} Item${totalItems === 1 ? '' : 's'}`;
+        return 'Manage Items';
     };
 
     return (

@@ -199,6 +199,10 @@ const PastScansScreen = () => {
         const platforms = (first && first.platforms) ? first.platforms : {};
         const title =
           job.summary?.firstTitle ||
+          first?.title ||
+          first?.generatedTitle ||
+          first?.listingTitle ||
+          first?.productTitle ||
           platforms?.shopify?.title ||
           platforms?.amazon?.title ||
           platforms?.ebay?.title ||

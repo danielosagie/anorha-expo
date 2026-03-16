@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard, Animated, Easing } from 'react-native';
 import { CameraView } from 'expo-camera';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -30,6 +30,8 @@ import { useIsFocused } from '@react-navigation/native';
 
 const ACTION_BAR_HEIGHT = 80;
 const ACTION_BAR_BOTTOM_OFFSET = 24;
+const SCANNER_GROW_HEIGHT = 240;
+const SCANNER_CLOSE_DURATION = 220;
 
 // Feature flag to hide AI refill functionality
 const ENABLE_AI_REFILL_FEATURES = false;
@@ -552,6 +554,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [selectedFieldKey, setSelectedFieldKey] = useState<string | null>(null);
   const [versionsTab, setVersionsTab] = useState<'versions' | 'sources'>('versions');
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerMounted, setScannerMounted] = useState(false);
+  const scannerHeight = useRef(new Animated.Value(0)).current;
   const [isFilling, setIsFilling] = useState(false);
   const [recentlyFilledByPlatform, setRecentlyFilledByPlatform] = useState<Record<string, string[]>>({});
   const [fillSelectedFields, setFillSelectedFields] = useState<string[]>([
@@ -594,6 +598,36 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     lastSyncAt: string | null;
     lastError: string | null;
   }>({ status: 'idle', lastSyncAt: null, lastError: null });
+
+  const openScanner = (onResult: (code: string) => void) => {
+    scannerHeight.stopAnimation();
+    scannerHeight.setValue(0);
+    setScannerMounted(true);
+    setScannerOpen(true);
+    (GenerateDetailsScreen as any)._scannerResultHandler = onResult;
+    Animated.spring(scannerHeight, {
+      toValue: SCANNER_GROW_HEIGHT,
+      speed: 18,
+      bounciness: 6,
+      useNativeDriver: false,
+    }).start();
+  };
+
+  const closeScanner = () => {
+    setScannerOpen(false);
+    (GenerateDetailsScreen as any)._scannerResultHandler = null;
+    scannerHeight.stopAnimation();
+    Animated.timing(scannerHeight, {
+      toValue: 0,
+      duration: SCANNER_CLOSE_DURATION,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished) {
+        setScannerMounted(false);
+      }
+    });
+  };
 
   // Fetch connections and locations on mount
   useEffect(() => {
@@ -2413,11 +2447,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             <>
               {/* Image Change Handler */}
               {(() => {
-                // We define this inline or use the one defined in scope if possible, 
-                // but since I can't easily insert a function definition in the middle of the render block without wrapping,
-                // I'll rely on the function I defined at the component scope.
-                // Wait, I need to define handleImagesChange inside the component body, NOT here in JSX.
-                // I will use a separate replace call to insert the function definition before the return statement.
+    
                 return null;
               })()}
 
@@ -2475,9 +2505,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                   onOpenFieldPanel={handleOpenFieldPanel}
                   onRegenerateField={ENABLE_AI_REFILL_FEATURES ? regenerateField : undefined}
                   onOpenBarcodeScanner={(onResult) => {
-                    setScannerOpen(true);
-                    // handler stored on closure
-                    (GenerateDetailsScreen as any)._scannerResultHandler = onResult;
+                    openScanner(onResult);
                   }}
                   onOpenImageCapture={async (onResult) => {
                     try {
@@ -2833,26 +2861,25 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           </View>
         </View>
       )}
-      {scannerOpen && (
+      {scannerMounted && (
         <View style={styles.scannerDockFull} pointerEvents="box-none">
-          <View style={styles.scannerFullBleed}>
+          <Animated.View pointerEvents={scannerOpen ? 'auto' : 'none'} style={[styles.scannerFullBleed, { height: scannerHeight }]}>
             <CameraView
-              style={{ width: '100%', height: 240 }}
+              style={StyleSheet.absoluteFillObject}
               facing={'back'}
-              onBarcodeScanned={(result: any) => {
+              onBarcodeScanned={scannerOpen ? (result: any) => {
                 const code = result?.data || result?.rawValue;
                 if (code && (GenerateDetailsScreen as any)._scannerResultHandler) {
                   (GenerateDetailsScreen as any)._scannerResultHandler(code);
-                  setScannerOpen(false);
-                  (GenerateDetailsScreen as any)._scannerResultHandler = null;
+                  closeScanner();
                 }
-              }}
+              } : undefined}
               barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'] }}
             />
-            <TouchableOpacity onPress={() => { setScannerOpen(false); (GenerateDetailsScreen as any)._scannerResultHandler = null; }} style={styles.scannerCloseFull}>
+            <TouchableOpacity onPress={closeScanner} style={styles.scannerCloseFull}>
               <Text style={{ color: '#fff', fontSize: 28 }}>×</Text>
             </TouchableOpacity>
-          </View>
+          </Animated.View>
         </View>
       )}
       {versionsSheetOpen && (

@@ -60,9 +60,28 @@ export default {
       }
     ],
     "expo-asset",
+    "expo-audio",
     "expo-font",
+    "expo-localization",
+    "expo-sharing",
     "expo-web-browser",
-    "expo-secure-store"
+    "expo-secure-store",
+    [
+      "expo-widgets",
+      {
+        enablePushNotifications: true,
+        widgets: [
+          {
+            name: "BulkJobActivity",
+            displayName: "Bulk Job Activity",
+            description: "Shows progress for bulk match and generate jobs.",
+            supportedFamilies: [
+              "systemSmall"
+            ]
+          }
+        ]
+      }
+    ]
   ],
   extra: {
     supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL,

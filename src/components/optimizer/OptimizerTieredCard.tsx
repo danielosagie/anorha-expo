@@ -8,7 +8,11 @@ interface OptimizerTieredCardProps {
     item: any;
     tier: OptimizerTier;
     onPress: () => void;
-    onAction?: () => void;
+    onAction?: () => void; // kept for interface compatibility
+    selectable?: boolean;
+    selected?: boolean;
+    onLongPress?: () => void;
+    onSelect?: () => void;
 }
 
 const TIER_COLORS = {
@@ -22,187 +26,148 @@ export const OptimizerTieredCard: React.FC<OptimizerTieredCardProps> = ({
     item,
     tier,
     onPress,
-    onAction,
+    selectable = false,
+    selected = false,
+    onLongPress,
+    onSelect,
 }) => {
     const isUrgent = tier === 'urgent';
-    const isStandard = tier === 'standard';
     const isCompleted = tier === 'completed';
 
     return (
         <TouchableOpacity
-            onPress={onPress}
-            activeOpacity={0.8}
+            onPress={selectable ? onSelect : onPress}
+            onLongPress={onLongPress}
+            activeOpacity={0.7}
             style={[
                 styles.card,
-                { borderLeftColor: TIER_COLORS[tier] },
-                isUrgent && styles.cardUrgent,
-                isStandard && styles.cardStandard,
                 isCompleted && styles.cardCompleted,
             ]}
         >
             <View style={styles.contentRow}>
+                {selectable && (
+                    <TouchableOpacity style={styles.checkboxContainer} onPress={onSelect}>
+                        <MaterialCommunityIcons
+                            name={selected ? 'check-circle' : 'checkbox-blank-circle-outline'}
+                            size={24}
+                            color={selected ? '#8cc63f' : '#adb5bd'}
+                        />
+                    </TouchableOpacity>
+                )}
+
+                {/* Unread/Priority Indicator */}
+                {!selectable && (
+                    <View style={styles.indicatorContainer}>
+                        {!isCompleted && (
+                            <View style={[styles.priorityDot, { backgroundColor: TIER_COLORS[tier] }]} />
+                        )}
+                    </View>
+                )}
+
                 <View style={styles.imageContainer}>
                     {item.ProductImages?.[0]?.ImageUrl ? (
                         <Image source={{ uri: item.ProductImages[0].ImageUrl }} style={styles.thumb} />
                     ) : (
                         <View style={[styles.thumb, styles.placeholderThumb]}>
-                            <MaterialCommunityIcons name="image-off" size={20} color="#ccc" />
-                        </View>
-                    )}
-                    {isCompleted && (
-                        <View style={styles.checkBadge}>
-                            <MaterialCommunityIcons name="check-circle" size={14} color="#fff" />
+                            <MaterialCommunityIcons name="image-outline" size={20} color="#adb5bd" />
                         </View>
                     )}
                 </View>
 
                 <View style={styles.textContainer}>
                     <View style={styles.headerRow}>
-                        <Text style={styles.title} numberOfLines={1}>
+                        <Text style={[styles.title, isCompleted && styles.titleCompleted]} numberOfLines={1}>
                             {item.Title || 'Untitled Product'}
                         </Text>
-                        {isUrgent && (
-                            <View style={styles.urgentBadge}>
-                                <Text style={styles.urgentBadgeText}>URGENT</Text>
-                            </View>
-                        )}
+                        <Text style={styles.timeText}>{item.Sku ? `SKU: ${item.Sku}` : 'No SKU'}</Text>
                     </View>
 
-                    <Text style={styles.subtitle} numberOfLines={1}>
-                        {isCompleted ? 'Fully optimized' : (isUrgent ? 'Missing critical photos' : 'Description could be better')}
+                    <Text style={[styles.subtitle, isCompleted && styles.subtitleCompleted]} numberOfLines={1}>
+                        {isCompleted ? 'Optimized' : (isUrgent ? 'Missing photos' : 'Description needs details')}
                     </Text>
-
-                    {isUrgent && (
-                        <View style={styles.metaRow}>
-                            <MaterialCommunityIcons name="clock-outline" size={12} color="#6c757d" />
-                            <Text style={styles.metaText}>~2 min to fix</Text>
-                        </View>
-                    )}
                 </View>
-
-                {!isUrgent && !isCompleted && (
-                    <MaterialCommunityIcons name="chevron-right" size={20} color="#adb5bd" />
-                )}
             </View>
-
-            {isUrgent && onAction && (
-                <TouchableOpacity style={styles.actionButton} onPress={onAction}>
-                    <MaterialCommunityIcons name="camera" size={16} color="#fff" />
-                    <Text style={styles.actionText}>Start Photo Session</Text>
-                </TouchableOpacity>
-            )}
         </TouchableOpacity>
     );
 };
 
 const styles = StyleSheet.create({
     card: {
-        backgroundColor: '#fff',
-        borderRadius: 16,
-        padding: 16,
-        marginBottom: 12,
-        borderLeftWidth: 4,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 8,
-        elevation: 2,
-    },
-    cardUrgent: {
-        paddingBottom: 12,
-    },
-    cardStandard: {
-        padding: 12,
-        opacity: 0.8,
+        backgroundColor: '#ffffff',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: 'rgba(0,0,0,0.06)',
     },
     cardCompleted: {
-        padding: 12,
-        backgroundColor: '#f8f9fa',
-        borderLeftWidth: 0,
-        opacity: 0.7,
+        backgroundColor: '#fcfcfc',
     },
     contentRow: {
         flexDirection: 'row',
         alignItems: 'center',
     },
+    checkboxContainer: {
+        width: 36,
+        justifyContent: 'center',
+        alignItems: 'flex-start',
+    },
+    indicatorContainer: {
+        width: 14,
+        justifyContent: 'center',
+        alignItems: 'flex-start',
+    },
+    priorityDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+    },
     imageContainer: {
-        position: 'relative',
         marginRight: 12,
     },
     thumb: {
-        width: 48,
-        height: 48,
-        borderRadius: 10,
+        width: 44,
+        height: 44,
+        borderRadius: 6,
         backgroundColor: '#f1f3f5',
     },
     placeholderThumb: {
         justifyContent: 'center',
         alignItems: 'center',
-    },
-    checkBadge: {
-        position: 'absolute',
-        bottom: -4,
-        right: -4,
-        backgroundColor: '#8cc63f',
-        borderRadius: 10,
-        padding: 1,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: 'rgba(0,0,0,0.04)',
     },
     textContainer: {
         flex: 1,
+        justifyContent: 'center',
     },
     headerRow: {
         flexDirection: 'row',
+        justifyContent: 'space-between',
         alignItems: 'center',
-        gap: 8,
         marginBottom: 2,
     },
     title: {
-        fontSize: 15,
-        fontWeight: '700',
+        fontSize: 16,
+        fontWeight: '600',
         color: '#1a1a1a',
-        flexShrink: 1,
+        flex: 1,
+        marginRight: 8,
+        letterSpacing: -0.2,
     },
-    urgentBadge: {
-        backgroundColor: '#fff5f5',
-        paddingHorizontal: 6,
-        paddingVertical: 2,
-        borderRadius: 4,
-        borderWidth: 1,
-        borderColor: '#ffa8a8',
+    titleCompleted: {
+        fontWeight: '400',
+        color: '#6c757d',
     },
-    urgentBadgeText: {
-        fontSize: 9,
-        fontWeight: '800',
-        color: '#fa5252',
+    timeText: {
+        fontSize: 12,
+        color: '#adb5bd',
+        fontWeight: '400',
     },
     subtitle: {
-        fontSize: 13,
-        color: '#6c757d',
-        marginBottom: 4,
-    },
-    metaRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-    },
-    metaText: {
-        fontSize: 11,
-        color: '#6c757d',
-        fontWeight: '500',
-    },
-    actionButton: {
-        backgroundColor: '#fa5252',
-        height: 38,
-        borderRadius: 10,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginTop: 12,
-        gap: 8,
-    },
-    actionText: {
-        color: '#fff',
         fontSize: 14,
-        fontWeight: '700',
+        color: '#6c757d',
+    },
+    subtitleCompleted: {
+        color: '#adb5bd',
     },
 });

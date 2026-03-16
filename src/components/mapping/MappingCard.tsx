@@ -86,9 +86,6 @@ const MappingCard: React.FC<MappingCardProps> = ({
         style={[styles.card, selected ? styles.cardSelected : null]}
         accessibilityRole={"button" as AccessibilityRole}
       >
-
-        {/* Direction indicator removed */}
-
         {/* Content */}
         <View style={styles.row}>
           <View style={[styles.miniCard, styles.leftMini]}>
