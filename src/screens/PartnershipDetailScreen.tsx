@@ -7,7 +7,8 @@ import {
     ActivityIndicator,
     TouchableOpacity,
     Alert,
-    FlatList
+    FlatList,
+    Switch
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
@@ -106,46 +107,7 @@ export default function PartnershipDetailScreen() {
         }
     };
 
-    const handleToggleVisibility = async (link: LinkedProduct) => {
-        const isHidden = link.visibilityStatus === 'hidden';
-        // Optimistic
-        setProducts(prev => prev.map(p => p.id === link.id ? { ...p, visibilityStatus: isHidden ? 'available' : 'hidden' } : p));
 
-        try {
-            const token = await ensureSupabaseJwt();
-            await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/links/${link.id}/visibility`, {
-                method: 'PATCH',
-                headers: {
-                    Authorization: `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ hidden: !isHidden })
-            });
-        } catch (e) {
-            console.error(e);
-            loadProducts();
-        }
-    };
-
-    const handleRevoke = (link: LinkedProduct) => {
-        Alert.alert('Remove Product', `Remove "${link.title}" from this partnership?`, [
-            { text: 'Cancel', style: 'cancel' },
-            {
-                text: 'Remove', style: 'destructive', onPress: async () => {
-                    try {
-                        const token = await ensureSupabaseJwt();
-                        await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/links/${link.id}`, {
-                            method: 'DELETE',
-                            headers: { Authorization: `Bearer ${token}` }
-                        });
-                        setProducts(prev => prev.filter(p => p.id !== link.id));
-                    } catch (e) {
-                        Alert.alert('Error', 'Failed to remove product');
-                    }
-                }
-            }
-        ]);
-    };
 
     const renderProduct = ({ item }: { item: LinkedProduct }) => (
         <View style={styles.productCard}>
@@ -165,17 +127,13 @@ export default function PartnershipDetailScreen() {
             </View>
 
             <View style={styles.actionsContainer}>
-                <TouchableOpacity onPress={() => handleToggleSync(item)} style={styles.actionButton}>
-                    <Icon name={item.status === 'active' ? "pause" : "play"} size={20} color="#4B5563" />
-                </TouchableOpacity>
-
-                <TouchableOpacity onPress={() => handleToggleVisibility(item)} style={styles.actionButton}>
-                    <Icon name={item.visibilityStatus === 'hidden' ? "eye-off" : "eye"} size={20} color="#4B5563" />
-                </TouchableOpacity>
-
-                <TouchableOpacity onPress={() => handleRevoke(item)} style={styles.actionButton}>
-                    <Icon name="link-variant-off" size={20} color="#EF4444" />
-                </TouchableOpacity>
+                <Switch
+                    value={item.status === 'active'}
+                    onValueChange={() => handleToggleSync(item)}
+                    trackColor={{ false: '#D1D5DB', true: '#10B981' }}
+                    thumbColor="#FFF"
+                    ios_backgroundColor="#D1D5DB"
+                />
             </View>
         </View>
     );

@@ -1,35 +1,30 @@
-// ... imports remain the same, ensuring MaterialCommunityIcons is used
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     View,
     Text,
     StyleSheet,
     TouchableOpacity,
     ActivityIndicator,
-    Animated,
     Dimensions,
-    Image,
     Platform,
     ScrollView,
     LayoutAnimation,
     UIManager,
+    Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { useAuth } from '@clerk/clerk-expo';
-import { ensureSupabaseJwt, supabase } from '../lib/supabase';
 import * as Haptics from 'expo-haptics';
-import { LinearGradient } from 'expo-linear-gradient';
-
-import { OptimizerProgressRing } from '../components/optimizer/OptimizerProgressRing';
 import { OptimizerTieredCard, OptimizerTier } from '../components/optimizer/OptimizerTieredCard';
 import { OptimizerProductDetailSheet } from '../components/optimizer/OptimizerProductDetailSheet';
 import { OptimizerBatchGenerateView } from '../components/optimizer/OptimizerBatchGenerateView';
 import { OptimizerPhotoModeView } from '../components/optimizer/OptimizerPhotoModeView';
 import { OptimizerReviewModeView } from '../components/optimizer/OptimizerReviewModeView';
 import { OptimizerCelebration } from '../components/optimizer/OptimizerCelebration';
+import PillTabs from '../components/ui/PillTabs';
+import { useOptimizerQueues, OptimizerQueue } from '../hooks/useOptimizerQueues';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
     UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -55,81 +50,39 @@ const COLORS = {
 };
 
 type OptimizerMode = 'dashboard' | 'batch' | 'photo' | 'review';
-type FilterType = 'all' | 'urgent' | 'quick_wins';
+type QueueTab = 'all' | OptimizerQueue;
 
 export function BackfillOptimizerScreen() {
     const navigation = useNavigation<NativeStackNavigationProp<any>>();
     const route = useRoute<any>();
-    const { getToken } = useAuth();
     const newlyImportedIds: string[] = Array.isArray(route.params?.newlyImportedIds) ? route.params.newlyImportedIds : [];
     const newlyImportedSet = React.useMemo(() => new Set(newlyImportedIds), [newlyImportedIds]);
 
-    const [loading, setLoading] = useState(true);
     const [mode, setMode] = useState<OptimizerMode>('dashboard');
-    const [filter, setFilter] = useState<FilterType>('all');
+    const [queueTab, setQueueTab] = useState<QueueTab>('all');
     const [showCelebration, setShowCelebration] = useState(false);
-
-    // Data buckets
-    const [allProducts, setAllProducts] = useState<any[]>([]);
     const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
-    const [overallCompleteness, setOverallCompleteness] = useState(0);
-    const [estimatedTime, setEstimatedTime] = useState(0);
+    const [isSelectMode, setIsSelectMode] = useState(false);
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+    const {
+        loading,
+        products,
+        counts,
+        photoNeededItems,
+        dataNeededItems,
+        manualQueueItems,
+        refresh,
+    } = useOptimizerQueues({ limit: 100 });
 
     // Detail Sheet State
     const [selectedProduct, setSelectedProduct] = useState<any | null>(null);
     const [isDetailSheetVisible, setIsDetailSheetVisible] = useState(false);
 
-    const fetchData = async () => {
-        try {
-            await ensureSupabaseJwt();
-
-            const { data, error } = await supabase
-                .from('ProductVariants')
-                .select(`
-                    Id, Title, Description, Sku,
-                    ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl)
-                `)
-                .limit(50);
-
-            if (error) throw error;
-            if (!data) return;
-
-            // Tiering Logic
-            const tieredData = data.map(p => {
-                const needsPhotos = !p.ProductImages || p.ProductImages.length < 2;
-                const needsContent = !p.Description || p.Description.length < 50;
-
-                let tier: OptimizerTier = 'standard';
-                if (needsPhotos) tier = 'urgent';
-                else if (needsContent) tier = 'warning';
-
-                return { ...p, tier };
-            });
-
-            setAllProducts(tieredData);
-
-            // Health Calc
-            const issues = tieredData.filter(p => !completedIds.has(p.Id) && p.tier !== 'standard').length;
-            const score = Math.max(0, Math.round(((tieredData.length - issues) / tieredData.length) * 100));
-            setOverallCompleteness(score);
-
-            // Time Estimate (2m for urgent, 30s for warning)
-            const urgentCount = tieredData.filter(p => !completedIds.has(p.Id) && p.tier === 'urgent').length;
-            const warningCount = tieredData.filter(p => !completedIds.has(p.Id) && p.tier === 'warning').length;
-            setEstimatedTime(Math.ceil((urgentCount * 2) + (warningCount * 0.5)));
-
-        } catch (error) {
-            console.error('[BackfillOptimizer] Error fetching data:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    // Use .size to avoid infinite loop (Set reference changes on every render)
     const completedCount = completedIds.size;
     useEffect(() => {
-        fetchData();
-    }, [completedCount]);
+        if (completedCount > 0) refresh();
+    }, [completedCount, refresh]);
 
     const switchMode = (newMode: OptimizerMode) => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -139,10 +92,22 @@ export function BackfillOptimizerScreen() {
 
     const handleComplete = (ids: string[]) => {
         setCompletedIds(prev => new Set([...prev, ...ids]));
+        setIsSelectMode(false);
+        setSelectedIds(new Set());
         switchMode('dashboard');
         // Re-calc completeness or just toast
         setShowCelebration(true);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    };
+
+    const toggleSelect = (id: string) => {
+        Haptics.selectionAsync();
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
     };
 
     const openProductDetail = (product: any) => {
@@ -151,37 +116,95 @@ export function BackfillOptimizerScreen() {
     };
 
     // --- SUB-VIEWS ---
+    const getQueuedProducts = (fullList: any[]) => {
+        if (!isSelectMode || selectedIds.size === 0) return fullList.filter(i => !completedIds.has(i.Id));
+        return fullList.filter(i => selectedIds.has(i.Id) && !completedIds.has(i.Id));
+    };
+
     if (mode === 'batch') {
-        return <OptimizerBatchGenerateView onBack={() => switchMode('dashboard')} onComplete={handleComplete} />;
+        return (
+            <OptimizerBatchGenerateView
+                onBack={() => switchMode('dashboard')}
+                onComplete={handleComplete}
+                queueProducts={getQueuedProducts(dataNeededItems)}
+            />
+        );
     }
     if (mode === 'photo') {
-        return <OptimizerPhotoModeView onBack={() => switchMode('dashboard')} onComplete={handleComplete} />;
+        return (
+            <OptimizerPhotoModeView
+                onBack={() => switchMode('dashboard')}
+                onComplete={handleComplete}
+                queueProducts={getQueuedProducts(photoNeededItems)}
+            />
+        );
     }
     if (mode === 'review') {
-        return <OptimizerReviewModeView onBack={() => switchMode('dashboard')} />;
+        return (
+            <OptimizerReviewModeView
+                onBack={() => switchMode('dashboard')}
+                queueProducts={getQueuedProducts(manualQueueItems)}
+            />
+        );
     }
 
-    const filteredItems = allProducts.filter(item => {
-        if (filter === 'urgent') return item.tier === 'urgent';
-        if (filter === 'quick_wins') return item.tier === 'warning';
-        return true;
-    }).sort((a, b) => {
-        const priority = { urgent: 0, warning: 1, standard: 2, completed: 3 };
+    const queueToTier: Record<OptimizerQueue, OptimizerTier> = {
+        'photo-needed': 'urgent',
+        'data-needed': 'warning',
+        'manual-queue': 'standard',
+    };
+
+    const queueItems = queueTab === 'all'
+        ? products
+        : queueTab === 'photo-needed'
+            ? photoNeededItems
+            : queueTab === 'data-needed'
+                ? dataNeededItems
+                : manualQueueItems;
+
+    const filteredItems = [...queueItems].sort((a, b) => {
         if (newlyImportedSet.has(a.Id) && !newlyImportedSet.has(b.Id)) return -1;
         if (!newlyImportedSet.has(a.Id) && newlyImportedSet.has(b.Id)) return 1;
-        const tierA = completedIds.has(a.Id) ? 'completed' : a.tier;
-        const tierB = completedIds.has(b.Id) ? 'completed' : b.tier;
-        return priority[tierA as keyof typeof priority] - priority[tierB as keyof typeof priority];
+        const tierA = completedIds.has(a.Id) ? 'completed' : queueToTier[a.queue];
+        const tierB = completedIds.has(b.Id) ? 'completed' : queueToTier[b.queue];
+        const priority = { urgent: 0, warning: 1, standard: 2, completed: 3 };
+        return priority[tierA] - priority[tierB];
     });
+
+    const handleSelectAll = () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        const uncompletedFiltered = filteredItems.filter(item => !completedIds.has(item.Id));
+        if (selectedIds.size === uncompletedFiltered.length) {
+            setSelectedIds(new Set());
+        } else {
+            setSelectedIds(new Set(uncompletedFiltered.map(i => i.Id)));
+        }
+    };
 
     return (
         <SafeAreaView style={styles.container}>
             <View style={styles.header}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-                    <MaterialCommunityIcons name="arrow-left" size={22} color={COLORS.text} />
-                </TouchableOpacity>
-                <Text style={styles.headerTitle}>Optimizer</Text>
-                <View style={styles.headerActionPlaceholder} />
+                {isSelectMode ? (
+                    <>
+                        <TouchableOpacity onPress={() => { setIsSelectMode(false); setSelectedIds(new Set()); }} style={styles.headerBtnText}>
+                            <Text style={styles.headerActionText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.headerTitle}>{selectedIds.size} Selected</Text>
+                        <TouchableOpacity onPress={handleSelectAll} style={styles.headerBtnText}>
+                            <Text style={[styles.headerActionText, { fontWeight: '600', color: COLORS.primaryDark }]}>Select All</Text>
+                        </TouchableOpacity>
+                    </>
+                ) : (
+                    <>
+                        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+                            <MaterialCommunityIcons name="arrow-left" size={22} color={COLORS.text} />
+                        </TouchableOpacity>
+                        <Text style={styles.headerTitle}>Inbox</Text>
+                        <TouchableOpacity onPress={() => setIsSelectMode(true)} style={styles.headerBtnText}>
+                            <Text style={styles.headerActionText}>Select</Text>
+                        </TouchableOpacity>
+                    </>
+                )}
             </View>
 
             {loading ? (
@@ -192,7 +215,7 @@ export function BackfillOptimizerScreen() {
                 <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
                     {newlyImportedIds.length > 0 && (
                         <View style={styles.importBanner}>
-                            <MaterialCommunityIcons name="sparkles" size={18} color={COLORS.primaryDark} />
+                            <MaterialCommunityIcons name="star-four-points" size={18} color={COLORS.primaryDark} />
                             <View style={{ flex: 1 }}>
                                 <Text style={styles.importBannerTitle}>
                                     {newlyImportedIds.length} newly imported items are prioritized
@@ -215,36 +238,21 @@ export function BackfillOptimizerScreen() {
                         </View>
                     )}
 
-                    {/* Ring Overview */}
-                    <View style={styles.overviewSection}>
-                        <OptimizerProgressRing progress={overallCompleteness / 100} />
-                        <View style={styles.taglineWrapper}>
-                            <Text style={styles.tagline}>Let's get your products{'\n'}looking their best</Text>
-                            <View style={styles.timeBadge}>
-                                <MaterialCommunityIcons name="timer-outline" size={14} color={COLORS.textLight} />
-                                <Text style={styles.timeText}>~{estimatedTime} min to complete</Text>
-                            </View>
-                        </View>
-                    </View>
-
-                    {/* Filter Chips */}
-                    <View style={styles.filterRow}>
-                        {[
-                            { id: 'all', label: 'All Jobs' },
-                            { id: 'urgent', label: 'Urgent' },
-                            { id: 'quick_wins', label: 'Quick Wins' },
-                        ].map(f => (
-                            <TouchableOpacity
-                                key={f.id}
-                                style={[styles.filterChip, filter === f.id && styles.activeChip]}
-                                onPress={() => {
-                                    Haptics.selectionAsync();
-                                    setFilter(f.id as FilterType);
-                                }}
-                            >
-                                <Text style={[styles.chipText, filter === f.id && styles.activeChipText]}>{f.label}</Text>
-                            </TouchableOpacity>
-                        ))}
+                    {/* Queue Tabs */}
+                    <View style={styles.pillTabsWrapper}>
+                        <PillTabs
+                            tabs={[
+                                { key: 'all', label: 'All', count: products.length },
+                                { key: 'photo-needed' as const, label: 'Photos', count: counts.photoNeeded, tone: 'danger' },
+                                { key: 'data-needed' as const, label: 'Data', count: counts.dataNeeded, tone: 'warning' },
+                                //{ key: 'manual-queue' as const, label: 'Manual', count: counts.manualQueue, tone: 'default' },
+                            ]}
+                            value={queueTab}
+                            onChange={(key) => {
+                                Haptics.selectionAsync();
+                                setQueueTab(key as QueueTab);
+                            }}
+                        />
                     </View>
 
                     {/* Tiered List */}
@@ -253,36 +261,73 @@ export function BackfillOptimizerScreen() {
                             <OptimizerTieredCard
                                 key={item.Id}
                                 item={item}
-                                tier={completedIds.has(item.Id) ? 'completed' : item.tier}
-                                onPress={() => openProductDetail(item)}
-                                onAction={() => {
-                                    if (newlyImportedSet.has(item.Id)) {
-                                        navigation.navigate('ProductDetail', { productId: item.Id } as any);
+                                tier={completedIds.has(item.Id) ? 'completed' : queueToTier[item.queue]}
+                                selectable={isSelectMode && !completedIds.has(item.Id)}
+                                selected={selectedIds.has(item.Id)}
+                                onSelect={() => toggleSelect(item.Id)}
+                                onLongPress={() => {
+                                    if (!completedIds.has(item.Id) && !isSelectMode) {
+                                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                                        setIsSelectMode(true);
+                                        setSelectedIds(new Set([item.Id]));
+                                    }
+                                }}
+                                onPress={() => {
+                                    if (isSelectMode && !completedIds.has(item.Id)) {
+                                        toggleSelect(item.Id);
                                         return;
                                     }
-                                    switchMode(item.tier === 'urgent' ? 'photo' : 'batch');
+                                    openProductDetail(item);
                                 }}
                             />
                         ))}
 
                         {filteredItems.length === 0 && (
                             <View style={styles.emptyState}>
-                                <MaterialCommunityIcons name="party-popper" size={48} color={COLORS.primary} />
-                                <Text style={styles.emptyTitle}>All products optimized! 🎉</Text>
-                                <Text style={styles.emptySub}>Your listings are 50% more likely to convert</Text>
+                                <View style={styles.emptyIconCircle}>
+                                    <MaterialCommunityIcons name="check-all" size={48} color={COLORS.primary} />
+                                </View>
+                                <Text style={styles.emptyTitle}>Inbox Zero</Text>
+                                <Text style={styles.emptySub}>All products are optimized and ready to sell! 🎉</Text>
                                 <View style={styles.emptyActions}>
-                                    <TouchableOpacity style={styles.emptyActionBtn} onPress={() => switchMode('review')}>
-                                        <Text style={styles.emptyActionText}>Review all photos</Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity style={[styles.emptyActionBtn, styles.emptyActionBtnSecondary]} onPress={() => navigation.navigate('Inventory')}>
-                                        <Text style={[styles.emptyActionText, { color: COLORS.textLight }]}>Add new products</Text>
+                                    <TouchableOpacity style={styles.emptyActionBtn} onPress={() => navigation.navigate('Inventory')}>
+                                        <Text style={styles.emptyActionText}>Add new products</Text>
                                     </TouchableOpacity>
                                 </View>
                             </View>
                         )}
                     </View>
-                    <View style={{ height: 80 }} />
+                    <View style={{ height: 120 }} />
                 </ScrollView>
+            )}
+
+            {queueTab !== 'all' && filteredItems.length > 0 && mode === 'dashboard' && (
+                <View style={styles.fabContainer}>
+                    <TouchableOpacity
+                        style={[styles.fabBtn, queueTab === 'photo-needed' && styles.fabBtnUrgent]}
+                        onPress={() => {
+                            if (isSelectMode && selectedIds.size === 0) {
+                                Alert.alert("No items selected", "Please select items first.");
+                                return;
+                            }
+                            if (queueTab === 'photo-needed') switchMode('photo');
+                            else if (queueTab === 'data-needed') switchMode('batch');
+                            else switchMode('review');
+                        }}
+                    >
+                        <MaterialCommunityIcons
+                            name={queueTab === 'photo-needed' ? 'camera' : queueTab === 'data-needed' ? 'auto-fix' : 'playlist-check'}
+                            size={20}
+                            color={queueTab === 'photo-needed' ? '#fff' : '#1a1a1a'}
+                        />
+                        <Text style={[styles.fabText, queueTab === 'photo-needed' && { color: '#fff' }]}>
+                            {isSelectMode && selectedIds.size > 0
+                                ? `Start Queue (${selectedIds.size})`
+                                : (queueTab === 'photo-needed' ? `Start All Photos` : queueTab === 'data-needed' ? `Start All Data` : `Review All`)
+                            }
+                        </Text>
+                    </TouchableOpacity>
+                </View>
             )}
 
             <OptimizerProductDetailSheet
@@ -295,7 +340,10 @@ export function BackfillOptimizerScreen() {
                         navigation.navigate('ProductDetail', { productId: selectedProduct.Id } as any);
                         return;
                     }
-                    switchMode(selectedProduct?.tier === 'urgent' ? 'photo' : 'batch');
+                    const q = (selectedProduct as any)?.queue;
+                    if (q === 'photo-needed') switchMode('photo');
+                    else if (q === 'data-needed') switchMode('batch');
+                    else switchMode('review');
                 }}
             />
             {showCelebration && <OptimizerCelebration onComplete={() => setShowCelebration(false)} />}
@@ -306,7 +354,7 @@ export function BackfillOptimizerScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#f8f9fa',
+        backgroundColor: '#fff', //f8f9fa
     },
     header: {
         flexDirection: 'row',
@@ -335,6 +383,17 @@ const styles = StyleSheet.create({
     },
     headerActionPlaceholder: {
         width: 36,
+    },
+    headerBtnText: {
+        minWidth: 60,
+        height: 36,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    headerActionText: {
+        fontSize: 15,
+        color: COLORS.text,
+        fontWeight: '400',
     },
     loadingWrapper: {
         flex: 1,
@@ -377,89 +436,64 @@ const styles = StyleSheet.create({
         fontSize: 11,
         fontWeight: '700',
     },
-    overviewSection: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 24,
-        marginBottom: 32,
-        gap: 20,
-    },
-    taglineWrapper: {
-        flex: 1,
-    },
-    tagline: {
-        fontSize: 18,
-        fontWeight: '800',
-        color: COLORS.text,
-        lineHeight: 24,
-        marginBottom: 8,
-    },
-    timeBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#fff',
-        paddingHorizontal: 10,
-        paddingVertical: 4,
-        borderRadius: 8,
-        alignSelf: 'flex-start',
-        borderWidth: 1,
-        borderColor: '#eee',
-        gap: 6,
-    },
-    timeText: {
-        fontSize: 11,
-        fontWeight: '600',
-        color: COLORS.textLight,
-    },
-    filterRow: {
-        flexDirection: 'row',
-        paddingHorizontal: 20,
+    pillTabsWrapper: {
         marginBottom: 20,
-        gap: 10,
     },
-    filterChip: {
+    bulkActionBar: {
+        paddingHorizontal: 20,
+        marginBottom: 16,
+    },
+    bulkActionBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
         backgroundColor: '#fff',
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        borderRadius: 12,
         borderWidth: 1,
-        borderColor: '#eee',
+        borderColor: 'rgba(0,0,0,0.06)',
+        borderRadius: 8,
+        paddingVertical: 12,
     },
-    activeChip: {
-        backgroundColor: COLORS.text,
-        borderColor: COLORS.text,
+    bulkActionBtnUrgent: {
+        backgroundColor: '#fa5252',
+        borderColor: '#fa5252',
     },
-    chipText: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: COLORS.textLight,
-    },
-    activeChipText: {
-        color: '#fff',
+    bulkActionText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#1a1a1a',
     },
     listContainer: {
-        paddingHorizontal: 20,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderColor: 'rgba(0,0,0,0.06)',
     },
     emptyState: {
         alignItems: 'center',
         padding: 40,
-        marginTop: 20,
+        marginTop: 40,
+    },
+    emptyIconCircle: {
+        width: 90,
+        height: 90,
+        borderRadius: 45,
+        backgroundColor: '#f4fbe9',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 16,
     },
     emptyTitle: {
-        fontSize: 18,
+        fontSize: 22,
         fontWeight: '800',
         color: COLORS.text,
-        marginTop: 16,
-        marginBottom: 4,
+        marginBottom: 8,
     },
     emptySub: {
-        fontSize: 14,
+        fontSize: 15,
         color: COLORS.textLight,
         textAlign: 'center',
     },
     emptyActions: {
-        marginTop: 24,
-        gap: 12,
+        marginTop: 30,
         width: '100%',
     },
     emptyActionBtn: {
@@ -469,15 +503,44 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-    emptyActionBtnSecondary: {
-        backgroundColor: '#fff',
-        borderWidth: 1,
-        borderColor: '#eee',
-    },
     emptyActionText: {
         color: '#fff',
         fontSize: 15,
         fontWeight: '700',
+    },
+    fabContainer: {
+        position: 'absolute',
+        bottom: 30,
+        left: 0,
+        right: 0,
+        alignItems: 'center',
+        pointerEvents: 'box-none',
+    },
+    fabBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        backgroundColor: '#fff',
+        borderWidth: 1,
+        borderColor: 'rgba(0,0,0,0.06)',
+        borderRadius: 30,
+        paddingVertical: 14,
+        paddingHorizontal: 24,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 8,
+        elevation: 6,
+    },
+    fabBtnUrgent: {
+        backgroundColor: '#fa5252',
+        borderColor: '#fa5252',
+    },
+    fabText: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#1a1a1a',
     },
 });
 

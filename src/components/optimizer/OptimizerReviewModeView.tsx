@@ -34,9 +34,11 @@ const COLORS = {
 
 interface OptimizerReviewModeViewProps {
     onBack: () => void;
+    /** When provided, use this list instead of fetching (real manual-queue from useOptimizerQueues) */
+    queueProducts?: any[];
 }
 
-export function OptimizerReviewModeView({ onBack }: OptimizerReviewModeViewProps) {
+export function OptimizerReviewModeView({ onBack, queueProducts }: OptimizerReviewModeViewProps) {
     const { getToken } = useAuth();
     const [pendingItems, setPendingItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -46,7 +48,12 @@ export function OptimizerReviewModeView({ onBack }: OptimizerReviewModeViewProps
     const [filterType, setFilterType] = useState('all');
 
     useEffect(() => {
-        loadPendingReviews();
+        if (queueProducts && queueProducts.length > 0) {
+            setPendingItems(queueProducts.map((p: any) => ({ ...p, changeType: p.reason || 'Needs review', proposedTitle: null, proposedDescription: null })));
+            setLoading(false);
+        } else {
+            loadPendingReviews();
+        }
     }, []);
 
     const loadPendingReviews = async () => {
@@ -124,8 +131,15 @@ export function OptimizerReviewModeView({ onBack }: OptimizerReviewModeViewProps
                 </View>
 
                 <View style={styles.diffContainer}>
+                    {/* Manual queue: show reason (e.g. Missing SKU) */}
+                    {item.reason && !item.proposedDescription && !(item.proposedTitle && item.proposedTitle !== item.Title) && (
+                        <View style={styles.diffBlock}>
+                            <Text style={styles.diffLabel}>NEEDS MANUAL ATTENTION</Text>
+                            <Text style={styles.newText}>{item.reason}. Tap to edit in Product Detail.</Text>
+                        </View>
+                    )}
                     {/* If Title Changed */}
-                    {item.Title !== item.proposedTitle && (
+                    {item.proposedTitle && item.Title !== item.proposedTitle && (
                         <View style={styles.diffBlock}>
                             <Text style={styles.diffLabel}>TITLE</Text>
                             <Text style={styles.oldText}>{item.Title}</Text>
@@ -138,7 +152,7 @@ export function OptimizerReviewModeView({ onBack }: OptimizerReviewModeViewProps
                         </View>
                     )}
 
-                    {/* If Description Proposed */}
+                    {/* If Description Proposed (from AI drafts) */}
                     {item.proposedDescription && (
                         <View style={styles.diffBlock}>
                             <Text style={styles.diffLabel}>DESCRIPTION</Text>

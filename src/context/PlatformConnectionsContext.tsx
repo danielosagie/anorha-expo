@@ -1,5 +1,6 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { supabase } from '../../lib/supabase';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import { io, Socket } from 'socket.io-client';
 
 export type PlatformKey = 'shopify' | 'square' | 'clover' | 'ebay' | 'facebook' | 'amazon' | 'depop' | 'whatnot' | 'etsy';
 
@@ -15,8 +16,21 @@ export interface PlatformConnectionRow {
   UpdatedAt: string;
 }
 
+type SyncProgressUpdate = {
+  connectionId: string;
+  progress: number;
+  description?: string;
+  status?: string;
+  jobId?: string;
+  elapsedSeconds?: number;
+  details?: Record<string, any>;
+  receivedAt: number;
+};
+
 type ContextValue = {
   connections: PlatformConnectionRow[];
+  liveConnections: PlatformConnectionRow[];
+  progressByConnectionId: Record<string, SyncProgressUpdate>;
   connectedByPlatform: Record<string, boolean>;
   isConnected: (platform: PlatformKey | string) => boolean;
   refresh: () => Promise<void>;
@@ -27,24 +41,37 @@ type ContextValue = {
 
 const PlatformConnectionsContext = createContext<ContextValue | undefined>(undefined);
 
+const API_BASE = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+const SOCKET_BASE = API_BASE.endsWith('/api') ? API_BASE.replace(/\/api$/, '') : API_BASE;
+const CONNECTION_STATUS_SET = new Set(['active', 'inactive', 'pending', 'review', 'ready_to_sync', 'scanning', 'syncing', 'reconciling', 'error']);
+const TERMINAL_STATUS_SET = new Set(['active', 'review', 'error']);
+const PROGRESS_OVERRIDE_TTL_MS = 2 * 60 * 1000;
+
+const normalizeStatus = (value?: string) => (value || '').toLowerCase().trim();
+
 export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [connections, setConnections] = useState<PlatformConnectionRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const [toggles, setToggles] = useState<Record<string, { enabled: boolean; allowPublish: boolean; allowSync: boolean; message?: string }>>({});
+  const [progressByConnectionId, setProgressByConnectionId] = useState<Record<string, SyncProgressUpdate>>({});
+  const [authReady, setAuthReady] = useState(false);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const socketRef = useRef<Socket | null>(null);
 
   const fetchConnections = useCallback(async () => {
     setLoading(true);
     setError(undefined);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token || session?.user ? session?.access_token : session?.access_token;
+      const token = await ensureSupabaseJwt();
       if (!token) {
+        setError('Authentication required to load connections');
         setConnections([]);
+        setAuthReady(false);
         return;
       }
-      const base = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
-      const resp = await fetch(`${base}/api/platform-connections`, {
+      setAuthReady(true);
+      const resp = await fetch(`${API_BASE}/api/platform-connections`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!resp.ok) {
@@ -53,11 +80,20 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
         return;
       }
       const rows: PlatformConnectionRow[] = await resp.json();
-      setConnections(Array.isArray(rows) ? rows : []);
+      const safeRows = Array.isArray(rows) ? rows : [];
+      setConnections(safeRows);
+      setProgressByConnectionId(prev => {
+        const next = { ...prev };
+        const validIds = new Set(safeRows.map(r => r.Id));
+        Object.keys(next).forEach((id) => {
+          if (!validIds.has(id)) delete next[id];
+        });
+        return next;
+      });
 
       // Fetch toggles
       try {
-        const togResp = await fetch(`${base}/api/platform-connections/toggles`, {
+        const togResp = await fetch(`${API_BASE}/api/platform-connections/toggles`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (togResp.ok) {
@@ -78,6 +114,14 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
     }
   }, []);
 
+  const scheduleRefresh = useCallback((reason: string) => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => {
+      console.log(`[PlatformConnectionsContext] Refreshing connections (${reason})`);
+      fetchConnections();
+    }, 600);
+  }, [fetchConnections, scheduleRefresh]);
+
   useEffect(() => {
     fetchConnections();
 
@@ -89,7 +133,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
     const setupSubscription = () => {
       // Subscribe to realtime updates for PlatformConnections table
       channel = supabase
-        .channel('platform-connections-changes')
+        .channel(`platform-connections-changes-${Date.now()}`)
         .on(
           'postgres_changes',
           {
@@ -100,7 +144,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
           (payload) => {
             console.log('[PlatformConnectionsContext] Realtime update received:', payload.eventType);
             // Refetch all connections on any change
-            fetchConnections();
+            scheduleRefresh('realtime');
           }
         )
         .subscribe((status) => {
@@ -134,15 +178,126 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
     };
   }, [fetchConnections]);
 
+  useEffect(() => {
+    let isCancelled = false;
+    if (!authReady) {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+      return;
+    }
+
+    const connectSocket = async () => {
+      try {
+        const token = await ensureSupabaseJwt();
+        if (!token || isCancelled) return;
+
+        if (socketRef.current) {
+          socketRef.current.disconnect();
+          socketRef.current = null;
+        }
+
+        const socket = io(`${SOCKET_BASE}/collaboration`, {
+          transports: ['websocket'],
+          timeout: 5000,
+          auth: { token },
+          query: { token },
+        });
+
+        socket.on('connect', () => {
+          console.log('[PlatformConnectionsContext] Socket connected');
+        });
+
+        socket.on('connect_error', (err: any) => {
+          console.error('[PlatformConnectionsContext] Socket connection error:', err);
+        });
+
+        socket.on('disconnect', () => {
+          console.log('[PlatformConnectionsContext] Socket disconnected');
+        });
+
+        socket.on('sync:progress', (data: Omit<SyncProgressUpdate, 'receivedAt'>) => {
+          if (!data?.connectionId) return;
+          const receivedAt = Date.now();
+          setProgressByConnectionId(prev => ({
+            ...prev,
+            [data.connectionId]: { ...data, receivedAt },
+          }));
+
+          const status = normalizeStatus(data.status);
+          if (TERMINAL_STATUS_SET.has(status) || (typeof data.progress === 'number' && data.progress >= 100)) {
+            scheduleRefresh('progress-terminal');
+          }
+        });
+
+        socket.on('connection:status', (data: { connectionId: string; status: string; platformType?: string; timestamp?: string }) => {
+          if (!data?.connectionId) return;
+          const status = normalizeStatus(data.status);
+          if (!status) return;
+          setConnections(prev =>
+            prev.map(conn => (conn.Id === data.connectionId ? { ...conn, Status: status } : conn))
+          );
+          if (TERMINAL_STATUS_SET.has(status)) {
+            scheduleRefresh('connection-status');
+          }
+        });
+
+        socketRef.current = socket;
+      } catch (error) {
+        console.error('[PlatformConnectionsContext] Failed to connect socket:', error);
+      }
+    };
+
+    connectSocket();
+
+    return () => {
+      isCancelled = true;
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+    };
+  }, [authReady, scheduleRefresh]);
+
+  const liveConnections = useMemo(() => {
+    if (connections.length === 0) return [];
+    return connections.map((conn) => {
+      const progress = progressByConnectionId[conn.Id];
+      if (!progress) return conn;
+      if (Date.now() - progress.receivedAt > PROGRESS_OVERRIDE_TTL_MS) return conn;
+      const progressStatus = normalizeStatus(progress.status);
+      if (!CONNECTION_STATUS_SET.has(progressStatus)) return conn;
+      if (progressStatus === normalizeStatus(conn.Status)) return conn;
+    return { ...conn, Status: progressStatus };
+    });
+  }, [connections, progressByConnectionId]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setProgressByConnectionId(prev => {
+        const now = Date.now();
+        const next: Record<string, SyncProgressUpdate> = {};
+        Object.entries(prev).forEach(([id, progress]) => {
+          if (now - progress.receivedAt <= PROGRESS_OVERRIDE_TTL_MS) {
+            next[id] = progress;
+          }
+        });
+        return next;
+      });
+    }, 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   const connectedByPlatform = useMemo(() => {
     const map: Record<string, boolean> = {};
-    for (const c of connections) {
+    for (const c of liveConnections) {
       const key = (c.PlatformType || '').toLowerCase();
       const active = c.IsEnabled && (c.Status || '').toLowerCase() === 'active';
       map[key] = map[key] || active;
     }
     return map;
-  }, [connections]);
+  }, [liveConnections]);
 
   const isConnected = useCallback((platform: PlatformKey | string) => {
     const key = (platform || '').toString().toLowerCase();
@@ -151,6 +306,8 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
 
   const value: ContextValue = {
     connections,
+    liveConnections,
+    progressByConnectionId,
     connectedByPlatform,
     isConnected,
     refresh: fetchConnections,
@@ -171,5 +328,3 @@ export const usePlatformConnections = (): ContextValue => {
   if (!ctx) throw new Error('usePlatformConnections must be used within PlatformConnectionsProvider');
   return ctx;
 };
-
-

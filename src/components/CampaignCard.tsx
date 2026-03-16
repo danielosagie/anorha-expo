@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Animated, { FadeInLeft } from 'react-native-reanimated';
+import ShadowSurface from './ui/ShadowSurface';
 
 interface CampaignCardProps {
     id: string;
@@ -43,11 +44,12 @@ const CampaignCard: React.FC<CampaignCardProps> = ({
 
     return (
         <Animated.View entering={FadeInLeft.duration(300)}>
-            <TouchableOpacity
-                style={[styles.card, { backgroundColor: colors.surface, borderColor: border }]}
-                onPress={onPress}
-                activeOpacity={0.7}
-            >
+            <ShadowSurface shadow="sm" radius={16} style={styles.cardOuter} innerStyle={styles.cardSurface}>
+                <TouchableOpacity
+                    style={[styles.cardContent, { backgroundColor: colors.surface, borderColor: border }]}
+                    onPress={onPress}
+                    activeOpacity={0.7}
+                >
                 <View style={styles.header}>
                     <View style={styles.titleRow}>
                         <Icon name="flash" size={16} color="#FF9900" style={{ marginRight: 6 }} />
@@ -82,23 +84,24 @@ const CampaignCard: React.FC<CampaignCardProps> = ({
                         <View style={[styles.progressFill, { width: `${progress}%`, backgroundColor: getStatusColor() }]} />
                     </View>
                 </View>
-            </TouchableOpacity>
+                </TouchableOpacity>
+            </ShadowSurface>
         </Animated.View>
     );
 };
 
 const styles = StyleSheet.create({
-    card: {
+    cardOuter: {
         width: 280,
+        marginRight: 12,
+    },
+    cardSurface: {
+        borderRadius: 16,
+    },
+    cardContent: {
         padding: 16,
         borderRadius: 16,
         borderWidth: 1,
-        marginRight: 12,
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-        elevation: 2,
     },
     header: {
         flexDirection: 'row',

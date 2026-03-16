@@ -1,12 +1,11 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { createStackNavigator, StackScreenProps } from '@react-navigation/stack';
+import { CardStyleInterpolators, createStackNavigator, StackScreenProps } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import TabBar from '../components/TabBar';
-import styles from '../styles/styles';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 // import { Camera } from 'lucide-react-native';
-import { AppState, AppStateStatus, Platform } from 'react-native';
+import { AppState, AppStateStatus } from 'react-native';
 import { CommonActions } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import { NavigationContainer, useNavigation } from '@react-navigation/native';
@@ -17,7 +16,9 @@ import { useFonts } from 'expo-font';
 import {
   PlusJakartaSans_400Regular,
   PlusJakartaSans_500Medium,
+  PlusJakartaSans_600SemiBold,
   PlusJakartaSans_700Bold,
+  PlusJakartaSans_800ExtraBold,
 } from '@expo-google-fonts/plus-jakarta-sans';
 // import { CirclePlus } from 'lucide-react-native';
 import OnboardConnectionScreen from '../screens/OnboardConnectionScreen';
@@ -56,10 +57,12 @@ import PartnersScreen from '../screens/PartnersScreen';
 import PartnershipDetailScreen from '../screens/PartnershipDetailScreen';
 import { BackfillOptimizerScreen } from '../screens/BackfillOptimizerScreen';
 import { CSVColumnMappingScreen } from '../screens/CSVColumnMappingScreen';
+import ImportOverviewScreen from '../screens/ImportOverviewScreen';
 import PendingOrgInvitesScreen from '../screens/PendingOrgInvitesScreen';
 import LiquidationCampaignScreen from '../screens/LiquidationCampaignScreen';
 import BackupsScreen from '../screens/BackupsScreen';
 import BillingScreen from '../screens/BillingScreen';
+import BillingSupportScreen from '../screens/BillingSupportScreen';
 import DeleteAccountInfoScreen from '../screens/DeleteAccountInfoScreen';
 import { isFeatureEnabled } from '../config/features';
 import { SessionContext } from '../context/SessionContext';
@@ -102,6 +105,13 @@ export type AppStackParamList = {
       jobId?: string;
       firstPhotos: any[];
       bulkItems?: any[];
+      confirmedQuickMatchByItemId?: Record<string, {
+        serpApiData: any[];
+        preSelectedIndices: number[];
+        source?: 'quick_scan_auto' | 'quick_scan_confirmed';
+        confidence?: number;
+        reasoning?: string;
+      }>;
       userAssistDecisions?: Record<number, {
         confirmedCandidateIndex?: number;
         deniedCandidateIndices?: number[];
@@ -109,10 +119,14 @@ export type AppStackParamList = {
         generateBestGuess?: boolean;
         state?: 'pending' | 'submitted' | 'failed';
       }>;
+      assistTransitionToken?: string;
+      assistSourceItemIndex?: number;
+      resumeFromAssist?: boolean;
       // When true, LoadingScreen will NOT early-navigate to MatchSelectionScreen.
       // It will wait for the job to complete so it can respect skipToGenerate/autoGenerateJobId.
       skipMatchSelection?: boolean;
       autoGenerateAllPlatforms?: boolean;
+      resultIndexMap?: Record<number, number>;
     };
     onCompleteRoute: {
       screen: keyof AppStackParamList;
@@ -121,6 +135,7 @@ export type AppStackParamList = {
   };
   ProductDetail: { productId: string };
   PastScans: undefined;
+  ImportOverview: { connectionId: string; platformName: string; jobId?: string; };
   MappingReview: { connectionId: string; platformName: string; jobId?: string; importedProducts?: any[]; isCSVImport?: boolean; isScanning?: boolean; scanStartTime?: number; };
   SyncRules: { connectionId: string };
   Profile: { refresh?: number };
@@ -128,6 +143,14 @@ export type AppStackParamList = {
   NotificationSettings: undefined;
   Team: undefined;
   Billing: undefined;
+  BillingSupport: {
+    context?: {
+      planName?: string;
+      subscriptionStatus?: string;
+      aiAllowanceCents?: number;
+      aiUsedCents?: number;
+    };
+  } | undefined;
   AddProduct: {
     firstPhotos?: any[];
     bulkItems?: any[];
@@ -137,13 +160,17 @@ export type AppStackParamList = {
     jobResponse?: JobResponse;
     jobId?: string;
     focusIndex?: number;
+    overrideFocusIndex?: number;
+    overrideResults?: any[];
+    isNewScan?: boolean;
     items?: Array<{ index: number; title?: string; thumb?: string; matchesCount?: number; matchJobId?: string }>;
     jobMap?: Record<number, { jobId: string; status?: string }>;
     preResolvedSelections?: Record<number, number[]>;
     preDeniedSelections?: Record<number, number[]>;
     preRefineTextByIndex?: Record<number, string>;
     bestGuessByIndex?: Record<number, boolean>;
-    response: {
+    returnToLoading?: AppStackParamList['LoadingScreen'];
+    response?: {
       jobId?: string;
       bulkItems?: any[];
       firstPhotos?: any[];
@@ -344,44 +371,40 @@ const TabNavigator = () => {
     }
   }, [lastNotificationResponse]);
 
-  // Create a custom tab bar style with rounded corners and horizontal padding
-  const customTabBarStyle = {
-    ...styles.tabBar,
-    borderRadius: 30,
-    marginHorizontal: 0,
-    marginBottom: 16,
-    overflow: 'hidden' as const,
-    paddingHorizontal: 16,
-    backgroundColor: '#ffffff',
-    borderColor: "rgba(0, 0, 0, 0.07)",
-    borderWidth: 2,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOpacity: 0.15,
-        shadowRadius: 20,
-        shadowOffset: { width: 0, height: 10 },
-      },
-      android: {
-        elevation: 4,
-      },
-      default: {},
-    }),
+  const tabBarBottom = Math.max(18, insets.bottom);
+  const tabBarContainerStyle = {
     position: 'absolute' as const,
     left: 12,
     right: 12,
-    bottom: 18, //+ insets.bottom
+    bottom: tabBarBottom,
     height: 84,
+    backgroundColor: 'transparent',
+    overflow: 'visible' as const,
+  };
+  const tabBarSurfaceStyle = {
+    borderRadius: 30,
+    paddingHorizontal: 16,
+    backgroundColor: '#ffffff',
+    borderColor: 'rgba(0, 0, 0, 0.07)',
+    borderWidth: 2,
+    height: 84,
+    width: "95%"
   };
 
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarStyle: customTabBarStyle,
+        tabBarStyle: tabBarContainerStyle,
       }}
 
-      tabBar={(props: any) => <TabBar {...props} style={customTabBarStyle} />}
+      tabBar={(props: any) => (
+        <TabBar
+          {...props}
+          containerStyle={tabBarContainerStyle}
+          surfaceStyle={tabBarSurfaceStyle}
+        />
+      )}
       initialRouteName="Dashboard"
     >
       <Tab.Screen
@@ -414,18 +437,18 @@ const TabNavigator = () => {
           ),
         }}
       />
-  
+
 
       <Tab.Screen
         name="Clearouts"
         component={LiquidationCampaignScreen}
         initialParams={{ entryPoint: 'tab' }}
         options={{
-          tabBarLabel: 'Clearouts',
-          tabBarIcon: ({ color, size, focused }: { color: string; size: number; focused: boolean }) => (
+          tabBarLabel: 'Sprout',
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Icon
               name="cash-fast"
-              color={focused ? "#FF9900" : color}
+              color={color} //color={focused ? "#FF9900" : color}
               size={size}
             />
           ),
@@ -478,15 +501,23 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
     <AppStackNav.Screen name="Team" component={TeamScreen} />
     <AppStackNav.Screen name="Billing" component={BillingScreen} />
+    <AppStackNav.Screen name="BillingSupport" component={BillingSupportScreen} />
     <AppStackNav.Screen name="AddProduct" component={AddProductScreen} />
     <AppStackNav.Screen name="LoadingScreen" component={LoadingScreen} />
-    <AppStackNav.Screen name="MatchSelectionScreen" component={MatchSelectionScreen} />
+    <AppStackNav.Screen
+      name="MatchSelectionScreen"
+      component={MatchSelectionScreen}
+      options={{
+        cardStyleInterpolator: CardStyleInterpolators.forFadeFromBottomAndroid,
+      }}
+    />
     <AppStackNav.Screen name="GenerateDetailsScreen" component={GenerateDetailsScreen} />
     <AppStackNav.Screen name="PublishConfirmation" component={PublishConfirmationScreen} />
     <AppStackNav.Screen name="OnboardConnectionScreen" component={OnboardConnectionScreen} />
     <AppStackNav.Screen name="PartnerAccept" component={PartnerAcceptScreen} />
     <AppStackNav.Screen name="PartnershipDetail" component={PartnershipDetailScreen} />
     <AppStackNav.Screen name="BackfillOptimizer" component={BackfillOptimizerScreen} />
+    <AppStackNav.Screen name="ImportOverview" component={ImportOverviewScreen} />
     <AppStackNav.Screen name="CSVColumnMapping" component={CSVColumnMappingScreen} />
     <AppStackNav.Screen name="ActivityFeed" component={ActivityFeedScreen} />
     <AppStackNav.Screen name="Backups" component={BackupsScreen} />
@@ -513,7 +544,9 @@ const AppNavigator = () => {
   const [fontsLoaded] = useFonts({
     PlusJakartaSans_400Regular,
     PlusJakartaSans_500Medium,
+    PlusJakartaSans_600SemiBold,
     PlusJakartaSans_700Bold,
+    PlusJakartaSans_800ExtraBold,
   });
 
   // Preload images

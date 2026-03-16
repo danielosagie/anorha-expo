@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Modal, Pressable, FlatList, SectionList, Alert, ActivityIndicator, Dimensions, Linking } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Modal, Pressable, FlatList, SectionList, Alert, ActivityIndicator, Dimensions, Linking, Platform } from 'react-native';
+import { ScrollView as ScrollViewHorizontal } from 'react-native-gesture-handler';
 import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
 import { Paths, Directory, File } from 'expo-file-system/next';
 import * as ImagePicker from 'expo-image-picker';
@@ -400,13 +401,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     }
   }, [highlightedField, activeTab]);
 
-  // Auto-switch to the platform tab when the navigator targets a specific platform
-  useEffect(() => {
-    if (highlightedPlatform && highlightedPlatform !== activeTab) {
-      setActiveTab(highlightedPlatform);
-    }
-  }, [highlightedPlatform]);
-
   const recordFieldLayout = (field: string) => (event: any) => {
     fieldYOffsets.current[field] = event.nativeEvent.layout.y;
   };
@@ -543,6 +537,15 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const activePlatformKey = activeTab === 'all' ? canonicalKey : activeTab;
   const activePlatformKeyLower = activePlatformKey.toLowerCase();
   const activeData = useMemo<PlatformState>(() => (platforms[activePlatformKey] || {}) as PlatformState, [activePlatformKey, platforms, updateCounter]);
+  const pricingResearchInput = useMemo(() => {
+    for (const pk of platformKeys) {
+      const p = platforms[pk] as any;
+      const t = p?.title?.trim();
+      if (t) return { title: t, categoryId: p?.categoryId, condition: p?.condition };
+    }
+    return null;
+  }, [platformKeys, platforms]);
+  const titleForPricingResearch = pricingResearchInput?.title ?? '';
   const supportsTaxonomy = activeTab !== 'all' && ['shopify', 'ebay'].includes(activePlatformKeyLower);
   const activeTaxonomyQuery = taxonomyQueries[activePlatformKeyLower] ?? '';
 
@@ -609,25 +612,30 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
     try {
       const token = await ensureSupabaseJwt();
-      // TRUNCATION FIX: Long titles cause empty results (strict keyword matching).
-      // eBay/Amazon taxonomy search prefers BROAD keywords (e.g. "MacBook Pro") over specific specs.
-      // We take the first 6 words max, which usually contains the Brand + Model + Core type.
-      let safeQuery = query;
+      const safeQuery = query.trim();
+      console.log(`[Taxonomy] Auto-suggesting for ${activePlatformKeyLower} using query: "${safeQuery}"`);
 
-      // 1. Normalization
-      safeQuery = safeQuery
-        .replace(/(\d+)(inch)/gi, '$1 $2') // "14inch" -> "14 inch"
-        .replace(/[^\w\s-]/g, '');         // Remove special chars
-
-      // 2. Aggressive Truncation
-      const words = safeQuery.split(/\s+/);
-      if (words.length > 6) {
-        safeQuery = words.slice(0, 6).join(' ');
-      } else if (safeQuery.length > 60) {
-        safeQuery = safeQuery.slice(0, 60);
-      }
-
-      console.log(`[Taxonomy] Auto-suggesting for ${activePlatformKeyLower} using truncated query: "${safeQuery}" (orig: "${query}")`);
+      const categorySuggestion = (activeData as any).categorySuggestion || activeData.categoryPath || activeData.productCategory || activeData.category;
+      const productType = (activeData as any).productType;
+      const rawSources = Array.isArray((platforms as any)?.sources)
+        ? (platforms as any).sources
+        : Array.isArray((platforms as any)?.canonical?.sources)
+          ? (platforms as any).canonical.sources
+          : undefined;
+      const sources = Array.isArray(rawSources)
+        ? rawSources.slice(0, 4).map((item: any) => {
+          if (typeof item === 'string') {
+            return { url: item };
+          }
+          return {
+            title: item?.title || item?.name,
+            snippet: item?.snippet || item?.description,
+            url: item?.url || item?.link,
+            source: item?.source || item?.domain,
+          };
+        })
+        : undefined;
+      const sourceUrls = sources?.map((s: any) => s?.url).filter((u: any) => typeof u === 'string');
 
       const url = `${API_BASE_URL}/api/taxonomy/${activePlatformKeyLower}/suggest`;
       const payload = {
@@ -636,6 +644,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         description: activeData.description,
         brand: (activeData as any).brand,
         tags: activeData.tags,
+        sources,
+        sourceUrls,
+        categorySuggestion,
+        productType,
         preferLeaf: true,
         limit: 15,
         useLlm: true,
@@ -711,7 +723,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     const timer = setTimeout(() => {
       const currentId = platformKey === 'shopify' ? activeData.productCategoryId : activeData.categoryId;
 
-      if (!currentId && !preventTaxonomyAutoFetchRef.current.has(platformKey) && activeData.title) {
+      const confidence = typeof activeData.taxonomyConfidence === 'number' ? activeData.taxonomyConfidence : 0;
+      if (!currentId && confidence < 0.8 && !preventTaxonomyAutoFetchRef.current.has(platformKey) && activeData.title) {
         suggestTaxonomy(true);
       }
     }, 500);
@@ -797,8 +810,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   }, [activePlatformKeyLower, activeData.categoryId, fetchAspects]);
 
   const fetchPricingResearch = useCallback(async () => {
-    const title = activeData.title?.trim();
-    if (!title) return;
+    const input = pricingResearchInput;
+    if (!input?.title) return;
     setPricingResearchLoading(true);
     setPricingResearchResult(null);
     try {
@@ -807,9 +820,9 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title,
-          categoryId: activeData.categoryId || undefined,
-          condition: activeData.condition || undefined,
+          title: input.title,
+          categoryId: input.categoryId || undefined,
+          condition: input.condition || undefined,
           limit: 20,
         }),
       });
@@ -827,7 +840,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     } finally {
       setPricingResearchLoading(false);
     }
-  }, [activeData.title, activeData.categoryId, activeData.condition]);
+  }, [pricingResearchInput]);
 
   const fetchShippingEstimate = useCallback(
     async (override?: { weight: string; weightUnit: string; estimatedDimensions?: { length: number; width: number; height: number } }) => {
@@ -964,7 +977,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const selectedCategoryId = activePlatformKeyLower === 'shopify'
     ? (activeData.productCategoryId || activeData.categoryId)
     : activeData.categoryId;
-  const selectedCategoryPath = activeData.categoryPath || activeData.productCategory || activeData.category;
+  const selectedCategoryPathRaw = activeData.categoryPath || activeData.productCategory || activeData.category;
+  const selectedCategoryPath = selectedCategoryPathRaw?.replace(/^Root\s*[>›]\s*/i, '');
   const selectedCategoryLabel = selectedCategoryPath || selectedCategoryId;
   const selectedCategoryOption = selectedCategoryId
     ? { label: selectedCategoryLabel, value: selectedCategoryId, path: selectedCategoryPath }
@@ -1701,16 +1715,23 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
       {/* Platform filter pills */}
       <ScrollView horizontal={true} showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 8 }}>
-        {pills.map((key) => (
-          key === 'all' ? (
-            <TouchableOpacity
-              key={key}
-              onPress={() => setActiveTab(key)}
-              style={[styles.pill, activeTab === key && styles.pillActive]}
-            >
-              <Text style={[styles.pillText, activeTab === key && styles.pillTextActive]}>All</Text>
-            </TouchableOpacity>
-          ) : (
+        {pills.map((key) => {
+          if (key === 'all') {
+            return (
+              <TouchableOpacity
+                key={key}
+                onPress={() => setActiveTab(key)}
+                style={[styles.pill, activeTab === key && styles.pillActive]}
+              >
+                <Text style={[styles.pillText, activeTab === key && styles.pillTextActive]}>All</Text>
+              </TouchableOpacity>
+            );
+          }
+          
+          const isReady = isPlatformReady((platforms as any)?.[key] || {}, key, []);
+          const missingCount = getMissingFieldsCount ? getMissingFieldsCount(key) : 0;
+          
+          return (
             <TouchableOpacity
               key={key}
               onPress={async () => {
@@ -1728,7 +1749,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   }
                 }
               }}
-              style={[styles.pill, activeTab === key && styles.pillActive, generatingPlatforms.has(key) && styles.pillGenerating, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}
+              style={[
+                styles.pill, 
+                activeTab === key && styles.pillActive, 
+                generatingPlatforms.has(key) && styles.pillGenerating, 
+                { flexDirection: 'row', alignItems: 'center', gap: 6 }
+              ]}
               disabled={generatingPlatforms.has(key)}
             >
               {generatingPlatforms.has(key) ? (
@@ -1746,9 +1772,22 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 {PLATFORM_META[key]?.label || key}
                 {generatingPlatforms.has(key) && ' (Generating...)'}
               </Text>
+              
+              {/* Readiness Indicator */}
+              {!generatingPlatforms.has(key) && (
+                isReady ? (
+                  <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: '#dcfce7', alignItems: 'center', justifyContent: 'center', marginLeft: 2 }}>
+                    <Icon name="check" size={10} color="#93C822" />
+                  </View>
+                ) : missingCount > 0 ? (
+                  <View style={{ height: 16, minWidth: 16, paddingHorizontal: 4, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center', marginLeft: 2 }}>
+                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#ef4444' }}>{missingCount}</Text>
+                  </View>
+                ) : null
+              )}
             </TouchableOpacity>
-          )
-        ))}
+          );
+        })}
         <TouchableOpacity style={styles.pillDashed} onPress={() => platformPickerOverlay.show()}>
           <Text style={styles.pillText}>+ Add Platform</Text>
         </TouchableOpacity>
@@ -1808,7 +1847,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 {typeof activeData.taxonomyConfidence === 'number' && activeData.taxonomyConfidence >= 0.5 && (
                   <View style={{ backgroundColor: activeData.taxonomyConfidence > 0.8 ? 'rgba(147, 200, 34, 0.12)' : 'rgba(234, 179, 8, 0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
                     <Text style={{ color: activeData.taxonomyConfidence > 0.8 ? '#93C822' : '#ca8a04', fontSize: 10, fontWeight: '600' }}>
-                      {['llm', 'groq'].includes(activeData.taxonomySource || '') ? '✨ AI Match' : 'Suggested'} {Math.round(activeData.taxonomyConfidence * 100)}%
+                      {['llm', 'groq', 'tree', 'rerank'].includes(activeData.taxonomySource || '') ? '✨ AI Match' : 'Suggested'} {Math.round(activeData.taxonomyConfidence * 100)}%
                     </Text>
                   </View>
                 )}
@@ -1846,7 +1885,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               renderItem={(item: TaxonomyOption) => (
                 <View style={{ paddingVertical: 10, paddingHorizontal: 0, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#1F2937' }}>{item.label}</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#1F2937' }}>{(item.label || '').replace(/^Root\s*[>›]\s*/i, '')}</Text>
                     {item.score && item.score > 0.8 && (
                       <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
                         <Text style={{ color: '#166534', fontSize: 10, fontWeight: '700' }}>BEST MATCH</Text>
@@ -1854,7 +1893,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                     )}
                   </View>
                   {item.path && item.path !== item.label && (
-                    <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{item.path.replace(/ > /g, ' › ')}</Text>
+                    <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{item.path.replace(/^Root\s*[>›]\s*/i, '').replace(/ > /g, ' › ')}</Text>
                   )}
                 </View>
               )}
@@ -1898,27 +1937,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               </View>
             )}
 
-            {!!selectedCategoryLabel && (
-              <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, backgroundColor: '#F9FAFB', padding: 8, borderRadius: 8 }}>
-                <Icon name="check-circle-outline" size={16} color="#93C822" />
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 12, color: '#374151', fontWeight: '500' }}>Selected Category:</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 2 }}>
-                    <Text style={{ fontSize: 12, color: '#6B7280' }}>{selectedCategoryLabel.replace(/ > /g, ' › ')}</Text>
-                  </ScrollView>
-                </View>
-                <TouchableOpacity onPress={() => {
-                  // Clear category
-                  if (activePlatformKeyLower === 'shopify') {
-                    patchPlatform(prev => ({ ...prev, productCategoryId: undefined, productCategory: undefined, categoryPath: undefined }));
-                  } else {
-                    patchPlatform(prev => ({ ...prev, categoryId: undefined, category: undefined, categoryPath: undefined }));
-                  }
-                }}>
-                  <Text style={{ fontSize: 12, color: '#EF4444', fontWeight: '600' }}>Change</Text>
-                </TouchableOpacity>
-              </View>
-            )}
+            {/* Selected category indicator removed - the dropdown already shows the current selection */}
 
             {/* eBay Item Specifics - when category selected */}
             {activePlatformKeyLower === 'ebay' && selectedCategoryId && (
@@ -1987,17 +2006,17 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             paddingHorizontal: 12,
             borderRadius: 8,
             borderWidth: 1,
-            borderColor: isSelected ? '#3B82F6' : '#E5E7EB',
-            backgroundColor: isSelected ? '#EFF6FF' : '#FFF',
+            borderColor: isSelected ? '#93C822' : '#E5E7EB',
+            backgroundColor: isSelected ? '#F0FFF4' : '#FFF',
             alignItems: 'center' as const,
           });
 
           return (
-            <View style={{ backgroundColor: '#F0F9FF', borderRadius: 8, padding: 10, marginBottom: 8, borderLeftWidth: 3, borderLeftColor: '#3B82F6' }}>
+            <View style={{ backgroundColor: '#F0FFF4', borderRadius: 8, padding: 10, marginBottom: 8, borderLeftWidth: 3, borderLeftColor: '#93C822' }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                <Sparkles size={16} color="#3B82F6" />
+                <Sparkles size={16} color="#93C822" />
                 <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#1E40AF' }}>Suggested Price</Text>
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#3f6212' }}>Suggested Price</Text>
                   <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>
                     ${band.low.toFixed(0)} – ${band.high.toFixed(0)} (recommended ${band.recommended.toFixed(0)})
                   </Text>
@@ -2030,7 +2049,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           const priceRequired = requiredFields?.includes?.('price') && !allVariantsHavePrice;
           const priceError = priceRequired && ((activeData as any).price == null || String((activeData as any).price) === '' || Number((activeData as any).price) === 0);
           const priceLabel = hasVariantsWithOptions ? 'Base Price (optional with variants)' : 'Price';
-          const showResearchPricing = !!activeData.title?.trim();
+          const showResearchPricing = !!titleForPricingResearch;
 
           return (
             <View style={{ marginBottom: 12 }} onLayout={recordFieldLayout('price (either flat or all variants)')}>
@@ -2300,7 +2319,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   const marketPoints = (pricingResearchResult.samples || [])
                     .filter((s) => typeof s.estimatedDaysToSell === 'number' && Number.isFinite(s.estimatedDaysToSell) && typeof s.price === 'number')
                     .sort((a, b) => Number(a.price) - Number(b.price));
-                  const chartWidth = Math.max(Dimensions.get('window').width - 40, 280);
+                  const windowWidth = Dimensions.get('window').width;
+                  const chartWidth = Math.max(marketPoints.length * 60, windowWidth + 60, 320);
                   if (marketPoints.length >= 2) {
                     const maxLabels = 10;
                     const step = Math.max(1, Math.floor(marketPoints.length / maxLabels));
@@ -2313,13 +2333,21 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                       <View style={{ marginBottom: 16 }}>
                         <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 4 }}>Time to sell at each price</Text>
                         <Text style={{ fontSize: 12, color: '#6B7280', marginBottom: 6 }}>Y: Time (days to sell) · X: Price ($)</Text>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={true} style={{ marginHorizontal: -8 }} contentContainerStyle={{ paddingHorizontal: 8 }}>
+                        <ScrollViewHorizontal
+                          horizontal
+                          showsHorizontalScrollIndicator={true}
+                          scrollEventThrottle={16}
+                          nestedScrollEnabled={Platform.OS === 'android'}
+                          style={{ marginHorizontal: -8, width: windowWidth - 40 }}
+                          contentContainerStyle={{ paddingHorizontal: 8 }}
+                        >
+                          <View style={{ width: chartWidth }}>
                           <BarChart
                             data={{
                               labels,
                               datasets: [{ data }],
                             }}
-                            width={Math.max(chartWidth, marketPoints.length * 60)}
+                            width={chartWidth}
                             height={200}
                             yAxisLabel=""
                             yAxisSuffix="d"
@@ -2337,7 +2365,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                             withInnerLines={true}
                             fromZero
                           />
-                        </ScrollView>
+                          </View>
+                        </ScrollViewHorizontal>
                         <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 4, textAlign: 'center' }}>Price ($) →  Swipe to see more</Text>
                         {selected != null && (
                           <View style={{ marginTop: 8, padding: 10, borderRadius: 10, backgroundColor: '#F9FAFB' }}>
@@ -2372,6 +2401,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                     return `${d.getMonth() + 1}/${d.getDate()}`;
                   });
                   const data = filtered.map(p => p.median);
+                  const trendChartWidth = Math.max(filtered.length * 60, Dimensions.get('window').width + 60, 320);
                   return (
                     <View style={{ marginBottom: 16 }}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -2388,9 +2418,17 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                           ))}
                         </View>
                       </View>
+                      <ScrollViewHorizontal
+                        horizontal
+                        showsHorizontalScrollIndicator={true}
+                        scrollEventThrottle={16}
+                        nestedScrollEnabled={Platform.OS === 'android'}
+                        style={{ width: Dimensions.get('window').width - 40 }}
+                      >
+                        <View style={{ width: trendChartWidth }}>
                       <LineChart
                         data={{ labels, datasets: [{ data: data.length ? data : [0] }] }}
-                        width={chartWidth}
+                        width={trendChartWidth}
                         height={160}
                         chartConfig={{
                           backgroundColor: '#ffffff',
@@ -2405,6 +2443,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                         withInnerLines={false}
                         withOuterLines={true}
                       />
+                        </View>
+                      </ScrollViewHorizontal>
                     </View>
                   );
                 })()}

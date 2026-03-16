@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Switch, Image } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import ShadowSurface from './ui/ShadowSurface';
 
 // Mock types for now, will replace with real props
 export interface CampaignItem {
@@ -94,8 +95,14 @@ export const CampaignInventorySettings: React.FC<CampaignInventorySettingsProps>
                     </View>
                     <View style={styles.segmentedControl}>
                         {/* Simplified for demo */}
-                        <TouchableOpacity style={styles.segmentActive}><Text style={styles.segmentTextActive}>Normal</Text></TouchableOpacity>
-                        <TouchableOpacity style={styles.segment}><Text style={styles.segmentText}>Fast</Text></TouchableOpacity>
+                        <ShadowSurface shadow="xs" radius={6} style={styles.segmentShadow} innerStyle={styles.segmentInner}>
+                            <TouchableOpacity style={styles.segmentActive}>
+                                <Text style={styles.segmentTextActive}>Normal</Text>
+                            </TouchableOpacity>
+                        </ShadowSurface>
+                        <TouchableOpacity style={styles.segment}>
+                            <Text style={styles.segmentText}>Fast</Text>
+                        </TouchableOpacity>
                     </View>
                 </View>
             </View>
@@ -156,6 +163,12 @@ const styles = StyleSheet.create({
         borderRadius: 8,
         padding: 2,
     },
+    segmentShadow: {
+        borderRadius: 6,
+    },
+    segmentInner: {
+        borderRadius: 6,
+    },
     segment: {
         paddingHorizontal: 12,
         paddingVertical: 6,
@@ -166,21 +179,22 @@ const styles = StyleSheet.create({
         paddingVertical: 6,
         borderRadius: 6,
         backgroundColor: '#ffffff',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.1,
-        shadowRadius: 1,
-        elevation: 1,
     },
     segmentText: {
         fontSize: 13,
         color: '#6b7280',
         fontWeight: '500',
+        lineHeight: 16,
+        includeFontPadding: false,
+        textAlignVertical: 'center',
     },
     segmentTextActive: {
         fontSize: 13,
         color: '#111827',
         fontWeight: '600',
+        lineHeight: 16,
+        includeFontPadding: false,
+        textAlignVertical: 'center',
     },
     // Item List
     listContent: {

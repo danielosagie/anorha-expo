@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import ShadowSurface from './ui/ShadowSurface';
 
 interface CampaignSession {
     id: string;
@@ -45,14 +46,20 @@ export const CampaignSelector: React.FC<CampaignSelectorProps> = ({ campaigns, s
                 const revenue = campaign.state?.revenueGenerated || 0;
 
                 return (
-                    <TouchableOpacity
+                    <ShadowSurface
                         key={campaign.id}
-                        style={[
-                            styles.card,
-                            isSelected && styles.selectedCard
-                        ]}
-                        onPress={() => onSelect(campaign.id)}
+                        shadow="xs"
+                        radius={12}
+                        style={styles.cardShadow}
+                        innerStyle={styles.cardInner}
                     >
+                        <TouchableOpacity
+                            style={[
+                                styles.card,
+                                isSelected && styles.selectedCard
+                            ]}
+                            onPress={() => onSelect(campaign.id)}
+                        >
                         <View style={styles.header}>
                             <Icon
                                 name="rocket-launch-outline"
@@ -82,15 +89,18 @@ export const CampaignSelector: React.FC<CampaignSelectorProps> = ({ campaigns, s
                                 ]}
                             />
                         </View>
-                    </TouchableOpacity>
+                        </TouchableOpacity>
+                    </ShadowSurface>
                 );
             })}
 
             {/* Add New Placeholer */}
-            <TouchableOpacity style={[styles.card, styles.addCard]}>
-                <Icon name="plus" size={24} color="#9ca3af" />
-                <Text style={styles.addText}>New</Text>
-            </TouchableOpacity>
+            <ShadowSurface shadow="none" radius={12} style={styles.cardShadow} innerStyle={styles.cardInner}>
+                <TouchableOpacity style={[styles.card, styles.addCard]}>
+                    <Icon name="plus" size={24} color="#9ca3af" />
+                    <Text style={styles.addText}>New</Text>
+                </TouchableOpacity>
+            </ShadowSurface>
         </ScrollView>
     );
 };
@@ -111,18 +121,18 @@ const styles = StyleSheet.create({
         backgroundColor: '#f3f4f6',
         borderRadius: 12,
     },
-    card: {
+    cardShadow: {
         width: 130,
+    },
+    cardInner: {
+        borderRadius: 12,
+    },
+    card: {
         backgroundColor: '#ffffff',
         borderRadius: 12,
         padding: 12,
         borderWidth: 1,
         borderColor: '#e5e7eb',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
-        elevation: 1,
     },
     selectedCard: {
         borderColor: '#86efac', // green-300

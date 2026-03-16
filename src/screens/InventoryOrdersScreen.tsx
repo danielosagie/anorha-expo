@@ -16,7 +16,9 @@ import {
   Keyboard,
   PanResponder,
   PanResponderInstance,
-  LayoutChangeEvent
+  LayoutChangeEvent,
+  Animated as RNAnimated,
+  Easing
 } from 'react-native';
 import Animated, { FadeInUp, FadeInDown, SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
@@ -47,6 +49,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const TAB_BAR_HEIGHT = 84;
 const TAB_BAR_BOTTOM_OFFSET = 18;
+const SCANNER_GROW_HEIGHT = 240;
+const SCANNER_CLOSE_DURATION = 220;
 
 type InventoryOrdersScreenNavigationProp = StackNavigationProp<AppStackParamList, 'TabNavigator'>;
 
@@ -112,14 +116,40 @@ const InventoryOrdersScreen = observer(() => {
   const [scannedBarcode, setScannedBarcode] = useState<string | null>(null);
   const [barcodeSearchError, setBarcodeSearchError] = useState<string | null>(null);
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerMounted, setScannerMounted] = useState(false);
+  const scannerHeight = useRef(new RNAnimated.Value(0)).current;
   const [locationPickerOpen, setLocationPickerOpen] = useState(false);
   const scannerResultHandlerRef = useRef<((code: string) => void) | null>(null);
+  const openScanner = useCallback((handler: (code: string) => void, source: string) => {
+    logFlowEvent(FlowEvents.BARCODE_SCANNER_OPENED, { source });
+    scannerHeight.stopAnimation();
+    scannerHeight.setValue(0);
+    setScannerMounted(true);
+    setScannerOpen(true);
+    scannerResultHandlerRef.current = handler;
+    RNAnimated.spring(scannerHeight, {
+      toValue: SCANNER_GROW_HEIGHT,
+      speed: 18,
+      bounciness: 6,
+      useNativeDriver: false,
+    }).start();
+  }, [scannerHeight]);
   const closeScanner = useCallback(() => {
     logFlowEvent(FlowEvents.BARCODE_SCANNER_CLOSED, {});
     scannerResultHandlerRef.current = null;
-    // Small delay helps Android camera teardown before unmount.
-    setTimeout(() => setScannerOpen(false), 120);
-  }, []);
+    setScannerOpen(false);
+    scannerHeight.stopAnimation();
+    RNAnimated.timing(scannerHeight, {
+      toValue: 0,
+      duration: SCANNER_CLOSE_DURATION,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished) {
+        setScannerMounted(false);
+      }
+    });
+  }, [scannerHeight]);
 
   // Handle route params
   useEffect(() => {
@@ -137,12 +167,10 @@ const InventoryOrdersScreen = observer(() => {
 
       if (p.openScannerOnMount) {
         setTimeout(() => {
-          logFlowEvent(FlowEvents.BARCODE_SCANNER_OPENED, { source: 'deep_link' });
-          setScannerOpen(true);
-          scannerResultHandlerRef.current = (code: string) => {
+          openScanner((code: string) => {
             handleBarcodeScan(code);
             closeScanner();
-          };
+          }, 'deep_link');
         }, 100);
       }
 
@@ -150,7 +178,7 @@ const InventoryOrdersScreen = observer(() => {
         setLocationPickerOpen(true);
       }
     }
-  }, [route.params, closeScanner]);
+  }, [route.params, closeScanner, openScanner]);
 
   // Loading & Data State
   const [platformConnections, setPlatformConnections] = useState<PlatformConnection[]>([]);
@@ -1454,12 +1482,10 @@ const InventoryOrdersScreen = observer(() => {
                   onScan={handleBarcodeScan}
                   onScannerOpen={() => {
                     console.log('[InventoryOrdersScreen] Scanner button pressed, opening scanner');
-                    logFlowEvent(FlowEvents.BARCODE_SCANNER_OPENED, {});
-                    setScannerOpen(true);
-                    scannerResultHandlerRef.current = (code: string) => {
+                    openScanner((code: string) => {
                       handleBarcodeScan(code);
                       closeScanner();
-                    };
+                    }, 'search_bar');
                   }}
                   onClear={handleSearchClear}
                   onVoicePress={() => setSpeechModalVisible(true)}
@@ -1652,18 +1678,18 @@ const InventoryOrdersScreen = observer(() => {
 
       {/* Full-screen Scanner Modal - renders above everything */}
       {
-        scannerOpen && (
+        scannerMounted && (
           <View style={styles.scannerDockFull} pointerEvents="box-none">
-            <View style={styles.scannerFullBleed}>
+            <RNAnimated.View pointerEvents={scannerOpen ? 'auto' : 'none'} style={[styles.scannerFullBleed, { height: scannerHeight }]}>
               <CameraView
                 style={styles.scannerCamera}
                 facing="back"
-                onBarcodeScanned={(result: any) => {
+                onBarcodeScanned={scannerOpen ? (result: any) => {
                   const code = result?.data || result?.rawValue;
                   if (code && scannerResultHandlerRef.current) {
                     scannerResultHandlerRef.current(code);
                   }
-                }}
+                } : undefined}
                 barcodeScannerSettings={{
                   barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
                 }}
@@ -1677,7 +1703,7 @@ const InventoryOrdersScreen = observer(() => {
               >
                 <Icon name="close" size={28} color="#fff" />
               </TouchableOpacity>
-            </View>
+            </RNAnimated.View>
           </View>
         )
       }
@@ -2571,7 +2597,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   scannerCamera: {
-    flex: 1,
+    width: '100%',
+    height: '100%',
   },
   scannerCloseButton: {
     position: 'absolute',
@@ -2589,7 +2616,6 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   scannerFullBleed: {
-    flex: 1,
     backgroundColor: '#000',
     borderBottomLeftRadius: 16,
     borderBottomRightRadius: 16,

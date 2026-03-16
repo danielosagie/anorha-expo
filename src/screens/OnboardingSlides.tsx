@@ -1,8 +1,9 @@
 import React, { useState, useRef, memo } from 'react';
-import { View, Text, StyleSheet, FlatList, Image, Dimensions, TouchableOpacity, SafeAreaView, Platform } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Image, Dimensions, TouchableOpacity, SafeAreaView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, { FadeInUp, FadeIn } from 'react-native-reanimated';
+import Animated, { FadeInUp } from 'react-native-reanimated';
 import Button from '../components/Button';
+import ShadowSurface from '../components/ui/ShadowSurface';
 
 const { width, height } = Dimensions.get('window');
 
@@ -29,12 +30,14 @@ const slides = [
 
 const OnboardingSlide = memo(({ item }: { item: any }) => (
   <View style={styles.slide}>
-    <Animated.View entering={FadeInUp.duration(1000).springify()} style={styles.imageContainer}>
-      <Image
-        source={item.image}
-        style={styles.image}
-        resizeMode="contain"
-      />
+    <Animated.View entering={FadeInUp.duration(1000).springify()}>
+      <ShadowSurface shadow="md" radius={32} style={styles.imageShadow} innerStyle={styles.imageContainer}>
+        <Image
+          source={item.image}
+          style={styles.image}
+          resizeMode="contain"
+        />
+      </ShadowSurface>
     </Animated.View>
     <View style={styles.textContainer}>
       <Text style={styles.title}>{item.title}</Text>
@@ -136,27 +139,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   imageContainer: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 32,
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingBottom: 10,
+  },
+  imageShadow: {
     width: width * 0.85,
     height: height * 0.35,
     maxHeight: height * 0.35,
-    borderRadius: 32,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.05,
-        shadowRadius: 20,
-      },
-      android: {
-        elevation: 2,
-      },
-      default: {},
-    }),
-    justifyContent: 'center',
-    alignItems: 'center',
     marginBottom: 10,
-    paddingBottom: 10,
-    overflow: 'hidden',
   },
   image: {
     width: '100%',
@@ -176,7 +171,7 @@ const styles = StyleSheet.create({
   },
   description: {
     fontSize: 17,
-    fontFamily: 'PlusJakartaSans_500Regular',
+    fontFamily: 'PlusJakartaSans_500Medium',
     color: '#666',
     textAlign: 'center',
     lineHeight: 26,

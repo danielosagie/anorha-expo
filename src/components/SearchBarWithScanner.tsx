@@ -1,13 +1,12 @@
 import React, { useState } from 'react';
 import {
-  View,
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  Platform,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
+import ShadowSurface from './ui/ShadowSurface';
 
 interface SearchBarWithScannerProps {
   placeholder?: string;
@@ -32,7 +31,7 @@ const SearchBarWithScanner: React.FC<SearchBarWithScannerProps> = ({
   const theme = useTheme();
 
   return (
-    <View style={[styles.searchBar, { backgroundColor: "#FFF",}]}>
+    <ShadowSurface shadow="xs" style={styles.searchBarWrapper} innerStyle={[styles.searchBar, { backgroundColor: "#FFF" }]}>
       <Icon name="magnify" size={20} color="#999" style={styles.searchIcon} />
       <TextInput
         style={[styles.searchInput, { color: theme.colors.text }]}
@@ -62,11 +61,14 @@ const SearchBarWithScanner: React.FC<SearchBarWithScannerProps> = ({
       >
         <Icon name="qrcode-scan" size={20} color="#fff" />
       </TouchableOpacity>
-    </View>
+    </ShadowSurface>
   );
 };
 
 const styles = StyleSheet.create({
+  searchBarWrapper: {
+    marginBottom: 16,
+  },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -75,19 +77,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(102,102,102,0.26)",
     borderWidth: 1,
     paddingHorizontal: 12,
-    height: 48,
-    marginBottom: 16,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
-      },
-      android: {
-        elevation: 1,
-      },
-    }),
+    minHeight: 48,
   },
   searchIcon: {
     marginRight: 8,
@@ -96,6 +86,9 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 40,
     fontSize: 16,
+    lineHeight: 20,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
   voiceButton: {
     padding: 8,

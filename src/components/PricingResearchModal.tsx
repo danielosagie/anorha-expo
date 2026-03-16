@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable, Dimensions, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable, Dimensions, Linking, Platform } from 'react-native';
+import { ScrollView as ScrollViewHorizontal } from 'react-native-gesture-handler';
 import { BarChart, LineChart } from 'react-native-chart-kit';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
@@ -133,15 +134,15 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                         </TouchableOpacity>
                                         <TouchableOpacity
                                             disabled={!onApplyPrice}
-                                            style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#3B82F6', backgroundColor: '#EFF6FF', alignItems: 'center' }}
+                                            style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#2563EB', backgroundColor: '#EFF6FF', alignItems: 'center' }}
                                             onPress={() => {
                                                 onApplyPrice?.(String(recommended.toFixed(2)), { low, recommended, high });
                                                 onClose();
                                             }}
                                         >
-                                            <Text style={{ fontSize: 10, color: '#1E40AF' }}>Recommended</Text>
-                                            <Text style={{ fontSize: 14, fontWeight: '700', color: '#1E40AF' }}>${recommended.toFixed(2)}</Text>
-                                            <Text style={{ fontSize: 10, color: '#1E40AF', marginTop: 2 }}>
+                                            <Text style={{ fontSize: 10, color: '#1D4ED8' }}>Recommended</Text>
+                                            <Text style={{ fontSize: 14, fontWeight: '700', color: '#1D4ED8' }}>${recommended.toFixed(2)}</Text>
+                                            <Text style={{ fontSize: 10, color: '#1D4ED8', marginTop: 2 }}>
                                                 ~{recommendedDays ?? '—'}d avg
                                             </Text>
                                         </TouchableOpacity>
@@ -171,9 +172,9 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                 const marketPoints = (pricingResearchResult.samples || [])
                                     .filter((s: { estimatedDaysToSell?: number; price?: number }) => typeof s.estimatedDaysToSell === 'number' && Number.isFinite(s.estimatedDaysToSell) && typeof s.price === 'number')
                                     .sort((a: { price?: number }, b: { price?: number }) => Number(a.price) - Number(b.price));
-                                const screenWidth = Dimensions.get('window').width - 80;
-                                // Dynamic width: at least 50px per data point, but never smaller than screen
-                                const chartWidth = Math.max(marketPoints.length * 50, screenWidth, 260);
+                                const windowWidth = Dimensions.get('window').width;
+                                // Ensure chart is wider than viewport so horizontal scroll works; min 60px per bar
+                                const chartWidth = Math.max(marketPoints.length * 60, windowWidth + 60, 320);
                                 if (marketPoints.length >= 2) {
                                     const maxLabels = 10;
                                     const step = Math.max(1, Math.floor(marketPoints.length / maxLabels));
@@ -203,7 +204,14 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                         <View style={{ marginBottom: 16 }}>
                                             <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 4 }}>Time to sell at each price</Text>
                                             <Text style={{ fontSize: 12, color: '#6B7280', marginBottom: 6 }}>Y: Time (days to sell) · X: Price ($)</Text>
-                                            <ScrollView horizontal showsHorizontalScrollIndicator={true} style={{ marginHorizontal: -4 }} contentContainerStyle={{ paddingHorizontal: 4 }}>
+                                            <ScrollViewHorizontal
+                                                horizontal
+                                                showsHorizontalScrollIndicator={true}
+                                                scrollEventThrottle={16}
+                                                nestedScrollEnabled={Platform.OS === 'android'}
+                                                style={{ marginHorizontal: -4, flexGrow: 0, width: windowWidth - 40 }}
+                                                contentContainerStyle={{ paddingHorizontal: 4 }}
+                                            >
                                                 <View style={{ width: chartWidth }}>
                                                     <BarChart
                                                         data={{
@@ -219,7 +227,7 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                                             backgroundGradientFrom: '#fff',
                                                             backgroundGradientTo: '#fff',
                                                             decimalPlaces: 0,
-                                                            color: (opacity = 1) => `rgba(212, 168, 67, ${opacity})`,
+                                                            color: (opacity = 1) => `rgba(147, 200, 34, ${opacity})`,
                                                             labelColor: () => '#6B7280',
                                                             style: { borderRadius: 12 },
                                                             barPercentage: 0.7,
@@ -260,7 +268,7 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                                         </View>
                                                     )}
                                                 </View>
-                                            </ScrollView>
+                                            </ScrollViewHorizontal>
                                             <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 4, textAlign: 'center' }}>Price ($) → Swipe to see more</Text>
                                             {selected != null && (
                                                 <View style={{ marginTop: 8, padding: 10, borderRadius: 10, backgroundColor: '#F9FAFB' }}>
@@ -270,7 +278,7 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                                     </Text>
                                                     {selected.url ? (
                                                         <TouchableOpacity onPress={() => Linking.openURL(selected.url!)}>
-                                                            <Text style={{ fontSize: 12, color: '#D4A843', marginTop: 4, fontWeight: '600' }}>View listing</Text>
+                                                            <Text style={{ fontSize: 12, color: '#93C822', marginTop: 4, fontWeight: '600' }}>View listing</Text>
                                                         </TouchableOpacity>
                                                     ) : null}
                                                 </View>
@@ -295,7 +303,7 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                     return `${d.getMonth() + 1}/${d.getDate()}`;
                                 });
                                 const trendData = filtered.map((p: any) => p.median);
-                                const trendChartWidth = Math.max(filtered.length * 50, screenWidth, 260);
+                                const trendChartWidth = Math.max(filtered.length * 60, Dimensions.get('window').width + 60, 320);
                                 return (
                                     <View style={{ marginBottom: 16 }}>
                                         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -305,14 +313,20 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                                     <TouchableOpacity
                                                         key={r}
                                                         onPress={() => setPricingHistoryRange(r)}
-                                                        style={{ paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: pricingHistoryRange === r ? 'rgba(212,168,67,0.15)' : '#F3F4F6' }}
+                                                        style={{ paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: pricingHistoryRange === r ? 'rgba(147,200,34,0.15)' : '#F3F4F6' }}
                                                     >
-                                                        <Text style={{ fontSize: 12, fontWeight: '600', color: pricingHistoryRange === r ? '#D4A843' : '#6B7280' }}>{r}</Text>
+                                                        <Text style={{ fontSize: 12, fontWeight: '600', color: pricingHistoryRange === r ? '#93C822' : '#6B7280' }}>{r}</Text>
                                                     </TouchableOpacity>
                                                 ))}
                                             </View>
                                         </View>
-                                        <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+                                        <ScrollViewHorizontal
+                                            horizontal
+                                            showsHorizontalScrollIndicator={true}
+                                            scrollEventThrottle={16}
+                                            nestedScrollEnabled={Platform.OS === 'android'}
+                                            style={{ width: Dimensions.get('window').width - 40 }}
+                                        >
                                             <View style={{ width: trendChartWidth }}>
                                             <LineChart
                                                 data={{ labels: trendLabels, datasets: [{ data: trendData.length ? trendData : [0] }] }}
@@ -323,7 +337,7 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                                     backgroundGradientFrom: '#fff',
                                                     backgroundGradientTo: '#fff',
                                                     decimalPlaces: 0,
-                                                    color: (opacity = 1) => `rgba(212, 168, 67, ${opacity})`,
+                                                    color: (opacity = 1) => `rgba(147, 200, 34, ${opacity})`,
                                                     labelColor: () => '#6B7280',
                                                     style: { borderRadius: 12 },
                                                 }}
@@ -332,7 +346,7 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                                 withOuterLines={true}
                                             />
                                             </View>
-                                        </ScrollView>
+                                        </ScrollViewHorizontal>
                                     </View>
                                 );
                             })()}

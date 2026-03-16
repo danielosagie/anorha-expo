@@ -173,20 +173,18 @@ export default function BillingScreen() {
   const subscriptionStatus = summary?.subscription?.Status || summary?.subscription?.status;
   const planName = (planFromSummary as 'Growth' | 'Teams' | undefined) || undefined;
 
-  const aiScansUsed = safeNumber(summary?.ai_scans_used);
   const aiScansLimit = safeNumber(summary?.ai_scans_limit, planName === 'Teams' ? 80 : 40);
-  const aiCreditsUsed = safeNumber(summary?.ai_credits_used, aiScansUsed);
-  const aiCreditsLimit = safeNumber(summary?.ai_credits_limit, aiScansLimit);
-  const aiOverageCents = safeNumber(summary?.ai_credits_overage_cents, 0);
-  const aiOverageDollars = aiOverageCents / 100;
   const aiUnitCents = safeNumber(summary?.ai_credit_unit_cents, planName === 'Teams' ? 15 : 20);
+  const aiCreditsUsedLegacy = safeNumber(summary?.ai_credits_used);
+  const aiCreditsLimitLegacy = safeNumber(summary?.ai_credits_limit, aiScansLimit);
+  const aiAllowanceCents = safeNumber(
+    summary?.ai_credits_cents ?? summary?.ai_allowance_cents,
+    aiCreditsLimitLegacy * aiUnitCents
+  );
   const teamMembersCount = safeNumber(summary?.team_members_count);
   const teamMembersIncluded = safeNumber(summary?.team_members_included);
   const teamMembersExtra = Math.max(0, safeNumber(summary?.team_members_extra));
   const teamMembersCost = safeNumber(summary?.team_members_cost);
-  const totalThisMonth = safeNumber(summary?.total);
-  const displayedTeamMembersCost = teamMembersCost;
-  const displayedTotal = totalThisMonth;
   const pricePerScan = aiUnitCents / 100;
 
   let planTitle = 'No active plan';
@@ -201,16 +199,33 @@ export default function BillingScreen() {
     basePrice = 60;
     planDescription = `${teamMembersIncluded || 5} users/partners (+$10/spot after), unlimited platforms & inventory, AI: ${aiScansLimit || 80} scans included then ${formatCurrency(pricePerScan)}/scan.`;
   }
-  const totalCostEstimate = basePrice + teamMembersCost + aiOverageDollars;
 
   const featureUsage = summary?.usage || {};
   const featureEntries = Object.entries(featureUsage || {});
-  const hasFeatureUsage = featureEntries.some(
-    ([, value]: [string, any]) =>
-      (value.totalQuantity || value.count || 0) > 0 || (value.totalCost || 0) > 0
+  const usageHistoryEntries = featureEntries
+    .map(([key, value]: [string, any]) => {
+      const totalCostCents = safeNumber(value?.totalCost ?? value?.total_cost ?? value?.total_cost_cents);
+      const totalQuantity = safeNumber(
+        value?.totalQuantity ?? value?.total_quantity ?? value?.quantity ?? value?.count
+      );
+      const displayName = value?.displayName || getFeatureDisplayName(key);
+      return { key, displayName, totalCostCents, totalQuantity };
+    })
+    .filter((entry) => entry.totalCostCents > 0 || entry.totalQuantity > 0)
+    .sort((a, b) => b.totalCostCents - a.totalCostCents);
+
+  const totalUsageHistoryCents = usageHistoryEntries.reduce((sum, entry) => sum + entry.totalCostCents, 0);
+  const aiUsedCents = summary?.ai_used_cents == null
+    ? (totalUsageHistoryCents || (aiCreditsUsedLegacy * aiUnitCents))
+    : safeNumber(summary?.ai_used_cents);
+  const aiOverageCents = safeNumber(
+    summary?.ai_overage_cents ?? summary?.ai_credits_overage_cents,
+    Math.max(0, aiUsedCents - aiAllowanceCents)
   );
-  const hasAiUsage = aiCreditsUsed > 0 || aiScansUsed > 0;
-  const hasAnyUsage = hasAiUsage || hasFeatureUsage;
+  const aiOverageDollars = aiOverageCents / 100;
+  const aiUsedDollars = aiUsedCents / 100;
+  const aiAllowanceDollars = aiAllowanceCents / 100;
+  const totalCostEstimate = basePrice + teamMembersCost + aiOverageDollars;
 
   const handleManageSubscription = async () => {
     setActionError(null);
@@ -289,6 +304,13 @@ export default function BillingScreen() {
     if (url) Linking.openURL(url);
   };
 
+  const supportContext = {
+    planName: planName || 'Unknown',
+    subscriptionStatus: subscriptionStatus || 'inactive',
+    aiAllowanceCents,
+    aiUsedCents,
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
@@ -338,16 +360,18 @@ export default function BillingScreen() {
           )}
         </View>
 
-        {hasActiveSubscription && (
+        {hasSummaryData && (
           <>
             <Text style={styles.sectionHeader}>Usage this month</Text>
             <View style={styles.cardGroup}>
               <View style={styles.usageItem}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <Text style={[styles.listValue, { color: theme.colors.text, fontWeight: '600' }]}>AI Scans</Text>
-                  <Text style={styles.listSubValue}>{aiScansUsed} / {aiScansLimit} scans</Text>
+                  <Text style={[styles.listValue, { color: theme.colors.text, fontWeight: '600' }]}>AI Credits</Text>
+                  <Text style={styles.listSubValue}>
+                    {formatCurrency(aiUsedDollars)} of {formatCurrency(aiAllowanceDollars)}
+                  </Text>
                 </View>
-                <HealthBar used={aiScansUsed} limit={aiScansLimit} fillColor={ANORHA_GREEN} />
+                <HealthBar used={aiUsedCents} limit={aiAllowanceCents} fillColor={ANORHA_GREEN} />
                 {aiOverageDollars > 0 && <Text style={{ fontSize: 13, color: '#DC2626', marginTop: 8, fontWeight: '500' }}>+ {formatCurrency(aiOverageDollars)} overage</Text>}
               </View>
               <View style={styles.separator} />
@@ -361,6 +385,34 @@ export default function BillingScreen() {
               </View>
             </View>
 
+            {usageHistoryEntries.length > 0 && (
+              <>
+                <Text style={styles.sectionHeader}>Usage History</Text>
+                <View style={styles.cardGroup}>
+                  {usageHistoryEntries.map((entry, idx) => (
+                    <React.Fragment key={entry.key}>
+                      {idx > 0 && <View style={styles.separator} />}
+                      <View style={styles.listItem}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <Text style={styles.listValue}>{entry.displayName}</Text>
+                          <Text style={[styles.listValue, { fontWeight: '600' }]}>
+                            {formatCurrency(entry.totalCostCents / 100)}
+                          </Text>
+                        </View>
+                        <Text style={styles.listSubValue}>
+                          {entry.totalQuantity} {entry.totalQuantity === 1 ? 'use' : 'uses'}
+                        </Text>
+                      </View>
+                    </React.Fragment>
+                  ))}
+                </View>
+              </>
+            )}
+          </>
+        )}
+
+        {hasActiveSubscription && (
+          <>
             <Text style={styles.sectionHeader}>Cost Breakdown</Text>
             <View style={styles.cardGroup}>
               <View style={styles.listItem}>
@@ -453,16 +505,17 @@ export default function BillingScreen() {
           );
         })()}
 
-        <Text style={styles.sectionHeader}>Troubleshooting</Text>
+        <Text style={styles.sectionHeader}>Support</Text>
         <View style={styles.cardGroup}>
-          <TouchableOpacity style={styles.troubleItem} onPress={() => Linking.openURL('https://support.sssync.app')}>
-            <Text style={[styles.listValue, { color: theme.colors.text }]}>Subscription troubleshooting</Text>
-            <Text style={[styles.listSubValue, { marginTop: 4 }]}>If you are experiencing subscription issues, please read our troubleshooting guide.</Text>
-          </TouchableOpacity>
-          <View style={styles.separator} />
-          <TouchableOpacity style={styles.troubleItem} onPress={() => Linking.openURL('mailto:support@sssync.app')}>
-            <Text style={[styles.listValue, { color: theme.colors.text }]}>Report Subscription Issue</Text>
-            <Text style={[styles.listSubValue, { marginTop: 4 }]}>Contact our support team to report a subscription issue.</Text>
+          <TouchableOpacity
+            style={styles.listItemAction}
+            onPress={() => (navigation as any).navigate('BillingSupport', { context: supportContext })}
+          >
+            <View>
+              <Text style={[styles.listValue, { color: theme.colors.text }]}>Report Subscription Issue</Text>
+              <Text style={[styles.listSubValue, { marginTop: 4 }]}>Send details and an optional screenshot to our support team.</Text>
+            </View>
+            <Icon name="chevron-right" size={24} color="#C7C7CC" />
           </TouchableOpacity>
         </View>
 
@@ -541,10 +594,6 @@ const styles = StyleSheet.create({
   usageItem: {
     paddingHorizontal: 16,
     paddingVertical: 16,
-  },
-  troubleItem: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
   },
   listLabel: {
     fontSize: 13,

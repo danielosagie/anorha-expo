@@ -26,6 +26,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode as base64Decode } from 'base64-arraybuffer';
+import spinners from 'unicode-animations';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -73,11 +74,13 @@ import {
   logFlowEvent,
   FlowEvents,
 } from '../lib/mobileFlowLogger';
+import { buildMatchAnalyzeProducts } from '../utils/buildMatchAnalyzeProducts';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BULK_MODAL_FTUX_KEY = '@anorha_hasSeenBulkItemsModal';
 const MAX_BATCH_ITEMS = 100;
 const QUICK_SCAN_QUEUE_LIMIT = 100;
+const QUICK_MATCH_AUTO_SELECT_CONFIDENCE = 0.72;
 
 // Types
 
@@ -175,6 +178,11 @@ interface MatchCandidate {
   imageUrl: string;
   matchPercentage: number;
   sourceUrl: string;
+  productId?: string;
+  variantId?: string;
+  productUrl?: string;
+  isLocalMatch?: boolean;
+  queryKey?: string;
   estimatedShippingMin?: number;
   estimatedShippingMax?: number;
   estimatedShippingMidpoint?: number;
@@ -205,11 +213,21 @@ interface MatchResponse {
   };
 }
 
+type QuickMatchSelection = {
+  serpApiData: any[];
+  preSelectedIndices: number[];
+  source?: 'quick_scan_auto' | 'quick_scan_confirmed';
+  confidence?: number;
+  reasoning?: string;
+};
+
 type ItemLoadingState = {
   isLoading: boolean;
   stage: string;
   error?: string;
 };
+
+type ItemStage = 'submitted_for_match' | 'awaiting_user_input' | 'generating' | 'generated' | 'existing_inventory';
 
 type AddProductScreenProps = StackScreenProps<AppStackParamList, 'AddProduct'>;
 
@@ -234,18 +252,116 @@ type CameraInstruction =
 
 type CameraMode = 'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf';
 
+const shouldAutoSelectQuickMatch = ({
+  totalMatches,
+  recommendedAction,
+  rerankerConfidence,
+  topCandidateIsLocalMatch,
+}: {
+  totalMatches: number;
+  recommendedAction?: MatchResponse['systemAction'] | string;
+  rerankerConfidence?: number;
+  topCandidateIsLocalMatch?: boolean;
+}) => {
+  if (totalMatches <= 0) return false;
+  if (topCandidateIsLocalMatch) return true;
+  if (totalMatches === 1) return true;
+  if (recommendedAction === 'show_single_match') return true;
+  return typeof rerankerConfidence === 'number' && rerankerConfidence >= QUICK_MATCH_AUTO_SELECT_CONFIDENCE;
+};
+
+const getSelectedQuickMatchCandidate = (
+  matchInfo?: QuickMatchSelection | null,
+  store?: { matchData: MatchResponse; serpApiData: any[] } | null,
+) => {
+  if (matchInfo && Array.isArray(matchInfo.serpApiData) && matchInfo.preSelectedIndices?.length) {
+    const selectedIndex = matchInfo.preSelectedIndices[0];
+    return {
+      candidate: matchInfo.serpApiData[selectedIndex] ?? null,
+      isConfirmed: true,
+    };
+  }
+
+  return {
+    candidate: store?.matchData?.rankedCandidates?.[0] ?? null,
+    isConfirmed: false,
+  };
+};
+
+const rankedCandidatesToQuickMatchHintCandidates = (candidates: MatchCandidate[] = []): any[] => (
+  candidates.map((candidate, index) => ({
+    position: index + 1,
+    id: candidate.id,
+    productId: candidate.productId,
+    variantId: candidate.variantId,
+    title: candidate.title || 'Unknown Product',
+    description: candidate.description || '',
+    snippet: candidate.description || '',
+    link: candidate.productUrl || candidate.sourceUrl || '',
+    sourceUrl: candidate.sourceUrl || candidate.productUrl || '',
+    productUrl: candidate.productUrl || candidate.sourceUrl || '',
+    source: 'quickscan',
+    isLocalMatch: Boolean(candidate.isLocalMatch),
+    thumbnail: candidate.imageUrl || '',
+    image: candidate.imageUrl || '',
+    imageUrl: candidate.imageUrl || '',
+    price: typeof candidate.price === 'number'
+      ? { value: `$${candidate.price}`, extracted_value: candidate.price, currency: 'USD' }
+      : candidate.price,
+  }))
+);
+
+const getLocalInventoryCandidateForItem = (
+  itemId: string,
+  confirmedQuickMatchByItemId: Record<string, QuickMatchSelection>,
+  quickScanStore: Record<string, { matchData: MatchResponse; serpApiData: any[] }>,
+) => {
+  const confirmedCandidate = getSelectedQuickMatchCandidate(
+    confirmedQuickMatchByItemId[itemId],
+    quickScanStore[itemId],
+  ).candidate as any;
+
+  if (confirmedCandidate?.isLocalMatch) {
+    return confirmedCandidate;
+  }
+
+  const rankedLocalMatch = quickScanStore[itemId]?.matchData?.rankedCandidates?.find((candidate) => candidate?.isLocalMatch);
+  if (rankedLocalMatch) {
+    return rankedLocalMatch as any;
+  }
+
+  return quickScanStore[itemId]?.serpApiData?.find((candidate: any) => candidate?.isLocalMatch) ?? null;
+};
+
+const getConnectedPlatformKeys = (platformLocations: Array<{ platformType?: string }>) => (
+  Array.from(
+    new Set(
+      platformLocations
+        .map((entry) => String(entry.platformType || '').trim().toLowerCase())
+        .filter(Boolean)
+    )
+  )
+);
+
 const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const navigation = useNavigation();
   const route = useRoute();
   const theme = useTheme();
   const rawParams = (route.params ?? {}) as any;
-  const params = ((rawParams?.params && typeof rawParams.params === 'object') ? rawParams.params : rawParams) as { sessionId?: string; firstPhotos?: any[]; bulkItems?: any[] };
+  const params = ((rawParams?.params && typeof rawParams.params === 'object') ? rawParams.params : rawParams) as {
+    sessionId?: string;
+    firstPhotos?: any[];
+    bulkItems?: any[];
+    itemStageById?: Record<string, ItemStage>;
+    processedItemIds?: string[];
+  };
   const sessionIdParam = params?.sessionId;
 
   const sessionIdRef = useRef<string | null>(null);
   const shelfPhotoUriForDraftRef = useRef<string | null>(null);
   const saveDraftTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftSessionCreatePromiseRef = useRef<Promise<string | null> | null>(null);
+  const hasAutoOpenedFtuxRef = useRef(false);
 
   console.log('[RENDER] AddProductScreen rendered');
 
@@ -322,11 +438,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         const matchCtx = session.MatchContext ?? session.matchContext ?? {};
         const shelfUri = session.ShelfPhotoUri ?? session.shelfPhotoUri ?? null;
         const activeId = session.ActiveItemId ?? session.activeItemId ?? null;
+        const stageById = session.ItemStageById ?? session.itemStageById ?? {};
+        const processedIds = session.ProcessedItemIds ?? session.processedItemIds ?? [];
         if (items.length > 0 && !cancelled) {
           setBulkItems(items);
           setQuickScanStore(matchCtx);
           setShelfPhotoUri(shelfUri);
           setActiveItemId(activeId || items[0]?.id || null);
+          setItemStageById((stageById && typeof stageById === 'object') ? stageById : {});
+          setProcessedItemIds(Array.isArray(processedIds) ? processedIds : []);
           setIsBulkMode(true);
           setCameraMode('shelf');
           setShowDeepSearchSheet(true);
@@ -344,7 +464,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }, [sessionIdParam]);
 
   // Save draft to backend (create or update)
-  const ensureDraftSessionId = useCallback(async (payload: { scannedItems: any[]; matchContext: Record<string, any>; shelfPhotoUri?: string | null; activeItemId?: string | null }): Promise<string | null> => {
+  const ensureDraftSessionId = useCallback(async (payload: { scannedItems: any[]; matchContext: Record<string, any>; shelfPhotoUri?: string | null; activeItemId?: string | null; itemStageById?: Record<string, ItemStage>; processedItemIds?: string[] }): Promise<string | null> => {
     if (sessionIdRef.current) return sessionIdRef.current;
     if (draftSessionCreatePromiseRef.current) return draftSessionCreatePromiseRef.current;
 
@@ -372,7 +492,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   }, []);
 
-  const saveDraftToBackend = useCallback(async (payload: { scannedItems: any[]; matchContext: Record<string, any>; shelfPhotoUri?: string | null; activeItemId?: string | null }) => {
+  const saveDraftToBackend = useCallback(async (payload: { scannedItems: any[]; matchContext: Record<string, any>; shelfPhotoUri?: string | null; activeItemId?: string | null; itemStageById?: Record<string, ItemStage>; processedItemIds?: string[] }) => {
     if (isHydratingRef.current) return;
     try {
       const token = await ensureSupabaseJwt();
@@ -404,10 +524,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [quickScanStore, setQuickScanStore] = useState<Record<string, { matchData: MatchResponse; serpApiData: any[] }>>({});
   const [currentMatchItemId, setCurrentMatchItemId] = useState<string | null>(null);
   // Confirmed quick-match per item: when user taps "List Product" we store it so bulk Continue uses it instead of re-searching
-  const [confirmedQuickMatchByItemId, setConfirmedQuickMatchByItemId] = useState<Record<string, { serpApiData: any[]; preSelectedIndices: number[] }>>({});
+  const [confirmedQuickMatchByItemId, setConfirmedQuickMatchByItemId] = useState<Record<string, QuickMatchSelection>>({});
 
   // Loading state tracking per item
   const [itemLoadingStates, setItemLoadingStates] = useState<Record<string, ItemLoadingState>>({});
+  const [itemStageById, setItemStageById] = useState<Record<string, ItemStage>>(() => params?.itemStageById || {});
+  const [processedItemIds, setProcessedItemIds] = useState<string[]>(() => params?.processedItemIds || []);
 
   // Bulk mode state
   const [isBulkMode, setIsBulkMode] = useState(false);
@@ -423,7 +545,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Debounced auto-save when scan state changes (so drafts appear in Scan Drafts)
   useEffect(() => {
-    if (isHydratingRef.current || bulkItems.length === 0) return;
+    if (
+      isHydratingRef.current ||
+      (bulkItems.length === 0 && Object.keys(itemStageById).length === 0 && processedItemIds.length === 0)
+    ) return;
     if (saveDraftTimeoutRef.current) clearTimeout(saveDraftTimeoutRef.current);
     saveDraftTimeoutRef.current = setTimeout(() => {
       saveDraftTimeoutRef.current = null;
@@ -432,10 +557,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         matchContext: quickScanStore,
         shelfPhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri,
         activeItemId,
+        itemStageById,
+        processedItemIds,
       });
     }, 800);
     return () => { if (saveDraftTimeoutRef.current) clearTimeout(saveDraftTimeoutRef.current); };
-  }, [bulkItems, quickScanStore, activeItemId, shelfPhotoUri, saveDraftToBackend]);
+  }, [activeItemId, bulkItems, itemStageById, processedItemIds, quickScanStore, shelfPhotoUri, saveDraftToBackend]);
 
   // Auto-scan state
   const [isAutoScanning, setIsAutoScanning] = useState(false);
@@ -447,9 +574,88 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const quickScanQueueRef = useRef<Array<{ photo: CapturedPhoto; itemId: string }>>([]);
   const shelfQueryToItemIdRef = useRef<Record<string, string>>({});
   const hasTriggeredBulkModalFtuxRef = useRef(false);
-  const closeRequestIdRef = useRef(0);
-  // Track whether we've already opened the sheet for the first scan result
-  const hasOpenedSheetForScanRef = useRef(false);
+
+  const markItemsProcessed = useCallback((processedItems: Array<{ id: string }>, nextStage: ItemStage = 'submitted_for_match') => {
+    const processedIdsForStage = processedItems.map((item) => item.id).filter(Boolean);
+    if (processedIdsForStage.length === 0) return;
+    const submittedSet = new Set(processedIdsForStage);
+    const nextBulkItems = bulkItems.filter((item) => !submittedSet.has(item.id));
+    const nextQuickScanStore = Object.fromEntries(
+      Object.entries(quickScanStore).filter(([id]) => !submittedSet.has(id))
+    );
+    const nextStageById: Record<string, ItemStage> = { ...itemStageById };
+    processedIdsForStage.forEach((id) => {
+      nextStageById[id] = nextStage;
+    });
+    const nextProcessed = Array.from(new Set([...processedItemIds, ...processedIdsForStage]));
+
+    setItemStageById((prev) => {
+      const next = { ...prev };
+      processedIdsForStage.forEach((id) => {
+        next[id] = nextStage;
+      });
+      return next;
+    });
+    setProcessedItemIds((prev) => Array.from(new Set([...prev, ...processedIdsForStage])));
+
+    setBulkItems((prev) => prev.filter((item) => !processedIdsForStage.includes(item.id)));
+    setQuickScanStore((prev) => {
+      const next = { ...prev };
+      processedIdsForStage.forEach((id) => {
+        delete next[id];
+      });
+      return next;
+    });
+    setConfirmedQuickMatchByItemId((prev) => {
+      const next = { ...prev };
+      processedIdsForStage.forEach((id) => {
+        delete next[id];
+      });
+      return next;
+    });
+    setItemLoadingStates((prev) => {
+      const next = { ...prev };
+      processedIdsForStage.forEach((id) => {
+        delete next[id];
+      });
+      return next;
+    });
+
+    setActiveItemId((prev) => (prev && processedIdsForStage.includes(prev) ? null : prev));
+    setCurrentInstruction('ready');
+    setIsAutoScanning(false);
+    setShowProgressBar(false);
+    quickScanCancelledRef.current = true;
+    quickScanQueueRef.current = [];
+    void saveDraftToBackend({
+      scannedItems: nextBulkItems,
+      matchContext: nextQuickScanStore,
+      shelfPhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri,
+      activeItemId: processedIdsForStage.includes(activeItemId || '') ? null : activeItemId,
+      itemStageById: nextStageById,
+      processedItemIds: nextProcessed,
+    });
+  }, [activeItemId, bulkItems, itemStageById, processedItemIds, quickScanStore, saveDraftToBackend, shelfPhotoUri]);
+
+  const markItemsSubmittedForMatch = useCallback((submittedItems: Array<{ id: string }>) => {
+    markItemsProcessed(submittedItems, 'submitted_for_match');
+  }, [markItemsProcessed]);
+
+  useEffect(() => {
+    const validIds = new Set(bulkItems.map((item) => item.id));
+    setItemLoadingStates((prev) => {
+      let changed = false;
+      const next: Record<string, ItemLoadingState> = {};
+      Object.entries(prev).forEach(([id, value]) => {
+        if (validIds.has(id)) {
+          next[id] = value;
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [bulkItems]);
 
   // Notification and progress state
   const [showNotification, setShowNotification] = useState(false);
@@ -494,6 +700,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Animation values - separate for each modal
   const sheetTranslateY = useSharedValue(SCREEN_HEIGHT);
   const matchSheetTranslateY = useSharedValue(SCREEN_HEIGHT);
+
+  // Guard against inconsistent modal state that can leave camera paused with no visible sheet.
+  useEffect(() => {
+    if (showMatchSheet && !matchData) {
+      setShowMatchSheet(false);
+      if (bulkItems.length > 0 || cameraMode === 'shelf') {
+        setShowDeepSearchSheet(true);
+        sheetTranslateY.value = withSpring(0);
+      }
+    }
+  }, [showMatchSheet, matchData, bulkItems.length, cameraMode, sheetTranslateY]);
 
   // Force re-render counter for debugging
   const [forceRenderCount, setForceRenderCount] = useState(0);
@@ -574,14 +791,23 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     price?: number;
     imageUrl?: string;
     sourceUrl?: string;
+    productId?: string;
+    variantId?: string;
+    productUrl?: string;
+    isLocalMatch?: boolean;
   }>): any[] => {
     const out: any[] = [];
     candidates.forEach((c, idx) => {
       out.push({
         position: idx + 1,
+        id: c.id,
+        productId: c.productId,
+        variantId: c.variantId,
         title: c.title || 'Unknown Product',
         link: c.sourceUrl || '',
+        productUrl: c.productUrl || c.sourceUrl || '',
         source: 'quickscan',
+        isLocalMatch: Boolean(c.isLocalMatch),
         source_icon: '',
         thumbnail: c.imageUrl || '',
         image: c.imageUrl || '',
@@ -1011,6 +1237,26 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                     serpApiData: res.matches
                   }
                 }));
+
+                const shouldAutoConfirmTopMatch = shouldAutoSelectQuickMatch({
+                  totalMatches: res.matches.length,
+                  recommendedAction: 'show_multiple_matches',
+                  rerankerConfidence: res.confidence === 'high' ? 0.9 : res.confidence === 'medium' ? 0.6 : 0.2, // Rough translation of string to number for the helper
+                  topCandidateIsLocalMatch: Boolean(res.matches[0]?.isLocalMatch),
+                });
+
+                if (shouldAutoConfirmTopMatch) {
+                  const quickMatchHintCandidates = rankedCandidatesToQuickMatchHintCandidates(res.matches);
+                  setConfirmedQuickMatchByItemId(prev => ({
+                    ...prev,
+                    [itemId]: {
+                      serpApiData: quickMatchHintCandidates,
+                      preSelectedIndices: [0],
+                      source: 'quick_scan_auto',
+                      confidence: res.confidence === 'high' ? 0.9 : 0.6,
+                    },
+                  }));
+                }
               }
             }
           }
@@ -1645,20 +1891,25 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           confidence: quickScanResult?.overallConfidence || 0,
           totalMatches: allMatches.length,
           rankedCandidates: allMatches.map((match: any) => ({
-            id: match.ProductVariantId || match.productId || `match-${Date.now()}`,
+            id: String(match.ProductVariantId || match.variantId || match.productId || `match-${Date.now()}`),
+            productId: match.productId ? String(match.productId) : undefined,
+            variantId: match.ProductVariantId ? String(match.ProductVariantId) : (match.variantId ? String(match.variantId) : undefined),
             title: match.title || 'Unknown Product',
             description: match.description || '',
             price: typeof match.price === 'number'
               ? match.price
               : Number(match.price?.extracted_value || match.price?.value || 0),
-            imageUrl: match.imageUrl || '',
+            imageUrl: match.imageUrl || match.image || match.thumbnail || '',
+            productUrl: match.productUrl || match.product_url || match.link || '',
             sourceUrl: (() => {
-              const preferred = match.productUrl || match.link || '';
+              const preferred = match.productUrl || match.product_url || match.link || '';
               if (typeof preferred === 'string' && /sssync\.app/i.test(preferred)) {
                 return '';
               }
               return preferred;
             })(),
+            isLocalMatch: Boolean(match.isLocalMatch),
+            pricingResearch: match.pricingResearch,
           }))
         };
 
@@ -1668,6 +1919,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
         // Update store
         const serpApiDataForItem = candidatesToSerpApiData(nextMatchData.rankedCandidates as any);
+        const quickMatchHintCandidates = rankedCandidatesToQuickMatchHintCandidates(nextMatchData.rankedCandidates);
         setQuickScanStore(prev => {
           const updated = {
             ...prev,
@@ -1676,23 +1928,36 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           return updated;
         });
 
-        // AUTO-CONFIRM: Pre-select the top quick scan match so it's used when "Analyze & List" is pressed
-        // This saves time by using the quick scan result instead of re-searching from scratch
-        setConfirmedQuickMatchByItemId(prev => ({
-          ...prev,
-          [itemId]: { serpApiData: serpApiDataForItem, preSelectedIndices: [0] },
-        }));
+        const shouldAutoConfirmTopMatch = shouldAutoSelectQuickMatch({
+          totalMatches: allMatches.length,
+          recommendedAction: quickScanResult?.recommendedAction,
+          rerankerConfidence: rerankerMeta?.confidence,
+          topCandidateIsLocalMatch: Boolean(nextMatchData.rankedCandidates?.[0]?.isLocalMatch),
+        });
+
+        setConfirmedQuickMatchByItemId(prev => {
+          if (!shouldAutoConfirmTopMatch) {
+            if (!prev[itemId]) return prev;
+            const next = { ...prev };
+            delete next[itemId];
+            return next;
+          }
+
+          return {
+            ...prev,
+            [itemId]: {
+              serpApiData: quickMatchHintCandidates,
+              preSelectedIndices: [0],
+              source: 'quick_scan_auto',
+              confidence: rerankerMeta?.confidence,
+              reasoning: rerankerMeta?.reasoning,
+            },
+          };
+        });
 
         // CRITICAL: Also update component-level matchData so getInstructionText displays correct count
         setMatchData(nextMatchData);
-        // Update instruction to show match count in center box
-        setCurrentInstruction('matches_found');
-        // Only open sheet on the FIRST scan result in camera mode (Bug 2 fix)
-        if (cameraMode === 'camera' && !hasOpenedSheetForScanRef.current) {
-          hasOpenedSheetForScanRef.current = true;
-          setShowDeepSearchSheet(true);
-          sheetTranslateY.value = withSpring(0);
-        }
+        setCurrentInstruction(shouldAutoConfirmTopMatch ? 'matched' : 'matches_found');
 
         // Pricing enrichment: Use eBay pricing research (actual sold listings) in background
         // to populate price range and shipping data from real market data.
@@ -1758,12 +2023,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       } else {
         console.log('[QUICK SCAN] No matches found');
         showNotificationMessage('No quick matches found. Added to review.', 3000);
-        // Update instruction to show no matches in center box
+        setConfirmedQuickMatchByItemId(prev => {
+          if (!prev[itemId]) return prev;
+          const next = { ...prev };
+          delete next[itemId];
+          return next;
+        });
         setCurrentInstruction('no_matches');
-        if (cameraMode === 'camera') {
-          setShowDeepSearchSheet(true);
-          sheetTranslateY.value = withSpring(0);
-        }
       }
 
     } catch (error) {
@@ -1793,7 +2059,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
     }
 
-  }, [uploadImageToSupabase, candidatesToSerpApiData, quickScanStore, showNotificationMessage, cameraMode, sheetTranslateY, isAutoScanning, incrementLocalUsage]);
+  }, [uploadImageToSupabase, candidatesToSerpApiData, quickScanStore, showNotificationMessage, isAutoScanning, incrementLocalUsage]);
 
   // Open Match Selection screen using quick scan results for a given item
   const openMatchSelectionForItem = useCallback((itemId?: string | null) => {
@@ -1830,17 +2096,69 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       showNotificationMessage('Please wait for shelf scan to complete', 2000);
       return;
     }
+    const hasRenderableMatchData = !!store.matchData
+      && Array.isArray(store.matchData.rankedCandidates)
+      && store.matchData.rankedCandidates.length > 0;
+    if (!hasRenderableMatchData) {
+      showNotificationMessage('Quick matches are still loading for this item.', 2000);
+      setShowDeepSearchSheet(true);
+      sheetTranslateY.value = withSpring(0);
+      return;
+    }
     setMatchData(store.matchData);
     setCurrentMatchItemId(itemId);
-    // Close bulk sheet before opening match sheet
+    // Deterministic modal handoff: close bulk first, then open quick matches.
     setShowDeepSearchSheet(false);
-    sheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
-    setShowMatchSheet(true);
-    matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2);
+    sheetTranslateY.value = SCREEN_HEIGHT;
+    requestAnimationFrame(() => {
+      setShowMatchSheet(true);
+      matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2);
+    });
   }, [quickScanStore, matchSheetTranslateY, sheetTranslateY, showNotificationMessage, isProcessingShelfScan]);
 
+  const openExistingInventoryMatch = useCallback((itemId: string) => {
+    const localMatch = getLocalInventoryCandidateForItem(itemId, confirmedQuickMatchByItemId, quickScanStore) as any;
+    if (!localMatch) {
+      showNotificationMessage('No inventory match is ready for this item yet.', 2000);
+      return;
+    }
+
+    const variantId = String(localMatch.variantId || localMatch.ProductVariantId || localMatch.id || '');
+    const productId = String(localMatch.productId || localMatch.ProductId || '');
+    if (!variantId && !productId) {
+      showNotificationMessage('Inventory match is missing its item id.', 2000);
+      return;
+    }
+
+    setBarcodeSearchResult({
+      product: {
+        Id: productId || variantId,
+        id: productId || variantId,
+      },
+      variant: {
+        Id: variantId || productId,
+        id: variantId || productId,
+        Title: localMatch.title,
+        Price: typeof localMatch.price === 'number'
+          ? localMatch.price
+          : localMatch.price?.extracted_value,
+      },
+      images: localMatch.imageUrl
+        ? [{ ImageUrl: localMatch.imageUrl }]
+        : undefined,
+    } as any);
+    setShowBarcodeResultModal(true);
+    setShowDeepSearchSheet(false);
+    setCurrentInstruction('ready');
+    markItemsProcessed([{ id: itemId }], 'existing_inventory');
+  }, [confirmedQuickMatchByItemId, markItemsProcessed, quickScanStore, showNotificationMessage]);
+
   // Send payload of first photos for analysis/matching
-  const performAnalyze = useCallback(async (firstPhotos: CapturedPhoto[]) => {
+  const performAnalyze = useCallback(async (
+    firstPhotos: CapturedPhoto[],
+    quickMatchHintsByItemId?: Record<string, QuickMatchSelection>,
+    itemsForAnalyze?: Array<{ id: string }>,
+  ) => {
     startTrace();
     logFlowEvent(FlowEvents.SCAN_ANALYSIS_STARTED, {
       photoCount: firstPhotos.length,
@@ -1855,10 +2173,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         firstPhotos.map(photo => uploadImageToSupabase(photo.uri, photo.id))
       );
 
-      const products = publicImageUrls.map((url, index) => ({
-        productIndex: index,
-        images: [{ url }]
-      }));
+      const products = buildMatchAnalyzeProducts(publicImageUrls, itemsForAnalyze, quickMatchHintsByItemId);
 
       console.log('[ANALYZE] Images uploaded to:', publicImageUrls);
 
@@ -2055,11 +2370,25 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     if (activeItemId) {
       console.log('[MATCH CLICK] Indicator pressed for item:', activeItemId);
 
-      // Check if we have matches
-      const hasMatches = quickScanStore[activeItemId]?.matchData?.totalMatches > 0;
+      const itemMatches = quickScanStore[activeItemId];
+      const hasMatches = (itemMatches?.matchData?.totalMatches || 0) > 0;
 
       if (hasMatches) {
-        openQuickMatchesForItem(activeItemId);
+        const hasRenderableMatchData = !!itemMatches?.matchData
+          && Array.isArray(itemMatches.matchData.rankedCandidates)
+          && itemMatches.matchData.rankedCandidates.length > 0;
+        if (!hasRenderableMatchData) {
+          showNotificationMessage('Quick matches are still loading for this item.', 2000);
+          return;
+        }
+        setMatchData(itemMatches.matchData);
+        setCurrentMatchItemId(activeItemId);
+        setShowDeepSearchSheet(false);
+        sheetTranslateY.value = SCREEN_HEIGHT;
+        requestAnimationFrame(() => {
+          setShowMatchSheet(true);
+          matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2);
+        });
       } else {
         // Retry: re-trigger quick scan for this item if no matches yet
         if (currentInstruction === 'processing') {
@@ -2078,7 +2407,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     } else {
       showNotificationMessage('Select an item first', 1500);
     }
-  }, [activeItemId, quickScanStore, currentInstruction, openQuickMatchesForItem, showNotificationMessage, bulkItems, performQuickScan]);
+  }, [activeItemId, quickScanStore, currentInstruction, showNotificationMessage, bulkItems, performQuickScan, sheetTranslateY, matchSheetTranslateY]);
 
   // Select item as active
   const selectActiveItem = useCallback((itemId: string) => {
@@ -2191,42 +2520,23 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }));
   }, []);
 
-  // Complete close only if sheet was not reopened (guards against stale animation callback)
-  const completeCloseIfNotReopened = useCallback((closeId: number) => {
-    if (closeRequestIdRef.current === closeId) {
-      // Don't allow closing while processing shelf scan
-      if (isProcessingShelfScan) {
-        return;
-      }
-      // Don't close if quick scan has produced results — the user needs to review them
-      if (Object.keys(quickScanStore).length > 0) {
-        return;
-      }
-      setShowDeepSearchSheet(false);
-      setCurrentInstruction('ready');
-    }
-  }, [isProcessingShelfScan, quickScanStore]);
-
   // Close bulk items sheet
   const closeBulkItemsSheet = useCallback(() => {
     // Don't allow closing while processing shelf scan
     if (isProcessingShelfScan) {
       return;
     }
-    closeRequestIdRef.current += 1;
-    const myCloseId = closeRequestIdRef.current;
-    sheetTranslateY.value = withTiming(SCREEN_HEIGHT, {
-      duration: 200,
-    }, () => {
-      runOnJS(completeCloseIfNotReopened)(myCloseId);
-    });
-  }, [sheetTranslateY, completeCloseIfNotReopened, isProcessingShelfScan]);
+    cancelAnimation(sheetTranslateY);
+    setShowDeepSearchSheet(false);
+    sheetTranslateY.value = SCREEN_HEIGHT;
+    setCurrentInstruction('ready');
+  }, [sheetTranslateY, isProcessingShelfScan]);
 
-  // Open bulk items sheet (cancels any in-flight close so its callback does not overwrite)
+  // Open bulk items sheet deterministically
   const openBulkItemsSheet = useCallback(() => {
     cancelAnimation(sheetTranslateY);
-    closeRequestIdRef.current += 1;
     setShowDeepSearchSheet(true);
+    sheetTranslateY.value = SCREEN_HEIGHT;
     sheetTranslateY.value = withSpring(0);
   }, [sheetTranslateY]);
 
@@ -2239,28 +2549,31 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   useEffect(() => {
     if (hasSeenBulkModalFtux !== false || hasTriggeredBulkModalFtuxRef.current) return;
+    if (!isFocused) return;
+    if (sessionIdParam) return;
+    if (hasAutoOpenedFtuxRef.current) return;
     if (showDeepSearchSheet || showMatchSheet || showBarcodeResultModal) return;
     if (cameraMode === 'shelf') return; // In shelf mode, don't auto-close the sheet
 
     const hasAnyPhoto = capturedPhotos.length > 0 || bulkItems.some((item) => item.photos.length > 0);
     if (!hasAnyPhoto) return;
 
+    hasAutoOpenedFtuxRef.current = true;
     hasTriggeredBulkModalFtuxRef.current = true;
     openBulkItemsSheet();
+    setHasSeenBulkModalFtux(true);
+    void AsyncStorage.setItem(BULK_MODAL_FTUX_KEY, '1').catch(() => {
+      // non-blocking
+    });
 
     const timer = setTimeout(async () => {
       // Don't auto-close the sheet — let the user decide when to dismiss.
-      // We only mark the FTUX as seen so the walkthrough doesn't replay.
-      setHasSeenBulkModalFtux(true);
-      try {
-        await AsyncStorage.setItem(BULK_MODAL_FTUX_KEY, '1');
-      } catch {
-        // non-blocking
-      }
     }, 2200);
 
     return () => clearTimeout(timer);
   }, [
+    isFocused,
+    sessionIdParam,
     hasSeenBulkModalFtux,
     showDeepSearchSheet,
     showMatchSheet,
@@ -2274,13 +2587,21 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Close match results sheet
   const closeMatchSheet = useCallback(() => {
-    matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, {
-      duration: 200,
-    }, () => {
+    cancelAnimation(matchSheetTranslateY);
+    matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 250 }, () => {
       runOnJS(setShowMatchSheet)(false);
       runOnJS(setCurrentInstruction)('ready');
     });
   }, [matchSheetTranslateY]);
+
+  // Close quick matches and return to bulk items sheet
+  const closeMatchSheetToBulk = useCallback(() => {
+    matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 250 }, () => {
+      runOnJS(setShowMatchSheet)(false);
+      runOnJS(openBulkItemsSheet)();
+      runOnJS(setCurrentInstruction)('ready');
+    });
+  }, [matchSheetTranslateY, openBulkItemsSheet]);
 
   // Close barcode sheet
   const closeBarcodeSheet = useCallback(() => {
@@ -2300,22 +2621,20 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   }, [showBarcodeResultModal, matchSheetTranslateY]);
 
-  // Close all sheets (for tap-to-focus)
-  const closeAllSheets = useCallback(() => {
-    if (showMatchSheet) {
-      closeMatchSheet();
-    }
-    if (showDeepSearchSheet) {
-      closeBulkItemsSheet();
-    }
-    if (showBarcodeResultModal) {
-      closeBarcodeSheet();
-    }
-  }, [showMatchSheet, showDeepSearchSheet, showBarcodeResultModal, closeMatchSheet, closeBulkItemsSheet, closeBarcodeSheet]);
-
   // When starting a broad search or analysis, cancel any in-progress quick scan and reset camera state
   const handleStartBroadSearch = useCallback(() => {
     console.log('[BROAD SEARCH] Starting broad search: cancelling quick scan and resetting state');
+    
+    // Check if we are transitioning from shelf mode to take photos
+    if (cameraMode === 'shelf' && bulkItems.length > 0) {
+      setCameraMode('camera');
+      setActiveItemId(bulkItems[0].id);
+      setCurrentInstruction('capturing');
+      closeBulkItemsSheet();
+      showNotificationMessage(`Take photos for ${bulkItems[0].title || 'Item 1'}`, 2500);
+      return;
+    }
+
     // Cancel any in-progress quick scan so it doesn't reopen sheets
     quickScanCancelledRef.current = true;
     quickScanQueueRef.current = [];
@@ -2328,8 +2647,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     setCurrentInstruction,
     setIsAutoScanning,
     setShowProgressBar,
-    quickScanCancelledRef,
-    quickScanQueueRef,
+    cameraMode,
+    bulkItems,
+    setCameraMode,
+    setActiveItemId,
+    closeBulkItemsSheet,
+    showNotificationMessage,
   ]);
 
   // When screen loses focus (user navigates away), save draft and close sheets
@@ -2338,22 +2661,23 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return () => {
         quickScanQueueRef.current = [];
         setShowMatchSheet(false);
-        // Don't close deep search sheet if processing shelf scan
-        if (!isProcessingShelfScan) {
-          setShowDeepSearchSheet(false);
-        }
         setShowBarcodeResultModal(false);
         // Persist scan draft when navigating away so it appears in Scan Drafts
-        if (bulkItems.length > 0 && !isHydratingRef.current) {
+        if (
+          (bulkItems.length > 0 || Object.keys(itemStageById).length > 0 || processedItemIds.length > 0) &&
+          !isHydratingRef.current
+        ) {
           saveDraftToBackend({
             scannedItems: bulkItems,
             matchContext: quickScanStore,
             shelfPhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri,
             activeItemId,
+            itemStageById,
+            processedItemIds,
           });
         }
       };
-    }, [bulkItems, quickScanStore, activeItemId, shelfPhotoUri, saveDraftToBackend, isProcessingShelfScan])
+    }, [activeItemId, bulkItems, itemStageById, processedItemIds, quickScanStore, shelfPhotoUri, saveDraftToBackend])
   );
 
   // Animated styles
@@ -2412,6 +2736,30 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     );
   }
 
+  const isMatchSheetVisible = !!showMatchSheet && !!matchData;
+  const isAnySheetVisible = showDeepSearchSheet || isMatchSheetVisible || showBarcodeResultModal;
+  const connectedPlatformKeys = getConnectedPlatformKeys(platformLocations);
+  const matchedItemsCount = bulkItems.reduce((count, item) => {
+    const matchCount = quickScanStore[item.id]?.matchData?.totalMatches || 0;
+    return matchCount > 0 ? count + 1 : count;
+  }, 0);
+  const activeQuickMatchStore = activeItemId ? quickScanStore[activeItemId] : null;
+  const activeQuickMatchInfo = activeItemId ? confirmedQuickMatchByItemId[activeItemId] : null;
+  const { candidate: activeSelectedMatch, isConfirmed: activeMatchIsConfirmed } = getSelectedQuickMatchCandidate(
+    activeQuickMatchInfo,
+    activeQuickMatchStore,
+  );
+  const activeMatchCount = activeQuickMatchStore?.matchData?.totalMatches || 0;
+  const centerOverlayMatchPreview = activeSelectedMatch ? {
+    imageUrl: activeSelectedMatch?.imageUrl || activeSelectedMatch?.image || activeSelectedMatch?.thumbnail || null,
+    title: cleanMatchText(activeSelectedMatch?.title || 'Selected match'),
+    label: activeMatchIsConfirmed
+      ? (activeQuickMatchInfo?.source === 'quick_scan_auto' ? 'Auto-selected match' : 'Selected match')
+      : `${activeMatchCount} match${activeMatchCount === 1 ? '' : 'es'} found`,
+    subtitle: activeMatchIsConfirmed ? 'Tap to review or change' : 'Tap to review and confirm',
+    isConfirmed: activeMatchIsConfirmed,
+  } : null;
+
   return (
     <GestureHandlerRootView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="black" />
@@ -2435,7 +2783,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         style={styles.camera}
         facing={facing}
         flash={flash}
-        active={isFocused && !showDeepSearchSheet && !showMatchSheet && !showBarcodeResultModal} // Disable camera when sheets are open
+        active={isFocused && !isAnySheetVisible} // Disable camera when sheets are open
         onBarcodeScanned={handleBarCodeScanned}
         barcodeScannerSettings={{
           barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
@@ -2445,7 +2793,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         <Animated.View style={[styles.flashOverlay, flashAnimatedStyle]} />
 
         {/* Camera paused overlay */}
-        {(showDeepSearchSheet || showMatchSheet || showBarcodeResultModal) && (
+        {isAnySheetVisible && (
           <View style={styles.cameraPausedOverlay}>
             <View style={styles.cameraPausedIndicator}>
               <MaterialIcons name="pause-circle-filled" size={48} color="rgba(255,255,255,0.8)" />
@@ -2459,9 +2807,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         <Pressable
           style={styles.tapToFocusOverlay}
           onPress={(event) => {
-            // Close sheets if open - instant close
-            if (showMatchSheet || showDeepSearchSheet || showBarcodeResultModal) {
-              closeAllSheets();
+            // Do not close sheets from background taps; this can race with control taps.
+            if (isAnySheetVisible) {
               return;
             }
             // Otherwise handle focus
@@ -2469,7 +2816,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           }}
           onLongPress={() => {
             // Open sheet on long press if not already open
-            if (!showDeepSearchSheet && !showMatchSheet && !showBarcodeResultModal) {
+            if (!isAnySheetVisible) {
               openBulkItemsSheet();
             }
           }}
@@ -2525,6 +2872,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         cameraMode={cameraMode}
         scannedBarcode={scannedBarcode}
         onCopyBarcode={copyBarcodeToClipboard}
+        matchPreview={centerOverlayMatchPreview}
         onPress={
           cameraMode === 'shelf' && !showDeepSearchSheet && (isProcessingShelfScan || bulkItems.length > 0 || shelfPhotoUri)
             ? openBulkItemsSheet
@@ -2590,6 +2938,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         items={bulkItems}
         activeItemId={activeItemId}
         onSelectItem={(id) => setActiveItemId(id)}
+        matchedItemsCount={matchedItemsCount}
         maxItems={MAX_BATCH_ITEMS}
         onNewItem={addNewBulkItem}
         onOpenBarcodeEntry={
@@ -2615,21 +2964,29 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         transparent
         animationType="none"
         statusBarTranslucent
-        onRequestClose={closeMatchSheet}
+        onRequestClose={closeMatchSheetToBulk}
         presentationStyle="overFullScreen"
       >
         {showMatchSheet && matchData ? (
           <MatchResultsSheet
             matchData={matchData}
-            onClose={closeMatchSheet}
+            onClose={closeMatchSheetToBulk}
             onUseForSelection={() => openMatchSelectionForItem(currentMatchItemId)}
-            onConfirmMatch={currentMatchItemId ? (serpApiData, preSelectedIndices) => {
+            onConfirmMatch={currentMatchItemId ? (_serpApiData, preSelectedIndices) => {
+              const confirmedCandidates = matchData
+                ? rankedCandidatesToQuickMatchHintCandidates(matchData.rankedCandidates)
+                : [];
               setConfirmedQuickMatchByItemId(prev => ({
                 ...prev,
-                [currentMatchItemId]: { serpApiData, preSelectedIndices },
+                [currentMatchItemId]: {
+                  serpApiData: confirmedCandidates,
+                  preSelectedIndices,
+                  source: 'quick_scan_confirmed',
+                },
               }));
             } : undefined}
             currentMatchItemId={currentMatchItemId}
+            initialSelectedIndices={currentMatchItemId ? confirmedQuickMatchByItemId[currentMatchItemId]?.preSelectedIndices : undefined}
             fetchPricingResearch={async (title: string) => {
               try {
                 const token = await getToken();
@@ -2648,9 +3005,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             sheetStyle={matchSheetAnimatedStyle}
             navigation={navigation}
             onStartBroadSearch={() => {
-              setShowMatchSheet(false);
-              matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
-              openBulkItemsSheet();
+              closeMatchSheetToBulk();
             }}
           />
         ) : null}
@@ -2727,29 +3082,24 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   itemLoadingStates={itemLoadingStates}
                   setItemLoadingStates={setItemLoadingStates}
                   confirmedQuickMatchByItemId={confirmedQuickMatchByItemId}
+                  connectedPlatformKeys={connectedPlatformKeys}
                   currentInstruction={currentInstruction}
-                  onOpenLocalMatch={(itemId) => {
-                    const match = quickScanStore?.[itemId]?.serpApiData?.[0];
-                    if (match && match.isLocalMatch) {
-                      setBarcodeSearchResult({
-                        product: { id: match.productId },
-                        variant: { id: match.variantId, Title: match.title, Price: match.price }
-                      } as any);
-                      // Don't close sheet if processing shelf scan
-                      if (!isProcessingShelfScan) {
-                        setShowDeepSearchSheet(false);
-                      }
-                    }
-                  }}
+                  onOpenLocalMatch={openExistingInventoryMatch}
                   shelfPhotoUri={shelfPhotoUri}
                   cameraMode={cameraMode}
+                  onSubmitItemsForProcessing={markItemsSubmittedForMatch}
                   onSaveDraft={() => {
-                    if (bulkItems.length > 0 && !isHydratingRef.current) {
+                    if (
+                      (bulkItems.length > 0 || Object.keys(itemStageById).length > 0 || processedItemIds.length > 0) &&
+                      !isHydratingRef.current
+                    ) {
                       saveDraftToBackend({
                         scannedItems: bulkItems,
                         matchContext: quickScanStore,
                         shelfPhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri,
                         activeItemId,
+                        itemStageById,
+                        processedItemIds,
                       });
                     }
                   }}
@@ -3083,6 +3433,34 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
 
 
+type UnicodeSpinnerDefinition = {
+  frames: string[];
+  interval: number;
+};
+
+const UnicodeSpinner: React.FC<{
+  spinner: UnicodeSpinnerDefinition;
+  color?: string;
+  size?: number;
+  style?: any;
+}> = ({ spinner, color = '#4CAF50', size = 18, style }) => {
+  const [frameIndex, setFrameIndex] = useState(0);
+
+  useEffect(() => {
+    setFrameIndex(0);
+    const intervalId = setInterval(() => {
+      setFrameIndex((prev) => (prev + 1) % spinner.frames.length);
+    }, spinner.interval);
+    return () => clearInterval(intervalId);
+  }, [spinner]);
+
+  return (
+    <Text style={[styles.unicodeSpinnerText, { color, fontSize: size }, style]}>
+      {spinner.frames[frameIndex]}
+    </Text>
+  );
+};
+
 // Progress Bar Overlay Component
 const ProgressBarOverlay: React.FC<{
   progressWidth: any;
@@ -3141,9 +3519,76 @@ const CenterOverlay: React.FC<{
   cameraMode: CameraMode;
   scannedBarcode: string | null;
   onCopyBarcode: () => void;
+  matchPreview?: {
+    imageUrl?: string | null;
+    title: string;
+    label: string;
+    subtitle: string;
+    isConfirmed: boolean;
+  } | null;
   onPress?: () => void;
   totalPhotos?: number;
-}> = ({ instruction, isProcessing, cameraMode, scannedBarcode, onCopyBarcode, onPress, totalPhotos = 0 }) => {
+}> = ({ instruction, isProcessing, cameraMode, scannedBarcode, onCopyBarcode, matchPreview, onPress, totalPhotos = 0 }) => {
+  const [showCompletionPulse, setShowCompletionPulse] = useState(false);
+  const completionPulseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wasProcessingRef = useRef(false);
+  const [showPostCaptureHold, setShowPostCaptureHold] = useState(false);
+  const postCaptureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previousTotalPhotosRef = useRef(totalPhotos);
+
+  useEffect(() => {
+    if (completionPulseTimeoutRef.current) {
+      clearTimeout(completionPulseTimeoutRef.current);
+      completionPulseTimeoutRef.current = null;
+    }
+
+    if (isProcessing) {
+      wasProcessingRef.current = true;
+      setShowCompletionPulse(false);
+      return;
+    }
+
+    if (wasProcessingRef.current) {
+      const pulseCycles = 1;
+      const pulseExtraDelayMs = 150;
+      const pulseDuration = (spinners.pulse.frames.length * spinners.pulse.interval * pulseCycles) + pulseExtraDelayMs;
+      setShowCompletionPulse(true);
+      completionPulseTimeoutRef.current = setTimeout(() => {
+        setShowCompletionPulse(false);
+        completionPulseTimeoutRef.current = null;
+      }, pulseDuration);
+      wasProcessingRef.current = false;
+    }
+  }, [isProcessing]);
+
+  useEffect(() => {
+    return () => {
+      if (completionPulseTimeoutRef.current) {
+        clearTimeout(completionPulseTimeoutRef.current);
+        completionPulseTimeoutRef.current = null;
+      }
+      if (postCaptureTimeoutRef.current) {
+        clearTimeout(postCaptureTimeoutRef.current);
+        postCaptureTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (totalPhotos > previousTotalPhotosRef.current) {
+      if (postCaptureTimeoutRef.current) {
+        clearTimeout(postCaptureTimeoutRef.current);
+        postCaptureTimeoutRef.current = null;
+      }
+      setShowPostCaptureHold(true);
+      postCaptureTimeoutRef.current = setTimeout(() => {
+        setShowPostCaptureHold(false);
+        postCaptureTimeoutRef.current = null;
+      }, 1200);
+    }
+    previousTotalPhotosRef.current = totalPhotos;
+  }, [totalPhotos]);
+
   // Barcode overlay at top middle
   if (cameraMode === 'barcode' && scannedBarcode) {
     return (
@@ -3159,20 +3604,55 @@ const CenterOverlay: React.FC<{
     );
   }
 
-  // Hide "Take photos to get started" overlay when user already has photos (cleaner view)
-  if (cameraMode === 'camera' && totalPhotos > 0 && instruction === 'Take photos to get started') {
+  if (matchPreview && cameraMode !== 'barcode' && !isProcessing && !showCompletionPulse) {
+    return (
+      <View style={styles.barcodeOverlayContainer}>
+        <TouchableOpacity style={styles.centerOverlayMatchTouchable} onPress={onPress} activeOpacity={0.9}>
+          <Animated.View style={[
+            styles.centerOverlayMatchCard,
+            matchPreview.isConfirmed ? styles.centerOverlayMatchCardConfirmed : styles.centerOverlayMatchCardPending,
+          ]}>
+            {matchPreview.imageUrl ? (
+              <Image source={{ uri: matchPreview.imageUrl }} style={styles.centerOverlayMatchImage} />
+            ) : (
+              <View style={[styles.centerOverlayMatchImage, styles.centerOverlayMatchImageFallback]}>
+                <Icon name="image-outline" size={18} color="#64748B" />
+              </View>
+            )}
+            <View style={styles.centerOverlayMatchTextBlock}>
+              <Text style={styles.centerOverlayMatchLabel} numberOfLines={1}>{matchPreview.label}</Text>
+              <Text style={styles.centerOverlayMatchTitle} numberOfLines={1}>{matchPreview.title}</Text>
+              <Text style={styles.centerOverlayMatchSubtitle} numberOfLines={1}>{matchPreview.subtitle}</Text>
+            </View>
+            <View style={styles.centerOverlayChevron}>
+              <Icon name={matchPreview.isConfirmed ? 'check-circle' : 'chevron-right-circle'} size={20} color={matchPreview.isConfirmed ? '#93C822' : '#CBD5E1'} />
+            </View>
+          </Animated.View>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  if (cameraMode === 'camera' && totalPhotos > 0 && !isProcessing && !showCompletionPulse && !showPostCaptureHold) {
     return null;
   }
+
+  const idleInstruction = cameraMode === 'shelf' ? 'Capture shelf to find items' : 'Take a photo to find a match';
+  const displayInstruction = showCompletionPulse
+    ? 'Likely Match Found'
+    : (!isProcessing && instruction === 'Capturing') ? idleInstruction : instruction;
+  const showSpinner = isProcessing || showCompletionPulse || showPostCaptureHold;
+  const spinner = showCompletionPulse ? spinners.pulse : spinners.helix;
 
   // Regular instruction overlay - moved to top-middle like barcode
   return (
     <View style={styles.barcodeOverlayContainer}>
       <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
         <Animated.View style={styles.centerOverlay}>
-          <Text style={styles.centerOverlayText}>{instruction}</Text>
-          {isProcessing && (
+          <Text style={styles.centerOverlayText}>{displayInstruction}</Text>
+          {showSpinner && (
             <View style={styles.processingIndicator}>
-              <MaterialIcons name="sync" size={16} color="white" />
+              <UnicodeSpinner spinner={spinner} color="#FFFFFF" size={16} />
             </View>
           )}
         </Animated.View>
@@ -3202,6 +3682,7 @@ const BottomControls: React.FC<{
   onOpenBarcodeEntry?: () => void;
   showDeepSearchSheet?: boolean;
   onOpenSheet?: () => void;
+  matchedItemsCount?: number;
   maxItems?: number;
 }> = ({
   onCapture,
@@ -3221,6 +3702,7 @@ const BottomControls: React.FC<{
   onOpenBarcodeEntry,
   showDeepSearchSheet = false,
   onOpenSheet,
+  matchedItemsCount = 0,
   maxItems = MAX_BATCH_ITEMS,
 }) => {
     const activeIndex = items.findIndex(i => i.id === activeItemId);
@@ -3339,8 +3821,8 @@ const BottomControls: React.FC<{
           : 'Capture receipt';
       }
       if (photosCount === 0) return 'Take a photo to get started';
-      if (totalItems > 1) return `Continue w/ ${totalItems} items`;
-      return `Manage ${totalItems} item${totalItems > 1 ? 's' : ''}`;
+      if (totalItems > 0) return `Manage ${totalItems} Item${totalItems === 1 ? '' : 's'}`;
+      return 'Manage Items';
     };
 
     const activeMode = hoveredMode || cameraMode;
@@ -3486,6 +3968,9 @@ const BottomControls: React.FC<{
                   }}
                   disabled={activeIndex <= 0}
                 >
+                  {matchedItemsCount > 0 && (
+                    <View style={styles.itemNavArrowMatchBadge} />
+                  )}
                   <Icon name="chevron-left" size={24} color={activeIndex > 0 ? "#FFF" : "rgba(255,255,255,0.3)"} />
                 </TouchableOpacity>
 
@@ -3549,13 +4034,18 @@ const MatchResultsSheet: React.FC<{
   onStartBroadSearch?: () => void;
   onConfirmMatch?: (serpApiData: any[], preSelectedIndices: number[]) => void;
   currentMatchItemId?: string | null;
+  initialSelectedIndices?: number[];
   fetchPricingResearch?: (title: string) => Promise<{ low?: number; median?: number; high?: number; recommended?: number; error?: string } | null>;
   navigation?: any;
-}> = ({ matchData, onClose, sheetStyle, onUseForSelection, onStartBroadSearch, onConfirmMatch, currentMatchItemId, fetchPricingResearch, navigation }) => {
+}> = ({ matchData, onClose, sheetStyle, onUseForSelection, onStartBroadSearch, onConfirmMatch, currentMatchItemId, initialSelectedIndices, fetchPricingResearch, navigation }) => {
   const insets = useSafeAreaInsets();
   const bottomMargin = Math.max(insets.bottom, 20);
   // Use index-based selection to avoid duplicate id issues
-  const [selectedMatchIndices, setSelectedMatchIndices] = React.useState<Set<number>>(new Set());
+  const effectiveInitialSelection = (Array.isArray(initialSelectedIndices) && initialSelectedIndices.length > 0)
+    ? initialSelectedIndices
+    : (matchData.totalMatches === 1 ? [0] : []);
+  const initialSelectionKey = `${currentMatchItemId ?? 'none'}:${effectiveInitialSelection.join(',')}`;
+  const [selectedMatchIndices, setSelectedMatchIndices] = React.useState<Set<number>>(() => new Set(effectiveInitialSelection));
   const [pricingResearch, setPricingResearch] = React.useState<{ low?: number; median?: number; high?: number; recommended?: number } | null>(null);
   const [pricingResearchLoading, setPricingResearchLoading] = React.useState(false);
   const [pricingResearchModalVisible, setPricingResearchModalVisible] = React.useState(false);
@@ -3569,6 +4059,18 @@ const MatchResultsSheet: React.FC<{
   const firstTitle = firstCandidate?.title;
   // Check if candidate already has pre-fetched pricing research from quick scan enrichment
   const preFetchedPricing = (firstCandidate as any)?.pricingResearch;
+
+  React.useEffect(() => {
+    setSelectedMatchIndices((prev) => {
+      if (prev.size === effectiveInitialSelection.length) {
+        const hasChanged = effectiveInitialSelection.some((index) => !prev.has(index));
+        if (!hasChanged) {
+          return prev;
+        }
+      }
+      return new Set(effectiveInitialSelection);
+    });
+  }, [initialSelectionKey]);
 
   React.useEffect(() => {
     // If pre-fetched pricing research data exists from quick scan, use it directly
@@ -3650,7 +4152,9 @@ const MatchResultsSheet: React.FC<{
         </View>
 
         <Text style={styles.selectionHint}>
-          Tap to select matches for creating this listing
+          {selectedMatchIndices.size > 0
+            ? 'Selected match is ready. Tap another result if you need to change it.'
+            : 'Tap the right match before continuing.'}
         </Text>
 
         <View style={styles.matchResults}>
@@ -3802,7 +4306,11 @@ const BulkItemsSheet: React.FC<{
   onSelectItem: (itemId: string) => void;
   onSetCoverPhoto: (itemId: string, photoId: string) => void;
   onRemovePhoto: (itemId: string, photoId: string) => void;
-  performAnalyze: (firstPhotos: CapturedPhoto[]) => Promise<any>;
+  performAnalyze: (
+    firstPhotos: CapturedPhoto[],
+    quickMatchHintsByItemId?: Record<string, QuickMatchSelection>,
+    itemsForAnalyze?: Array<{ id: string }>,
+  ) => Promise<any>;
   sheetTranslateY: any;
   jobResponse: JobResponse | null;
   navigation: any;
@@ -3812,16 +4320,18 @@ const BulkItemsSheet: React.FC<{
   onOpenPhotoModal?: (itemId: string) => void;
   itemLoadingStates: Record<string, ItemLoadingState>;
   setItemLoadingStates: React.Dispatch<React.SetStateAction<Record<string, ItemLoadingState>>>;
-  confirmedQuickMatchByItemId?: Record<string, { serpApiData: any[]; preSelectedIndices: number[] }>;
+  confirmedQuickMatchByItemId?: Record<string, QuickMatchSelection>;
+  connectedPlatformKeys?: string[];
   currentInstruction?: string | null;
   onOpenLocalMatch?: (itemId: string) => void;
   shelfPhotoUri?: string | null;
   onUpdateItemQuery?: (id: string, newQuery: string) => void;
   onUpdateItemTitle?: (id: string, newTitle: string) => void;
   onUpdateItemQuantity?: (id: string, quantity: number) => void;
+  onSubmitItemsForProcessing?: (items: Array<{ id: string }>) => void;
   onSaveDraft?: () => void;
   cameraMode?: 'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf';
-}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onRetryItemScan, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, confirmedQuickMatchByItemId = {}, currentInstruction, onOpenLocalMatch, shelfPhotoUri, onUpdateItemQuery, onUpdateItemTitle, onUpdateItemQuantity, onSaveDraft, cameraMode = 'camera' }) => {
+}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onRetryItemScan, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, confirmedQuickMatchByItemId = {}, connectedPlatformKeys = [], currentInstruction, onOpenLocalMatch, shelfPhotoUri, onUpdateItemQuery, onUpdateItemTitle, onUpdateItemQuantity, onSubmitItemsForProcessing, onSaveDraft, cameraMode = 'camera' }) => {
 
   console.log('[SHEET RENDER] ==================');
   console.log('[SHEET RENDER] BulkItemsSheet RE-RENDERED at:', new Date().toISOString());
@@ -3862,17 +4372,22 @@ const BulkItemsSheet: React.FC<{
 
   useEffect(() => {
     setCountDraftByItemId(prev => {
+      let changed = false;
       const next: Record<string, string> = {};
       for (const item of bulkItems) {
         const existingDraft = prev[item.id];
+        let nextValue: string;
         if (typeof existingDraft === 'string') {
-          next[item.id] = existingDraft;
-          continue;
+          nextValue = existingDraft;
+        } else {
+          const quantity = item.quantity ?? 1;
+          nextValue = String(quantity);
         }
-        const quantity = item.quantity ?? 1;
-        next[item.id] = String(quantity);
+        next[item.id] = nextValue;
+        if (prev[item.id] !== nextValue) changed = true;
       }
-      return next;
+      if (Object.keys(prev).length !== Object.keys(next).length) changed = true;
+      return changed ? next : prev;
     });
   }, [bulkItems]);
 
@@ -3917,20 +4432,77 @@ const BulkItemsSheet: React.FC<{
 
   const bottomMargin = Math.max(insets.bottom, 20);
 
-  const hasLoadingItems = Object.values(itemLoadingStates || {}).some(state => state.isLoading);
+  const activeBulkItemIds = new Set(displayItems.map((item) => item.id));
+  const hasLoadingItems = Object.entries(itemLoadingStates || {}).some(([id, state]) => {
+    const loadingState = state as ItemLoadingState;
+    return loadingState.isLoading && activeBulkItemIds.has(id);
+  });
   const hasAnyPhotos = displayItems.some(item => item.photos.length > 0);
   const hasAnyItems = totalItems > 0;
+  const isAnalyzeInFlightRef = React.useRef(false);
   const shouldShowBottomActions =
     cameraMode === 'shelf'
       ? true
       : hasAnyItems || hasAnyPhotos;
 
+  const submitDirectGenerateJob = React.useCallback(async (
+    products: Array<{
+      productIndex: number;
+      productId: string;
+      variantId?: string;
+      imageUrls: string[];
+      coverImageIndex: number;
+      selectedMatches?: any[];
+      quantity?: number;
+    }>
+  ) => {
+    const token = await ensureSupabaseJwt();
+    if (!token) {
+      throw new Error('No auth token available for generate request');
+    }
+
+    const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+    const API_BASE = /localhost|127\.0\.0\.1/i.test(rawApiBase) ? 'https://api.sssync.app' : rawApiBase;
+    const response = await fetch(`${API_BASE}/api/products/generate/jobs`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        products,
+        selectedPlatforms: connectedPlatformKeys,
+        options: { useScraping: true },
+      }),
+    });
+
+    const responseText = await response.text();
+    let parsed: any = null;
+    try {
+      parsed = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      parsed = null;
+    }
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText} :: ${responseText.slice(0, 200)}`);
+    }
+
+    return parsed as JobResponse | null;
+  }, [connectedPlatformKeys]);
+
   // Shared handler: analyze and navigate to match/generate flow (accounts for quick scan selections)
   const handleAnalyzeAndNavigate = React.useCallback(async () => {
+    if (isAnalyzeInFlightRef.current) {
+      return;
+    }
+    isAnalyzeInFlightRef.current = true;
     onSaveDraft?.();
+    onClose();
     const firstPhotos = bulkItems.map(item => item.photos[0]).filter(Boolean);
     if (firstPhotos.length === 0) {
       Alert.alert('No Photos', 'Please take some photos first before searching.');
+      isAnalyzeInFlightRef.current = false;
       return;
     }
 
@@ -3945,42 +4517,212 @@ const BulkItemsSheet: React.FC<{
     setItemLoadingStates(loadingStates);
 
     try {
-      const jobResponseData: JobResponse = await performAnalyze(firstPhotos);
+      const mergedConfirmedQuickMatch = { ...confirmedQuickMatchByItemId };
+      bulkItems.forEach(item => {
+        if (item.preSelectedSource) {
+          mergedConfirmedQuickMatch[item.id] = {
+            serpApiData: [item.preSelectedSource],
+            preSelectedIndices: [0],
+            source: 'quick_scan_confirmed',
+          };
+        }
+      });
+
+      const queueEntries = bulkItems.map((item, index) => {
+        const confirmedMatch = mergedConfirmedQuickMatch[item.id];
+        const selectedIndex = typeof confirmedMatch?.preSelectedIndices?.[0] === 'number'
+          ? confirmedMatch.preSelectedIndices[0]
+          : null;
+        const selectedCandidate = (
+          confirmedMatch?.source === 'quick_scan_confirmed' &&
+          selectedIndex != null &&
+          Array.isArray(confirmedMatch.serpApiData)
+        )
+          ? confirmedMatch.serpApiData[selectedIndex]
+          : null;
+        const imageUrls = item.photos.map((photo) => photo.uri).filter(Boolean);
+        const fallbackId = item.id || `quick-generate-${index}`;
+
+        return {
+          originalIndex: index,
+          item,
+          selectedCandidate,
+          generateProduct: selectedCandidate ? {
+            productIndex: index,
+            productId: String(selectedCandidate.productId || selectedCandidate.variantId || fallbackId),
+            variantId: selectedCandidate.variantId ? String(selectedCandidate.variantId) : undefined,
+            imageUrls,
+            coverImageIndex: 0,
+            selectedMatches: [selectedCandidate],
+            quantity: item.quantity,
+          } : null,
+        };
+      });
+
+      const directGenerateEntries = queueEntries.filter((entry) => (
+        entry.selectedCandidate &&
+        entry.generateProduct &&
+        Array.isArray(entry.generateProduct.imageUrls) &&
+        entry.generateProduct.imageUrls.length > 0
+      ));
+      const analyzeEntries = queueEntries.filter((entry) => !directGenerateEntries.includes(entry));
+      const userImagesByIndex = Object.fromEntries(
+        bulkItems.map((item, index) => [index, item.photos.map((photo) => photo.uri).filter(Boolean)])
+      );
+
+      if (directGenerateEntries.length > 0 && analyzeEntries.length === 0) {
+        const generateProductsPayload = directGenerateEntries.flatMap((entry) => (
+          entry.generateProduct ? [{ ...entry.generateProduct, productIndex: entry.originalIndex }] : []
+        ));
+        const directJobResponse = await submitDirectGenerateJob(generateProductsPayload);
+
+        const directJobId = directJobResponse?.jobId;
+        if (!directJobId) {
+          throw new Error('Generate job response missing jobId');
+        }
+
+        onSubmitItemsForProcessing?.(bulkItems.map((item) => ({ id: item.id })));
+        const itemsForGenerate = bulkItems.map((item, index) => {
+          const selectedCandidate = queueEntries[index]?.selectedCandidate;
+          return {
+            index,
+            title: item.title || selectedCandidate?.title || `Item ${index + 1}`,
+            thumb: item.photos?.[0]?.uri || selectedCandidate?.image || selectedCandidate?.thumbnail || '',
+            matchesCount: 1,
+            matchJobId: undefined,
+          };
+        });
+
+        navigation.navigate('LoadingScreen', {
+          processType: 'generate',
+          payload: {
+            jobId: directJobId,
+            firstPhotos,
+            bulkItems,
+          },
+          onCompleteRoute: {
+            screen: 'GenerateDetailsScreen',
+            params: {
+              jobId: directJobId,
+              matchJobId: '',
+              items: itemsForGenerate,
+              jobMap: {},
+              userImagesByIndex,
+            },
+          },
+        });
+        return;
+      }
+
+      const directJobMap = directGenerateEntries.length > 0 ? (() => {
+        const payload = directGenerateEntries.flatMap((entry) => (
+          entry.generateProduct ? [{ ...entry.generateProduct, productIndex: entry.originalIndex }] : []
+        ));
+        return payload;
+      })() : [];
+
+      let directJobResponse: JobResponse | null = null;
+      let directJobId: string | undefined;
+      if (directJobMap.length > 0) {
+        directJobResponse = await submitDirectGenerateJob(directJobMap);
+        directJobId = directJobResponse?.jobId || undefined;
+        if (!directJobId) {
+          throw new Error('Generate job response missing jobId');
+        }
+      }
+
+      const analyzeFirstPhotos = analyzeEntries.map((entry) => entry.item.photos[0]).filter(Boolean);
+      const analyzeItems = analyzeEntries.map((entry) => ({ id: entry.item.id }));
+      const analyzeQuickMatchHints = Object.fromEntries(
+        analyzeEntries.flatMap((entry) => (
+          mergedConfirmedQuickMatch[entry.item.id]
+            ? [[entry.item.id, mergedConfirmedQuickMatch[entry.item.id]]]
+            : []
+        ))
+      );
+
+      if (analyzeFirstPhotos.length === 0 && directJobId) {
+        onSubmitItemsForProcessing?.(bulkItems.map((item) => ({ id: item.id })));
+        navigation.navigate('LoadingScreen', {
+          processType: 'generate',
+          payload: {
+            jobId: directJobId,
+            firstPhotos,
+            bulkItems,
+          },
+          onCompleteRoute: {
+            screen: 'GenerateDetailsScreen',
+            params: {
+              jobId: directJobId,
+              matchJobId: '',
+              items: bulkItems.map((item, index) => ({
+                index,
+                title: item.title || queueEntries[index]?.selectedCandidate?.title || `Item ${index + 1}`,
+                thumb: item.photos?.[0]?.uri || queueEntries[index]?.selectedCandidate?.image || queueEntries[index]?.selectedCandidate?.thumbnail || '',
+                matchesCount: 1,
+                matchJobId: undefined,
+              })),
+              jobMap: {},
+              userImagesByIndex,
+            },
+          },
+        });
+        return;
+      }
+
+      const jobResponseData: JobResponse = await performAnalyze(
+        analyzeFirstPhotos,
+        analyzeQuickMatchHints,
+        analyzeItems,
+      );
       console.log('[ANALYZE] Job Response:', jobResponseData);
       setJobResponse(jobResponseData);
       const jobId = jobResponseData?.jobId;
 
       if (jobId) {
-        const mergedConfirmedQuickMatch = { ...confirmedQuickMatchByItemId };
-        bulkItems.forEach(item => {
-          if (item.preSelectedSource) {
-            mergedConfirmedQuickMatch[item.id] = {
-              serpApiData: [item.preSelectedSource],
-              preSelectedIndices: [0]
-            };
-          }
-        });
+        onSubmitItemsForProcessing?.(bulkItems.map((item) => ({ id: item.id })));
+        const itemsForGenerate = bulkItems.map((item, index) => ({
+          index,
+          title: item.title || queueEntries[index]?.selectedCandidate?.title || `Item ${index + 1}`,
+          thumb: item.photos?.[0]?.uri || queueEntries[index]?.selectedCandidate?.image || queueEntries[index]?.selectedCandidate?.thumbnail || '',
+          matchesCount: directGenerateEntries.some((entry) => entry.originalIndex === index) ? 1 : 0,
+          matchJobId: analyzeEntries.some((entry) => entry.originalIndex === index) ? jobId : undefined,
+        }));
+        const jobMap = directJobId
+          ? Object.fromEntries(
+              directGenerateEntries.map((entry) => [
+                entry.originalIndex,
+                { jobId: directJobId as string, status: directJobResponse?.status },
+              ])
+            )
+          : {};
+        const resultIndexMap = Object.fromEntries(
+          analyzeEntries.map((entry, analyzeIndex) => [analyzeIndex, entry.originalIndex])
+        );
 
         navigation.navigate('LoadingScreen', {
           processType: 'match',
           payload: {
             jobId,
-            bulkItems,
-            firstPhotos,
-            confirmedQuickMatchByItemId: mergedConfirmedQuickMatch,
+            bulkItems: analyzeEntries.map((entry) => entry.item),
+            firstPhotos: analyzeFirstPhotos,
+            confirmedQuickMatchByItemId: analyzeQuickMatchHints,
             skipMatchSelection: true,
             autoGenerateAllPlatforms: true,
+            resultIndexMap,
           },
           onCompleteRoute: {
-            screen: 'MatchSelectionScreen',
+            screen: 'GenerateDetailsScreen',
             params: {
-              jobResponse: jobResponseData,
-              response: {
-                jobId,
-                bulkItems,
-                firstPhotos,
-                confirmedQuickMatchByItemId: mergedConfirmedQuickMatch,
-              },
+              jobId: '',
+              status: 'processing',
+              results: [],
+              summary: [],
+              completedAt: '',
+              matchJobId: jobId,
+              items: itemsForGenerate,
+              jobMap,
+              userImagesByIndex,
             },
           },
         });
@@ -3990,16 +4732,22 @@ const BulkItemsSheet: React.FC<{
     } catch (error) {
       console.error('[ANALYZE] Error:', error);
       Alert.alert('Error', 'Failed to start analysis. Please try again.');
+    } finally {
+      isAnalyzeInFlightRef.current = false;
     }
   }, [
     bulkItems,
     confirmedQuickMatchByItemId,
+    connectedPlatformKeys,
     performAnalyze,
     onStartBroadSearch,
     setJobResponse,
     setItemLoadingStates,
     navigation,
+    onSubmitItemsForProcessing,
     onSaveDraft,
+    onClose,
+    submitDirectGenerateJob,
   ]);
 
   return (
@@ -4027,8 +4775,8 @@ const BulkItemsSheet: React.FC<{
 
               // Snap to positions based on velocity
               if (velocityY > 500) {
-                // Fast downward swipe - close completely
-                onClose();
+                // Prevent accidental auto-close from gesture noise; explicit Exit handles closing.
+                sheetTranslateY.value = withSpring(0);
               } else if (velocityY < -500) {
                 // Fast upward swipe - expand to fully visible
                 sheetTranslateY.value = withSpring(0);
@@ -4205,6 +4953,12 @@ const BulkItemsSheet: React.FC<{
                     const selectedMatch = confirmedMatch || topMatch;
                     const selectedMatchImage = selectedMatch?.imageUrl || selectedMatch?.image || null;
                     const selectedMatchTitle = selectedMatch?.title || 'Selected match';
+                    const isLocalInventoryMatch = Boolean(selectedMatch?.isLocalMatch);
+                    const selectedMatchLabel = isLocalInventoryMatch
+                      ? 'Already in Inventory'
+                      : confirmedMatch
+                        ? (matchInfo?.source === 'quick_scan_auto' ? 'Auto-selected Match' : 'Selected Match')
+                        : `${matchCount} Match${matchCount > 1 ? 'es' : ''} Found`;
                     const countDraft = countDraftByItemId[item.id] ?? String(item.quantity ?? 1);
 
                     if (currentInstruction === 'extracting' || currentInstruction === 'optimizing') {
@@ -4363,9 +5117,16 @@ const BulkItemsSheet: React.FC<{
                           </View>
                         ) : selectedMatch ? (
                           <TouchableOpacity
-                            style={styles.selectedMatchCard}
+                            style={[
+                              styles.selectedMatchCard,
+                              isLocalInventoryMatch && styles.selectedMatchCardLocalInventory,
+                            ]}
                             onPress={(e) => {
                               e.stopPropagation?.();
+                              if (isLocalInventoryMatch) {
+                                onOpenLocalMatch?.(item.id);
+                                return;
+                              }
                               onOpenQuickMatches?.(item.id);
                             }}
                           >
@@ -4375,11 +5136,23 @@ const BulkItemsSheet: React.FC<{
                               <View style={[styles.selectedMatchImage, { backgroundColor: '#E2E8F0' }]} />
                             )}
                             <View style={{ flex: 1, marginRight: 8 }}>
-                              <Text style={styles.selectedMatchLabel}>{confirmedMatch ? 'Selected Match' : `${matchCount} Match${matchCount > 1 ? 'es' : ''} Found`}</Text>
+                              <Text style={[
+                                styles.selectedMatchLabel,
+                                isLocalInventoryMatch && styles.selectedMatchLabelLocalInventory,
+                              ]}>
+                                {selectedMatchLabel}
+                              </Text>
                               <Text style={styles.selectedMatchTitle} numberOfLines={1}>{selectedMatchTitle}</Text>
+                              {isLocalInventoryMatch ? (
+                                <Text style={styles.selectedMatchSubtitle} numberOfLines={1}>
+                                  Open stock details and clear it from this queue.
+                                </Text>
+                              ) : null}
                             </View>
-                            <View style={styles.matchActionPill}>
-                              <Text style={styles.matchActionPillText}>Change</Text>
+                            <View style={[styles.matchActionPill, isLocalInventoryMatch && styles.matchActionPillLocalInventory]}>
+                              <Text style={[styles.matchActionPillText, isLocalInventoryMatch && styles.matchActionPillLocalInventoryText]}>
+                                {isLocalInventoryMatch ? 'View' : (confirmedMatch ? 'Manage' : 'Review')}
+                              </Text>
                             </View>
                           </TouchableOpacity>
                         ) : (
@@ -4453,7 +5226,16 @@ const BulkItemsSheet: React.FC<{
                 { backgroundColor: hasLoadingItems || (cameraMode !== 'shelf' && totalItems === 0) ? '#A3A3A3' : '#93C822' },
               ]}
               disabled={hasLoadingItems || (cameraMode !== 'shelf' && totalItems === 0)}
-              onPress={cameraMode === 'shelf' && totalItems === 0 ? onImageUpload : handleAnalyzeAndNavigate}
+              onPress={() => {
+                if (cameraMode === 'shelf' && totalItems === 0) {
+                  onImageUpload();
+                } else if (cameraMode === 'shelf' && totalItems > 0) {
+                  // Direct transition from shelf to camera mode
+                  onStartBroadSearch(); // We'll hijack this prop or close modal
+                } else {
+                  handleAnalyzeAndNavigate();
+                }
+              }}
             >
               {hasLoadingItems ? (
                 <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 8 }} />
@@ -4467,11 +5249,13 @@ const BulkItemsSheet: React.FC<{
               <Text style={[styles.searchForProductButtonText, { marginLeft: 8 }]}>
                 {cameraMode === 'shelf' && totalItems === 0
                   ? 'Take shelf photo'
-                  : cameraMode !== 'shelf' && totalItems === 0
-                    ? 'Take a photo to continue'
-                    : hasLoadingItems
-                      ? 'Analyzing...'
-                      : `Analyze & List ${totalItems} Items`}
+                  : cameraMode === 'shelf' && totalItems > 0
+                    ? `Take Photos for ${totalItems} Item${totalItems > 1 ? 's' : ''}`
+                    : cameraMode !== 'shelf' && totalItems === 0
+                      ? 'Take a photo to continue'
+                      : hasLoadingItems
+                        ? 'Analyzing...'
+                        : `Analyze & List ${totalItems} Items`}
               </Text>
             </TouchableOpacity>
           </View>
@@ -4507,7 +5291,6 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
   },
-
   // Photo Stack Styles
   photoStackContainer: {
     position: 'absolute',
@@ -4617,11 +5400,70 @@ const styles = StyleSheet.create({
   processingIndicator: {
     marginLeft: 8,
   },
+  centerOverlayMatchCard: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 16,
+    minHeight: 78,
+    paddingHorizontal: 12,
+    paddingVertical: 13,
+    borderWidth: 1,
+  },
+  centerOverlayMatchTouchable: {
+    width: '100%',
+    paddingLeft: 116,
+    paddingRight: 84,
+    marginBottom: 30,
+  },
+  centerOverlayMatchCardConfirmed: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E2E8F0',
+  },
+  centerOverlayMatchCardPending: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E2E8F0',
+  },
+  centerOverlayMatchImage: {
+    width: 52,
+    height: 52,
+    borderRadius: 12,
+    marginRight: 10,
+  },
+  centerOverlayMatchImageFallback: {
+    backgroundColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  centerOverlayMatchTextBlock: {
+    flex: 1,
+  },
+  centerOverlayMatchLabel: {
+    color: '#7BAF12',
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 2,
+  },
+  centerOverlayMatchTitle: {
+    color: '#0F172A',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  centerOverlayMatchSubtitle: {
+    color: '#475569',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  centerOverlayChevron: {
+    marginLeft: 8,
+  },
 
   // Barcode Overlay Styles
   barcodeOverlayContainer: {
     position: 'absolute',
-    top: 140, // Below nav bar
+    top: 135, // Below nav bar
     left: 0,
     right: 0,
     alignItems: 'center',
@@ -4898,6 +5740,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  itemNavArrowMatchBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -4,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#93C822',
+  },
   itemNavArrowDisabled: {
     opacity: 0.4,
   },
@@ -4934,7 +5787,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
-
   // Sheet Styles
   matchSheet: {
     position: 'absolute',
@@ -5592,6 +6444,10 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginTop: 10,
   },
+  selectedMatchCardLocalInventory: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#86EFAC',
+  },
   selectedMatchImage: {
     width: 38,
     height: 38,
@@ -5605,10 +6461,18 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: 2,
   },
+  selectedMatchLabelLocalInventory: {
+    color: '#15803D',
+  },
   selectedMatchTitle: {
     fontSize: 13,
     color: '#1E293B',
     fontWeight: '600',
+  },
+  selectedMatchSubtitle: {
+    marginTop: 3,
+    fontSize: 11,
+    color: '#475569',
   },
   noMatchCard: {
     flexDirection: 'row',
@@ -5662,6 +6526,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#334155',
     fontWeight: '700',
+  },
+  matchActionPillLocalInventory: {
+    backgroundColor: '#DCFCE7',
+  },
+  matchActionPillLocalInventoryText: {
+    color: '#166534',
   },
   matchActionPillDisabled: {
     opacity: 0.55,
@@ -5797,6 +6667,13 @@ const styles = StyleSheet.create({
     marginLeft: 12,
     width: 20,
     height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unicodeSpinnerText: {
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    textAlign: 'center',
+    includeFontPadding: false,
   },
 
   // Notification Bar Styles

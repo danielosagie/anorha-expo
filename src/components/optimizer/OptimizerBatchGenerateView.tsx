@@ -32,9 +32,11 @@ const COLORS = {
 interface OptimizerBatchGenerateViewProps {
     onBack: () => void;
     onComplete: (ids: string[]) => void;
+    /** When provided, use this list instead of fetching (real data-needed queue from useOptimizerQueues) */
+    queueProducts?: any[];
 }
 
-export function OptimizerBatchGenerateView({ onBack, onComplete }: OptimizerBatchGenerateViewProps) {
+export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }: OptimizerBatchGenerateViewProps) {
     const { getToken } = useAuth();
     const [products, setProducts] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -45,34 +47,34 @@ export function OptimizerBatchGenerateView({ onBack, onComplete }: OptimizerBatc
     const successAnim = useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
-        loadBatchCandidates();
+        if (queueProducts && queueProducts.length > 0) {
+            setProducts(queueProducts);
+            const initialSelection = new Set<string>();
+            queueProducts.slice(0, 5).forEach((p: any) => initialSelection.add(p.Id));
+            setSelectedIds(initialSelection);
+            setLoading(false);
+        } else {
+            loadBatchCandidates();
+        }
     }, []);
 
     const loadBatchCandidates = async () => {
         try {
             await ensureSupabaseJwt();
-
-            // Fetch products that need text content (Title/Description)
-            // Simplified logic: Products created recently or flagged
             const { data, error } = await supabase
                 .from('ProductVariants')
                 .select(`
                     Id, Title, Sku, Price,
                     ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl)
                 `)
-                .limit(20);
+                .limit(100);
 
             if (error) throw error;
-
-            // In a real scenario, we'd filter for "needs_optimization"
-            // For demo, we just take the first 20
-            setProducts(data || []);
-
-            // Auto-select first few to encourage action
+            const list = data || [];
+            setProducts(list);
             const initialSelection = new Set<string>();
-            data?.slice(0, 5).forEach(p => initialSelection.add(p.Id));
+            list.slice(0, 5).forEach((p: any) => initialSelection.add(p.Id));
             setSelectedIds(initialSelection);
-
         } catch (err) {
             console.error('[BatchMode] Error loading', err);
             Alert.alert('Error', 'Failed to load products for batch generation.');

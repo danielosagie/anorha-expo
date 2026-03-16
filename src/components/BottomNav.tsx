@@ -3,12 +3,12 @@ import { View, Text, TouchableOpacity, Image, StyleSheet, StyleProp, ViewStyle, 
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PlatformButton from './PlatformButton';
-import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
+import { SmartCommandInput } from './SmartCommandInput';
 import { ENABLED_PLATFORMS } from '../config/platforms';
 
 
 
-export type BottomNavState = 'empty' | 'selection' | 'template' | 'platform' | 'platformPicker';
+export type BottomNavState = 'empty' | 'selection' | 'template' | 'platform' | 'platformPicker' | 'match_confirm' | 'match_assist_input';
 
 type Props = {
   state: BottomNavState;
@@ -37,6 +37,17 @@ type Props = {
   manualOverrideInput?: string;
   onManualOverrideChange?: (text: string) => void;
   onManualOverrideApply?: () => void;
+  // Match selection footer mode props
+  matchSelectedItem?: { thumb?: string; title?: string; source?: string } | null;
+  matchPrompt?: string;
+  matchInputValue?: string;
+  onMatchInputChange?: (value: string) => void;
+  onMatchConfirm?: () => void;
+  onMatchDeny?: () => void;
+  onMatchSubmitDetails?: (text: string) => void;
+  onMatchBestGuess?: () => void;
+  onMatchReselect?: () => void;
+  matchSubmitting?: boolean;
 };
 
 const BottomNav: React.FC<Props> = ({
@@ -64,15 +75,28 @@ const BottomNav: React.FC<Props> = ({
   manualOverrideInput = '',
   onManualOverrideChange,
   onManualOverrideApply,
+  matchSelectedItem = null,
+  matchPrompt,
+  matchInputValue = '',
+  onMatchInputChange,
+  onMatchConfirm,
+  onMatchDeny,
+  onMatchSubmitDetails,
+  onMatchBestGuess,
+  onMatchReselect,
+  matchSubmitting = false,
 }) => {
   const [confirmedExpanded, setConfirmedExpanded] = React.useState(false);
+  const matchInputLabel = 'e.g. barcode, model number, visible text';
+
   return (
     <LinearGradient
       colors={["rgba(255, 255, 255, 0)", "rgb(255, 255, 255)", "rgb(255, 255, 255)"]}
       style={[
         {
-          marginBottom: 3,
-          ...(state === 'platformPicker' ? { width: '100%' } : {}),
+          marginBottom: 0,
+          width: '100%',
+          alignSelf: 'stretch',
         },
         style
       ]}
@@ -147,7 +171,6 @@ const BottomNav: React.FC<Props> = ({
               </View>
             ) : null}
 
-            {/* Manual Override UI */}
             {onManualOverrideChange && onManualOverrideApply && (
               <View style={styles.manualSafetyWrap}>
                 <Text style={styles.manualSafetyLabel}>Safety override: paste a product URL or type the product name</Text>
@@ -244,6 +267,91 @@ const BottomNav: React.FC<Props> = ({
           </TouchableOpacity>
         </View>
       )}
+
+      {state === 'match_confirm' && (
+        <View style={styles.matchFooterWrap}>
+          <Text style={styles.matchHeader}>Selected Match</Text>
+          <View style={styles.matchSelectedCard}>
+            {matchSelectedItem?.thumb ? (
+              <Image source={{ uri: matchSelectedItem.thumb }} style={styles.matchSelectedThumb} resizeMode="cover" />
+            ) : (
+              <View style={styles.matchSelectedThumbPlaceholder} />
+            )}
+            <View style={{ flex: 1 }}>
+              <Text style={styles.matchSelectedTitle} numberOfLines={2}>
+                {matchSelectedItem?.title || 'Untitled listing'}
+              </Text>
+              <Text style={styles.matchSelectedMeta} numberOfLines={1}>
+                {matchSelectedItem?.source || 'web'}
+              </Text>
+            </View>
+          </View>
+
+          <View style={{ gap: 8, marginTop: 3 }}>
+            <TouchableOpacity
+              style={[styles.mainButton, styles.matchPrimaryButton, matchSubmitting && styles.disabledButton]}
+              disabled={matchSubmitting}
+              onPress={onMatchConfirm}
+            >
+              <Icon name="arrow-right" size={18} color="#fff" style={{ marginRight: 8 }} />
+              <Text style={styles.mainButtonText}>Confirm Selection</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.secondaryButton, styles.matchSecondaryButton, matchSubmitting && styles.disabledButton]}
+              disabled={matchSubmitting}
+              onPress={onMatchDeny}
+            >
+              <Icon name="link-off" size={18} color="#888" style={{ marginRight: 8 }} />
+              <Text style={styles.secondaryButtonText}>Product not in results</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {state === 'match_assist_input' && (
+        <View style={styles.matchFooterWrap}>
+          <View style={styles.matchAssistHeaderRow}>
+            {onMatchReselect ? (
+              <TouchableOpacity
+                onPress={onMatchReselect}
+                style={styles.matchReselectBtn}
+                disabled={matchSubmitting}
+              >
+                <Icon name="redo-variant" size={16} color="#6B7280" />
+                <Text style={styles.matchReselectText}>Reselect matches</Text>
+              </TouchableOpacity>
+            ) : null}
+            <Text style={styles.matchHeader}>Could you provide more details?</Text>
+          </View>
+          <Text style={styles.matchPromptText}>
+            {'Add barcode, model, or title text, or continue with best guess.'}
+          </Text>
+
+          <SmartCommandInput
+            mode="quick_fix"
+            variant="inline"
+            startExpanded={true}
+            disableKeyboardHandling={true}
+            placeholder={matchInputLabel}
+            value={matchInputValue}
+            onTextChange={onMatchInputChange}
+            submitLabel="Search again"
+            designVariant="v2"
+            isLoading={matchSubmitting}
+            onSubmit={(text) => {
+              if (onMatchSubmitDetails) onMatchSubmitDetails(text);
+            }}
+          />
+
+          <TouchableOpacity
+            style={[styles.matchSecondaryButton, styles.matchBestGuessBtn, matchSubmitting && styles.disabledButton]}
+            disabled={matchSubmitting}
+            onPress={onMatchBestGuess}
+          >
+            <Text style={styles.matchBestGuessText}>Just give your best guess</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </LinearGradient>
   );
 };
@@ -322,7 +430,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     flexDirection: 'row',
     backgroundColor: '#D9D9D9',
-    paddingVertical: 14,
+    paddingVertical: 18,
     paddingHorizontal: 30,
     borderRadius: 12,
     alignItems: 'center',
@@ -468,6 +576,111 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontSize: 14,
   },
+  matchFooterWrap: {
+    marginBottom: 0,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 18,
+    gap: 12,
+  },
+  matchAssistHeaderRow: {
+    flexDirection: 'column',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 32,
+  },
+  matchReselectBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 999,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  matchReselectText: {
+    color: '#4B5563',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  matchHeader: {
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  matchPromptText: {
+    color: '#64748B',
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center',
+    marginTop: -2,
+  },
+  matchSelectedCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#F8FAFC',
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  matchSelectedThumb: {
+    width: 52,
+    height: 52,
+    borderRadius: 10,
+    backgroundColor: '#E2E8F0',
+  },
+  matchSelectedThumbPlaceholder: {
+    width: 52,
+    height: 52,
+    borderRadius: 10,
+    backgroundColor: '#E2E8F0',
+  },
+  matchSelectedTitle: {
+    color: '#111827',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  matchSelectedMeta: {
+    color: '#64748B',
+    fontSize: 12,
+    marginTop: 3,
+  },
+  matchBestGuessBtn: {
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 0,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 0,
+    borderColor: '#E5E7EB',
+    minHeight: 24,
+  },
+  matchBestGuessText: {
+    color: '#475569',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  matchPrimaryButton: {
+    minHeight: 54,
+    height: 54,
+    marginTop: 0,
+    borderRadius: 12,
+  },
+  matchSecondaryButton: {
+    minHeight: 54,
+    height: 54,
+    marginTop: 0,
+    borderRadius: 12,
+  },
 });
-
-

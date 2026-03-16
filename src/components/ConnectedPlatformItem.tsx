@@ -2,9 +2,8 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, TouchableWithoutFeedback, Alert } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Progress from 'react-native-progress';
-import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
-import { useSyncProgress } from '../hooks/useSyncProgress';
+import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import ShopifySvg from '../assets/shopify.svg';
 import AmazonSvg from '../assets/amazon.svg';
 import FacebookSvg from '../assets/facebook.svg';
@@ -168,7 +167,8 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
     navigation
 }) => {
     const theme = useTheme();
-    const { progress } = useSyncProgress(connection.Id);
+    const { progressByConnectionId } = usePlatformConnections();
+    const progress = progressByConnectionId[connection.Id];
 
     let displayShopName = connection.DisplayName || platformConfig.name;
     if (connection.PlatformType === 'shopify' && connection.DisplayName.includes('.myshopify.com')) {
@@ -176,15 +176,20 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
     }
 
     const PlatformIconComponent = getPlatformIcon(platformConfig.key);
-    const statusInfo = getStatusDisplay(connection.Status);
+    const progressStatus = (progress?.status || '').toLowerCase();
+    const effectiveStatus = progressStatus && CONNECTION_STATUS[progressStatus.toUpperCase() as keyof typeof CONNECTION_STATUS]
+        ? progressStatus
+        : connection.Status;
+    const statusInfo = getStatusDisplay(effectiveStatus);
+    const actionConnection = { ...connection, Status: effectiveStatus };
 
-    const status = (progress?.status as any);
-    const isProgressActive = status === 'scanning' ||
-        status === 'syncing' ||
-        status === 'reconciling' ||
-        status === 'queued';
+    const isProgressActive = progressStatus === 'scanning' ||
+        progressStatus === 'syncing' ||
+        progressStatus === 'reconciling' ||
+        progressStatus === 'queued';
 
-    const progressValue = (progress?.progress || 0) / 100;
+    const rawProgress = typeof progress?.progress === 'number' ? progress.progress : 0;
+    const progressValue = rawProgress > 1 ? rawProgress / 100 : rawProgress;
 
 
     // --- CSV Manage Logic ---
@@ -348,7 +353,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                         </TouchableOpacity>
                     )}
 
-                    {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.PENDING && (
+                    {!connection.NeedsReauth && effectiveStatus === CONNECTION_STATUS.PENDING && (
                         <TouchableOpacity
                             style={[styles.actionButton, { backgroundColor: theme.colors.primary + '20' }]}
                             onPress={() => onStartScan(connection.Id, platformConfig.name)}
@@ -358,7 +363,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                         </TouchableOpacity>
                     )}
 
-                    {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.REVIEW && (
+                    {!connection.NeedsReauth && effectiveStatus === CONNECTION_STATUS.REVIEW && (
                         <TouchableOpacity
                             style={[styles.actionButton, { backgroundColor: '#FF9500' + '20' }]}
                             onPress={() => onReview(connection.Id, platformConfig.name)}
@@ -368,17 +373,17 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                         </TouchableOpacity>
                     )}
 
-                    {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.READY_TO_SYNC && (
+                    {!connection.NeedsReauth && effectiveStatus === CONNECTION_STATUS.READY_TO_SYNC && (
                         <TouchableOpacity
                             style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
-                            onPress={() => navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name })}
+                            onPress={() => navigation.navigate('ImportOverview', { connectionId: connection.Id, platformName: platformConfig.name })}
                         >
                             <Icon name="check-circle" size={18} color={theme.colors.success} />
                             <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Ready</Text>
                         </TouchableOpacity>
                     )}
 
-                    {!connection.NeedsReauth && (connection.Status === CONNECTION_STATUS.INACTIVE) && (
+                    {!connection.NeedsReauth && (effectiveStatus === CONNECTION_STATUS.INACTIVE) && (
                         <TouchableOpacity
                             style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
                             onPress={() => onStartScan(connection.Id, platformConfig.name)}
@@ -388,15 +393,15 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                         </TouchableOpacity>
                     )}
 
-                    {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.ERROR && (() => {
-                        const recommended = getRecommendedAction(connection, platformConfig.key);
+                    {!connection.NeedsReauth && effectiveStatus === CONNECTION_STATUS.ERROR && (() => {
+                        const recommended = getRecommendedAction(actionConnection, platformConfig.key);
                         const handleAction = () => {
                             switch (recommended.action) {
                                 case 'reconnect': onReconnect(connection.Id, platformConfig.key, platformConfig.name); break;
                                 case 'rescan': onStartScan(connection.Id, platformConfig.name, true); break;
                                 case 'fix_resume': onFix(connection.Id, platformConfig.name); break;
                                 case 'manage':
-                                    navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name });
+                                    navigation.navigate('ImportOverview', { connectionId: connection.Id, platformName: platformConfig.name });
                                     break;
                             }
                         };
@@ -411,7 +416,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                         );
                     })()}
 
-                    {!connection.NeedsReauth && connection.Status === CONNECTION_STATUS.ACTIVE && (
+                    {!connection.NeedsReauth && effectiveStatus === CONNECTION_STATUS.ACTIVE && (
                         <>
                             <TouchableOpacity
                                 style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
@@ -419,17 +424,13 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                                     if (connection.PlatformType === 'csv') {
                                         openManageMenu();
                                     } else {
-                                        navigation.navigate('MappingReview', { connectionId: connection.Id, platformName: platformConfig.name });
+                                        navigation.navigate('ImportOverview', { connectionId: connection.Id, platformName: platformConfig.name });
                                     }
                                 }}
                             >
                                 <Icon name="cog" size={18} color={theme.colors.primary} />
                                 <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Manage</Text>
                             </TouchableOpacity>
-
-                            import BaseModal from './BaseModal';
-
-                            // ... inside component ...
 
                             {/* CSV Manage Modal */}
                             <BaseModal
@@ -477,7 +478,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                                     }}
                                     onPress={() => {
                                         setManageMenuVisible(false);
-                                        navigation.navigate('MappingReview' as any, {
+                                        navigation.navigate('ImportOverview' as any, {
                                             connectionId: connection.Id,
                                             platformName: connection.DisplayName || 'CSV Connection',
                                         });

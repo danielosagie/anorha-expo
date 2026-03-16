@@ -127,6 +127,12 @@ async function exchangeClerkForSupabase(): Promise<boolean> {
     currentSupabaseJwt = body.supabase_token as string;
     if (currentSupabaseJwt) {
       console.log('[supabase.ts] Supabase JWT set, length:', currentSupabaseJwt.length);
+      try {
+        // Ensure Realtime uses the latest JWT for RLS-enabled channels
+        (supabase as any)?.realtime?.setAuth?.(currentSupabaseJwt);
+      } catch (e) {
+        console.warn('[supabase.ts] Failed to set Realtime auth token:', e);
+      }
     } else {
       console.log('[supabase.ts] No supabase_token in response');
     }

@@ -4,6 +4,10 @@ const { getDefaultConfig } = require('expo/metro-config');
 /** @type {import('expo/metro-config').MetroConfig} */
 const config = getDefaultConfig(__dirname);
 
+// Watchman is failing on this machine's global state dir, so force Metro to use
+// the node-based crawler instead of crashing during startup.
+config.resolver.useWatchman = false;
+
 // Fix react-async-hook: package.json "module" points to react-async-hook.esm.js at root, but file is in dist/
 const defaultResolver = require('metro-resolver').resolve;
 config.resolver.resolveRequest = (context, moduleName, platform) => {
@@ -36,4 +40,3 @@ config.transformer = {
 };
 
 module.exports = config;
-

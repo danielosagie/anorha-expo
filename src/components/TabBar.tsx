@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from 'react';
-import { View, TouchableOpacity, Text, StyleSheet, Platform, ViewStyle, StyleProp, Animated, Easing } from 'react-native';
+import { View, TouchableOpacity, Text, StyleSheet, ViewStyle, StyleProp, Animated, Easing, Platform } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import ShadowSurface from './ui/ShadowSurface';
 
 const getTabIcon = (routeName: string): string => {
   switch (routeName) {
@@ -15,8 +16,8 @@ const getTabIcon = (routeName: string): string => {
       return 'message-outline';
     case 'AddProduct':
       return 'plus';
-    case 'Clearouts':
-      return 'cash-fast';
+    case 'Clearouts': //Sprout Clearouts Tab Button
+      return 'sprout-outline';
     case 'Profile':
       return 'cog-outline';
     default:
@@ -28,10 +29,11 @@ type TabBarProps = {
   state: any;
   descriptors: Record<string, any>;
   navigation: any;
-  style?: StyleProp<ViewStyle>;
+  containerStyle?: StyleProp<ViewStyle>;
+  surfaceStyle?: StyleProp<ViewStyle>;
 };
 
-const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, style }) => {
+const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, containerStyle, surfaceStyle }) => {
   const theme = useTheme();
   const lastNonAddRouteRef = useRef<string>('Dashboard');
   const currentRouteName = state?.routes?.[state.index]?.name;
@@ -61,96 +63,104 @@ const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, style }
   }, [currentRouteName]);
 
   return (
-    <View style={[styles.tabBar, style]}> 
-      {state.routes.map((route: any, index: number) => {
-        const { options } = descriptors[route.key];
-        const label = options.tabBarLabel || route.name;
-        const isFocused = state.index === index;
-        
-        const icon = getTabIcon(route.name);
-        const isAddButton = route.name === 'AddProduct';
-        
-        const onPress = () => {
-          // If the Add tab is focused, pressing it acts like a close and returns to the last tab
-          if (isAddButton && isFocused) {
-            navigation.navigate(lastNonAddRouteRef.current || 'Dashboard');
-            return;
+    <View style={[styles.container, containerStyle]}>
+      <ShadowSurface shadow="lg" clip={false} innerStyle={[styles.surface, surfaceStyle]} radius={30}>
+        {state.routes.map((route: any, index: number) => {
+          const { options } = descriptors[route.key];
+          const label = options.tabBarLabel || route.name;
+          const isFocused = state.index === index;
+
+          const icon = getTabIcon(route.name);
+          const isAddButton = route.name === 'AddProduct';
+
+          const onPress = () => {
+            // If the Add tab is focused, pressing it acts like a close and returns to the last tab
+            if (isAddButton && isFocused) {
+              navigation.navigate(lastNonAddRouteRef.current || 'Dashboard');
+              return;
+            }
+            const event = navigation.emit({
+              type: 'tabPress',
+              target: route.key,
+              canPreventDefault: true,
+            });
+            if (!isFocused && !event.defaultPrevented) {
+              navigation.navigate(route.name);
+            } else if (isAddButton && !isFocused) {
+              navigation.navigate('AddProduct');
+            }
+          };
+
+          if (isAddButton) {
+            return (
+              <TouchableOpacity
+                key={index}
+                accessibilityRole="button"
+                accessibilityLabel={options.tabBarAccessibilityLabel}
+                testID={options.tabBarTestID}
+                onPress={onPress}
+                style={styles.tabItem}
+              >
+                <ShadowSurface shadow="md" radius={32} style={styles.addShadowWrap} innerStyle={styles.addOuterCircle}>
+                  <View style={styles.addInnerCircle}>
+                    <Animated.View style={{ transform: [{ rotate: addRotate }] }}>
+                      <Icon name={'plus'} size={28} color={'#FFF'} />
+                    </Animated.View>
+                  </View>
+                </ShadowSurface>
+              </TouchableOpacity>
+            );
           }
-          const event = navigation.emit({
-            type: 'tabPress',
-            target: route.key,
-            canPreventDefault: true,
-          });
-          if (!isFocused && !event.defaultPrevented) {
-            navigation.navigate(route.name);
-          } else if (isAddButton && !isFocused) {
-            navigation.navigate('AddProduct');
-          }
-        };
-        
-        if (isAddButton) {
+
+          const clearoutsActiveColor = '#84CC16';
+          const tintColor =
+            isFocused && route.name === 'Clearouts'
+              ? clearoutsActiveColor
+              : (isFocused ? theme.colors.primary : '#999');
+
           return (
             <TouchableOpacity
               key={index}
               accessibilityRole="button"
+              accessibilityState={isFocused ? { selected: true } : {}}
               accessibilityLabel={options.tabBarAccessibilityLabel}
               testID={options.tabBarTestID}
               onPress={onPress}
               style={styles.tabItem}
             >
-              {/* Outer circle for drop shadow */}
-              <View style={styles.addOuterCircle}>
-                {/* Inner circle for subtle ring */}
-                <View style={styles.addInnerCircle}>
-                  <Animated.View style={{ transform: [{ rotate: addRotate }] }}>
-                    <Icon name={'plus'} size={28} color={'#FFF'} />
-                  </Animated.View>
-                </View>
-              </View>
+              <Icon
+                name={icon}
+                size={24}
+                color={tintColor}
+              />
+              <Text
+                style={[
+                  styles.tabLabel,
+                  { color: tintColor }
+                ]}
+              >
+                {label}
+              </Text>
             </TouchableOpacity>
           );
-        }
-        
-        return (
-          <TouchableOpacity
-            key={index}
-            accessibilityRole="button"
-            accessibilityState={isFocused ? { selected: true } : {}}
-            accessibilityLabel={options.tabBarAccessibilityLabel}
-            testID={options.tabBarTestID}
-            onPress={onPress}
-            style={styles.tabItem}
-          >
-            <Icon
-              name={icon}
-              size={24}
-              color={isFocused && route.name === 'Clearouts' ? '#FF9900' : (isFocused ? theme.colors.primary : '#999')}
-            />
-            <Text
-              style={[
-                styles.tabLabel,
-                { color: isFocused && route.name === 'Clearouts' ? '#FF9900' : (isFocused ? theme.colors.primary : '#999') }
-              ]}
-            >
-              {label}
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
+        })}
+      </ShadowSurface>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  tabBar: {
+  container: {
+    width: '100%',
+  },
+  surface: {
     flexDirection: 'row',
-    backgroundColor: 'transparent',
-    height: 70,
-    paddingBottom: Platform.OS === 'ios' ? 10 : 10,
-    paddingTop: 8,
-    paddingHorizontal: 8,
-    justifyContent: 'space-around',
     alignItems: 'center',
+    justifyContent: 'space-around',
+    paddingTop: 8,
+    paddingBottom: Platform.OS === 'ios' ? 10 : 8,
+    paddingHorizontal: 8,
+    height: '100%',
   },
   tabItem: {
     flex: 1,
@@ -161,24 +171,14 @@ const styles = StyleSheet.create({
     height: 60,
     width: 60,
     borderRadius: 32,
-    marginTop: -5,
     backgroundColor: '#93C822',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2.5,
     borderColor: "rgba(0, 0, 0, 0.15)",
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.15,
-        shadowRadius: 8,
-      },
-      android: {
-        elevation: 4,
-      },
-      default: {},
-    }),
+  },
+  addShadowWrap: {
+    marginTop: -5,
   },
   addInnerCircle: {
     height: 54,
@@ -192,8 +192,11 @@ const styles = StyleSheet.create({
   },
   tabLabel: {
     fontSize: 12,
+    lineHeight: 14,
     marginTop: 4,
     fontWeight: '500',
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
 });
 

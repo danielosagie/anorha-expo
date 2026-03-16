@@ -14,6 +14,7 @@ import { supabase } from '../../lib/supabase';
 import InventoryListCard from '../components/InventoryListCard';
 import ActivityEventCard from '../components/ActivityEventCard';
 import SearchBarWithScanner from '../components/SearchBarWithScanner';
+import ShadowSurface from '../components/ui/ShadowSurface';
 import { useOrg } from '../context/OrgContext';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 import { useProductVariantRealtime } from '../hooks/useProductVariantRealtime';
@@ -773,7 +774,7 @@ const DashboardScreen = () => {
       // Find platform name from ID or use type? Assuming MappingReview needs platformName.
       // We can try to guess or just pass a generic name if needed, but MappingReview probably wants it for display.
       // Let's pass PlatformType as platformName or DisplayName.
-      navigation.navigate('MappingReview', {
+      navigation.navigate('ImportOverview', {
         connectionId: readyConnection.Id,
         platformName: readyConnection.DisplayName || readyConnection.PlatformType
       });
@@ -964,12 +965,13 @@ const DashboardScreen = () => {
               />
             )
           ) : (
-            <View style={styles.todayCard}>
-              <TouchableOpacity
-                activeOpacity={0.95}
-                style={styles.insightCardGreen}
-                onPress={forceRefreshInsight}
-              >
+            <ShadowSurface shadow="sm" radius={20} style={styles.todayCardShadow} innerStyle={styles.todayCard}>
+              <ShadowSurface shadow="sm" radius={20} style={styles.insightCardGreenShadow} innerStyle={styles.insightCardGreenSurface}>
+                <TouchableOpacity
+                  activeOpacity={0.95}
+                  style={styles.insightCardGreenContent}
+                  onPress={forceRefreshInsight}
+                >
                 <View style={{ ...styles.insightGreenHeader, marginBottom: 0 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
                     <Icon name="sprout-outline" size={20} color="rgba(72, 72, 72, 1)" />
@@ -1027,8 +1029,9 @@ const DashboardScreen = () => {
                     </View>
                   </View>
                 </View>
-              </TouchableOpacity>
-            </View>
+                </TouchableOpacity>
+              </ShadowSurface>
+            </ShadowSurface>
           )}
         </View>
 
@@ -1039,26 +1042,30 @@ const DashboardScreen = () => {
 
         {/* Overview */}
         <View style={styles.sectionContainer}>
-          <View style={[styles.todayCard, { padding: 8, paddingTop: 4 }]}>
+          <ShadowSurface shadow="sm" radius={20} style={styles.todayCardShadow} innerStyle={[styles.todayCard, { padding: 8, paddingTop: 4 }]}>
             <View style={[styles.tabsContainer, { marginHorizontal: 4, marginTop: 8, marginBottom: 4, backgroundColor: "#fff", justifyContent: 'space-between' }]}>
               <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>Overview</Text>
             </View>
 
             <View style={[styles.tabsContainer, { marginHorizontal: 8, marginTop: 0 }]}>
-              <TouchableOpacity
-                style={[styles.tab, activeTab === 'low_stock' && styles.activeTab]}
-                onPress={() => setActiveTab('low_stock')}
-              >
-                <Icon name="package-variant" size={16} color={activeTab === 'low_stock' ? '#1F2937' : '#6B7280'} style={{ marginRight: 6 }} />
-                <Text style={[styles.tabText, activeTab === 'low_stock' && styles.activeTabText]}>Low Stock</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.tab, activeTab === 'recent_activity' && styles.activeTab]}
-                onPress={() => setActiveTab('recent_activity')}
-              >
-                <Icon name="clock-outline" size={16} color={activeTab === 'recent_activity' ? '#1F2937' : '#6B7280'} style={{ marginRight: 6 }} />
-                <Text style={[styles.tabText, activeTab === 'recent_activity' && styles.activeTabText]}>Recent Activity</Text>
-              </TouchableOpacity>
+              <ShadowSurface shadow={activeTab === 'low_stock' ? 'xs' : 'none'} radius={8} style={styles.tabShadow} innerStyle={styles.tabInner}>
+                <TouchableOpacity
+                  style={[styles.tab, activeTab === 'low_stock' && styles.activeTab]}
+                  onPress={() => setActiveTab('low_stock')}
+                >
+                  <Icon name="package-variant" size={16} color={activeTab === 'low_stock' ? '#1F2937' : '#6B7280'} style={{ marginRight: 6 }} />
+                  <Text style={[styles.tabText, activeTab === 'low_stock' && styles.activeTabText]}>Low Stock</Text>
+                </TouchableOpacity>
+              </ShadowSurface>
+              <ShadowSurface shadow={activeTab === 'recent_activity' ? 'xs' : 'none'} radius={8} style={styles.tabShadow} innerStyle={styles.tabInner}>
+                <TouchableOpacity
+                  style={[styles.tab, activeTab === 'recent_activity' && styles.activeTab]}
+                  onPress={() => setActiveTab('recent_activity')}
+                >
+                  <Icon name="clock-outline" size={16} color={activeTab === 'recent_activity' ? '#1F2937' : '#6B7280'} style={{ marginRight: 6 }} />
+                  <Text style={[styles.tabText, activeTab === 'recent_activity' && styles.activeTabText]}>Recent Activity</Text>
+                </TouchableOpacity>
+              </ShadowSurface>
             </View>
 
             {activeTab === 'low_stock' && (
@@ -1130,7 +1137,7 @@ const DashboardScreen = () => {
                 )}
               </View>
             )}
-          </View>
+          </ShadowSurface>
         </View>
 
       </ScrollView >
@@ -1247,6 +1254,9 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     backgroundColor: "transparent",
   },
+  todayCardShadow: {
+    marginBottom: 0,
+  },
   todayHeader: {
     marginBottom: 12,
   },
@@ -1277,11 +1287,6 @@ const styles = StyleSheet.create({
     padding: 0,
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.1)', // slightly darker lime-200 for better edge definition
-    // Add shadow to separate from background
-    ...Platform.select({
-      ios: { shadowColor: '#rgba(0,0,0,1)', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 6 },
-      android: { elevation: 3 },
-    }),
   },
 
   insideContainer: {
@@ -1294,17 +1299,18 @@ const styles = StyleSheet.create({
 
   },
   // Green Card Insight - Updated to match new theme
-  insightCardGreen: {
+  insightCardGreenShadow: {
+    marginTop: 0,
+  },
+  insightCardGreenSurface: {
     backgroundColor: '#FEF4DD',
     borderRadius: 20,
-    padding: 16,
-    gap: 12,
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.1)',
-    ...Platform.select({
-      ios: { shadowColor: 'rgba(0,0,0,1)', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 6 },
-      android: { elevation: 3 },
-    }),
+  },
+  insightCardGreenContent: {
+    padding: 16,
+    gap: 12,
   },
   insightGreenHeader: {
     flexDirection: 'row',
@@ -1382,6 +1388,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#fff',
+    lineHeight: 20,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
   modalBackdrop: {
     flex: 1,
@@ -1657,6 +1666,12 @@ const styles = StyleSheet.create({
     padding: 4,
     marginBottom: 16,
   },
+  tabShadow: {
+    flex: 1,
+  },
+  tabInner: {
+    borderRadius: 8,
+  },
   tab: {
     flex: 1,
     flexDirection: 'row',
@@ -1667,15 +1682,14 @@ const styles = StyleSheet.create({
   },
   activeTab: {
     backgroundColor: '#fff',
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2 },
-      android: { elevation: 2 },
-    }),
   },
   tabText: {
     fontSize: 13,
     fontWeight: '500',
     color: '#6B7280',
+    lineHeight: 16,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
   activeTabText: {
     color: '#111',

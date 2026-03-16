@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, Switch, FlatList, Animated } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, Switch, FlatList, Animated, Easing } from 'react-native';
 import { ChevronLeft, ChevronRight, Copy, Check, Info, Box, AlertTriangle, X } from 'lucide-react-native';
 import BaseModal from '../components/BaseModal';
 import { useTheme } from '../context/ThemeContext';
@@ -13,7 +13,6 @@ import CloverSvg from '../assets/clover.svg';
 import SquareSvg from '../assets/square.svg';
 import ListingEditorForm, { ListingEditorFormRef } from '../components/ListingEditorForm';
 import BottomActionBar from '../components/BottomActionBar';
-import ExpoBarcodeScanner from '../components/ExpoBarcodeScanner';
 import { CameraView } from 'expo-camera';
 import Card from '../components/Card';
 import PlaceholderImage from '../components/PlaceholderImage';
@@ -38,6 +37,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const ACTION_BAR_HEIGHT = 80;
 const ACTION_BAR_BOTTOM_OFFSET = 24;
+const SCANNER_GROW_HEIGHT = 240;
+const SCANNER_CLOSE_DURATION = 220;
 
 // Base URL for API
 const SSSYNC_API_BASE_URL = 'https://api.sssync.app';
@@ -274,6 +275,38 @@ const ProductDetailScreen = observer(
     const [isActivityModalVisible, setIsActivityModalVisible] = useState(false);
     const [isBarcodeScannerVisible, setIsBarcodeScannerVisible] = useState(false);
     const [isImagePickerVisible, setIsImagePickerVisible] = useState(false);
+    const [scannerMounted, setScannerMounted] = useState(false);
+    const scannerHeight = useRef(new Animated.Value(0)).current;
+
+    const openBarcodeScanner = useCallback((onResult: (code: string) => void) => {
+      scannerHeight.stopAnimation();
+      scannerHeight.setValue(0);
+      setScannerMounted(true);
+      setIsBarcodeScannerVisible(true);
+      (ProductDetailScreen as any)._scannerResultHandler = onResult;
+      Animated.spring(scannerHeight, {
+        toValue: SCANNER_GROW_HEIGHT,
+        speed: 18,
+        bounciness: 6,
+        useNativeDriver: false,
+      }).start();
+    }, [scannerHeight]);
+
+    const closeBarcodeScanner = useCallback(() => {
+      setIsBarcodeScannerVisible(false);
+      (ProductDetailScreen as any)._scannerResultHandler = null;
+      scannerHeight.stopAnimation();
+      Animated.timing(scannerHeight, {
+        toValue: 0,
+        duration: SCANNER_CLOSE_DURATION,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: false,
+      }).start(({ finished }) => {
+        if (finished) {
+          setScannerMounted(false);
+        }
+      });
+    }, [scannerHeight]);
 
     // Partnership state for share/revoke controls
     interface PartnershipInfo {
@@ -1525,38 +1558,38 @@ const ProductDetailScreen = observer(
             const productResult = resultArray[0]; // Assuming single product regen
             const platformData = productResult?.platforms?.[platformKey];
 
-	            if (platformData) {
-	              console.log(`[ProductDetail] Got generated data for ${platformKey}:`, Object.keys(platformData));
+            if (platformData) {
+              console.log(`[ProductDetail] Got generated data for ${platformKey}:`, Object.keys(platformData));
 
               // Smart Merge: Don't overwrite existing values with empty strings
               const safePlatformData = { ...platformData };
 
-	              // Sanitize: If title/desc are empty strings, remove them from update so we keep existing
-	              if (safePlatformData.title === '') delete safePlatformData.title;
-	              if (safePlatformData.description === '') delete safePlatformData.description;
-	              const now = Date.now();
-	              const aiFieldChanges: Record<string, { value?: any; updatedAt: number }> = {};
-	              if (safePlatformData.title !== undefined) aiFieldChanges.title = { value: safePlatformData.title, updatedAt: now };
-	              if (safePlatformData.description !== undefined) aiFieldChanges.description = { value: safePlatformData.description, updatedAt: now };
-	              if (safePlatformData.price !== undefined) aiFieldChanges.price = { value: safePlatformData.price, updatedAt: now };
-	              if (safePlatformData.sku !== undefined) aiFieldChanges.sku = { value: safePlatformData.sku, updatedAt: now };
-	              if (safePlatformData.barcode !== undefined) aiFieldChanges.barcode = { value: safePlatformData.barcode, updatedAt: now };
-	              if (safePlatformData.weight !== undefined) aiFieldChanges.weight = { value: safePlatformData.weight, updatedAt: now };
+              // Sanitize: If title/desc are empty strings, remove them from update so we keep existing
+              if (safePlatformData.title === '') delete safePlatformData.title;
+              if (safePlatformData.description === '') delete safePlatformData.description;
+              const now = Date.now();
+              const aiFieldChanges: Record<string, { value?: any; updatedAt: number }> = {};
+              if (safePlatformData.title !== undefined) aiFieldChanges.title = { value: safePlatformData.title, updatedAt: now };
+              if (safePlatformData.description !== undefined) aiFieldChanges.description = { value: safePlatformData.description, updatedAt: now };
+              if (safePlatformData.price !== undefined) aiFieldChanges.price = { value: safePlatformData.price, updatedAt: now };
+              if (safePlatformData.sku !== undefined) aiFieldChanges.sku = { value: safePlatformData.sku, updatedAt: now };
+              if (safePlatformData.barcode !== undefined) aiFieldChanges.barcode = { value: safePlatformData.barcode, updatedAt: now };
+              if (safePlatformData.weight !== undefined) aiFieldChanges.weight = { value: safePlatformData.weight, updatedAt: now };
 
-	              // Update displayedPlatforms with the generated data
-	              setDisplayedPlatforms(prev => ({
-	                ...prev,
-	                [platformKey]: {
-	                  ...prev[platformKey],
-	                  ...safePlatformData,
-	                }
-	              }));
-	              if (Object.keys(aiFieldChanges).length > 0) {
-	                setExternalUpdates(prev => ({ ...prev, ...aiFieldChanges }));
-	              }
-	              setHasUnsavedChanges(true);
-	              showBanner(`✨ Generated ${platformKey} listing data`);
-	            }
+              // Update displayedPlatforms with the generated data
+              setDisplayedPlatforms(prev => ({
+                ...prev,
+                [platformKey]: {
+                  ...prev[platformKey],
+                  ...safePlatformData,
+                }
+              }));
+              if (Object.keys(aiFieldChanges).length > 0) {
+                setExternalUpdates(prev => ({ ...prev, ...aiFieldChanges }));
+              }
+              setHasUnsavedChanges(true);
+              showBanner(`✨ Generated ${platformKey} listing data`);
+            }
           } catch (err) {
             console.error(`[ProductDetail] Error processing completion for ${platformKey}:`, err);
             Alert.alert('Generation Error', 'Failed to process generated results.');
@@ -1778,6 +1811,8 @@ const ProductDetailScreen = observer(
               description: canonicalData.description,
               brand: (platformData as any).brand,
               tags: canonicalData.tags,
+              categorySuggestion: (platformData as any).categorySuggestion || platformData.categoryPath || platformData.productCategory || platformData.category,
+              productType: (platformData as any).productType,
               preferLeaf: true,
               limit: 15,
               useLlm: true,
@@ -2017,7 +2052,7 @@ const ProductDetailScreen = observer(
       }
     }, [detailedItem, connections, displayedPlatforms, isPublishing, showBanner, loadPlatformData, hasUnsavedChanges, performAutoSave, navigation, facebookSyncMeta.lastSyncAt]);
     // Handle Delist / Remove Mapping
-    const handleDelist = useCallback(async (mappingId: string, platformName: string) => {
+    const handleDelist = useCallback(async (connectionId: string, mappingId: string, platformName: string) => {
       Alert.alert('Delist', `Remove listing from ${platformName}?`, [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -2026,7 +2061,7 @@ const ProductDetailScreen = observer(
           onPress: async () => {
             try {
               const token = await ensureSupabaseJwt();
-              const res = await fetch(`${SSSYNC_API_BASE_URL}/api/products/mappings/${mappingId}`, {
+              const res = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/mappings/${mappingId}`, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${token}` }
               });
@@ -3019,11 +3054,53 @@ const ProductDetailScreen = observer(
               // Mark as fetched for this product (prevents re-fetching)
               hasFetchedDraftRef.current = detailedItem.Id;
 
-              // CRITICAL: Do NOT merge draft data into displayedPlatforms!
-              // The draft contains OLD data from original publish time.
-              // displayedPlatforms should reflect CURRENT edits.
-              // Draft data is available in draftData state if needed for comparison.
-              console.log('[ProductDetail] Draft loaded for reference only - NOT merging to preserve current data');
+              // DRAFT HYDRATION: If core ProductVariant fields are empty/placeholder
+              // but the draft has generated data, merge draft into formData + displayedPlatforms.
+              // This covers the case where user scanned → generated → but never completed "Save to Inventory".
+              const draft = data.currentDraft?.DraftData;
+              const coreFieldsEmpty = !formData.Title || formData.Title.trim() === '' || formData.Price === 0;
+
+              if (draft && coreFieldsEmpty) {
+                console.log('[ProductDetail] Core fields empty — hydrating from draft data');
+
+                // Find canonical platform data (prefer shopify, else first key)
+                const draftKeys = Object.keys(draft);
+                const canonicalKey = draftKeys.includes('shopify') ? 'shopify' : draftKeys[0];
+                const canonicalDraft = canonicalKey ? draft[canonicalKey] : null;
+
+                if (canonicalDraft) {
+                  // Hydrate formData from draft canonical fields
+                  setFormData(prev => ({
+                    ...prev,
+                    Title: canonicalDraft.title || prev.Title || '',
+                    Description: canonicalDraft.description || prev.Description || '',
+                    Price: canonicalDraft.price != null ? parseFloat(String(canonicalDraft.price)) || prev.Price : prev.Price,
+                    CompareAtPrice: canonicalDraft.compareAtPrice != null ? parseFloat(String(canonicalDraft.compareAtPrice)) || 0 : prev.CompareAtPrice,
+                    Sku: canonicalDraft.sku || prev.Sku || '',
+                    Barcode: canonicalDraft.barcode || prev.Barcode || '',
+                    Weight: canonicalDraft.weight != null ? parseFloat(String(canonicalDraft.weight)) || 0 : prev.Weight,
+                    WeightUnit: canonicalDraft.weightUnit || prev.WeightUnit || 'kg',
+                  }));
+
+                  // Hydrate displayedPlatforms from draft
+                  setDisplayedPlatforms(prev => {
+                    const merged = { ...prev };
+                    for (const [platformKey, platformData] of Object.entries(draft)) {
+                      if (platformData && typeof platformData === 'object') {
+                        merged[platformKey] = {
+                          ...(merged[platformKey] || {}),
+                          ...platformData,
+                        };
+                      }
+                    }
+                    return merged;
+                  });
+
+                  console.log('[ProductDetail] Draft hydration complete — Title:', canonicalDraft.title?.substring(0, 50), 'Price:', canonicalDraft.price);
+                }
+              } else {
+                console.log('[ProductDetail] Draft loaded for reference only — core fields already populated');
+              }
             }
           } else {
             console.log('[ProductDetail] Draft data not found (expected for new products)');
@@ -3694,9 +3771,7 @@ const ProductDetailScreen = observer(
               onOpenFieldPanel={undefined}
               pendingImages={pendingImages}
               onOpenBarcodeScanner={(onResult) => {
-                setIsBarcodeScannerVisible(true);
-                // handler stored on closure
-                (ProductDetailScreen as any)._scannerResultHandler = onResult;
+                openBarcodeScanner(onResult);
               }}
               onOpenImageCapture={async (onResult) => {
                 try {
@@ -3783,7 +3858,7 @@ const ProductDetailScreen = observer(
                         </View>
                         <TouchableOpacity
                           style={styles.delistButton}
-                          onPress={() => handleDelist(mapping.Id, platformName)}
+                          onPress={() => handleDelist(mapping.PlatformConnectionId, mapping.Id, platformName)}
                         >
                           <Icon name="archive-outline" size={16} color={theme.colors.text} style={{ marginRight: 6 }} />
                           <Text style={[styles.delistButtonText, { color: theme.colors.text }]}>Delist</Text>
@@ -4004,26 +4079,25 @@ const ProductDetailScreen = observer(
         }
         {/* Barcode Scanner Modal */}
         {
-          isBarcodeScannerVisible && (
+          scannerMounted && (
             <View style={styles.scannerDockFull} pointerEvents="box-none">
-              <View style={styles.scannerFullBleed}>
+              <Animated.View pointerEvents={isBarcodeScannerVisible ? 'auto' : 'none'} style={[styles.scannerFullBleed, { height: scannerHeight }]}>
                 <CameraView
-                  style={{ width: '100%', height: 240 }}
+                  style={StyleSheet.absoluteFillObject}
                   facing={'back'}
-                  onBarcodeScanned={(result: any) => {
+                  onBarcodeScanned={isBarcodeScannerVisible ? (result: any) => {
                     const code = result?.data || result?.rawValue;
                     if (code && (ProductDetailScreen as any)._scannerResultHandler) {
                       (ProductDetailScreen as any)._scannerResultHandler(code);
-                      setIsBarcodeScannerVisible(false);
-                      (ProductDetailScreen as any)._scannerResultHandler = null;
+                      closeBarcodeScanner();
                     }
-                  }}
+                  } : undefined}
                   barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'] }}
                 />
-                <TouchableOpacity onPress={() => { setIsBarcodeScannerVisible(false); (ProductDetailScreen as any)._scannerResultHandler = null; }} style={styles.scannerCloseFull}>
+                <TouchableOpacity onPress={closeBarcodeScanner} style={styles.scannerCloseFull}>
                   <Text style={{ color: '#fff', fontSize: 28 }}>×</Text>
                 </TouchableOpacity>
-              </View>
+              </Animated.View>
             </View>
           )
         }
