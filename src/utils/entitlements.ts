@@ -44,7 +44,7 @@ export async function fetchUserEntitlements(): Promise<UserEntitlements> {
   // Fetch user with subscription in one query
   const { data: usr } = await supabase
     .from('Users')
-    .select('Id, SubscriptionTierId, created_at')
+    .select('Id, CreatedAt')
     .eq('Id', user.id)
     .maybeSingle();
 
@@ -53,12 +53,12 @@ export async function fetchUserEntitlements(): Promise<UserEntitlements> {
   // Fetch subscription status
   const { data: subscription } = await supabase
     .from('Subscriptions')
-    .select('Status, CurrentPlan, CurrentPeriodEnd, TrialEndsAt, CanceledAt')
+    .select('Status, CurrentPlan, CurrentPeriodEnd, TrialEnd, CanceledAt')
     .eq('UserId', user.id)
     .maybeSingle();
 
   // Calculate trial status based on user creation date if no subscription
-  const userCreatedAt = usr.created_at ? new Date(usr.created_at) : new Date();
+  const userCreatedAt = usr.CreatedAt ? new Date(usr.CreatedAt) : new Date();
   const trialEndDate = new Date(userCreatedAt);
   trialEndDate.setDate(trialEndDate.getDate() + FREE_TRIAL_DAYS);
   
@@ -69,7 +69,7 @@ export async function fetchUserEntitlements(): Promise<UserEntitlements> {
     : 0;
 
   // Check explicit trial from subscription
-  const explicitTrialEnd = subscription?.TrialEndsAt ? new Date(subscription.TrialEndsAt) : null;
+  const explicitTrialEnd = subscription?.TrialEnd ? new Date(subscription.TrialEnd) : null;
   const isInExplicitTrial = explicitTrialEnd && now < explicitTrialEnd;
   const explicitTrialDaysLeft = isInExplicitTrial
     ? Math.ceil((explicitTrialEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
@@ -79,7 +79,7 @@ export async function fetchUserEntitlements(): Promise<UserEntitlements> {
   const inTrial = isInAutoTrial || isInExplicitTrial;
   const trialDaysLeft = isInExplicitTrial ? explicitTrialDaysLeft : autoTrialDaysLeft;
   const trialEndsAt = isInExplicitTrial 
-    ? subscription?.TrialEndsAt 
+    ? subscription?.TrialEnd 
     : (isInAutoTrial ? trialEndDate.toISOString() : null);
 
   // Determine subscription status
@@ -101,19 +101,15 @@ export async function fetchUserEntitlements(): Promise<UserEntitlements> {
   let planName: string | null = subscription?.CurrentPlan || null;
   let aiScanLimit: number | null = null;
   
-  if (planName || usr.SubscriptionTierId) {
-    const tierId = usr.SubscriptionTierId;
-    const tierQuery = planName 
-      ? supabase.from('SubscriptionTiers').select('Name, AiScans').eq('Name', planName).maybeSingle()
-      : tierId 
-        ? supabase.from('SubscriptionTiers').select('Name, AiScans').eq('Id', tierId).maybeSingle()
-        : null;
-    
-    if (tierQuery) {
-      const { data: tier } = await tierQuery;
-      planName = tier?.Name ?? planName;
-      aiScanLimit = tier?.AiScans ?? null;
-    }
+  if (planName) {
+    const { data: tier } = await supabase
+      .from('SubscriptionTiers')
+      .select('Name, AiScans')
+      .eq('Name', planName)
+      .maybeSingle();
+
+    planName = tier?.Name ?? planName;
+    aiScanLimit = tier?.AiScans ?? null;
   }
 
   const maxConnections = planName && CONNECTION_LIMITS[planName] ? CONNECTION_LIMITS[planName] : CONNECTION_LIMITS.free;
@@ -161,8 +157,6 @@ export function isFeatureAvailable(
       return entitlements.hasAccess;
   }
 }
-
-
 
 
 

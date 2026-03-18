@@ -800,6 +800,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
       updatedAt: session.updatedAt,
       primaryThreadId: session.primaryThreadId || `primary-${session.id}`,
       stateSummary: session.state?.phase ? `Phase: ${session.state.phase}` : undefined,
+      timeframeDays: timeframe,
     };
   }
 
@@ -815,6 +816,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
       createdAt,
       updatedAt,
       primaryThreadId: String(row?.primaryThreadId || `primary-${campaignId}`),
+      timeframeDays: typeof row?.metadata?.timeframeDays === 'number' ? row.metadata.timeframeDays : undefined,
     };
   }
 

@@ -2,7 +2,8 @@
 
 import React, { createContext, useState, useEffect, useCallback, useContext } from 'react';
 import { useUser, useOrganizationList } from '@clerk/clerk-expo';
-import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ensureSupabaseJwt } from '../lib/supabase';
 import { SessionContext } from './SessionContext';
 
 export interface UserOrgAccess {
@@ -33,6 +34,8 @@ export const OrgContext = createContext<OrgContextType>({
   refreshOrgs: async () => { },
 });
 
+const ORG_CACHE_KEY = 'sssync_org_context_cache_v1';
+
 export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isSignedIn, user: clerkUser } = useUser();
   const { userInvitations, isLoaded: invitationsLoaded } = useOrganizationList({
@@ -48,6 +51,38 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const hasPendingInvites = invitationsLoaded && (userInvitations?.data?.length ?? 0) > 0;
 
   const API_BASE = 'https://api.sssync.app';
+
+  const hydrateFromCache = useCallback(async () => {
+    try {
+      const stored = await AsyncStorage.getItem(ORG_CACHE_KEY);
+      if (!stored) {
+        return false;
+      }
+
+      const parsed = JSON.parse(stored) as {
+        currentOrg: UserOrgAccess | null;
+        availableOrgs: UserOrgAccess[];
+      };
+
+      setAvailableOrgs(parsed.availableOrgs || []);
+      setCurrentOrg(parsed.currentOrg || parsed.availableOrgs?.find((org) => org.isActive) || null);
+      return true;
+    } catch (error) {
+      console.warn('[OrgContext] Failed to hydrate org cache:', error);
+      return false;
+    }
+  }, []);
+
+  const persistOrgCache = useCallback(async (nextCurrentOrg: UserOrgAccess | null, nextAvailableOrgs: UserOrgAccess[]) => {
+    try {
+      await AsyncStorage.setItem(ORG_CACHE_KEY, JSON.stringify({
+        currentOrg: nextCurrentOrg,
+        availableOrgs: nextAvailableOrgs,
+      }));
+    } catch (error) {
+      console.warn('[OrgContext] Failed to persist org cache:', error);
+    }
+  }, []);
 
   /**
    * Fetch all available orgs for this user
@@ -112,24 +147,33 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (active) {
         console.log('[OrgContext] Set current org:', active);
         setCurrentOrg(active);
+        await persistOrgCache(active, orgsWithActive);
       } else if (orgsWithActive.length > 0) {
         console.log('[OrgContext] Set current org to first:', orgsWithActive[0]);
         setCurrentOrg(orgsWithActive[0]);
+        await persistOrgCache(orgsWithActive[0], orgsWithActive);
+      } else {
+        await persistOrgCache(null, []);
       }
 
       setError(null);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Failed to load orgs';
       console.error('[OrgContext] Load orgs error:', err);
+      const hydrated = await hydrateFromCache();
 
-      // Set empty state - user should have created org during signup
-      // If they don't have one, the app should guide them to create one
-      console.log('[OrgContext] No orgs found, setting empty state');
+      if (hydrated) {
+        console.log('[OrgContext] Using cached organization state after load failure');
+        setError('Using cached organization data until the backend reconnects.');
+        return;
+      }
+
+      console.log('[OrgContext] No org cache found, setting empty state');
       setAvailableOrgs([]);
       setCurrentOrg(null);
       setError('No organization found. Please complete signup to create one.');
     }
-  }, [isSignedIn]);
+  }, [hydrateFromCache, isSignedIn, persistOrgCache]);
 
   /**
    * 3. Switch active org
@@ -157,12 +201,12 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (switched) {
         setCurrentOrg(switched);
         // Mark as active in available orgs list
-        setAvailableOrgs(orgs =>
-          orgs.map(org => ({
+        const updatedOrgs = availableOrgs.map(org => ({
             ...org,
             isActive: org.id === orgId,
-          }))
-        );
+          }));
+        setAvailableOrgs(updatedOrgs);
+        await persistOrgCache({ ...switched, isActive: true }, updatedOrgs);
       }
 
       setError(null);
@@ -173,7 +217,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setError(errMsg);
       throw err;
     }
-  }, [availableOrgs]);
+  }, [availableOrgs, persistOrgCache]);
 
   /**
    * Refresh orgs (re-fetch from API)

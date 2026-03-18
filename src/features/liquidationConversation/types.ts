@@ -15,6 +15,15 @@ export interface CampaignSummary {
   createdAt: string;
   primaryThreadId: string;
   stateSummary?: string;
+  inventoryScope?: 'all' | 'pool' | 'specific';
+  timeframeDays?: number;
+  stats?: {
+    soldToday?: number;
+    totalCount?: number;
+    soldCount?: number;
+    reprices?: number;
+    negotiating?: number;
+  };
 }
 
 export interface AutonomyGuardrails {
@@ -202,4 +211,51 @@ export interface NegotiationDecisionInput {
   counterAmount?: number;
   threadId?: string;
   note?: string;
+}
+
+// ── Sprout types ──────────────────────────────────────────────────────
+
+export type CampaignStage = 'seedling' | 'growing' | 'thriving' | 'dormant' | 'complete';
+export type CampaignType = 'static' | 'dynamic';
+export type FeedEventKind = 'info' | 'confirm' | 'ask' | 'action';
+export type ItemStatus = 'negotiating' | 'listed' | 'sold' | 'at_floor' | 'paused';
+
+export interface CampaignCriteria {
+  slow_movers?: boolean;
+  dead_stock?: boolean;
+  overstock?: { threshold: number };
+  by_category?: string[];
+  by_age?: { days: number };
+  custom_tag?: string[];
+}
+
+export interface FeedEventAction {
+  label: string;
+  actionType: string;
+  variant: 'primary' | 'neutral' | 'destructive';
+}
+
+export interface FeedEvent {
+  id: string;
+  campaignId: string;
+  kind: FeedEventKind;
+  title: string;
+  body?: string;
+  payload?: Record<string, unknown>;
+  actions?: FeedEventAction[];
+  createdAt: number;
+  resolvedAt?: number;
+}
+
+export interface CampaignItem {
+  id: string;
+  productId: string;
+  name: string;
+  channels: string;
+  currentPrice: number;
+  status: ItemStatus;
+  imageUrl?: string;
+  emoji?: string;
+  floorPrice?: number;
+  priceHistory?: Array<{ date: string; price: number; reason: string }>;
 }

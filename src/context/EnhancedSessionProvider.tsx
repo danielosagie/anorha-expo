@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SessionContext, SessionContextType, SessionUser } from './SessionContext';
-import { supabase, configureClerkSupabaseBridge, getUserLike, stopClerkSupabaseBridge } from '../lib/supabase';
+import { configureClerkSupabaseBridge, getUserLike, stopClerkSupabaseBridge } from '../lib/supabase';
 import { fetchUserEntitlements, UserEntitlements } from '../utils/entitlements';
 import { AuthPersistence } from '../utils/AuthPersistence';
 import { AppStateManager } from '../utils/AppStateManager';
@@ -11,6 +12,8 @@ interface EnhancedSessionProviderProps {
   getClerkToken: () => Promise<string | null>;
 }
 
+const ENTITLEMENTS_CACHE_KEY = 'sssync_entitlements_cache_v1';
+
 export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = ({ 
   children, 
   getClerkToken 
@@ -19,12 +22,38 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   const [user, setUser] = useState<SessionUser>(null);
   const [entitlements, setEntitlements] = useState<UserEntitlements | null>(null);
   const [initializing, setInitializing] = useState(true);
+  const [usingCachedSession, setUsingCachedSession] = useState(false);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [lastReadyAt, setLastReadyAt] = useState<number | null>(null);
   
   const configuredRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const authPersistence = useRef(AuthPersistence.getInstance());
   const appStateManager = useRef(AppStateManager.getInstance());
   const processPersistence = useRef(ProcessPersistence.getInstance());
+
+  const loadCachedEntitlements = useCallback(async (): Promise<UserEntitlements | null> => {
+    try {
+      const stored = await AsyncStorage.getItem(ENTITLEMENTS_CACHE_KEY);
+      return stored ? JSON.parse(stored) : null;
+    } catch (error) {
+      console.warn('[EnhancedSessionProvider] Failed to load cached entitlements:', error);
+      return null;
+    }
+  }, []);
+
+  const persistEntitlements = useCallback(async (nextEntitlements: UserEntitlements | null) => {
+    try {
+      if (!nextEntitlements) {
+        await AsyncStorage.removeItem(ENTITLEMENTS_CACHE_KEY);
+        return;
+      }
+
+      await AsyncStorage.setItem(ENTITLEMENTS_CACHE_KEY, JSON.stringify(nextEntitlements));
+    } catch (error) {
+      console.warn('[EnhancedSessionProvider] Failed to persist entitlements:', error);
+    }
+  }, []);
 
   // Enhanced token validation with 30-minute intervals and auto-retry
   const validateAuthIfNeeded = useCallback(async (force: boolean = false, retryCount: number = 0): Promise<void> => {
@@ -49,7 +78,10 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         
         console.log('[EnhancedSessionProvider] Bridge configured. Loading user data...');
         const { user: me } = await getUserLike();
-        const ents = await fetchUserEntitlements();
+        const ents = await fetchUserEntitlements().catch(async (error) => {
+          console.warn('[EnhancedSessionProvider] Falling back to cached entitlements:', error);
+          return loadCachedEntitlements();
+        });
         
         // Save auth state for persistence
         await authPersistence.current.saveAuthState({
@@ -61,6 +93,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         
         setUser(me);
         setEntitlements(ents);
+        await persistEntitlements(ents);
         
         // Initialize process persistence system
         if (me?.id) {
@@ -69,6 +102,9 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         }
         
         setReady(true);
+        setUsingCachedSession(false);
+        setBootstrapError(null);
+        setLastReadyAt(Date.now());
         
         console.log('[EnhancedSessionProvider] Session ready for user:', me?.id);
       } else if (!token && configuredRef.current) {
@@ -82,6 +118,9 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         setReady(false);
         setUser(null);
         setEntitlements(null);
+        setUsingCachedSession(false);
+        setBootstrapError(null);
+        setLastReadyAt(null);
       }
     } catch (e) {
       console.error('[EnhancedSessionProvider] Auth validation failed:', e);
@@ -95,21 +134,41 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
           validateAuthIfNeeded(force, retryCount + 1).catch(console.error);
         }, retryDelay);
       } else {
-        console.error('[EnhancedSessionProvider] Max retries reached, giving up');
+        console.error('[EnhancedSessionProvider] Max retries reached, entering degraded mode if cache is available');
+        const persistedState = await authPersistence.current.getAuthState();
+        const cachedEntitlements = await loadCachedEntitlements();
+
+        if (persistedState?.isAuthenticated && persistedState.userId) {
+          configuredRef.current = false;
+          setUser((currentUser) => currentUser ?? {
+            id: persistedState.userId,
+            email: persistedState.email || '',
+          });
+          setEntitlements((currentEntitlements) => currentEntitlements ?? cachedEntitlements);
+          setReady(true);
+          setUsingCachedSession(true);
+          setBootstrapError('Live services are unavailable right now. Continuing with cached account data.');
+          return;
+        }
+
         await authPersistence.current.clearAuthData();
         configuredRef.current = false;
         setReady(false);
         setUser(null);
         setEntitlements(null);
+        setUsingCachedSession(false);
+        setBootstrapError('Unable to restore your session right now.');
+        setLastReadyAt(null);
       }
     }
-  }, [getClerkToken]);
+  }, [getClerkToken, loadCachedEntitlements, persistEntitlements]);
 
   // Initialize session from persisted state
   const initializeFromPersistedState = useCallback(async (): Promise<void> => {
     console.log('[EnhancedSessionProvider] Checking persisted auth state...');
     
     const persistedState = await authPersistence.current.getAuthState();
+    const cachedEntitlements = await loadCachedEntitlements();
     
     if (persistedState?.isAuthenticated && persistedState.userId) {
       console.log('[EnhancedSessionProvider] Found valid persisted state for user:', persistedState.userId);
@@ -119,13 +178,12 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         id: persistedState.userId,
         email: persistedState.email || '',
       });
+      setUsingCachedSession(true);
+      setBootstrapError('Restoring your workspace from cached session data.');
+      setLastReadyAt(persistedState.lastAuthCheck || null);
       
-      // Try to get fresh entitlements
-      try {
-        const ents = await fetchUserEntitlements();
-        setEntitlements(ents);
-      } catch (e) {
-        console.warn('[EnhancedSessionProvider] Could not fetch entitlements from cache:', e);
+      if (cachedEntitlements) {
+        setEntitlements(cachedEntitlements);
       }
       
       setReady(true);
@@ -139,7 +197,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     }
     
     setInitializing(false);
-  }, [validateAuthIfNeeded]);
+  }, [loadCachedEntitlements, validateAuthIfNeeded]);
 
   useEffect(() => {
     let cancelled = false;
@@ -176,7 +234,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     console.log('[EnhancedSessionProvider] Manual refresh requested');
     try {
       const { user: me } = await getUserLike();
-      const ents = await fetchUserEntitlements();
+      const ents = await fetchUserEntitlements().catch(async () => loadCachedEntitlements());
       
       // Update persisted state
       await authPersistence.current.saveAuthState({
@@ -187,18 +245,28 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       
       setUser(me);
       setEntitlements(ents);
+      await persistEntitlements(ents);
+      setUsingCachedSession(false);
+      setBootstrapError(null);
+      setLastReadyAt(Date.now());
     } catch (error) {
       console.error('[EnhancedSessionProvider] Refresh failed:', error);
       // Don't clear state on refresh failures - might be network issue
+      setUsingCachedSession(true);
+      setBootstrapError('Refresh failed. Cached account data is still available.');
     }
-  };
+  }, [loadCachedEntitlements, persistEntitlements]);
 
   const value: SessionContextType = useMemo(() => ({ 
     ready: ready && !initializing, 
     user, 
     entitlements, 
+    bootstrapState: !ready || initializing ? 'initializing' : (usingCachedSession || !!bootstrapError ? 'degraded' : 'ready'),
+    usingCachedSession,
+    bootstrapError,
+    lastReadyAt,
     refresh 
-  }), [ready, initializing, user, entitlements]);
+  }), [ready, initializing, user, entitlements, usingCachedSession, bootstrapError, lastReadyAt, refresh]);
 
   return (
     <SessionContext.Provider value={value}>

@@ -489,28 +489,12 @@ const ProfileScreen = () => {
   });
 
   const { user } = useUser();
-  const [planName, setPlanName] = useState('');
   const [stats, setStats] = useState({ products: 0, locations: 0 });
 
   useEffect(() => {
     (async () => {
       try {
         if (!user) return;
-
-        // Subscription tier (optional)
-        const { data: usr } = await supabase
-          .from('Users')
-          .select('SubscriptionTierId')
-          .eq('Id', user.id)
-          .maybeSingle();
-        if (usr?.SubscriptionTierId) {
-          const { data: tier } = await supabase
-            .from('SubscriptionTiers')
-            .select('Name')
-            .eq('Id', usr.SubscriptionTierId)
-            .maybeSingle();
-          if (tier?.Name) setPlanName(tier.Name);
-        }
 
         // Entitlements
         const e = await fetchUserEntitlements();
