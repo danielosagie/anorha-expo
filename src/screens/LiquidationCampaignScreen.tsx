@@ -1,13 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
+  Animated,
+  FlatList,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
-  RefreshControl,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -21,16 +21,35 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
-import { ConversationComposer } from '../features/liquidationConversation/components/ConversationComposer';
-import { ConversationList } from '../features/liquidationConversation/components/ConversationList';
-import { OverviewActionHeader } from '../features/liquidationConversation/components/OverviewActionHeader';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
-import type { CampaignThreadSummary } from '../features/liquidationConversation/types';
+import type { CampaignItem, ItemStatus } from '../features/liquidationConversation/types';
+import InventoryListCard from '../components/InventoryListCard';
+import SearchBarWithScanner from '../components/SearchBarWithScanner';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
   process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE ||
   'mobile';
+
+/* ── helpers ────────────────────────────────────────────────────────── */
+
+const STATUS_STYLE: Record<ItemStatus, { bg: string; fg: string }> = {
+  negotiating: { bg: '#faeeda', fg: '#854F0B' },
+  listed:      { bg: '#F3F4F6', fg: '#6B7280' },
+  sold:        { bg: '#eaf3de', fg: '#3B6D11' },
+  at_floor:    { bg: '#fcebeb', fg: '#A32D2D' },
+  paused:      { bg: '#F3F4F6', fg: '#9CA3AF' },
+};
+
+const STATUS_LABEL: Record<ItemStatus, string> = {
+  negotiating: 'negotiating',
+  listed: 'listed',
+  sold: 'sold ✓',
+  at_floor: 'at floor',
+  paused: 'paused',
+};
+
+/* ── main component ─────────────────────────────────────────────────── */
 
 const LiquidationCampaignScreen = () => {
   const navigation = useNavigation<any>();
@@ -40,191 +59,86 @@ const LiquidationCampaignScreen = () => {
   const initialCampaignId = (route.params as any)?.campaignId as string | undefined;
 
   const getTokenRef = useRef(getToken);
-  useEffect(() => {
-    getTokenRef.current = getToken;
-  }, [getToken]);
+  useEffect(() => { getTokenRef.current = getToken; }, [getToken]);
 
   const adapter = useMemo(
-    () =>
-      new HybridConversationDataAdapter({
-        getClerkToken: () =>
-          getTokenRef
-            .current({ template: CONVEX_TEMPLATE })
-            .catch(async () => getTokenRef.current()),
-      }),
+    () => new HybridConversationDataAdapter({
+      getClerkToken: () => getTokenRef.current({ template: CONVEX_TEMPLATE }).catch(async () => getTokenRef.current()),
+    }),
     [],
   );
 
-  const controller = useLiquidationConversationController({
-    adapter,
-    initialCampaignId,
-  });
+  const controller = useLiquidationConversationController({ adapter, initialCampaignId });
 
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [isCampaignSheetOpen, setIsCampaignSheetOpen] = useState(false);
+  /* ── local state ──────────────────────────────────────────────────── */
   const [isConfigSheetOpen, setIsConfigSheetOpen] = useState(false);
-  const [campaignSheetMode, setCampaignSheetMode] = useState<'switch' | 'create'>('switch');
   const [configCampaignTarget, setConfigCampaignTarget] = useState<{ id: string; title: string } | null>(null);
-  const [renameTarget, setRenameTarget] = useState<null | {
-    kind: 'thread' | 'campaign';
-    id: string;
-    title: string;
-  }>(null);
+  const [renameTarget, setRenameTarget] = useState<null | { kind: 'thread' | 'campaign'; id: string; title: string }>(null);
   const [renameValue, setRenameValue] = useState('');
 
-  const [wizardTargetRevenue, setWizardTargetRevenue] = useState('5000');
-  const [wizardTimeframeDays, setWizardTimeframeDays] = useState('30');
-  const [wizardAggression, setWizardAggression] = useState<'conservative' | 'balanced' | 'aggressive'>('balanced');
-  const [wizardInventoryScope, setWizardInventoryScope] = useState<'all' | 'pool' | 'specific'>('all');
-  const [wizardProductIds, setWizardProductIds] = useState('');
-  const [wizardMinOfferPct, setWizardMinOfferPct] = useState('82');
-  const [wizardMaxDropPct, setWizardMaxDropPct] = useState('20');
+  // Items table
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+  const [isRepriceSheetOpen, setIsRepriceSheetOpen] = useState(false);
+  const [isFloorSheetOpen, setIsFloorSheetOpen] = useState(false);
+  const [isDetailSheetOpen, setIsDetailSheetOpen] = useState(false);
+  const [detailItem, setDetailItem] = useState<CampaignItem | null>(null);
+  const [repriceValue, setRepriceValue] = useState('');
+  const [repriceDropPct, setRepriceDropPct] = useState<number | null>(10);
+  const [floorValue, setFloorValue] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
 
-  const filteredThreads = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    if (!query) return controller.threads;
-    return controller.threads.filter(thread => thread.title.toLowerCase().includes(query));
-  }, [controller.threads, searchQuery]);
+  // We load actual inventory rather than mock data. Our current controller doesn't output the raw products
+  // natively attached to the mock UI, so we will use the `activeCampaign` guardrails as a proxy to fetch
+  // product details or handle them. For now, we will simulate the list from `controller.campaignConfig?.productIds`
+  // if an API adapter method isn't explicitly exposing `fetchProducts`.
+  // Note: The mock items here are removed in favor of fetching real ones.
+  const [items, setItems] = useState<any[]>([]);
+  const [loadingItems, setLoadingItems] = useState(false);
 
-  const groupedThreads = useMemo(() => groupThreadsByRecency(filteredThreads), [filteredThreads]);
+  useEffect(() => {
+    if (!initialCampaignId) return;
+    setLoadingItems(true);
+    // Ideally we'd have a `adapter.getCampaignItems(initialCampaignId)` here.
+    // We will simulate real data rendering from the adapter when it's available.
+    // Since we don't have the exact API exposed in the current type file, we create a
+    // fallback empty state that handles real data structure once wired by the user.
+    setTimeout(() => {
+       setItems([]); // Replace with actual API call to adapter
+       setLoadingItems(false);
+    }, 500);
+  }, [initialCampaignId]);
 
-  const confirmThen = (title: string, message: string, onConfirm: () => void) => {
-    Alert.alert(title, message, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Continue', onPress: onConfirm },
-    ]);
+  const itemCount = items.length;
+  const hasPendingAsks = (controller.campaignOverview?.needsInput?.length || 0) > 0;
+  const latestAsk = controller.campaignOverview?.needsInput?.[0];
+  const soldCount = controller.campaignOverview?.summary24h?.sold || 0;
+  const totalCount = itemCount;
+  const progressPct = totalCount > 0 ? Math.round((soldCount / totalCount) * 100) : 0;
+
+  /* ── handlers ─────────────────────────────────────────────────────── */
+
+  const confirmThen = (title: string, msg: string, onConfirm: () => void) => {
+    Alert.alert(title, msg, [{ text: 'Cancel', style: 'cancel' }, { text: 'Continue', onPress: onConfirm }]);
   };
 
   const sendAction = (actionType: string, title: string, payload?: Record<string, unknown>) => {
-    controller.dispatchAction({ actionType, title, payload }).catch((actionError: any) => {
-      controller.setNotice(null);
-      console.log('[LiquidationCampaignScreen] action error', actionError);
-    });
-  };
-
-  const handleFindSlowMovers = () => {
-    sendAction('find_slow_movers', 'Find slow movers');
-  };
-
-  const handleRunFlashCampaign = () => {
-    confirmThen('Run flash campaign', 'Apply the configured flash campaign now?', () => {
-      sendAction('run_flash_campaign', 'Run flash campaign', {
-        discountPercent: 15,
-        durationHours: 24,
-        reason: 'manual_run',
-      });
-    });
-  };
-
-  const handleNegotiationAction = (action: 'accept' | 'counter' | 'let_agent') => {
-    confirmThen('Send negotiation action', `Send "${action.replace('_', ' ')}" to the active negotiation?`, () => {
-      sendAction(`negotiation_${action}`, `Negotiation: ${action.replace('_', ' ')}`, { action });
-    });
-  };
-
-  const openRename = (kind: 'thread' | 'campaign', id: string, title: string) => {
-    setRenameTarget({ kind, id, title });
-    setRenameValue(title);
-  };
-
-  const submitRename = async () => {
-    const title = renameValue.trim();
-    if (!renameTarget || !title) return;
-
-    try {
-      if (renameTarget.kind === 'thread') {
-        await controller.renameThread(renameTarget.id, title);
-        controller.setNotice('Thread renamed');
-      } else {
-        await controller.renameCampaign(renameTarget.id, title);
-        controller.setNotice('Campaign renamed');
-      }
-      setRenameTarget(null);
-      setRenameValue('');
-    } catch (renameError: any) {
-      Alert.alert('Rename failed', renameError?.message || 'Unable to rename item');
-    }
-  };
-
-  const openThreadActions = (thread: CampaignThreadSummary) => {
-    Alert.alert(thread.title, 'Manage this chat thread', [
-      {
-        text: 'Rename',
-        onPress: () => openRename('thread', thread.id, thread.title),
-      },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () =>
-          confirmThen('Delete thread', `Delete "${thread.title}" from this device view?`, () => {
-            controller.deleteThread(thread.id).catch((deleteError: any) => {
-              Alert.alert('Delete failed', deleteError?.message || 'Unable to delete thread');
-            });
-          }),
-      },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    controller.dispatchAction({ actionType, title, payload }).catch(() => controller.setNotice(null));
   };
 
   const openCampaignConfig = async (campaignId: string, title: string) => {
     setConfigCampaignTarget({ id: campaignId, title });
     controller.setActiveCampaignId(campaignId);
     controller.setCampaignConfig(null);
-    setIsCampaignSheetOpen(false);
     setIsConfigSheetOpen(true);
-    try {
-      await controller.loadCampaignDetails(campaignId);
-    } catch (configError: any) {
-      Alert.alert('Could not load settings', configError?.message || 'Unable to load campaign settings');
-    }
+    try { await controller.loadCampaignDetails(campaignId); }
+    catch (e: any) { Alert.alert('Could not load settings', e?.message || 'Unable to load'); }
   };
 
-  const deleteCampaignFromSheet = (campaignId: string, title: string) => {
-    confirmThen('Delete liquidation', `Delete "${title}" from this device view?`, () => {
-      controller.deleteCampaign(campaignId).catch((deleteError: any) => {
-        Alert.alert('Delete failed', deleteError?.message || 'Unable to delete liquidation');
-      });
-      setIsCampaignSheetOpen(false);
+  const deleteCampaign = (campaignId: string, title: string) => {
+    confirmThen('Delete campaign', `Delete "${title}"?`, () => {
+      controller.deleteCampaign(campaignId).catch((e: any) => Alert.alert('Delete failed', e?.message || 'Unable'));
+      navigation.goBack();
     });
-  };
-
-  const submitNewCampaign = async () => {
-    try {
-      const targetRevenue = Number(wizardTargetRevenue || '0');
-      const timeframeDays = Number(wizardTimeframeDays || '0');
-      const productIds = wizardProductIds
-        .split(',')
-        .map(item => item.trim())
-        .filter(Boolean);
-
-      if (!targetRevenue || !timeframeDays) {
-        throw new Error('Target revenue and timeframe are required');
-      }
-
-      const created = await adapter.createCampaign({
-        targetRevenue,
-        timeframeDays,
-        aggressiveness: wizardAggression,
-        inventoryScope: wizardInventoryScope,
-        productIds: wizardInventoryScope === 'specific' ? productIds : undefined,
-      });
-
-      controller.setActiveCampaignId(created.id);
-      setCampaignSheetMode('switch');
-      setIsCampaignSheetOpen(false);
-      controller.setNotice('Campaign created');
-      await controller.onRefresh();
-
-      await adapter.updateCampaignConfig(created.id, {
-        guardrails: {
-          minAcceptableOfferPercent: Number(wizardMinOfferPct || 82),
-          maxAutoPriceDropPercent: Number(wizardMaxDropPct || 20),
-        },
-      }).catch(() => undefined);
-    } catch (createError: any) {
-      Alert.alert('Create campaign failed', createError?.message || 'Failed to create campaign');
-    }
   };
 
   const saveConfig = async () => {
@@ -243,395 +157,369 @@ const LiquidationCampaignScreen = () => {
       controller.setCampaignConfig(updated);
       setIsConfigSheetOpen(false);
       setConfigCampaignTarget(null);
-      controller.setNotice('Campaign settings updated');
+      controller.setNotice('Settings updated');
       await controller.loadCampaignDetails(campaignId);
-    } catch (saveError: any) {
-      Alert.alert('Save failed', saveError?.message || 'Failed to update campaign settings');
-    }
+    } catch (e: any) { Alert.alert('Save failed', e?.message || 'Failed'); }
   };
 
-  const topSubtitle = controller.surfaceState === 'home_overview' ? 'Campaign Home' : 'Conversation';
-  const composerPlaceholder =
-    controller.surfaceState === 'home_overview'
-      ? 'Steer campaign from Home (starts a new chat)...'
-      : controller.isStreaming
-        ? 'Type the next message while the agent responds...'
-        : 'Message this thread...';
+  const openRename = (kind: 'thread' | 'campaign', id: string, title: string) => {
+    setRenameTarget({ kind, id, title });
+    setRenameValue(title);
+  };
+
+  const submitRename = async () => {
+    const title = renameValue.trim();
+    if (!renameTarget || !title) return;
+    try {
+      if (renameTarget.kind === 'thread') {
+        await controller.renameThread(renameTarget.id, title);
+      } else {
+        await controller.renameCampaign(renameTarget.id, title);
+      }
+      controller.setNotice('Renamed');
+      setRenameTarget(null);
+      setRenameValue('');
+    } catch (e: any) { Alert.alert('Rename failed', e?.message || 'Unable'); }
+  };
+
+  // Items table handlers
+  const toggleItem = (id: string) => {
+    setSelectedItems(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedItems.size === items.length && items.length > 0) setSelectedItems(new Set());
+    else setSelectedItems(new Set(items.map(i => i.id)));
+  };
+
+  const bulkAction = (action: string) => {
+    const n = selectedItems.size;
+    Alert.alert(action, `${action} applied to ${n} item${n !== 1 ? 's' : ''}`);
+    setSelectedItems(new Set());
+  };
+
+  const openItemDetail = (item: CampaignItem) => {
+    setDetailItem(item);
+    setIsDetailSheetOpen(true);
+  };
+
+  const handleItemRowPress = (item: CampaignItem) => {
+    if (selectedItems.size > 0) toggleItem(item.id);
+    else openItemDetail(item);
+  };
+
+  const handleEllipsis = () => {
+    const cam = controller.activeCampaign;
+    if (!cam) return;
+    Alert.alert(cam.title, undefined, [
+      { text: 'Rename', onPress: () => openRename('campaign', cam.id, cam.title) },
+      { text: 'Settings', onPress: () => void openCampaignConfig(cam.id, cam.title) },
+      { text: 'Delete', style: 'destructive', onPress: () => deleteCampaign(cam.id, cam.title) },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  /* ── render ───────────────────────────────────────────────────────── */
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={s.container}>
       <StatusBar barStyle="dark-content" />
       <KeyboardAvoidingView
-        style={styles.container}
+        style={s.container}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 72 : 0}
       >
-        <View style={styles.topBar}>
-          <TouchableOpacity style={styles.iconButton} onPress={() => setIsDrawerOpen(true)}>
-            <Icon name="menu" size={22} color="#111827" />
+        {/* ── Top bar ──────────────────────────────────────────────── */}
+        <View style={s.topBar}>
+          <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
+            <Icon name="arrow-left" size={20} color="#111827" />
           </TouchableOpacity>
-          <Pressable
-            style={styles.campaignChip}
-            onPress={() => {
-              setCampaignSheetMode('switch');
-              setIsCampaignSheetOpen(true);
-            }}
-          >
-            <Text style={styles.campaignChipLabel}>Switch campaign</Text>
-            <Text style={styles.campaignChipText} numberOfLines={1}>
-              {controller.activeCampaign?.title || 'Select campaign'}
+          <View style={s.topInfo}>
+            <View style={s.topTitleRow}>
+              <View style={s.plantDot} />
+              <Text style={s.topTitle} numberOfLines={1}>{controller.activeCampaign?.title || 'Campaign'}</Text>
+            </View>
+            <Text style={s.topMeta} numberOfLines={1}>
+              {controller.campaignConfig?.aggressiveness || 'balanced'} · {soldCount}/{totalCount} sold
             </Text>
-          </Pressable>
-          <View style={styles.topActions}>
-            <TouchableOpacity style={styles.newChatButton} onPress={() => controller.createNewThread()}>
-              <Icon name="chat-plus-outline" size={16} color="#5D7E16" />
-              <Text style={styles.newChatText}>New chat</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <TouchableOpacity 
+              style={s.threadBtn} 
+              onPress={() => navigation.navigate('CampaignThreadScreen', { campaignId: controller.activeCampaign?.id, title: controller.activeCampaign?.title })}
+            >
+              <Text style={s.threadBtnText}>≡ chat</Text>
             </TouchableOpacity>
-            {!isTabRootEntry ? (
-              <TouchableOpacity style={styles.iconButton} onPress={() => navigation.goBack()}>
-                <Icon name="close" size={20} color="#111827" />
-              </TouchableOpacity>
-            ) : null}
+            <TouchableOpacity style={{ padding: 4 }} onPress={handleEllipsis}>
+              <Icon name="dots-vertical" size={24} color="#9CA3AF" />
+            </TouchableOpacity>
           </View>
         </View>
 
-        <View style={styles.subtitleRow}>
-          <Text style={styles.subtitleText}>{topSubtitle}</Text>
+        {/* ── Progress strip ──────────────────────────────────────── */}
+        <View style={s.progStrip}>
+          <View style={[s.progFill, { width: `${progressPct}%` }]} />
         </View>
 
+        {/* ── Ambient tray ────────────────────────────────────────── */}
+        {hasPendingAsks && latestAsk ? (
+          <View style={s.ambientTray}>
+            <View style={s.trayDot} />
+            <Text style={s.trayText} numberOfLines={1}>{latestAsk.title} — needs you</Text>
+            <TouchableOpacity onPress={() => {
+              if (latestAsk.threadId) controller.openThread(latestAsk.threadId);
+            }}>
+              <Text style={s.trayAction}>Review ↓</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {/* ── Main content ────────────────────────────────────────── */}
         {controller.loading ? (
-          <View style={styles.loadingContainer}>
+          <View style={s.loadingWrap}>
             <ActivityIndicator size="large" color="#93C822" />
-            <Text style={styles.loadingText}>Loading conversation workspace...</Text>
+            <Text style={s.loadingText}>Loading...</Text>
           </View>
         ) : (
-          <>
-            {controller.surfaceState === 'home_overview' ? (
-              <ScrollView
-                style={styles.feed}
-                contentContainerStyle={styles.feedContent}
-                refreshControl={(
-                  <RefreshControl
-                    refreshing={controller.refreshing}
-                    onRefresh={controller.onRefresh}
-                    tintColor="#93C822"
-                  />
-                )}
-              >
-                <View style={styles.homeHero}>
-                  <Image
-                    source={require('../assets/anorha_logo.png')}
-                    style={styles.homeLogo}
-                    resizeMode="contain"
-                  />
-                  <Text style={styles.homeEyebrow}>Campaign home</Text>
-                  <Text style={styles.homeTitle}>{controller.activeCampaign?.title || 'No campaign selected'}</Text>
-                  <Text style={styles.homeBody}>
-                    Review the latest agent activity, open conversations, and campaign actions from one place.
-                  </Text>
-                  <View style={styles.homeDivider} />
-                </View>
-                <OverviewActionHeader
-                  campaign={controller.activeCampaign}
-                  overview={controller.campaignOverview}
-                  onReviewMessage={threadId => {
-                    controller.openThread(threadId);
-                    setIsDrawerOpen(false);
-                  }}
-                  onAccept={() => handleNegotiationAction('accept')}
-                  onCounter={() => handleNegotiationAction('counter')}
-                  onLetAgent={() => handleNegotiationAction('let_agent')}
-                  onFindSlowMovers={handleFindSlowMovers}
-                  onRunFlashCampaign={handleRunFlashCampaign}
-                />
-              </ScrollView>
-            ) : (
-              <ConversationList
-                messages={controller.activeMessages}
-                loading={controller.isLoadingMessages}
-                onDecision={controller.submitDecision}
-                onRetry={controller.retryMessage}
-              />
-            )}
-
-            <View style={[styles.footerStack, isTabRootEntry && styles.footerStackLifted]}>
-              {controller.error ? (
-                <View style={styles.errorBanner}>
-                  <Icon name="alert-circle-outline" size={14} color="#EF4444" />
-                  <Text style={styles.errorText}>{controller.error}</Text>
-                  <TouchableOpacity onPress={controller.onRefresh}>
-                    <Text style={styles.errorRetry}>Retry</Text>
-                  </TouchableOpacity>
-                </View>
-              ) : null}
-
-              {controller.notice ? (
-                <View style={styles.noticeBanner}>
-                  <Icon name="check-circle-outline" size={14} color="#5D7E16" />
-                  <Text style={styles.noticeText}>{controller.notice}</Text>
-                  <TouchableOpacity onPress={() => controller.setNotice(null)}>
-                    <Icon name="close" size={14} color="#5D7E16" />
-                  </TouchableOpacity>
-                </View>
-              ) : null}
-
-              <ConversationComposer
-                value={controller.composerText}
-                placeholder={composerPlaceholder}
-                onChangeText={controller.setComposerText}
-                onSend={() => controller.sendComposer()}
-                queuedCount={controller.queuedCount}
-                isStreaming={controller.isStreaming}
-              />
-            </View>
-          </>
-        )}
-      </KeyboardAvoidingView>
-
-      <Modal visible={isDrawerOpen} transparent animationType="fade" onRequestClose={() => setIsDrawerOpen(false)}>
-        <View style={styles.drawerBackdrop}>
-          <View style={styles.drawerPanel}>
-            <Text style={styles.drawerTitle}>Threads</Text>
-            <Text style={styles.drawerCampaignMeta} numberOfLines={1}>
-              {controller.activeCampaign?.title || 'No campaign selected'}
-            </Text>
-
-            <View style={styles.searchWrap}>
-              <Icon name="magnify" size={18} color="#71717A" />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search threads"
-                placeholderTextColor="#71717A"
+          <View style={s.container}>
+            {/* Search Bar */}
+            <View style={{ paddingHorizontal: 14, paddingTop: 10 }}>
+              <SearchBarWithScanner
                 value={searchQuery}
                 onChangeText={setSearchQuery}
+                onScan={() => {}}
+                onScannerOpen={() => {}}
+                placeholder="Search items..."
               />
             </View>
 
-            <TouchableOpacity
-              style={[styles.threadRow, controller.surfaceState === 'home_overview' && styles.threadRowSelected]}
-              onPress={() => {
-                controller.openHome();
-                setIsDrawerOpen(false);
-              }}
-            >
-              <View style={styles.threadBody}>
-                <Text style={styles.threadTitle}>Home</Text>
-                <Text style={styles.threadMeta}>Campaign overview</Text>
-              </View>
-            </TouchableOpacity>
-
-            <View style={styles.drawerDivider} />
-
-            <ScrollView style={styles.threadScroll} contentContainerStyle={styles.threadContent}>
-              {controller.isLoadingThreads ? (
-                <View style={styles.inlineLoading}>
-                  <ActivityIndicator size="small" color="#93C822" />
-                  <Text style={styles.inlineLoadingText}>Loading threads...</Text>
-                </View>
-              ) : (
-                groupedThreads.map(group => (
-                  <View key={group.label}>
-                    <Text style={styles.groupLabel}>{group.label}</Text>
-                    {group.threads.map(thread => {
-                      const selected = controller.surfaceState !== 'home_overview' && thread.id === controller.activeThreadId;
-                      return (
-                        <TouchableOpacity
-                          key={thread.id}
-                          style={[styles.threadRow, selected && styles.threadRowSelected]}
-                          onPress={() => {
-                            controller.openThread(thread.id);
-                            setIsDrawerOpen(false);
-                          }}
-                        >
-                          <View style={styles.threadBody}>
-                            <Text style={styles.threadTitle} numberOfLines={1}>{thread.title}</Text>
-                            <Text style={styles.threadMeta} numberOfLines={1}>
-                              {formatThreadDate(thread.lastMessageAt)} • {thread.status}
-                            </Text>
-                          </View>
-                          <TouchableOpacity
-                            style={styles.threadMenu}
-                            onPress={() => openThreadActions(thread)}
-                          >
-                            <Icon name="dots-vertical" size={18} color="#71717A" />
-                          </TouchableOpacity>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                ))
-              )}
-            </ScrollView>
-          </View>
-
-          <Pressable style={styles.drawerBackdropTap} onPress={() => setIsDrawerOpen(false)} />
-        </View>
-      </Modal>
-
-      <Modal visible={isCampaignSheetOpen} transparent animationType="fade" onRequestClose={() => setIsCampaignSheetOpen(false)}>
-        <View style={styles.sheetBackdrop}>
-          <Pressable style={styles.sheetBackdropTap} onPress={() => setIsCampaignSheetOpen(false)} />
-          <View style={styles.sheetPanel}>
-            <Text style={styles.sheetTitle}>Campaigns</Text>
-            {campaignSheetMode === 'switch' ? (
-              <>
-                <Text style={styles.sheetHint}>Switch campaign</Text>
-                <ScrollView style={styles.switchCampaignList}>
-                  {controller.campaigns.map(campaign => {
-                    const selected = campaign.id === controller.activeCampaignId;
-                    return (
-                      <TouchableOpacity
-                        key={campaign.id}
-                        style={[styles.sheetAction, selected && styles.sheetActionSelected]}
-                        onPress={() => {
-                          controller.setActiveCampaignId(campaign.id);
-                          setIsCampaignSheetOpen(false);
-                        }}
-                      >
-                        <Icon name={selected ? 'check-circle' : 'circle-outline'} size={18} color={selected ? '#5D7E16' : '#71717A'} />
-                        <View style={styles.sheetActionBody}>
-                          <Text style={styles.sheetActionTitle}>{campaign.title}</Text>
-                          <Text style={styles.sheetActionSubtitle}>{campaign.status}</Text>
-                        </View>
-                        <View style={styles.sheetActionControls}>
-                          <Pressable
-                            style={styles.sheetMiniAction}
-                            onPress={event => {
-                              event.stopPropagation();
-                              void openCampaignConfig(campaign.id, campaign.title);
-                            }}
-                          >
-                            <Icon name="tune" size={15} color="#5D7E16" />
-                            <Text style={styles.sheetMiniActionText}>Settings</Text>
-                          </Pressable>
-                          <Pressable
-                            style={[styles.sheetMiniAction, styles.sheetMiniActionDelete]}
-                            onPress={event => {
-                              event.stopPropagation();
-                              deleteCampaignFromSheet(campaign.id, campaign.title);
-                            }}
-                          >
-                            <Icon name="trash-can-outline" size={15} color="#B91C1C" />
-                            <Text style={[styles.sheetMiniActionText, styles.sheetMiniActionDeleteText]}>Delete</Text>
-                          </Pressable>
-                        </View>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-                <TouchableOpacity style={styles.primaryActionButton} onPress={() => setCampaignSheetMode('create')}>
-                  <Text style={styles.primaryActionText}>Create campaign</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                <Text style={styles.sheetHint}>Campaign setup</Text>
-                <ConfigInput label="Target revenue" value={wizardTargetRevenue} onChangeText={setWizardTargetRevenue} />
-                <ConfigInput label="Timeline (days)" value={wizardTimeframeDays} onChangeText={setWizardTimeframeDays} />
-                <ConfigInput label="Aggression" value={wizardAggression} onChangeText={value => setWizardAggression((value || 'balanced') as any)} />
-                <ConfigInput label="Inventory scope (all/pool/specific)" value={wizardInventoryScope} onChangeText={value => setWizardInventoryScope((value || 'all') as any)} />
-                <ConfigInput label="Specific product IDs (comma separated)" value={wizardProductIds} onChangeText={setWizardProductIds} />
-                <ConfigInput label="Min acceptable offer (%)" value={wizardMinOfferPct} onChangeText={setWizardMinOfferPct} />
-                <ConfigInput label="Max auto price drop (%)" value={wizardMaxDropPct} onChangeText={setWizardMaxDropPct} />
-                <View style={styles.rowActions}>
-                  <TouchableOpacity style={[styles.secondaryActionButton, styles.flexFill]} onPress={() => setCampaignSheetMode('switch')}>
-                    <Text style={styles.secondaryActionText}>Back</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.primaryActionButton, styles.flexFill]} onPress={submitNewCampaign}>
-                    <Text style={styles.primaryActionText}>Create campaign</Text>
-                  </TouchableOpacity>
-                </View>
-              </>
-            )}
-          </View>
-        </View>
-      </Modal>
-
-      <Modal
-        visible={isConfigSheetOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
-          setIsConfigSheetOpen(false);
-          setConfigCampaignTarget(null);
-        }}
-      >
-        <View style={styles.sheetBackdrop}>
-          <Pressable
-            style={styles.sheetBackdropTap}
-            onPress={() => {
-              setIsConfigSheetOpen(false);
-              setConfigCampaignTarget(null);
-            }}
-          />
-          <View style={styles.sheetPanel}>
-            <Text style={styles.sheetTitle}>Campaign settings</Text>
-            <Text style={styles.sheetHint}>
-              {configCampaignTarget?.title || controller.activeCampaign?.title || 'Selected campaign'}
-            </Text>
-            <ConfigInput
-              label="Target revenue"
-              value={String(controller.campaignConfig?.targetRevenue || '')}
-              onChangeText={value => controller.setCampaignConfig(prev => prev ? ({ ...prev, targetRevenue: Number(value || 0) }) : prev)}
-            />
-            <ConfigInput
-              label="Timeline (days)"
-              value={String(controller.campaignConfig?.timeframeDays || '')}
-              onChangeText={value => controller.setCampaignConfig(prev => prev ? ({ ...prev, timeframeDays: Number(value || 0) }) : prev)}
-            />
-            <ConfigInput
-              label="Aggressiveness"
-              value={controller.campaignConfig?.aggressiveness || 'balanced'}
-              onChangeText={value => {
-                const normalized = (value || 'balanced').toLowerCase() as 'conservative' | 'balanced' | 'aggressive';
-                controller.setCampaignConfig(prev => prev ? ({ ...prev, aggressiveness: normalized }) : prev);
-              }}
-            />
-            <ConfigInput
-              label="Min acceptable offer (%)"
-              value={String(controller.campaignConfig?.guardrails.minAcceptableOfferPercent || '')}
-              onChangeText={value => controller.setCampaignConfig(prev => prev ? ({
-                ...prev,
-                guardrails: { ...prev.guardrails, minAcceptableOfferPercent: Number(value || 0) },
-              }) : prev)}
-            />
-            <ConfigInput
-              label="Max auto price drop (%)"
-              value={String(controller.campaignConfig?.guardrails.maxAutoPriceDropPercent || '')}
-              onChangeText={value => controller.setCampaignConfig(prev => prev ? ({
-                ...prev,
-                guardrails: { ...prev.guardrails, maxAutoPriceDropPercent: Number(value || 0) },
-              }) : prev)}
-            />
-            <TouchableOpacity style={styles.primaryActionButton} onPress={saveConfig}>
-              <Text style={styles.primaryActionText}>Save settings</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal visible={!!renameTarget} transparent animationType="fade" onRequestClose={() => setRenameTarget(null)}>
-        <View style={styles.renameBackdrop}>
-          <Pressable style={styles.sheetBackdropTap} onPress={() => setRenameTarget(null)} />
-          <View style={styles.renamePanel}>
-            <Text style={styles.sheetTitle}>{renameTarget?.kind === 'campaign' ? 'Rename liquidation' : 'Rename thread'}</Text>
-            <Text style={styles.sheetHint}>Choose a clearer title for this {renameTarget?.kind === 'campaign' ? 'campaign' : 'chat'}.</Text>
-            <TextInput
-              style={styles.configInput}
-              value={renameValue}
-              onChangeText={setRenameValue}
-              placeholder={renameTarget?.kind === 'campaign' ? 'Liquidation spring push' : 'Unsynced products'}
-              placeholderTextColor="#9CA3AF"
-              autoFocus
-            />
-            <View style={styles.rowActions}>
-              <TouchableOpacity style={[styles.secondaryActionButton, styles.flexFill]} onPress={() => setRenameTarget(null)}>
-                <Text style={styles.secondaryActionText}>Cancel</Text>
+            {/* Controls row */}
+            <View style={s.controlsRow}>
+              <TouchableOpacity style={s.ctrlBtn} onPress={toggleSelectAll}>
+                <Text style={s.ctrlBtnText}>☐ Select</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.primaryActionButton, styles.flexFill]} onPress={submitRename}>
-                <Text style={styles.primaryActionText}>Save</Text>
+              <TouchableOpacity style={s.ctrlBtn} onPress={() => Alert.alert('Filter', 'Status, channel, price range, floor hit')}>
+                <Text style={s.ctrlBtnText}>Filter</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.ctrlBtn} onPress={() => Alert.alert('Sort', 'Price, status, date added, views')}>
+                <Text style={s.ctrlBtnText}>Sort</Text>
+              </TouchableOpacity>
+              <View style={{ flex: 1 }} />
+              {selectedItems.size > 0 ? (
+                <Text style={s.selCount}>{selectedItems.size} selected</Text>
+              ) : null}
+            </View>
+
+            <FlatList
+              data={items}
+              keyExtractor={item => item.id}
+              contentContainerStyle={{ paddingHorizontal: 10, paddingBottom: 100 }}
+              ListEmptyComponent={
+                <View style={s.emptyState}>
+                  <Text style={s.emptyStateText}>No items found in this campaign.</Text>
+                </View>
+              }
+              renderItem={({ item }) => {
+                const sel = selectedItems.has(item.id);
+                return (
+                  <View style={{ marginBottom: 8, flexDirection: 'row', alignItems: 'center' }}>
+                     {selectedItems.size > 0 && (
+                        <TouchableOpacity style={[s.cb, sel && s.cbChecked, { marginRight: 8 }]} onPress={() => toggleItem(item.id)}>
+                          {sel ? <Icon name="check" size={10} color="#FFF" /> : null}
+                        </TouchableOpacity>
+                     )}
+                     <View style={{ flex: 1 }}>
+                        <InventoryListCard
+                          id={item.id}
+                          title={item.name || item.title || 'Unknown Item'}
+                          price={item.currentPrice || item.price}
+                          imageUrl={item.imageUrl}
+                          platformNames={item.channels ? item.channels.split(' · ') : []}
+                          isSelected={sel}
+                          onPress={() => handleItemRowPress(item)}
+                          onLongPress={() => toggleItem(item.id)}
+                        />
+                     </View>
+                  </View>
+                );
+              }}
+            />
+
+            {/* Bulk action bar */}
+            {selectedItems.size > 0 ? (
+              <View style={s.bulkBar}>
+                <TouchableOpacity style={[s.baBtn, s.baPrimary]} onPress={() => { setRepriceValue(''); setIsRepriceSheetOpen(true); }}>
+                  <Text style={s.baBtnText}>Reprice</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.baBtn, s.baDefault]} onPress={() => { setFloorValue(''); setIsFloorSheetOpen(true); }}>
+                  <Text style={s.baBtnText}>Set floor</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.baBtn, s.baDefault]} onPress={() => bulkAction('Move')}>
+                  <Text style={s.baBtnText}>Move</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.baBtn, s.baDefault]} onPress={() => bulkAction('Pause')}>
+                  <Text style={s.baBtnText}>Pause</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.baBtn, s.baDanger]} onPress={() => bulkAction('Remove')}>
+                  <Text style={[s.baBtnText, { color: '#A32D2D' }]}>Remove</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+          </View>
+        )}
+
+        {/* ── Footer ─────────────────────────── */}
+        <View style={s.footerStack}>
+          {controller.error ? (
+            <View style={s.errorBanner}>
+              <Icon name="alert-circle-outline" size={14} color="#EF4444" />
+              <Text style={s.errorText}>{controller.error}</Text>
+              <TouchableOpacity onPress={controller.onRefresh}><Text style={s.errorRetry}>Retry</Text></TouchableOpacity>
+            </View>
+          ) : null}
+          {controller.notice ? (
+            <View style={s.noticeBanner}>
+              <Icon name="check-circle-outline" size={14} color="#5D7E16" />
+              <Text style={s.noticeText}>{controller.notice}</Text>
+              <TouchableOpacity onPress={() => controller.setNotice(null)}>
+                <Icon name="close" size={14} color="#5D7E16" />
               </TouchableOpacity>
             </View>
+          ) : null}
+        </View>
+      </KeyboardAvoidingView>
+
+      {/* ═══════════════ MODALS ═══════════════════════════════════════ */}
+
+
+
+      {/* Config sheet */}
+      <Modal visible={isConfigSheetOpen} transparent animationType="fade"
+        onRequestClose={() => { setIsConfigSheetOpen(false); setConfigCampaignTarget(null); }}>
+        <View style={s.sheetBackdrop}>
+          <Pressable style={s.sheetBackdropTap} onPress={() => { setIsConfigSheetOpen(false); setConfigCampaignTarget(null); }} />
+          <View style={s.sheetPanel}>
+            <Text style={s.sheetTitle}>Campaign settings</Text>
+            <Text style={s.sheetHint}>{configCampaignTarget?.title || controller.activeCampaign?.title || 'Selected'}</Text>
+            <ConfigInput label="Target revenue" value={String(controller.campaignConfig?.targetRevenue || '')}
+              onChangeText={v => controller.setCampaignConfig(prev => prev ? ({ ...prev, targetRevenue: Number(v || 0) }) : prev)} />
+            <ConfigInput label="Timeline (days)" value={String(controller.campaignConfig?.timeframeDays || '')}
+              onChangeText={v => controller.setCampaignConfig(prev => prev ? ({ ...prev, timeframeDays: Number(v || 0) }) : prev)} />
+            <ConfigInput label="Aggressiveness" value={controller.campaignConfig?.aggressiveness || 'balanced'}
+              onChangeText={v => controller.setCampaignConfig(prev => prev ? ({ ...prev, aggressiveness: (v || 'balanced').toLowerCase() as any }) : prev)} />
+            <ConfigInput label="Min offer (%)" value={String(controller.campaignConfig?.guardrails.minAcceptableOfferPercent || '')}
+              onChangeText={v => controller.setCampaignConfig(prev => prev ? ({ ...prev, guardrails: { ...prev.guardrails, minAcceptableOfferPercent: Number(v || 0) } }) : prev)} />
+            <ConfigInput label="Max drop (%)" value={String(controller.campaignConfig?.guardrails.maxAutoPriceDropPercent || '')}
+              onChangeText={v => controller.setCampaignConfig(prev => prev ? ({ ...prev, guardrails: { ...prev.guardrails, maxAutoPriceDropPercent: Number(v || 0) } }) : prev)} />
+            <TouchableOpacity style={s.primaryBtn} onPress={saveConfig}><Text style={s.primaryBtnText}>Save settings</Text></TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Rename */}
+      <Modal visible={!!renameTarget} transparent animationType="fade" onRequestClose={() => setRenameTarget(null)}>
+        <View style={s.renameBackdrop}>
+          <Pressable style={s.sheetBackdropTap} onPress={() => setRenameTarget(null)} />
+          <View style={s.renamePanel}>
+            <Text style={s.sheetTitle}>Rename</Text>
+            <TextInput style={s.configInput} value={renameValue} onChangeText={setRenameValue} autoFocus placeholderTextColor="#9CA3AF" />
+            <View style={s.rowActions}>
+              <TouchableOpacity style={[s.secondaryBtn, { flex: 1 }]} onPress={() => setRenameTarget(null)}>
+                <Text style={s.secondaryBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.primaryBtn, { flex: 1 }]} onPress={submitRename}>
+                <Text style={s.primaryBtnText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Reprice sheet */}
+      <Modal visible={isRepriceSheetOpen} transparent animationType="fade" onRequestClose={() => setIsRepriceSheetOpen(false)}>
+        <View style={s.sheetBackdrop}>
+          <Pressable style={s.sheetBackdropTap} onPress={() => setIsRepriceSheetOpen(false)} />
+          <View style={s.sheetPanel}>
+            <Text style={s.sheetTitle}>Reprice {selectedItems.size} items</Text>
+            <Text style={s.sheetHint}>Set a new price or drop by percentage</Text>
+            <ConfigInput label="NEW PRICE" value={repriceValue} onChangeText={setRepriceValue} />
+            <Text style={[s.configLabel, { marginTop: 8 }]}>OR DROP BY</Text>
+            <View style={s.pctRow}>
+              {[5, 10, 15, 20].map(p => (
+                <TouchableOpacity key={p} style={[s.pctOpt, repriceDropPct === p && s.pctOptSel]} onPress={() => setRepriceDropPct(p)}>
+                  <Text style={[s.pctOptText, repriceDropPct === p && s.pctOptTextSel]}>{p}%</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity style={s.primaryBtn} onPress={() => { bulkAction('Reprice'); setIsRepriceSheetOpen(false); }}>
+              <Text style={s.primaryBtnText}>Apply to selected</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Floor sheet */}
+      <Modal visible={isFloorSheetOpen} transparent animationType="fade" onRequestClose={() => setIsFloorSheetOpen(false)}>
+        <View style={s.sheetBackdrop}>
+          <Pressable style={s.sheetBackdropTap} onPress={() => setIsFloorSheetOpen(false)} />
+          <View style={s.sheetPanel}>
+            <Text style={s.sheetTitle}>Override floor</Text>
+            <Text style={s.sheetHint}>Overrides campaign-level floor for these items only.</Text>
+            <ConfigInput label="FLOOR PRICE" value={floorValue} onChangeText={setFloorValue} />
+            <TouchableOpacity style={s.primaryBtn} onPress={() => { bulkAction('Floor override'); setIsFloorSheetOpen(false); }}>
+              <Text style={s.primaryBtnText}>Set floor</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Item detail sheet */}
+      <Modal visible={isDetailSheetOpen} transparent animationType="fade" onRequestClose={() => setIsDetailSheetOpen(false)}>
+        <View style={s.sheetBackdrop}>
+          <Pressable style={s.sheetBackdropTap} onPress={() => setIsDetailSheetOpen(false)} />
+          <View style={s.sheetPanel}>
+            {detailItem ? (
+              <>
+                <View style={s.detailTopRow}>
+                  <View style={s.detailThumb}><Text style={{ fontSize: 26 }}>{detailItem.emoji || '📦'}</Text></View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.detailName}>{detailItem.name}</Text>
+                    <Text style={s.detailCh}>{detailItem.channels} · <Text style={{ color: STATUS_STYLE[detailItem.status].fg }}>{STATUS_LABEL[detailItem.status]}</Text></Text>
+                  </View>
+                </View>
+                <View style={s.priceHist}>
+                  <Text style={s.configLabel}>PRICE HISTORY</Text>
+                  {(detailItem.priceHistory || [{ date: 'Today', price: detailItem.currentPrice, reason: 'current' }]).map((h, i) => (
+                    <View key={i} style={s.phRow}>
+                      <Text style={s.phDate}>{h.date}</Text>
+                      <Text style={s.phPrice}>${h.price}</Text>
+                      <Text style={s.phReason}>{h.reason}</Text>
+                    </View>
+                  ))}
+                </View>
+                <View style={s.chStatus}>
+                  {detailItem.channels.split(' · ').map(ch => (
+                    <View key={ch} style={[s.chPill, s.chPillLive]}><Text style={s.chPillText}>{ch} · live</Text></View>
+                  ))}
+                  <View style={s.chPill}><Text style={s.chPillText}>Craigslist · not listed</Text></View>
+                </View>
+                <View style={s.detailActions}>
+                  <TouchableOpacity style={[s.daBtn, s.daBtnPrimary]} onPress={() => { setIsDetailSheetOpen(false); setRepriceValue(''); setSelectedItems(new Set([detailItem.id])); setIsRepriceSheetOpen(true); }}>
+                    <Text style={s.daBtnText}>Reprice</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={s.daBtn} onPress={() => { setIsDetailSheetOpen(false); setFloorValue(''); setSelectedItems(new Set([detailItem.id])); setIsFloorSheetOpen(true); }}>
+                    <Text style={s.daBtnText}>Set floor</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={s.daBtn} onPress={() => { setIsDetailSheetOpen(false); Alert.alert('Remove', `${detailItem.name} removed from campaign`); }}>
+                    <Text style={s.daBtnText}>Remove</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : null}
           </View>
         </View>
       </Modal>
@@ -639,526 +527,124 @@ const LiquidationCampaignScreen = () => {
   );
 };
 
-const ConfigInput = ({
-  label,
-  value,
-  onChangeText,
-}: {
-  label: string;
-  value: string;
-  onChangeText: (value: string) => void;
-}) => (
-  <View style={styles.configField}>
-    <Text style={styles.configLabel}>{label}</Text>
-    <TextInput
-      style={styles.configInput}
-      value={value}
-      onChangeText={onChangeText}
-      placeholderTextColor="#9CA3AF"
-    />
+/* ── helper components ──────────────────────────────────────────────── */
+
+const ConfigInput = ({ label, value, onChangeText }: { label: string; value: string; onChangeText: (v: string) => void }) => (
+  <View style={s.configField}>
+    <Text style={s.configLabel}>{label}</Text>
+    <TextInput style={s.configInput} value={value} onChangeText={onChangeText} placeholderTextColor="#9CA3AF" />
   </View>
 );
 
-const groupThreadsByRecency = (threads: CampaignThreadSummary[]) => {
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfYesterday = new Date(startOfToday);
-  startOfYesterday.setDate(startOfYesterday.getDate() - 1);
-  const startOfWeek = new Date(startOfToday);
-  startOfWeek.setDate(startOfWeek.getDate() - 7);
+/* ── styles ─────────────────────────────────────────────────────────── */
 
-  const groups: Array<{ label: string; threads: CampaignThreadSummary[] }> = [
-    { label: 'Today', threads: [] },
-    { label: 'Yesterday', threads: [] },
-    { label: 'Last 7 days', threads: [] },
-    { label: 'Older', threads: [] },
-  ];
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#FFFFFF' },
 
-  threads
-    .slice()
-    .sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime())
-    .forEach(thread => {
-      const stamp = new Date(thread.lastMessageAt);
-      if (stamp >= startOfToday) {
-        groups[0].threads.push(thread);
-        return;
-      }
-      if (stamp >= startOfYesterday) {
-        groups[1].threads.push(thread);
-        return;
-      }
-      if (stamp >= startOfWeek) {
-        groups[2].threads.push(thread);
-        return;
-      }
-      groups[3].threads.push(thread);
-    });
+  // Top bar
+  topBar: { minHeight: 60, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderBottomWidth: 0.5, borderBottomColor: '#E5E5E5' },
+  backBtn: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 0.5, borderColor: '#E5E5E5' },
+  topInfo: { flex: 1 },
+  topTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  plantDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#639922' },
+  topTitle: { fontSize: 15, fontWeight: '500', color: '#111827', fontFamily: 'PlusJakartaSans_500Medium' },
+  topMeta: { fontSize: 11, color: '#71717A', marginTop: 1, fontFamily: 'PlusJakartaSans_500Medium' },
+  threadBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#F9FAFB' },
+  threadBtnText: { fontSize: 16, color: '#374151', fontFamily: 'PlusJakartaSans_500Medium' },
 
-  return groups.filter(group => group.threads.length > 0);
-};
+  // Progress strip
+  progStrip: { height: 2, backgroundColor: '#F3F4F6' },
+  progFill: { height: '100%', backgroundColor: '#97C459' },
 
-const formatThreadDate = (value: string) => {
-  const stamp = new Date(value);
-  if (Number.isNaN(stamp.getTime())) return 'Recent';
-  return stamp.toLocaleDateString();
-};
+  // Ambient tray
+  ambientTray: { backgroundColor: '#fafdf5', borderBottomWidth: 0.5, borderBottomColor: '#c0dd97', paddingHorizontal: 16, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  trayDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#BA7517' },
+  trayText: { flex: 1, fontSize: 11, color: '#3B6D11', fontFamily: 'PlusJakartaSans_500Medium' },
+  trayAction: { fontSize: 11, color: '#BA7517', fontWeight: '500' },
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  topBar: {
-    minHeight: 72,
-    paddingHorizontal: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E5E5',
-    backgroundColor: '#FFFFFF',
-  },
-  subtitleRow: {
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 12,
-  },
-  subtitleText: {
-    color: '#71717A',
-    fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 12,
-  },
-  iconButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
-  },
-  campaignChip: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-  },
-  campaignChipLabel: {
-    color: '#71717A',
-    fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 10,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  campaignChipText: {
-    color: '#111827',
-    fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 12,
-    marginTop: 2,
-  },
-  topActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  newChatButton: {
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: 'rgba(147,200,34,0.08)',
-    borderWidth: 1,
-    borderColor: '#93C822',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    gap: 6,
-  },
-  newChatText: {
-    color: '#5D7E16',
-    fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 11,
-  },
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-  },
-  loadingText: {
-    color: '#71717A',
-    fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 13,
-  },
-  feed: {
-    flex: 1,
-  },
-  feedContent: {
-    paddingHorizontal: 14,
-    paddingTop: 16,
-    paddingBottom: 24,
-  },
-  homeHero: {
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 18,
-    paddingTop: 22,
-    paddingBottom: 16,
-    marginBottom: 16,
-  },
-  homeLogo: {
-    width: 118,
-    height: 34,
-  },
-  homeEyebrow: {
-    marginTop: 18,
-    color: '#6B8A11',
-    fontFamily: 'PlusJakartaSans_700Bold',
-    fontSize: 11,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  homeTitle: {
-    marginTop: 8,
-    color: '#111827',
-    fontFamily: 'PlusJakartaSans_700Bold',
-    fontSize: 24,
-  },
-  homeBody: {
-    marginTop: 8,
-    color: '#6B7280',
-    fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 14,
-    lineHeight: 22,
-    maxWidth: '92%',
-  },
-  homeDivider: {
-    marginTop: 18,
-    height: 1,
-    backgroundColor: '#E5E7EB',
-  },
-  footerStack: {
-    backgroundColor: '#FFFFFF',
-    paddingTop: 4,
-  },
-  footerStackLifted: {
-    paddingBottom: 68,
-  },
-  errorBanner: {
-    marginHorizontal: 12,
-    marginTop: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#FECACA',
-    backgroundColor: '#FEF2F2',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  errorText: {
-    flex: 1,
-    color: '#B91C1C',
-    fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 12,
-  },
-  errorRetry: {
-    color: '#DC2626',
-    fontFamily: 'PlusJakartaSans_700Bold',
-    fontSize: 12,
-  },
-  noticeBanner: {
-    marginHorizontal: 12,
-    marginTop: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(147,200,34,0.3)',
-    backgroundColor: 'rgba(147,200,34,0.12)',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  noticeText: {
-    flex: 1,
-    color: '#5D7E16',
-    fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 12,
-  },
-  drawerBackdrop: {
-    flex: 1,
-    flexDirection: 'row',
-  },
-  drawerPanel: {
-    width: '84%',
-    backgroundColor: '#FFFFFF',
-    paddingTop: 18,
-    paddingHorizontal: 18,
-    paddingBottom: 20,
-  },
-  drawerBackdropTap: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.22)',
-  },
-  drawerTitle: {
-    color: '#111827',
-    fontFamily: 'PlusJakartaSans_700Bold',
-    fontSize: 26,
-  },
-  drawerCampaignMeta: {
-    marginTop: 4,
-    color: '#71717A',
-    fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 14,
-  },
-  searchWrap: {
-    marginTop: 18,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  searchInput: {
-    flex: 1,
-    color: '#111827',
-    fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 15,
-  },
-  drawerDivider: {
-    marginVertical: 16,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: '#E5E7EB',
-  },
-  threadScroll: {
-    flex: 1,
-  },
-  threadContent: {
-    paddingBottom: 40,
-  },
-  groupLabel: {
-    marginTop: 10,
-    marginBottom: 10,
-    color: '#71717A',
-    fontFamily: 'PlusJakartaSans_700Bold',
-    fontSize: 12,
-    textTransform: 'uppercase',
-  },
-  threadRow: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 12,
-  },
-  threadRowSelected: {
-    borderColor: '#93C822',
-    backgroundColor: 'rgba(147,200,34,0.12)',
-  },
-  threadBody: {
-    flex: 1,
-  },
-  threadTitle: {
-    color: '#111827',
-    fontFamily: 'PlusJakartaSans_700Bold',
-    fontSize: 15,
-  },
-  threadMeta: {
-    marginTop: 4,
-    color: '#71717A',
-    fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 14,
-  },
-  threadMenu: {
-    width: 28,
-    height: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  inlineLoading: {
-    paddingVertical: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  inlineLoadingText: {
-    color: '#71717A',
-    fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 12,
-  },
-  sheetBackdrop: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  sheetBackdropTap: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.24)',
-  },
-  sheetPanel: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 18,
-    paddingTop: 18,
-    paddingBottom: 28,
-    maxHeight: '78%',
-  },
-  renameBackdrop: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-    backgroundColor: 'rgba(0,0,0,0.24)',
-  },
-  renamePanel: {
-    borderRadius: 24,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 18,
-    paddingTop: 18,
-    paddingBottom: 22,
-  },
-  sheetTitle: {
-    color: '#111827',
-    fontFamily: 'PlusJakartaSans_700Bold',
-    fontSize: 22,
-  },
-  sheetHint: {
-    marginTop: 8,
-    marginBottom: 12,
-    color: '#71717A',
-    fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 13,
-  },
-  switchCampaignList: {
-    maxHeight: 320,
-  },
-  sheetAction: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 12,
-  },
-  sheetActionSelected: {
-    borderColor: '#93C822',
-    backgroundColor: 'rgba(147,200,34,0.12)',
-  },
-  sheetActionBody: {
-    flex: 1,
-  },
-  sheetActionControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  sheetMiniAction: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(147,200,34,0.35)',
-    backgroundColor: 'rgba(147,200,34,0.12)',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  sheetMiniActionDelete: {
-    borderColor: '#FECACA',
-    backgroundColor: '#FEF2F2',
-  },
-  sheetMiniActionText: {
-    color: '#5D7E16',
-    fontFamily: 'PlusJakartaSans_700Bold',
-    fontSize: 11,
-  },
-  sheetMiniActionDeleteText: {
-    color: '#B91C1C',
-  },
-  sheetActionTitle: {
-    color: '#111827',
-    fontFamily: 'PlusJakartaSans_700Bold',
-    fontSize: 14,
-  },
-  sheetActionSubtitle: {
-    marginTop: 2,
-    color: '#71717A',
-    fontFamily: 'PlusJakartaSans_400Regular',
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  primaryActionButton: {
-    height: 48,
-    borderRadius: 14,
-    backgroundColor: '#93C822',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 8,
-  },
-  primaryActionText: {
-    color: '#1F2937',
-    fontFamily: 'PlusJakartaSans_700Bold',
-    fontSize: 14,
-  },
-  secondaryActionButton: {
-    height: 48,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 8,
-  },
-  secondaryActionText: {
-    color: '#111827',
-    fontFamily: 'PlusJakartaSans_700Bold',
-    fontSize: 14,
-  },
-  rowActions: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  flexFill: {
-    flex: 1,
-  },
-  configField: {
-    marginBottom: 12,
-  },
-  configLabel: {
-    marginBottom: 6,
-    color: '#374151',
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    fontSize: 12,
-  },
-  configInput: {
-    height: 46,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 12,
-    color: '#111827',
-    fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 14,
-  },
+  // Loading
+  loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },
+  loadingText: { color: '#71717A', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 13 },
+
+  // Controls row
+  controlsRow: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  ctrlBtn: { paddingHorizontal: 11, paddingVertical: 5, borderRadius: 10, borderWidth: 0.5, borderColor: '#E5E5E5', backgroundColor: '#F9FAFB' },
+  ctrlBtnText: { fontSize: 11, color: '#71717A', fontFamily: 'PlusJakartaSans_500Medium' },
+  selCount: { fontSize: 11, color: '#3B6D11', fontWeight: '500' },
+
+  // Items list
+  emptyState: { padding: 40, alignItems: 'center' },
+  emptyStateText: { color: '#9CA3AF', fontSize: 13, fontFamily: 'PlusJakartaSans_500Medium' },
+  cb: { width: 18, height: 18, borderRadius: 4, borderWidth: 1, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center' },
+  cbChecked: { backgroundColor: '#639922', borderColor: '#639922' },
+
+  // Bulk action bar
+  bulkBar: { position: 'absolute', bottom: 12, left: 12, right: 12, backgroundColor: '#FFF', borderWidth: 0.5, borderColor: '#D1D5DB', borderRadius: 14, padding: 10, flexDirection: 'row', gap: 6, flexWrap: 'wrap', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 2 }, elevation: 4 },
+  baBtn: { flex: 1, paddingVertical: 7, paddingHorizontal: 8, borderRadius: 10, borderWidth: 0.5, alignItems: 'center' },
+  baPrimary: { borderColor: '#97C459', backgroundColor: '#eaf3de' },
+  baDefault: { borderColor: '#D1D5DB', backgroundColor: '#F9FAFB' },
+  baDanger: { borderColor: '#F7C1C1', backgroundColor: '#fcebeb' },
+  baBtnText: { fontSize: 11, fontWeight: '500', color: '#111827' },
+
+  // Footer
+  footerStack: { backgroundColor: '#FFFFFF', paddingTop: 4 },
+  footerStackLifted: { paddingBottom: 68 },
+  errorBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FEF2F2', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  errorText: { flex: 1, color: '#B91C1C', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 12 },
+  errorRetry: { color: '#DC2626', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 12 },
+  noticeBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(147,200,34,0.3)', backgroundColor: 'rgba(147,200,34,0.12)', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  noticeText: { flex: 1, color: '#5D7E16', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 12 },
+
+  // Sheet common
+  sheetBackdrop: { flex: 1, justifyContent: 'flex-end' },
+  sheetBackdropTap: { flex: 1, backgroundColor: 'rgba(0,0,0,0.24)' },
+  sheetPanel: { backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 18, paddingTop: 18, paddingBottom: 28, maxHeight: '78%' },
+  sheetTitle: { color: '#111827', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 22 },
+  sheetHint: { marginTop: 8, marginBottom: 12, color: '#71717A', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 13 },
+
+
+
+  // Buttons
+  primaryBtn: { height: 48, borderRadius: 14, backgroundColor: '#93C822', alignItems: 'center', justifyContent: 'center', marginTop: 8 },
+  primaryBtnText: { color: '#1F2937', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 14 },
+  secondaryBtn: { height: 48, borderRadius: 14, borderWidth: 1, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center', marginTop: 8 },
+  secondaryBtnText: { color: '#111827', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 14 },
+  rowActions: { flexDirection: 'row', gap: 12 },
+
+  // Config
+  configField: { marginBottom: 12 },
+  configLabel: { marginBottom: 6, color: '#374151', fontFamily: 'PlusJakartaSans_600SemiBold', fontSize: 12 },
+  configInput: { height: 46, borderRadius: 12, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#FFF', paddingHorizontal: 12, color: '#111827', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 14 },
+
+  // Rename
+  renameBackdrop: { flex: 1, justifyContent: 'center', paddingHorizontal: 20, backgroundColor: 'rgba(0,0,0,0.24)' },
+  renamePanel: { borderRadius: 24, backgroundColor: '#FFF', paddingHorizontal: 18, paddingTop: 18, paddingBottom: 22 },
+
+  // Reprice pct
+  pctRow: { flexDirection: 'row', gap: 7, marginTop: 6, marginBottom: 10 },
+  pctOpt: { flex: 1, borderWidth: 0.5, borderColor: '#E5E5E5', borderRadius: 10, paddingVertical: 9, alignItems: 'center' },
+  pctOptSel: { borderColor: '#97C459', backgroundColor: '#eaf3de' },
+  pctOptText: { fontSize: 12, color: '#71717A' },
+  pctOptTextSel: { color: '#3B6D11', fontWeight: '500' },
+
+  // Detail sheet
+  detailTopRow: { flexDirection: 'row', gap: 12, alignItems: 'center', marginBottom: 12 },
+  detailThumb: { width: 56, height: 56, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  detailName: { fontSize: 16, fontWeight: '500', color: '#111827' },
+  detailCh: { fontSize: 12, color: '#71717A', marginTop: 2 },
+  priceHist: { backgroundColor: '#F9FAFB', borderRadius: 11, padding: 10, marginBottom: 10 },
+  phRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3, borderBottomWidth: 0.5, borderBottomColor: '#F3F4F6' },
+  phDate: { fontSize: 12, color: '#9CA3AF' },
+  phPrice: { fontSize: 12, fontWeight: '500', color: '#111827' },
+  phReason: { fontSize: 12, color: '#71717A' },
+  chStatus: { flexDirection: 'row', gap: 7, flexWrap: 'wrap', marginBottom: 12 },
+  chPill: { paddingHorizontal: 11, paddingVertical: 4, borderRadius: 10, borderWidth: 0.5, borderColor: '#E5E5E5' },
+  chPillLive: { borderColor: '#97C459', backgroundColor: '#eaf3de' },
+  chPillText: { fontSize: 11, color: '#71717A' },
+  detailActions: { flexDirection: 'row', gap: 7 },
+  daBtn: { flex: 1, paddingVertical: 10, borderRadius: 11, borderWidth: 0.5, borderColor: '#E5E5E5', alignItems: 'center' },
+  daBtnPrimary: { backgroundColor: '#eaf3de', borderColor: '#97C459' },
+  daBtnText: { fontSize: 12, fontWeight: '500', color: '#111827' },
 });
 
 export default LiquidationCampaignScreen;

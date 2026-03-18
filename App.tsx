@@ -18,7 +18,7 @@ import { Text } from 'react-native';
 import { ClerkProvider, useAuth, SignedIn, SignedOut } from '@clerk/clerk-expo';
 import { tokenCache as clerkTokenCache } from '@clerk/clerk-expo/token-cache';
 import * as SecureStore from 'expo-secure-store';
-import { SessionProvider } from './src/context/SessionProvider';
+import { EnhancedSessionProvider } from './src/context/EnhancedSessionProvider';
 import { SessionContext } from './src/context/SessionContext';
 import ProcessResumptionModal from './src/components/ProcessResumptionModal';
 import { useProcessResumption } from './src/hooks/useProcessState';
@@ -32,6 +32,10 @@ import { PostHogProvider, PostHogIdentify } from './src/providers/PostHogProvide
 import * as WebBrowser from 'expo-web-browser';
 import { init as initFlowLogger } from './src/lib/mobileFlowLogger';
 import { LiveActivityProvider } from './src/context/LiveActivityContext';
+import AppStartupShell from './src/components/AppStartupShell';
+import SystemStatusBanner from './src/components/SystemStatusBanner';
+import { SystemStatusProvider } from './src/context/SystemStatusContext';
+import { OfflineQueueProvider } from './src/context/OfflineQueueContext';
 import {
   ActiveFlowCheckpoint,
   clearActiveFlowCheckpoint,
@@ -495,17 +499,25 @@ const App: React.FC = () => {
         <LegendStateContext.Provider value={legendStateModules}>
           <ThemeProvider>
             <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+            <SystemStatusBanner />
             {!clerkLoaded ? (
-              <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                <ActivityIndicator />
-              </View>
+              <AppStartupShell
+                title="Starting up"
+                message="Loading cached session state and checking service health."
+              />
             ) : !isSignedIn ? (
               // If not signed in, don't wait for session/legend state
               <AppNavigator />
-            ) : !session?.ready || !legendStateModules ? (
-              <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                <ActivityIndicator />
-              </View>
+            ) : !session?.ready ? (
+              <AppStartupShell
+                title="Restoring your workspace"
+                message={session?.bootstrapError || 'Checking your session and loading cached account data.'}
+              />
+            ) : (!legendStateModules && session?.bootstrapState !== 'degraded') ? (
+              <AppStartupShell
+                title="Preparing local data"
+                message="Reconnecting shared app state and restoring your last workspace."
+              />
             ) : (
               <AppNavigator />
             )}
@@ -532,10 +544,10 @@ const App: React.FC = () => {
     const { getToken } = useAuth();
     const template = process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'mobile';
     return (
-      <SessionProvider getClerkToken={() => getToken({ template }).catch(async () => getToken())}>
+      <EnhancedSessionProvider getClerkToken={() => getToken({ template }).catch(async () => getToken())}>
         <PostHogIdentify />
         {children}
-      </SessionProvider>
+      </EnhancedSessionProvider>
     );
   };
 
@@ -587,23 +599,26 @@ const App: React.FC = () => {
               setNavigationReady(true);
             }}
           >
-            {isSignedIn ? (
-              <WithSessionProvider>
-                {React.createElement(OrgProvider as any, null, (
-                  <LiveActivityProvider>
-                    <JobsProvider>
-                      <AuthedAppContent navigationRef={navigationRef} />
-                    </JobsProvider>
-                  </LiveActivityProvider>
-                ))}
-              </WithSessionProvider>
-            ) : (
-              <ThemeProvider>
-                <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-                <AppNavigator />
-                <FlashMessage position="top" />
-              </ThemeProvider>
-            )}
+            <>
+              {isSignedIn ? (
+                <WithSessionProvider>
+                  {React.createElement(OrgProvider as any, null, (
+                    <LiveActivityProvider>
+                      <JobsProvider>
+                        <AuthedAppContent navigationRef={navigationRef} />
+                      </JobsProvider>
+                    </LiveActivityProvider>
+                  ))}
+                </WithSessionProvider>
+              ) : (
+                <ThemeProvider>
+                  <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+                  <SystemStatusBanner />
+                  <AppNavigator />
+                  <FlashMessage position="top" />
+                </ThemeProvider>
+              )}
+            </>
           </NavigationContainer>
         </PlatformPickerOverlayProvider>
       </PlatformConnectionsProvider>
@@ -614,9 +629,13 @@ const App: React.FC = () => {
     <ClerkProvider publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!} tokenCache={tokenCache}>
       <PostHogProvider>
         <SafeAreaProvider>
-          <SystemNotificationProvider>
-            <DebugClerkState />
-          </SystemNotificationProvider>
+          <SystemStatusProvider>
+            <OfflineQueueProvider>
+              <SystemNotificationProvider>
+                <DebugClerkState />
+              </SystemNotificationProvider>
+            </OfflineQueueProvider>
+          </SystemStatusProvider>
         </SafeAreaProvider>
       </PostHogProvider>
     </ClerkProvider>

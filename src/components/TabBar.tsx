@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { View, TouchableOpacity, Text, StyleSheet, ViewStyle, StyleProp, Animated, Easing, Platform } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, TouchableOpacity, Text, StyleSheet, ViewStyle, StyleProp, Animated, Easing, Platform, PanResponder, GestureResponderEvent, PanResponderGestureState } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import ShadowSurface from './ui/ShadowSurface';
@@ -38,6 +38,7 @@ const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, contain
   const lastNonAddRouteRef = useRef<string>('Dashboard');
   const currentRouteName = state?.routes?.[state.index]?.name;
   const isAddFocused = currentRouteName === 'AddProduct';
+  const [barWidth, setBarWidth] = useState(0);
 
   // Animated rotation for the Add (+) button → × when focused
   const addRotateAnim = useRef(new Animated.Value(isAddFocused ? 1 : 0)).current;
@@ -62,8 +63,42 @@ const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, contain
     }
   }, [currentRouteName]);
 
+  const handleGestureTabChange = (event: GestureResponderEvent) => {
+    if (!barWidth || !state?.routes?.length) return;
+    const { locationX } = event.nativeEvent;
+    const routes = state.routes;
+    const tabWidth = barWidth / routes.length;
+    let targetIndex = Math.floor(locationX / tabWidth);
+    if (targetIndex < 0) targetIndex = 0;
+    if (targetIndex > routes.length - 1) targetIndex = routes.length - 1;
+
+    if (targetIndex === state.index) return;
+
+    const targetRoute = routes[targetIndex];
+    if (!targetRoute) return;
+
+    navigation.navigate(targetRoute.name);
+  };
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderMove: (evt: GestureResponderEvent, _gestureState: PanResponderGestureState) => {
+        handleGestureTabChange(evt);
+      },
+      onPanResponderRelease: (evt: GestureResponderEvent, _gestureState: PanResponderGestureState) => {
+        handleGestureTabChange(evt);
+      },
+    })
+  ).current;
+
   return (
-    <View style={[styles.container, containerStyle]}>
+    <View
+      style={[styles.container, containerStyle]}
+      onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}
+      {...panResponder.panHandlers}
+    >
       <ShadowSurface shadow="lg" clip={false} innerStyle={[styles.surface, surfaceStyle]} radius={30}>
         {state.routes.map((route: any, index: number) => {
           const { options } = descriptors[route.key];
@@ -101,7 +136,7 @@ const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, contain
                 onPress={onPress}
                 style={styles.tabItem}
               >
-                <ShadowSurface shadow="md" radius={32} style={styles.addShadowWrap} innerStyle={styles.addOuterCircle}>
+                <ShadowSurface shadow="xs" radius={32} style={styles.addShadowWrap} innerStyle={styles.addOuterCircle}>
                   <View style={styles.addInnerCircle}>
                     <Animated.View style={{ transform: [{ rotate: addRotate }] }}>
                       <Icon name={'plus'} size={28} color={'#FFF'} />
@@ -128,19 +163,21 @@ const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, contain
               onPress={onPress}
               style={styles.tabItem}
             >
-              <Icon
-                name={icon}
-                size={24}
-                color={tintColor}
-              />
-              <Text
-                style={[
-                  styles.tabLabel,
-                  { color: tintColor }
-                ]}
-              >
-                {label}
-              </Text>
+              <View style={[styles.tabInner, isFocused && styles.tabInnerActive]}>
+                <Icon
+                  name={icon}
+                  size={24}
+                  color={tintColor}
+                />
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    { color: tintColor }
+                  ]}
+                >
+                  {label}
+                </Text>
+              </View>
             </TouchableOpacity>
           );
         })}
@@ -166,6 +203,17 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  tabInner: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  tabInnerActive: {
+    backgroundColor: 'rgba(222, 247, 218, 0.4)', // gray-200 style
   },
   addOuterCircle: {
     height: 60,

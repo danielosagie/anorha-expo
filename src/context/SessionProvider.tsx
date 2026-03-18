@@ -64,9 +64,17 @@ export const SessionProvider: React.FC<{ children: React.ReactNode; getClerkToke
     setEntitlements(ents);
   };
 
-  const value: SessionContextType = useMemo(() => ({ ready, user, entitlements, refresh }), [ready, user, entitlements]);
+  const value: SessionContextType = useMemo(() => ({
+    ready,
+    user,
+    entitlements,
+    bootstrapState: ready ? 'ready' : 'initializing',
+    usingCachedSession: false,
+    bootstrapError: null,
+    lastReadyAt: ready ? Date.now() : null,
+    refresh,
+  }), [ready, user, entitlements]);
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 };
-
 

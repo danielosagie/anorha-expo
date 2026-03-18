@@ -10,7 +10,12 @@ import {
   Platform,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { Audio } from 'expo-av';
+import {
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  useAudioRecorder,
+  RecordingPresets,
+} from 'expo-audio';
 import { ensureSupabaseJwt } from '../lib/supabase';
 
 const API_BASE = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
@@ -39,24 +44,24 @@ export default function SpeechModal({
   const [isRecording, setIsRecording] = useState(false);
   const [recordingUri, setRecordingUri] = useState<string | null>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
-  const recordingRef = useRef<Audio.Recording | null>(null);
   const lastSentUri = useRef<string | null>(null);
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   useEffect(() => {
     if (!visible) return;
     const setup = async () => {
-      const { status } = await Audio.requestPermissionsAsync();
-      if (status !== 'granted') {
+      const { granted } = await requestRecordingPermissionsAsync();
+      if (!granted) {
         Alert.alert('Microphone', 'Allow microphone access to use voice input.');
         onClose();
         return;
       }
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        shouldPlayInBackground: false,
+        interruptionMode: 'duckOthers',
+        shouldRouteThroughEarpiece: false,
       });
     };
     setup();
@@ -81,31 +86,33 @@ export default function SpeechModal({
     setRecordingUri(null);
     lastSentUri.current = null;
     try {
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      recordingRef.current = recording;
+      await recorder.prepareToRecordAsync();
+      recorder.record();
       setIsRecording(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to start recording');
     }
-  }, []);
+  }, [recorder]);
 
   const stopRecording = useCallback(async () => {
-    const rec = recordingRef.current;
-    if (!rec) return;
     try {
-      await rec.stopAndUnloadAsync();
-      const uri = rec.getURI();
-      recordingRef.current = null;
+      await recorder.stop();
+      const uri = recorder.uri;
       setIsRecording(false);
       setRecordingUri(uri ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to stop recording');
-      recordingRef.current = null;
       setIsRecording(false);
     }
-  }, []);
+  }, [recorder]);
+
+  useEffect(() => {
+    if (visible) return;
+    if (recorder.isRecording) {
+      recorder.stop().catch(() => null);
+    }
+    setIsRecording(false);
+  }, [visible, recorder]);
 
   const sendForTranscription = useCallback(async (uri: string) => {
     if (!uri) {

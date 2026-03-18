@@ -13,6 +13,7 @@ import { ActivityIndicator, View } from 'react-native';
 import { Asset } from 'expo-asset';
 import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
+import AppStartupShell from '../components/AppStartupShell';
 import {
   PlusJakartaSans_400Regular,
   PlusJakartaSans_500Medium,
@@ -60,12 +61,15 @@ import { CSVColumnMappingScreen } from '../screens/CSVColumnMappingScreen';
 import ImportOverviewScreen from '../screens/ImportOverviewScreen';
 import PendingOrgInvitesScreen from '../screens/PendingOrgInvitesScreen';
 import LiquidationCampaignScreen from '../screens/LiquidationCampaignScreen';
+import SproutHomeScreen from '../screens/SproutHomeScreen';
+import CampaignThreadScreen from '../screens/CampaignThreadScreen';
 import BackupsScreen from '../screens/BackupsScreen';
 import BillingScreen from '../screens/BillingScreen';
 import BillingSupportScreen from '../screens/BillingSupportScreen';
 import DeleteAccountInfoScreen from '../screens/DeleteAccountInfoScreen';
 import { isFeatureEnabled } from '../config/features';
 import { SessionContext } from '../context/SessionContext';
+import { useSystemStatus } from '../context/SystemStatusContext';
 
 // --- Define Param Lists for Type Safety --- //
 export type AuthStackParamList = {
@@ -335,7 +339,9 @@ export type AppStackParamList = {
     sampleRow: Record<string, string>;
   };
   Backups: undefined;
-  LiquidationCampaignScreen: { campaignId?: string; entryPoint?: 'tab' | 'detail' } | undefined;
+  LiquidationCampaignScreen: { campaignId: string; entryPoint?: 'tab' | 'detail' } | undefined;
+  CampaignThreadScreen: { campaignId: string; title?: string } | undefined;
+  SproutHomeScreen: undefined;
   Partners: undefined;
 };
 
@@ -441,8 +447,7 @@ const TabNavigator = () => {
 
       <Tab.Screen
         name="Clearouts"
-        component={LiquidationCampaignScreen}
-        initialParams={{ entryPoint: 'tab' }}
+        component={SproutHomeScreen}
         options={{
           tabBarLabel: 'Sprout',
           tabBarIcon: ({ color, size }: { color: string; size: number }) => (
@@ -490,7 +495,8 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="PendingOrgInvitesScreen" component={PendingOrgInvitesScreen} />
     <AppStackNav.Screen name="CreateAccountScreen" component={CreateAccountScreen} />
     <AppStackNav.Screen name="Partners" component={PartnersScreen} />
-    <AppStackNav.Screen name="LiquidationCampaignScreen" component={LiquidationCampaignScreen} options={{ headerTitle: 'Liquidation Campaign' }} />
+    <AppStackNav.Screen name="LiquidationCampaignScreen" component={LiquidationCampaignScreen} options={{ headerTitle: 'Campaign Items', animationEnabled: false }} />
+    <AppStackNav.Screen name="SproutHomeScreen" component={SproutHomeScreen} options={{ headerTitle: 'Sprout' }} />
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />
     <AppStackNav.Screen name="ProductDetail" component={ProductDetailScreen} />
     <AppStackNav.Screen name="PastScans" component={PastScansScreen} />
@@ -521,6 +527,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="CSVColumnMapping" component={CSVColumnMappingScreen} />
     <AppStackNav.Screen name="ActivityFeed" component={ActivityFeedScreen} />
     <AppStackNav.Screen name="Backups" component={BackupsScreen} />
+    <AppStackNav.Screen name="CampaignThreadScreen" component={CampaignThreadScreen} options={{ headerTitle: 'Campaign Thread', animationEnabled: false }} />
   </AppStackNav.Navigator>
 );
 
@@ -530,6 +537,7 @@ SplashScreen.preventAutoHideAsync();
 const AppNavigator = () => {
   const { isLoaded: clerkLoaded, isSignedIn, signOut: clerkSignOut } = useAuth();
   const session = React.useContext(SessionContext);
+  const systemStatus = useSystemStatus();
   const [isLoading, setIsLoading] = useState(true);
   const [userToken, setUserToken] = useState<string | null>(null);
   const [isFirstLaunch, setIsFirstLaunch] = useState<boolean | null>(null);
@@ -726,11 +734,25 @@ const AppNavigator = () => {
 
   // Keep UI hidden only until assets are ready (avoid full blank on auth state transitions)
   if (!appIsReady) {
-    return null;
+    return (
+      <AppStartupShell
+        title="Loading app shell"
+        message="Preparing local assets so the app can stay usable even if services are degraded."
+      />
+    );
   }
 
   if (isLoading || !clerkLoaded || (isSignedIn && !initialAppScreen)) {
-    return null; // Or show a SplashScreen component
+    return (
+      <AppStartupShell
+        title="Restoring navigation"
+        message={
+          session?.bootstrapError ||
+          systemStatus.message ||
+          'Checking sign-in state and rebuilding your last known workspace.'
+        }
+      />
+    );
   }
   return (
     <View style={{ flex: 1 }} onLayout={onLayoutRootView}>

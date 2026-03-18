@@ -2366,11 +2366,11 @@ const styles = StyleSheet.create({
     backgroundColor: "rgb(208, 255, 170)",
   },
   container: {
-    borderTopRightRadius: 36,
-    borderTopLeftRadius: 36,
+    borderTopRightRadius: 32,
+    borderTopLeftRadius: 32,
     flex: 1,
     backgroundColor: '#F8F9FB',
-    padding: 8,
+    padding: 4,
   },
   listContainer: {
     backgroundColor: "#FFF",

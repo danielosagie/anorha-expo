@@ -31,7 +31,6 @@
     "expo-asset": "~55.0.8",
     "expo-audio": "~55.0.8",
     "expo-auth-session": "~55.0.8",
-    "expo-av": "~16.0.8",
     "expo-blur": "~55.0.9",
     "expo-camera": "~55.0.9",
     "expo-clipboard": "~55.0.8",
