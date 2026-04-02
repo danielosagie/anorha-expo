@@ -1,10 +1,9 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, AccessibilityRole } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Animated, { FadeInUp, Layout } from 'react-native-reanimated';
 import { tokens } from '../../design/tokens';
 import Badge from '../ui/Badge';
-import PlaceholderImage from '../PlaceholderImage';
 import { Image as RNImage } from 'react-native';
 // Local brand image fallback
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -40,6 +39,15 @@ export type MappingCardProps = {
   isResolvedNew?: boolean;
   onEditNew?: () => void;
   onPress?: () => void;
+  primaryActionLabel?: string;
+  onPrimaryAction?: () => void;
+  reviewBadge?: {
+    label: string;
+    tone?: 'warning' | 'danger' | 'info' | 'success';
+  } | null;
+  supportingText?: string;
+  showStaleState?: boolean;
+  struckThroughRightTitle?: string;
 };
 
 const MappingCard: React.FC<MappingCardProps> = ({
@@ -67,14 +75,13 @@ const MappingCard: React.FC<MappingCardProps> = ({
   variantCount,
   priceRange,
   onPress,
+  primaryActionLabel,
+  onPrimaryAction,
+  reviewBadge,
+  supportingText,
+  showStaleState = false,
+  struckThroughRightTitle,
 }) => {
-  const actionBadge = useMemo(() => {
-    if (variant === 'new') return <Badge variant="success">New</Badge>;
-    if (variant === 'matched') return <Badge variant="success">Match</Badge>;
-    return <Badge variant="warning">Review</Badge>;
-  }, [variant]);
-
-
   return (
     <Animated.View entering={FadeInUp.duration(tokens.durations.fast)} layout={Layout.springify()} style={isChild ? { marginLeft: 20 } : null}>
       {isChild && (
@@ -86,6 +93,16 @@ const MappingCard: React.FC<MappingCardProps> = ({
         style={[styles.card, selected ? styles.cardSelected : null]}
         accessibilityRole={"button" as AccessibilityRole}
       >
+        {reviewBadge ? (
+          <View style={styles.metaRow}>
+            <View style={[styles.reviewBadge, reviewBadge.tone === 'danger' ? styles.reviewBadgeDanger : reviewBadge.tone === 'info' ? styles.reviewBadgeInfo : reviewBadge.tone === 'success' ? styles.reviewBadgeSuccess : styles.reviewBadgeWarning]}>
+              <Text style={[styles.reviewBadgeText, reviewBadge.tone === 'danger' ? styles.reviewBadgeDangerText : reviewBadge.tone === 'info' ? styles.reviewBadgeInfoText : reviewBadge.tone === 'success' ? styles.reviewBadgeSuccessText : styles.reviewBadgeWarningText]}>
+                {reviewBadge.label}
+              </Text>
+            </View>
+          </View>
+        ) : null}
+
         {/* Content */}
         <View style={styles.row}>
           <View style={[styles.miniCard, styles.leftMini]}>
@@ -134,7 +151,19 @@ const MappingCard: React.FC<MappingCardProps> = ({
           </View>
 
           <View style={[styles.miniCard, styles.rightMini, variant === 'matched' ? styles.rightLinked : variant === 'review' ? styles.rightNeedsReview : variant === 'ignored' ? styles.rightIgnored : styles.rightCreate]}>
-            {(variant === 'new' || isResolvedNew) ? (
+            {showStaleState ? (
+              <TouchableOpacity onPress={onSearch} style={[styles.emptyRight, styles.emptyRightReview, styles.staleRight]} accessibilityLabel="Search again">
+                <View style={styles.emptyRightIconContainer}>
+                  <Icon name="magnify" size={22} color="#B45309" />
+                </View>
+                {!!struckThroughRightTitle && (
+                  <Text style={styles.staleTitle} numberOfLines={2}>{struckThroughRightTitle}</Text>
+                )}
+                <Text style={[styles.emptyText, styles.warningText]}>
+                  Search again to rematch
+                </Text>
+              </TouchableOpacity>
+            ) : (variant === 'new' || isResolvedNew) ? (
               <View style={styles.newRightCard} accessibilityLabel="New item">
                 <Icon name="plus-circle" size={24} color="#fff" />
                 <Text style={styles.newRightText}>New Item</Text>
@@ -196,7 +225,28 @@ const MappingCard: React.FC<MappingCardProps> = ({
                   accessibilityLabel="Ignore item"
                 >
                   <Icon name="close-box" size={18} color="#EF4444" style={{ marginRight: 6 }} />
-                  <Text style={styles.dangerText}>Ignore Item</Text>
+                <Text style={styles.dangerText}>Ignore Item</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : primaryActionLabel && onPrimaryAction ? (
+            <>
+              {!!supportingText && (
+                <Text style={styles.supportingText}>{supportingText}</Text>
+              )}
+              <View style={styles.actionsRow}>
+                <TouchableOpacity
+                  style={[styles.actionPrimaryBtn, styles.actionWide, { flexDirection: 'row', alignItems: 'center' }]}
+                  onPress={onPrimaryAction}
+                  accessibilityLabel={primaryActionLabel}
+                >
+                  <Icon
+                    name={primaryActionLabel.toLowerCase().includes('confirm') ? 'check-circle-outline' : primaryActionLabel.toLowerCase().includes('variant') ? 'source-branch' : 'magnify'}
+                    size={18}
+                    color="rgb(94, 41, 11)"
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text style={[styles.primaryText, { color: 'rgb(94, 41, 11)' }]}>{primaryActionLabel}</Text>
                 </TouchableOpacity>
               </View>
             </>
@@ -286,6 +336,44 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: tokens.spacing.sm,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+    marginBottom: tokens.spacing.sm,
+  },
+  reviewBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+  },
+  reviewBadgeWarning: {
+    backgroundColor: '#FEF3C7',
+  },
+  reviewBadgeDanger: {
+    backgroundColor: '#FEE2E2',
+  },
+  reviewBadgeInfo: {
+    backgroundColor: '#DBEAFE',
+  },
+  reviewBadgeSuccess: {
+    backgroundColor: '#DCFCE7',
+  },
+  reviewBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  reviewBadgeWarningText: {
+    color: '#B45309',
+  },
+  reviewBadgeDangerText: {
+    color: '#B91C1C',
+  },
+  reviewBadgeInfoText: {
+    color: '#1D4ED8',
+  },
+  reviewBadgeSuccessText: {
+    color: '#166534',
   },
   row: {
     flexDirection: 'row',
@@ -405,6 +493,18 @@ const styles = StyleSheet.create({
   warningText: {
     color: '#D97706',
   },
+  staleRight: {
+    alignItems: 'center',
+    paddingHorizontal: tokens.spacing.md,
+  },
+  staleTitle: {
+    marginTop: 2,
+    textDecorationLine: 'line-through',
+    color: '#9CA3AF',
+    fontSize: tokens.fontSizes.sm,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
   actions: {
     flexDirection: 'column',
     borderTopWidth: 1,
@@ -448,6 +548,11 @@ const styles = StyleSheet.create({
   search: { backgroundColor: '#5C9B00' },
   primaryText: { textAlign: 'center', color: '#93C822', fontWeight: '600' },
   dangerText: { textAlign: 'center', color: '#EF4444', fontWeight: '600' },
+  supportingText: {
+    fontSize: tokens.fontSizes.sm,
+    color: '#6B7280',
+    marginBottom: 10,
+  },
   bannerNew: {
     backgroundColor: '#93C822',
     borderRadius: 10,
@@ -525,5 +630,3 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 });
-
-

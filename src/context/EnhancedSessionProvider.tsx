@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { SessionContext, SessionContextType, SessionUser } from './SessionContext';
+import { SessionContext, SessionContextType, SessionMode, SessionUser } from './SessionContext';
 import { configureClerkSupabaseBridge, getUserLike, stopClerkSupabaseBridge } from '../lib/supabase';
 import { fetchUserEntitlements, UserEntitlements } from '../utils/entitlements';
 import { AuthPersistence } from '../utils/AuthPersistence';
@@ -23,14 +23,21 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   const [entitlements, setEntitlements] = useState<UserEntitlements | null>(null);
   const [initializing, setInitializing] = useState(true);
   const [usingCachedSession, setUsingCachedSession] = useState(false);
+  const [bridgeReady, setBridgeReady] = useState(false);
+  const [sessionMode, setSessionMode] = useState<SessionMode>('cached');
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [lastReadyAt, setLastReadyAt] = useState<number | null>(null);
   
   const configuredRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const userRef = useRef<SessionUser>(null);
   const authPersistence = useRef(AuthPersistence.getInstance());
   const appStateManager = useRef(AppStateManager.getInstance());
   const processPersistence = useRef(ProcessPersistence.getInstance());
+
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
 
   const loadCachedEntitlements = useCallback(async (): Promise<UserEntitlements | null> => {
     try {
@@ -55,9 +62,62 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     }
   }, []);
 
+  const setCachedSessionState = useCallback(async (
+    overrideMessage?: string,
+    overrideLastReadyAt?: number | null,
+  ) => {
+    const persistedState = await authPersistence.current.getAuthState();
+    const cachedEntitlements = await loadCachedEntitlements();
+
+    if (persistedState?.isAuthenticated && persistedState.userId) {
+      const cachedUser = {
+        id: persistedState.userId,
+        email: persistedState.email || '',
+      };
+      setUser((currentUser) => currentUser ?? {
+        ...cachedUser,
+      });
+      setEntitlements((currentEntitlements) => currentEntitlements ?? cachedEntitlements);
+      setReady(true);
+      setBridgeReady(false);
+      setSessionMode('cached');
+      setUsingCachedSession(true);
+      setBootstrapError(
+        overrideMessage ??
+        'Live services are unavailable right now. Continuing with cached account data.',
+      );
+      setLastReadyAt(overrideLastReadyAt ?? persistedState.lastAuthCheck ?? null);
+      return true;
+    }
+
+    return false;
+  }, [loadCachedEntitlements]);
+
+  const clearSessionState = useCallback(async (options: { clearPersistedAuth?: boolean } = {}) => {
+    if (options.clearPersistedAuth) {
+      await authPersistence.current.clearAuthData();
+    }
+
+    try {
+      stopClerkSupabaseBridge();
+    } catch {}
+
+    configuredRef.current = false;
+    setReady(false);
+    setBridgeReady(false);
+    setSessionMode('cached');
+    setUser(null);
+    setEntitlements(null);
+    setUsingCachedSession(false);
+    setBootstrapError(options.clearPersistedAuth ? 'Unable to restore your session right now.' : null);
+    setLastReadyAt(null);
+  }, []);
+
   // Enhanced token validation with 30-minute intervals and auto-retry
   const validateAuthIfNeeded = useCallback(async (force: boolean = false, retryCount: number = 0): Promise<void> => {
-    const shouldValidate = force || authPersistence.current.shouldValidateAuth();
+    const shouldRevalidateAccount = force || authPersistence.current.shouldValidateAuth();
+    const needsBridgeSetup = !configuredRef.current;
+    const shouldValidate = needsBridgeSetup || shouldRevalidateAccount;
     
     if (!shouldValidate) {
       console.log('[EnhancedSessionProvider] Skipping auth validation (within 30-min window)');
@@ -68,60 +128,92 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     
     try {
       const token = await getClerkToken();
-      
-      if (token && !configuredRef.current) {
+
+      if (!token) {
+        if (configuredRef.current) {
+          try {
+            stopClerkSupabaseBridge();
+          } catch {}
+          configuredRef.current = false;
+          setBridgeReady(false);
+        }
+
+        const restoredFromCache = await setCachedSessionState(
+          'Session token is unavailable. Continuing with cached account data while the session reconnects.',
+        );
+
+        if (!restoredFromCache) {
+          await clearSessionState({ clearPersistedAuth: true });
+        }
+        return;
+      }
+
+      if (!configuredRef.current) {
         console.log('[EnhancedSessionProvider] Configuring Supabase bridge...');
         
         // Extended to 30 minutes instead of 9
         await configureClerkSupabaseBridge({ getClerkToken, autoRefreshMinutes: 30 });
         configuredRef.current = true;
-        
-        console.log('[EnhancedSessionProvider] Bridge configured. Loading user data...');
-        const { user: me } = await getUserLike();
-        const ents = await fetchUserEntitlements().catch(async (error) => {
-          console.warn('[EnhancedSessionProvider] Falling back to cached entitlements:', error);
-          return loadCachedEntitlements();
-        });
-        
-        // Save auth state for persistence
-        await authPersistence.current.saveAuthState({
-          isAuthenticated: true,
-          userId: me?.id || null,
-          email: me?.email || null,
-          tokenExpiry: Date.now() + (30 * 60 * 1000), // 30 minutes from now
-        });
-        
-        setUser(me);
-        setEntitlements(ents);
-        await persistEntitlements(ents);
-        
-        // Initialize process persistence system
-        if (me?.id) {
-          await processPersistence.current.initialize(me.id);
-          console.log('[EnhancedSessionProvider] Process persistence initialized');
-        }
-        
-        setReady(true);
-        setUsingCachedSession(false);
-        setBootstrapError(null);
-        setLastReadyAt(Date.now());
-        
-        console.log('[EnhancedSessionProvider] Session ready for user:', me?.id);
-      } else if (!token && configuredRef.current) {
-        console.log('[EnhancedSessionProvider] Token cleared, cleaning up...');
-        try { 
-          stopClerkSupabaseBridge(); 
-          await authPersistence.current.clearAuthData();
-        } catch {}
-        
-        configuredRef.current = false;
-        setReady(false);
-        setUser(null);
-        setEntitlements(null);
-        setUsingCachedSession(false);
-        setBootstrapError(null);
-        setLastReadyAt(null);
       }
+
+      setBridgeReady(true);
+      setReady(true);
+      setSessionMode('live');
+      setUsingCachedSession(false);
+
+      if (!shouldRevalidateAccount) {
+        setBootstrapError(null);
+        console.log('[EnhancedSessionProvider] Bridge is ready; skipping account revalidation within auth window');
+        // Still refresh user from me so session.user.id matches JWT sub (fixes onboarding identity mismatch)
+        try {
+          const { user: me } = await getUserLike();
+          if (me?.id) {
+            await authPersistence.current.saveAuthState({
+              isAuthenticated: true,
+              userId: me.id,
+              email: me.email || userRef.current?.email || null,
+              tokenExpiry: Date.now() + (30 * 60 * 1000),
+            });
+            setUser(me);
+          }
+        } catch (refreshErr) {
+          console.warn('[EnhancedSessionProvider] Could not refresh user from me (within auth window):', refreshErr);
+        }
+        return;
+      }
+
+      console.log('[EnhancedSessionProvider] Bridge configured. Loading user data...');
+      const { user: me } = await getUserLike();
+      const ents = await fetchUserEntitlements().catch(async (error) => {
+        console.warn('[EnhancedSessionProvider] Falling back to cached entitlements:', error);
+        return loadCachedEntitlements();
+      });
+
+      await authPersistence.current.saveAuthState({
+        isAuthenticated: true,
+        userId: me?.id || userRef.current?.id || null,
+        email: me?.email || userRef.current?.email || null,
+        tokenExpiry: Date.now() + (30 * 60 * 1000),
+      });
+
+      const resolvedUser = me ?? userRef.current;
+      setUser(resolvedUser);
+      setEntitlements(ents);
+      await persistEntitlements(ents);
+
+      if (resolvedUser?.id) {
+        await processPersistence.current.initialize(resolvedUser.id);
+        console.log('[EnhancedSessionProvider] Process persistence initialized');
+      }
+
+      setReady(true);
+      setBridgeReady(true);
+      setSessionMode('live');
+      setUsingCachedSession(false);
+      setBootstrapError(null);
+      setLastReadyAt(Date.now());
+
+      console.log('[EnhancedSessionProvider] Session ready for user:', resolvedUser?.id);
     } catch (e) {
       console.error('[EnhancedSessionProvider] Auth validation failed:', e);
       
@@ -135,33 +227,21 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         }, retryDelay);
       } else {
         console.error('[EnhancedSessionProvider] Max retries reached, entering degraded mode if cache is available');
-        const persistedState = await authPersistence.current.getAuthState();
-        const cachedEntitlements = await loadCachedEntitlements();
+        configuredRef.current = false;
+        setBridgeReady(false);
+        setSessionMode('cached');
 
-        if (persistedState?.isAuthenticated && persistedState.userId) {
-          configuredRef.current = false;
-          setUser((currentUser) => currentUser ?? {
-            id: persistedState.userId,
-            email: persistedState.email || '',
-          });
-          setEntitlements((currentEntitlements) => currentEntitlements ?? cachedEntitlements);
-          setReady(true);
-          setUsingCachedSession(true);
-          setBootstrapError('Live services are unavailable right now. Continuing with cached account data.');
+        const restoredFromCache = await setCachedSessionState(
+          'Live services are unavailable right now. Continuing with cached account data.',
+        );
+        if (restoredFromCache) {
           return;
         }
 
-        await authPersistence.current.clearAuthData();
-        configuredRef.current = false;
-        setReady(false);
-        setUser(null);
-        setEntitlements(null);
-        setUsingCachedSession(false);
-        setBootstrapError('Unable to restore your session right now.');
-        setLastReadyAt(null);
+        await clearSessionState({ clearPersistedAuth: true });
       }
     }
-  }, [getClerkToken, loadCachedEntitlements, persistEntitlements]);
+  }, [clearSessionState, getClerkToken, loadCachedEntitlements, persistEntitlements, setCachedSessionState]);
 
   // Initialize session from persisted state
   const initializeFromPersistedState = useCallback(async (): Promise<void> => {
@@ -174,11 +254,21 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       console.log('[EnhancedSessionProvider] Found valid persisted state for user:', persistedState.userId);
       
       // Set user immediately from cache for better UX
-      setUser({
-        id: persistedState.userId,
-        email: persistedState.email || '',
+      setUser((currentUser) => {
+        const nextUser = {
+          id: persistedState.userId,
+          email: persistedState.email || '',
+        };
+
+        if (currentUser?.id === nextUser.id && currentUser?.email === nextUser.email) {
+          return currentUser;
+        }
+
+        return nextUser;
       });
       setUsingCachedSession(true);
+      setBridgeReady(false);
+      setSessionMode('cached');
       setBootstrapError('Restoring your workspace from cached session data.');
       setLastReadyAt(persistedState.lastAuthCheck || null);
       
@@ -188,7 +278,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       
       setReady(true);
       
-      // Validate auth in background (non-blocking)
+      // Always attempt to establish the live bridge in background for cached sessions.
       validateAuthIfNeeded(false).catch(console.error);
     } else {
       console.log('[EnhancedSessionProvider] No valid persisted state found');
@@ -230,9 +320,13 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     };
   }, [initializeFromPersistedState, validateAuthIfNeeded]);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     console.log('[EnhancedSessionProvider] Manual refresh requested');
     try {
+      if (!bridgeReady) {
+        await validateAuthIfNeeded(true);
+      }
+
       const { user: me } = await getUserLike();
       const ents = await fetchUserEntitlements().catch(async () => loadCachedEntitlements());
       
@@ -246,27 +340,33 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       setUser(me);
       setEntitlements(ents);
       await persistEntitlements(ents);
+      setBridgeReady(true);
+      setSessionMode('live');
       setUsingCachedSession(false);
       setBootstrapError(null);
       setLastReadyAt(Date.now());
     } catch (error) {
       console.error('[EnhancedSessionProvider] Refresh failed:', error);
       // Don't clear state on refresh failures - might be network issue
+      setBridgeReady(false);
+      setSessionMode('cached');
       setUsingCachedSession(true);
       setBootstrapError('Refresh failed. Cached account data is still available.');
     }
-  }, [loadCachedEntitlements, persistEntitlements]);
+  }, [bridgeReady, loadCachedEntitlements, persistEntitlements, validateAuthIfNeeded]);
 
   const value: SessionContextType = useMemo(() => ({ 
     ready: ready && !initializing, 
+    bridgeReady,
     user, 
     entitlements, 
     bootstrapState: !ready || initializing ? 'initializing' : (usingCachedSession || !!bootstrapError ? 'degraded' : 'ready'),
     usingCachedSession,
+    sessionMode,
     bootstrapError,
     lastReadyAt,
     refresh 
-  }), [ready, initializing, user, entitlements, usingCachedSession, bootstrapError, lastReadyAt, refresh]);
+  }), [ready, initializing, bridgeReady, user, entitlements, usingCachedSession, sessionMode, bootstrapError, lastReadyAt, refresh]);
 
   return (
     <SessionContext.Provider value={value}>

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -23,6 +23,7 @@ import ShopifySvg from '../assets/shopify.svg';
 import SquareSvg from '../assets/square.svg';
 import CloverSvg from '../assets/clover.svg';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import { SessionContext } from '../context/SessionContext';
 
 const API_BASE_URL = 'https://api.sssync.app';
 
@@ -135,6 +136,7 @@ interface DraftPool {
   name: string;
   locationIds: string[];
   locationMetadata?: Map<string, LocationMetadata>;
+  isPartnerPool?: boolean;
 }
 
 interface DeletePoolState {
@@ -354,6 +356,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
   onPressConnect,
   refreshTrigger
 }) => {
+  const session = useContext(SessionContext);
   const theme = useTheme();
   const [showWelcomeOverlay, setShowWelcomeOverlay] = useState(false);
   const [partnerNameForOverlay, setPartnerNameForOverlay] = useState('');
@@ -528,8 +531,19 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
 
   // Load available locations for creating/editing
   const loadAvailableLocations = useCallback(async () => {
+    if (!session?.bridgeReady) {
+      console.log('[LocationsManagerV2] Skipping available locations load until auth bridge is ready');
+      setAvailable([]);
+      return;
+    }
+
     try {
       const token = await ensureSupabaseJwt();
+      if (!token) {
+        console.warn('[LocationsManagerV2] No JWT available for available locations load');
+        setAvailable([]);
+        return;
+      }
       if (!resolvedOrgId) {
         console.log('[LocationsManagerV2] No org ID, skipping locations load');
         setAvailable([]);
@@ -551,18 +565,32 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
       console.error('[LocationsManagerV2] loadAvailableLocations error', e);
       setAvailable([]);
     }
-  }, [resolvedOrgId]);
+  }, [resolvedOrgId, session?.bridgeReady]);
 
   const loadList = useCallback(async () => {
     // If no org ID yet, just ensure we're not loading forever
     if (!resolvedOrgId) {
-      if (isLoading) setIsLoading(false);
+      setIsLoading(false);
+      return;
+    }
+
+    if (!session?.bridgeReady) {
+      console.log('[LocationsManagerV2] Skipping list load until auth bridge is ready');
+      setIsLoading(false);
       return;
     }
 
     setIsLoading(true);
     try {
       const token = await ensureSupabaseJwt();
+      if (!token) {
+        console.warn('[LocationsManagerV2] No JWT available for list load');
+        setPools([]);
+        setPartnerships([]);
+        setPendingInvites([]);
+        setSingleLocations([]);
+        return;
+      }
 
       // Load available locations FIRST (for metadata)
       // We do this in parallel or before to ensure we have data for the UI
@@ -624,7 +652,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [resolvedOrgId, connectionIds, loadAvailableLocations]);
+  }, [resolvedOrgId, connectionIds, loadAvailableLocations, session?.bridgeReady]);
 
   // Sync prop to state
   useEffect(() => {

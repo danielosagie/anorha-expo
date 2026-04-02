@@ -13,7 +13,7 @@ import {
     Image,
     SafeAreaView,
 } from 'react-native';
-import { WebView } from 'react-native-webview';
+import * as WebBrowser from 'expo-web-browser';
 import { X, CheckCircle2, Users } from 'lucide-react-native';
 import { useTheme } from '../context/ThemeContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
@@ -101,7 +101,6 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
     // Default selected tier is growth
     const [selectedTierId, setSelectedTierId] = useState<'growth' | 'teams'>(TIERS[0].id);
     const [isLoading, setIsLoading] = useState(false);
-    const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
 
     const handleCheckout = async () => {
         if (!selectedTierId) return;
@@ -141,7 +140,9 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
 
             const { url } = await response.json();
             if (url) {
-                setCheckoutUrl(url);
+                onClose();
+                await WebBrowser.openBrowserAsync(url);
+                onSuccess?.();
             }
         } catch (error: any) {
             console.error('[TierSelector] Checkout error:', error);
@@ -292,32 +293,6 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
                 </View>
             </View>
 
-            {/* Checkout WebView Modal scoped to TierSelectorModal */}
-            <Modal visible={!!checkoutUrl} animationType="slide" presentationStyle="pageSheet">
-                <View style={{ flex: 1, backgroundColor: '#fff', paddingTop: 16 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#E5E5EA' }}>
-                        <TouchableOpacity onPress={() => setCheckoutUrl(null)} style={{ padding: 4 }}>
-                            <Text style={{ fontSize: 17, color: '#007AFF', fontWeight: '500' }}>Cancel</Text>
-                        </TouchableOpacity>
-                        <Text style={{ fontSize: 17, fontWeight: '600', color: '#000' }}>Checkout</Text>
-                        <View style={{ width: 60 }} />
-                    </View>
-                    {checkoutUrl && (
-                        <WebView
-                            source={{ uri: checkoutUrl }}
-                            style={{ flex: 1 }}
-                            onNavigationStateChange={(state) => {
-                                if (state.url.includes('success=true')) {
-                                    setCheckoutUrl(null);
-                                    onSuccess?.(); // This closes TierSelectorModal in BillingScreen and refreshes
-                                } else if (state.url.includes('canceled=true')) {
-                                    setCheckoutUrl(null);
-                                }
-                            }}
-                        />
-                    )}
-                </View>
-            </Modal>
         </Modal>
     );
 };
@@ -376,12 +351,12 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingVertical: 8,
         borderRadius: 8,
-        backgroundColor: '#FEE2E2',
+        backgroundColor: '#F3F4F6',
     },
     usageBadgeText: {
         fontSize: 13,
         fontWeight: '600',
-        color: '#DC2626',
+        color: '#6B7280',
     },
     tabContainer: {
         flexDirection: 'row',

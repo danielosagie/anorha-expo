@@ -46,6 +46,7 @@ import ConnectedPlatformList from '../components/ConnectedPlatformList';
 import BaseModal from '../components/BaseModal';
 import { AppDropdown } from '../components/ui/AppDropdown';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useProfileProductCount } from '../hooks/useProfileProductCount';
 
 const TAB_BAR_HEIGHT = 84;
 const TAB_BAR_BOTTOM_OFFSET = 18;
@@ -489,6 +490,7 @@ const ProfileScreen = () => {
   });
 
   const { user } = useUser();
+  const { productCount } = useProfileProductCount();
   const [stats, setStats] = useState({ products: 0, locations: 0 });
 
   useEffect(() => {
@@ -501,27 +503,8 @@ const ProfileScreen = () => {
         setEntitlements(e);
 
         // Load Live Stats based on current org's connections
-        // 1. Load Product Count (Independent of Org context, bound to User)
-        let prodCount = 0;
+        const prodCount = productCount;
         let locCount = 0;
-
-        if (user) {
-          // CRITICAL FIX: Ensure we use the Supabase User ID (likely UUID), not just the Clerk ID (string)
-          // The shim in supabase.ts ensures supabase.auth.getUser() returns the correct DB-mapped user
-          const { data: authData } = await supabase.auth.getUser();
-          const dbUserId = authData?.user?.id || user.id; // Fallback to Clerk ID if shim fails, but shim should work
-
-          console.log('[ProfileScreen] Stats - Clerk ID:', user.id, 'DB User ID:', dbUserId);
-
-          const { count: pCount } = await supabase
-            .from('ProductVariants')
-            .select('*', { count: 'exact', head: true })
-            .eq('UserId', dbUserId)
-            .not('Sku', 'like', 'DRAFT-%');
-          // Removed .neq('VariantType', 'option') to catch NULLs and ensure non-zero count
-          console.log('[ProfileScreen] Stats - Product Count Result:', pCount);
-          prodCount = pCount || 0;
-        }
 
         if (currentOrg?.id) {
           // 2. Count locations via platform connections
@@ -554,7 +537,7 @@ const ProfileScreen = () => {
         logError('profile_load_data', 'Failed to load profile data', { error: String(e) });
       }
     })();
-  }, [user, currentOrg?.id]);
+  }, [user, currentOrg?.id, productCount]);
 
   // Auto-switch away from auto-created personal workspaces to real organization
   useEffect(() => {

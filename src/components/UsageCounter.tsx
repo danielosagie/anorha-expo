@@ -11,6 +11,9 @@ interface UsageCounterProps {
 }
 const ANORHA_GREEN = '#93C822';
 const ANORHA_CREAM = '#ffffffe4';
+const EXHAUSTED_BG = '#F3F4F6';
+const EXHAUSTED_TEXT = '#6B7280';
+const EXHAUSTED_BUTTON = '#D1D5DB';
 
 const UsageCounter: React.FC<UsageCounterProps> = ({
     usageCount,
@@ -27,13 +30,13 @@ const UsageCounter: React.FC<UsageCounterProps> = ({
     return (
         <View style={[
             styles.container,
-            { backgroundColor: isExhausted ? '#FEE2E2' : ANORHA_CREAM }
+            { backgroundColor: isExhausted ? EXHAUSTED_BG : ANORHA_CREAM }
         ]}>
             <View style={styles.leftSection}>
-                <Camera size={20} color={isExhausted ? '#DC2626' : ANORHA_GREEN} />
+                <Camera size={20} color={isExhausted ? EXHAUSTED_TEXT : ANORHA_GREEN} />
                 <Text style={[
                     styles.countText,
-                    { color: isExhausted ? '#DC2626' : '#333' }
+                    { color: isExhausted ? EXHAUSTED_TEXT : '#333' }
                 ]}>
                     {isExhausted
                         ? `Free scans used (${usageCount}/${freeLimit})`
@@ -45,7 +48,7 @@ const UsageCounter: React.FC<UsageCounterProps> = ({
             <TouchableOpacity
                 style={[
                     styles.upgradeButton,
-                    { backgroundColor: isExhausted ? '#DC2626' : ANORHA_GREEN }
+                    { backgroundColor: isExhausted ? EXHAUSTED_BUTTON : ANORHA_GREEN }
                 ]}
                 onPress={() => {
                     capture('billing_metering_upgrade_cta_tapped', {
@@ -57,8 +60,13 @@ const UsageCounter: React.FC<UsageCounterProps> = ({
                     onUpgradePress();
                 }}
             >
-                <Text style={styles.upgradeText}>Upgrade</Text>
-                <ChevronUp size={14} color="#fff" />
+                <Text style={[
+                    styles.upgradeText,
+                    isExhausted && styles.exhaustedUpgradeText,
+                ]}>
+                    {isExhausted ? 'View plans' : 'Upgrade'}
+                </Text>
+                <ChevronUp size={14} color={isExhausted ? EXHAUSTED_TEXT : '#fff'} />
             </TouchableOpacity>
         </View>
     );
@@ -98,6 +106,9 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 12,
         fontWeight: '600',
+    },
+    exhaustedUpgradeText: {
+        color: EXHAUSTED_TEXT,
     },
 });
 

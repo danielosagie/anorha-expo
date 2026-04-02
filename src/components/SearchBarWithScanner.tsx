@@ -17,6 +17,8 @@ interface SearchBarWithScannerProps {
   onClear?: () => void;
   /** Voice button to the left of the barcode/scanner button */
   onVoicePress?: () => void;
+  scannerDisabled?: boolean;
+  onScannerDisabledPress?: () => void;
 }
 
 const SearchBarWithScanner: React.FC<SearchBarWithScannerProps> = ({
@@ -27,6 +29,8 @@ const SearchBarWithScanner: React.FC<SearchBarWithScannerProps> = ({
   onScannerOpen,
   onClear,
   onVoicePress,
+  scannerDisabled = false,
+  onScannerDisabledPress,
 }) => {
   const theme = useTheme();
 
@@ -55,11 +59,11 @@ const SearchBarWithScanner: React.FC<SearchBarWithScannerProps> = ({
         </TouchableOpacity>
       )}
       <TouchableOpacity
-        style={styles.scannerButton}
-        onPress={onScannerOpen}
+        style={[styles.scannerButton, scannerDisabled && styles.scannerButtonDisabled]}
+        onPress={scannerDisabled ? (onScannerDisabledPress || onScannerOpen) : onScannerOpen}
         activeOpacity={0.7}
       >
-        <Icon name="qrcode-scan" size={20} color="#fff" />
+        <Icon name="qrcode-scan" size={20} color={scannerDisabled ? '#6B7280' : '#fff'} />
       </TouchableOpacity>
     </ShadowSurface>
   );
@@ -99,6 +103,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#93C822",
     padding: 8,
     marginLeft: 8,
+  },
+  scannerButtonDisabled: {
+    backgroundColor: '#E5E7EB',
   },
 });
 

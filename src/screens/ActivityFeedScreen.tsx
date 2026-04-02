@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useContext } from 'react';
 import {
   View,
   Text,
@@ -32,6 +32,7 @@ import { PlatformConnection, PlatformLocation } from '../utils/SupaLegend';
 import { useProductVariantRealtime } from '../hooks/useProductVariantRealtime';
 import { useUser } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SessionContext } from '../context/SessionContext';
 
 const TAB_BAR_HEIGHT = 84;
 const TAB_BAR_BOTTOM_OFFSET = 18;
@@ -174,6 +175,7 @@ const ActivityFeedScreen = observer(() => {
   const navigation = useNavigation<ActivityFeedScreenNavigationProp>();
   const legendState = useLegendState();
   const { currentOrg, isLoading: isOrgLoading } = useOrg();
+  const session = useContext(SessionContext);
   const { user: clerkUser } = useUser();
   const insets = useSafeAreaInsets();
   const bottomSafePadding = TAB_BAR_HEIGHT + TAB_BAR_BOTTOM_OFFSET + insets.bottom + 16;
@@ -218,6 +220,9 @@ const ActivityFeedScreen = observer(() => {
   // Fetch org members and build user image map
   const fetchOrgMembersWithImages = useCallback(async () => {
     if (!currentOrg?.id) return;
+    if (!session?.bridgeReady) {
+      return;
+    }
 
     try {
       const token = await ensureSupabaseJwt();
@@ -254,19 +259,22 @@ const ActivityFeedScreen = observer(() => {
         setUserImageMap({ [clerkUser.id]: clerkUser.imageUrl });
       }
     }
-  }, [currentOrg?.id, clerkUser?.id, clerkUser?.imageUrl]);
+  }, [currentOrg?.id, clerkUser?.id, clerkUser?.imageUrl, session?.bridgeReady]);
 
   // Fetch activity feed from backend
   const fetchActivityFeed = useCallback(async (cursor?: string, append = false) => {
     // Wait for org context to be available (like ProfileScreen and DashboardScreen do)
     if (!currentOrg?.id) {
-      console.log('[ActivityFeed] ⏭️ Skipping fetch: no currentOrg.id yet (waiting for org context to load...)');
       setLoading(false);
       return;
     }
 
     if (!legendState?.userId) {
-      console.log('[ActivityFeed] Skipping fetch: no userId in legend state');
+      setLoading(false);
+      return;
+    }
+
+    if (!session?.bridgeReady) {
       setLoading(false);
       return;
     }
@@ -274,7 +282,6 @@ const ActivityFeedScreen = observer(() => {
     try {
       const token = await ensureSupabaseJwt();
       if (!token) {
-        console.log('[ActivityFeed] ❌ No JWT token available from bridge');
         setLoading(false);
         return;
       }
@@ -291,12 +298,6 @@ const ActivityFeedScreen = observer(() => {
 
       const base = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
       const fullUrl = `${base}/api/activity?${queryString}`;
-      console.log(`[ActivityFeed] 📡 ==========================================`);
-      console.log(`[ActivityFeed] 📡 FETCH REQUEST DETAILS:`);
-      console.log(`[ActivityFeed] 📡   Full URL: ${fullUrl}`);
-      console.log(`[ActivityFeed] 📡   OrgId from currentOrg: ${currentOrg?.id || 'MISSING'}`);
-      console.log(`[ActivityFeed] 📡   UserId: ${legendState.userId}`);
-      console.log(`[ActivityFeed] 📡 ==========================================`);
 
       const response = await fetch(
         fullUrl,
@@ -319,20 +320,8 @@ const ActivityFeedScreen = observer(() => {
       }
 
       const data = await response.json();
-      console.log(`[ActivityFeed] Response:`, {
-        eventsCount: data.events?.length || 0,
-        hasMore: data.hasMore,
-        nextCursor: data.nextCursor ? 'present' : 'null',
-        firstEvent: data.events?.[0] ? {
-          id: data.events[0].Id,
-          timestamp: data.events[0].Timestamp,
-          eventType: data.events[0].EventType,
-          orgId: data.events[0].OrgId,
-        } : 'none',
-      });
 
       if (!data.events || data.events.length === 0) {
-        console.log('[ActivityFeed] ✅ No events (DB is empty or OrgId mismatch)');
         if (!append) {
           setEvents([]);
           setNextCursor(null);
@@ -376,8 +365,6 @@ const ActivityFeedScreen = observer(() => {
           return !et.includes('WEBHOOK') && !et.includes('USER_VIEWED');
         });
 
-      console.log(`[ActivityFeed] Transformed ${data.events.length} events → ${userRelevantEvents.length} user-relevant, showing ${transformedEvents.length}`);
-
       if (append) {
         setEvents(prev => [...prev, ...transformedEvents]);
       } else {
@@ -395,12 +382,17 @@ const ActivityFeedScreen = observer(() => {
       setRefreshing(false);
       setLoadingMore(false);
     }
-  }, [legendState?.userId, currentOrg?.id, startDate, endDate]);
+  }, [legendState?.userId, currentOrg?.id, session?.bridgeReady, startDate, endDate]);
 
   // Fetch platform connections and locations
   useEffect(() => {
     const fetchPlatformData = async () => {
       if (!legendState?.userId) return;
+      if (!session?.bridgeReady) {
+        console.log('[ActivityFeedScreen] Skipping platform data fetch until auth bridge is ready');
+        setIsLoadingConnections(false);
+        return;
+      }
 
       setIsLoadingConnections(true);
       try {
@@ -412,7 +404,7 @@ const ActivityFeedScreen = observer(() => {
         if (connectionsError) {
           console.error('[ActivityFeedScreen] Error fetching platform connections:', connectionsError);
         } else {
-          setPlatformConnections(connectionsData || []);
+          setPlatformConnections((connectionsData || []) as unknown as PlatformConnection[]);
         }
 
         if (connectionsData && connectionsData.length > 0) {
@@ -425,7 +417,7 @@ const ActivityFeedScreen = observer(() => {
           if (locationsError) {
             console.error('[ActivityFeedScreen] Error fetching platform locations:', locationsError);
           } else {
-            setPlatformLocations(locationsData || []);
+            setPlatformLocations((locationsData || []) as unknown as PlatformLocation[]);
           }
         }
       } catch (error) {
@@ -436,7 +428,7 @@ const ActivityFeedScreen = observer(() => {
     };
 
     fetchPlatformData();
-  }, [legendState?.userId]);
+  }, [legendState?.userId, session?.bridgeReady]);
 
   // Initial load
   useEffect(() => {
@@ -458,6 +450,10 @@ const ActivityFeedScreen = observer(() => {
   const [campaigns, setCampaigns] = useState<any[]>([]);
   const fetchCampaigns = useCallback(async () => {
     if (!currentOrg?.id) return;
+    if (!session?.bridgeReady) {
+      console.log('[ActivityFeed] Skipping campaigns fetch until auth bridge is ready');
+      return;
+    }
     try {
       const token = await ensureSupabaseJwt();
       const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app'}/api/liquidation/campaigns`, {
@@ -470,7 +466,7 @@ const ActivityFeedScreen = observer(() => {
     } catch (e) {
       console.log('Error fetching campaigns', e);
     }
-  }, [currentOrg?.id]);
+  }, [currentOrg?.id, session?.bridgeReady]);
 
   useEffect(() => {
     fetchCampaigns();

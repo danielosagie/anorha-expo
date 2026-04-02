@@ -1,1 +1,11 @@
-export { supabase, configureClerkSupabaseBridge, getUserLike, ensureSupabaseJwt, getCurrentSupabaseJwt } from '../src/lib/supabase'
+export {
+  supabase,
+  configureClerkSupabaseBridge,
+  getUserLike,
+  ensureSupabaseJwt,
+  getCurrentSupabaseJwt,
+  getSupabaseJwtState,
+  subscribeToSupabaseJwtState,
+  isSupabaseBridgeWarmingUp,
+  isSupabaseBridgeUnavailableState,
+} from '../src/lib/supabase'

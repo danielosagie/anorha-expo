@@ -255,9 +255,26 @@ const PastScansScreen = () => {
       const res = await fetch(`${API_BASE}/api/products/quick-scan-sessions`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error('Failed to fetch draft scans');
-      const data = await res.json();
-      const raw = Array.isArray(data) ? data : [];
+      const responseText = await res.text();
+      let data: any = null;
+      try {
+        data = responseText ? JSON.parse(responseText) : null;
+      } catch {
+        data = null;
+      }
+
+      if (!res.ok) {
+        const message = data?.message || data?.error || `Failed to fetch draft scans (${res.status})`;
+        throw new Error(message);
+      }
+
+      const raw = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.sessions)
+          ? data.sessions
+          : Array.isArray(data?.data)
+            ? data.data
+            : [];
       setDraftScans(raw.map((d: any) => ({ ...d, id: d.Id ?? d.id })));
     } catch (err: any) {
       setError(err.message);

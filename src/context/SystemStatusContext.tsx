@@ -1,9 +1,20 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAuth } from '@clerk/clerk-expo';
+import * as Network from 'expo-network';
+import {
+  getSupabaseJwtState,
+  isSupabaseBridgeUnavailableState,
+  isSupabaseBridgeWarmingUp,
+  subscribeToSupabaseJwtState,
+  type SupabaseJwtAcquisitionState,
+} from '../lib/supabase';
 
 export type RemoteStatusMode = 'operational' | 'degraded' | 'maintenance';
 export type EffectiveSystemMode = RemoteStatusMode | 'offline';
+export type ConnectivityState = 'online' | 'offline' | 'unknown';
+export type BackendState = RemoteStatusMode | 'unknown';
+export type AuthBridgeState = 'ready' | 'refreshing' | 'unavailable';
 
 export interface RemoteStatusManifest {
   mode: RemoteStatusMode;
@@ -13,7 +24,12 @@ export interface RemoteStatusManifest {
 
 interface SystemStatusContextValue {
   backendReachable: boolean | null;
+  connectivityState: ConnectivityState;
+  backendState: BackendState;
+  authBridgeState: AuthBridgeState;
   effectiveMode: EffectiveSystemMode;
+  forceOfflineMode: boolean;
+  hasCheckedOnce: boolean;
   isRefreshing: boolean;
   lastCheckedAt: string | null;
   lastHealthyAt: string | null;
@@ -23,16 +39,19 @@ interface SystemStatusContextValue {
   retry: () => Promise<void>;
 }
 
-const STATUS_CACHE_KEY = 'sssync_system_status_cache_v1';
-const STATUS_HEALTHY_AT_KEY = 'sssync_system_status_last_healthy_at';
-const STATUS_POLL_INTERVAL_MS = 60_000;
-
 const API_BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
 const STATUS_MANIFEST_URL = process.env.EXPO_PUBLIC_STATUS_MANIFEST_URL?.trim() || '';
+const STATUS_POLL_INTERVAL_MS = 60_000;
+const FORCE_OFFLINE_MODE = String(process.env.EXPO_PUBLIC_FORCE_OFFLINE_MODE).toLowerCase() === 'true';
 
 const defaultStatusValue: SystemStatusContextValue = {
-  backendReachable: null,
-  effectiveMode: 'operational',
+  backendReachable: true,
+  connectivityState: FORCE_OFFLINE_MODE ? 'offline' : 'unknown',
+  backendState: 'unknown',
+  authBridgeState: 'ready',
+  effectiveMode: FORCE_OFFLINE_MODE ? 'offline' : 'operational',
+  forceOfflineMode: FORCE_OFFLINE_MODE,
+  hasCheckedOnce: false,
   isRefreshing: false,
   lastCheckedAt: null,
   lastHealthyAt: null,
@@ -44,113 +63,152 @@ const defaultStatusValue: SystemStatusContextValue = {
 
 const SystemStatusContext = createContext<SystemStatusContextValue>(defaultStatusValue);
 
+function mapAuthBridgeState(isSignedIn: boolean, jwtState: SupabaseJwtAcquisitionState): AuthBridgeState {
+  if (!isSignedIn) return 'ready';
+  if (jwtState === 'ready') return 'ready';
+  if (isSupabaseBridgeWarmingUp(jwtState)) return 'refreshing';
+  if (isSupabaseBridgeUnavailableState(jwtState)) return 'unavailable';
+  return 'unavailable';
+}
+
 function buildStatusMessage(params: {
-  effectiveMode: EffectiveSystemMode;
+  isSignedIn: boolean;
+  connectivityState: ConnectivityState;
+  backendState: BackendState;
+  authBridgeState: AuthBridgeState;
   manifest: RemoteStatusManifest | null;
-  backendReachable: boolean | null;
 }): string {
+  if (params.connectivityState === 'offline') {
+    return 'You appear to be offline. Cached data will stay available until the connection returns.';
+  }
+
   if (params.manifest?.message?.trim()) {
     return params.manifest.message.trim();
   }
 
-  if (params.effectiveMode === 'maintenance') {
+  if (params.backendState === 'maintenance') {
     return 'Scheduled maintenance is in progress. Some actions may be unavailable.';
   }
 
-  if (params.effectiveMode === 'degraded') {
+  if (params.backendState === 'degraded') {
     return 'Some backend systems are degraded. Cached data will stay available while services recover.';
   }
 
-  if (params.effectiveMode === 'offline' || params.backendReachable === false) {
-    return 'Backend connection is unavailable. The app is using cached data where possible.';
+  if (!params.isSignedIn) {
+    return '';
+  }
+
+  if (params.authBridgeState === 'refreshing') {
+    return 'Refreshing your live session. Network features may appear shortly.';
+  }
+
+  if (params.authBridgeState === 'unavailable') {
+    return 'Live account access is unavailable right now. Cached workspace data is still available.';
   }
 
   return '';
 }
 
 export const SystemStatusProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [backendReachable, setBackendReachable] = useState<boolean | null>(null);
+  const { isSignedIn } = useAuth();
+  const [connectivityState, setConnectivityState] = useState<ConnectivityState>(
+    FORCE_OFFLINE_MODE ? 'offline' : 'unknown',
+  );
+  const [backendReachable, setBackendReachable] = useState<boolean | null>(FORCE_OFFLINE_MODE ? false : null);
+  const [backendState, setBackendState] = useState<BackendState>(FORCE_OFFLINE_MODE ? 'unknown' : 'unknown');
   const [manifest, setManifest] = useState<RemoteStatusManifest | null>(null);
+  const [authBridgeState, setAuthBridgeState] = useState<AuthBridgeState>(
+    mapAuthBridgeState(!!isSignedIn, getSupabaseJwtState().state),
+  );
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [hasCheckedOnce, setHasCheckedOnce] = useState(false);
   const [lastCheckedAt, setLastCheckedAt] = useState<string | null>(null);
   const [lastHealthyAt, setLastHealthyAt] = useState<string | null>(null);
   const [usingCachedStatus, setUsingCachedStatus] = useState(false);
 
-  const loadCachedStatus = useCallback(async () => {
-    try {
-      const [cachedManifest, cachedHealthyAt] = await Promise.all([
-        AsyncStorage.getItem(STATUS_CACHE_KEY),
-        AsyncStorage.getItem(STATUS_HEALTHY_AT_KEY),
-      ]);
-
-      if (cachedManifest) {
-        setManifest(JSON.parse(cachedManifest));
-        setUsingCachedStatus(true);
-      }
-
-      if (cachedHealthyAt) {
-        setLastHealthyAt(cachedHealthyAt);
-      }
-    } catch (error) {
-      console.warn('[SystemStatus] Failed to load cached status state:', error);
-    }
-  }, []);
-
   const refreshStatus = useCallback(async () => {
+    if (FORCE_OFFLINE_MODE) {
+      setConnectivityState('offline');
+      setBackendReachable(false);
+      setBackendState('unknown');
+      setHasCheckedOnce(true);
+      setLastCheckedAt(new Date().toISOString());
+      return;
+    }
+
     setIsRefreshing(true);
-
-    const statusFetch = STATUS_MANIFEST_URL
-      ? fetch(STATUS_MANIFEST_URL, { headers: { Accept: 'application/json' } })
-      : Promise.resolve(null);
-    const backendFetch = fetch(`${API_BASE_URL}/health`, { headers: { Accept: 'application/json' } });
-
     try {
-      const [statusResult, backendResult] = await Promise.allSettled([statusFetch, backendFetch]);
+      const networkState = await Network.getNetworkStateAsync();
+      const online = Boolean(networkState.isConnected && networkState.isInternetReachable !== false);
       const nowIso = new Date().toISOString();
 
-      let nextManifest = manifest;
-      let manifestFetched = false;
+      setConnectivityState(online ? 'online' : 'offline');
+      setLastCheckedAt(nowIso);
+      setHasCheckedOnce(true);
 
-      if (statusResult.status === 'fulfilled' && statusResult.value && statusResult.value.ok) {
-        const payload = await statusResult.value.json().catch(() => null);
+      if (!online) {
+        setBackendReachable(false);
+        setBackendState('unknown');
+        setUsingCachedStatus(true);
+        return;
+      }
+
+      const manifestFetch = STATUS_MANIFEST_URL
+        ? fetch(STATUS_MANIFEST_URL, { headers: { Accept: 'application/json' } }).catch(() => null)
+        : Promise.resolve(null);
+      const healthFetch = fetch(`${API_BASE_URL}/health`, { headers: { Accept: 'application/json' } }).catch(() => null);
+
+      const [manifestResponse, healthResponse] = await Promise.all([manifestFetch, healthFetch]);
+
+      let nextManifest: RemoteStatusManifest | null = null;
+      if (manifestResponse?.ok) {
+        const payload = await manifestResponse.json().catch(() => null);
         if (payload?.mode) {
           nextManifest = {
             mode: payload.mode,
             message: payload.message,
             updatedAt: payload.updatedAt || nowIso,
           };
-          manifestFetched = true;
-          setManifest(nextManifest);
-          await AsyncStorage.setItem(STATUS_CACHE_KEY, JSON.stringify(nextManifest));
         }
       }
 
-      const backendOk =
-        backendResult.status === 'fulfilled' &&
-        backendResult.value.ok;
-
+      setManifest(nextManifest);
+      const backendOk = !!healthResponse?.ok;
       setBackendReachable(backendOk);
-      setLastCheckedAt(nowIso);
-
       if (backendOk) {
-        setUsingCachedStatus(false);
         setLastHealthyAt(nowIso);
-        await AsyncStorage.setItem(STATUS_HEALTHY_AT_KEY, nowIso);
-      } else if (manifestFetched || nextManifest) {
+        setUsingCachedStatus(false);
+      } else {
         setUsingCachedStatus(true);
+      }
+
+      if (nextManifest?.mode) {
+        setBackendState(nextManifest.mode);
+      } else {
+        setBackendState(backendOk ? 'operational' : 'degraded');
       }
     } catch (error) {
       console.warn('[SystemStatus] Status refresh failed:', error);
+      setConnectivityState('unknown');
       setBackendReachable(false);
+      setBackendState('degraded');
       setUsingCachedStatus(true);
+      setHasCheckedOnce(true);
       setLastCheckedAt(new Date().toISOString());
     } finally {
       setIsRefreshing(false);
     }
-  }, [manifest]);
+  }, []);
 
   useEffect(() => {
-    loadCachedStatus().catch(console.error);
+    setAuthBridgeState(mapAuthBridgeState(!!isSignedIn, getSupabaseJwtState().state));
+    const unsubscribe = subscribeToSupabaseJwtState((status) => {
+      setAuthBridgeState(mapAuthBridgeState(!!isSignedIn, status.state));
+    });
+    return unsubscribe;
+  }, [isSignedIn]);
+
+  useEffect(() => {
     refreshStatus().catch(console.error);
 
     const interval = setInterval(() => {
@@ -159,7 +217,7 @@ export const SystemStatusProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     let appState = AppState.currentState;
     const subscription = AppState.addEventListener('change', (nextState: AppStateStatus) => {
-      const wasBackgrounded = appState.match(/inactive|background/);
+      const wasBackgrounded = /inactive|background/.test(appState);
       appState = nextState;
 
       if (nextState === 'active' && wasBackgrounded) {
@@ -171,25 +229,40 @@ export const SystemStatusProvider: React.FC<{ children: React.ReactNode }> = ({ 
       clearInterval(interval);
       subscription.remove();
     };
-  }, [loadCachedStatus, refreshStatus]);
+  }, [refreshStatus]);
 
   const effectiveMode: EffectiveSystemMode = useMemo(() => {
-    if (backendReachable === false && manifest?.mode !== 'maintenance') {
-      return manifest?.mode === 'degraded' ? 'degraded' : 'offline';
+    if (FORCE_OFFLINE_MODE || connectivityState === 'offline') {
+      return 'offline';
     }
 
-    return manifest?.mode || 'operational';
-  }, [backendReachable, manifest]);
+    if (backendState === 'maintenance') {
+      return 'maintenance';
+    }
+
+    if (backendState === 'degraded') {
+      return 'degraded';
+    }
+
+    return 'operational';
+  }, [backendState, connectivityState]);
 
   const message = useMemo(() => buildStatusMessage({
-    effectiveMode,
+    isSignedIn: !!isSignedIn,
+    connectivityState,
+    backendState,
+    authBridgeState,
     manifest,
-    backendReachable,
-  }), [backendReachable, effectiveMode, manifest]);
+  }), [isSignedIn, connectivityState, backendState, authBridgeState, manifest]);
 
   const value = useMemo<SystemStatusContextValue>(() => ({
     backendReachable,
+    connectivityState,
+    backendState,
+    authBridgeState,
     effectiveMode,
+    forceOfflineMode: FORCE_OFFLINE_MODE,
+    hasCheckedOnce,
     isRefreshing,
     lastCheckedAt,
     lastHealthyAt,
@@ -199,7 +272,11 @@ export const SystemStatusProvider: React.FC<{ children: React.ReactNode }> = ({ 
     retry: refreshStatus,
   }), [
     backendReachable,
+    connectivityState,
+    backendState,
+    authBridgeState,
     effectiveMode,
+    hasCheckedOnce,
     isRefreshing,
     lastCheckedAt,
     lastHealthyAt,

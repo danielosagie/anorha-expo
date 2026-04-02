@@ -1,29 +1,31 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
+import { Image, StyleSheet, Text, View } from 'react-native';
+import { LinearGradient as ExpoLinearGradient } from 'expo-linear-gradient';
+import Animated, {
+  Easing,
+  interpolate,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
 
 type ShelfScanProgressCardProps = {
   photoUri: string;
   title: string;
   subtitle: string;
+  phase?: string;
+  status?: 'idle' | 'streaming' | 'completed' | 'no_items' | 'timeout' | 'error';
   progress: number;
   totalItems: number;
   completedItems: number;
   stalled?: boolean;
-  showActions?: boolean;
-  onRetry?: () => void;
-  onRetake?: () => void;
+  rippleColors?: string[];
 };
 
-const LARGE_RIPPLE_FRAMES = [
-  '■■■■■\n■□□□■\n■□■□■\n■□□□■\n■■■■■',
-  '■□□□■\n□■■■□\n□■□■□\n□■■■□\n■□□□■',
-  '□■□■□\n■□■□■\n□■■■□\n■□■□■\n□■□■□',
-  '□▪▫▪□\n▪□■□▪\n▫■□■▫\n▪□■□▪\n□▪▫▪□',
-  '▫▫▪▫▫\n▫▪□▪▫\n▪□▫□▪\n▫▪□▪▫\n▫▫▪▫▫',
-];
-
-const SMALL_RIPPLE_FRAMES = ['■□■', '□■□', '▪□▪', '▫▪▫'];
+const RIPPLE_PHASES = new Set(['inspecting_shelf', 'separating_items']);
+const SMALL_FRAMES = ['◌', '◎', '◉'];
 
 const useGlyphFrame = (frames: string[], interval: number) => {
   const [frameIndex, setFrameIndex] = useState(0);
@@ -39,91 +41,311 @@ const useGlyphFrame = (frames: string[], interval: number) => {
   return frames[frameIndex];
 };
 
+const clampPercent = (value: number) => Math.max(0, Math.min(100, Math.round((value || 0) * 100)));
+
+const getCounterLabel = (completedItems: number, totalItems: number) => {
+  if (totalItems > 0) {
+    return `${completedItems}/${Math.max(totalItems, completedItems)} items created`;
+  }
+
+  if (completedItems > 0) {
+    return `${completedItems} item${completedItems === 1 ? '' : 's'} created`;
+  }
+
+  return 'Creating item map';
+};
+
+const getStatusCopy = ({
+  phase,
+  stalled,
+  status,
+  subtitle,
+  progressPercent,
+}: {
+  phase?: string;
+  stalled?: boolean;
+  status?: ShelfScanProgressCardProps['status'];
+  subtitle: string;
+  progressPercent: number;
+}) => {
+  if (status === 'completed') return 'Shelf scan finished';
+  if (status === 'no_items' || status === 'timeout' || status === 'error') return subtitle;
+  if (stalled) return 'Connection dipped. Picking the scan back up.';
+
+  switch (phase) {
+    case 'inspecting_shelf':
+      return 'Starting with a ripple pass over the shelf.';
+    case 'separating_items':
+      return 'Splitting the shelf into distinct products.';
+    case 'reading_labels':
+      return 'Reading labels and tightening product names.';
+    case 'searching_matches':
+      return 'Creating item rows as matches arrive.';
+    case 'finishing':
+      return progressPercent >= 95 ? 'Wrapping the last item details.' : 'Closing out the final matches.';
+    default:
+      return subtitle;
+  }
+};
+
+const getProgressTone = (status?: ShelfScanProgressCardProps['status'], stalled?: boolean) => {
+  if (status === 'error' || status === 'timeout' || status === 'no_items') {
+    return {
+      track: 'rgba(248, 113, 113, 0.24)',
+      fill: ['#FB7185', '#F97316'] as [string, string],
+      badge: 'rgba(127, 29, 29, 0.72)',
+      badgeBorder: 'rgba(252, 165, 165, 0.28)',
+    };
+  }
+
+  if (stalled) {
+    return {
+      track: 'rgba(250, 204, 21, 0.20)',
+      fill: ['#FACC15', '#86EFAC'] as [string, string],
+      badge: 'rgba(113, 63, 18, 0.58)',
+      badgeBorder: 'rgba(250, 204, 21, 0.22)',
+    };
+  }
+
+  return {
+    track: 'rgba(134, 239, 172, 0.18)',
+    fill: ['#4ADE80', '#22C55E'] as [string, string],
+    badge: 'rgba(4, 47, 46, 0.58)',
+    badgeBorder: 'rgba(167, 243, 208, 0.18)',
+  };
+};
+
+const AnimatedGradient = Animated.createAnimatedComponent(ExpoLinearGradient);
+
 export const ShelfScanProgressCard: React.FC<ShelfScanProgressCardProps> = ({
   photoUri,
   title,
   subtitle,
+  phase,
+  status = 'streaming',
   progress,
   totalItems,
   completedItems,
   stalled = false,
-  showActions = false,
-  onRetry,
-  onRetake,
+  rippleColors,
 }) => {
-  const normalizedProgress = Math.max(0, Math.min(1, progress || 0));
-  const largeGlyph = useGlyphFrame(LARGE_RIPPLE_FRAMES, stalled ? 540 : 220);
-  const smallGlyph = useGlyphFrame(SMALL_RIPPLE_FRAMES, stalled ? 520 : 180);
-  const progressPercent = Math.round(normalizedProgress * 100);
-  const progressWidth = `${Math.max(8, progressPercent)}%`;
-  const meterLabel = totalItems > 0
-    ? `${completedItems}/${totalItems} items streamed`
-    : `${progressPercent}% analyzed`;
+  const progressPercent = clampPercent(progress);
+  const counterLabel = getCounterLabel(completedItems, totalItems);
+  const glyph = useGlyphFrame(SMALL_FRAMES, stalled ? 520 : 220);
+  const statusCopy = getStatusCopy({ phase, stalled, status, subtitle, progressPercent });
+  const tones = getProgressTone(status, stalled);
+  const showRipple = RIPPLE_PHASES.has(phase || 'inspecting_shelf') && completedItems === 0 && !stalled;
+  const customRipple = rippleColors && rippleColors.length >= 3 ? rippleColors : ['#A7F3D0', '#6EE7B7', '#34D399'];
+  const isResolved = status === 'completed';
 
-  const stageAccent = useMemo(
-    () => (stalled ? '#F59E0B' : '#FFFFFF'),
-    [stalled],
-  );
+  const ripplePulse = useSharedValue(0);
+  const ripplePulseDelayed = useSharedValue(0);
+  const haloPulse = useSharedValue(0);
+  const auroraDriftA = useSharedValue(0);
+  const auroraDriftB = useSharedValue(0);
+  const auroraGlow = useSharedValue(0);
+
+  useEffect(() => {
+    ripplePulse.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: stalled ? 2200 : 1800, easing: Easing.out(Easing.quad) }),
+        withTiming(0, { duration: 0 }),
+      ),
+      -1,
+      false,
+    );
+    ripplePulseDelayed.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: stalled ? 2600 : 2100, easing: Easing.out(Easing.quad) }),
+        withTiming(0, { duration: 0 }),
+      ),
+      -1,
+      false,
+    );
+    haloPulse.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: stalled ? 2200 : 1400, easing: Easing.inOut(Easing.quad) }),
+        withTiming(0, { duration: stalled ? 2200 : 1400, easing: Easing.inOut(Easing.quad) }),
+      ),
+      -1,
+      false,
+    );
+    auroraDriftA.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: stalled ? 6200 : 4200, easing: Easing.inOut(Easing.sin) }),
+        withTiming(0, { duration: stalled ? 6200 : 4200, easing: Easing.inOut(Easing.sin) }),
+      ),
+      -1,
+      true,
+    );
+    auroraDriftB.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: stalled ? 7400 : 5000, easing: Easing.inOut(Easing.sin) }),
+        withTiming(0, { duration: stalled ? 7400 : 5000, easing: Easing.inOut(Easing.sin) }),
+      ),
+      -1,
+      true,
+    );
+    auroraGlow.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: stalled ? 2600 : 1900, easing: Easing.inOut(Easing.quad) }),
+        withTiming(0, { duration: stalled ? 2600 : 1900, easing: Easing.inOut(Easing.quad) }),
+      ),
+      -1,
+      false,
+    );
+  }, [auroraDriftA, auroraDriftB, auroraGlow, haloPulse, ripplePulse, ripplePulseDelayed, stalled]);
+
+  const rippleStylePrimary = useAnimatedStyle(() => ({
+    opacity: interpolate(ripplePulse.value, [0, 1], [0.42, 0]),
+    transform: [{ scale: interpolate(ripplePulse.value, [0, 1], [0.72, 1.9]) }],
+  }));
+
+  const rippleStyleSecondary = useAnimatedStyle(() => ({
+    opacity: interpolate(ripplePulseDelayed.value, [0, 1], [0.34, 0]),
+    transform: [{ scale: interpolate(ripplePulseDelayed.value, [0, 1], [0.55, 2.2]) }],
+  }));
+
+  const haloStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(haloPulse.value, [0, 1], [0.24, 0.52]),
+    transform: [{ scale: interpolate(haloPulse.value, [0, 1], [0.96, 1.08]) }],
+  }));
+
+  const auroraStyleA = useAnimatedStyle(() => ({
+    opacity: interpolate(auroraGlow.value, [0, 1], [0.42, 0.76]),
+    transform: [
+      { translateX: interpolate(auroraDriftA.value, [0, 1], [-24, 44]) },
+      { translateY: interpolate(auroraDriftA.value, [0, 1], [18, -26]) },
+      { rotate: `${interpolate(auroraDriftA.value, [0, 1], [-8, 8])}deg` },
+      { scale: interpolate(auroraGlow.value, [0, 1], [1, 1.08]) },
+    ],
+  }));
+
+  const auroraStyleB = useAnimatedStyle(() => ({
+    opacity: interpolate(auroraGlow.value, [0, 1], [0.28, 0.58]),
+    transform: [
+      { translateX: interpolate(auroraDriftB.value, [0, 1], [30, -30]) },
+      { translateY: interpolate(auroraDriftB.value, [0, 1], [-8, 24]) },
+      { rotate: `${interpolate(auroraDriftB.value, [0, 1], [12, -6])}deg` },
+      { scale: interpolate(auroraGlow.value, [0, 1], [0.96, 1.12]) },
+    ],
+  }));
+
+  const auroraSweepStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(auroraGlow.value, [0, 1], [0.18, 0.34]),
+    transform: [
+      { translateX: interpolate(auroraDriftA.value, [0, 1], [-80, 80]) },
+      { skewX: `${interpolate(auroraDriftA.value, [0, 1], [-14, 14])}deg` },
+    ],
+  }));
+
+  const itemCounter = useMemo(() => {
+    if (isResolved && completedItems === 0 && totalItems === 0) {
+      return 'Done';
+    }
+
+    if (totalItems > 0) {
+      return `${completedItems}/${Math.max(totalItems, completedItems)}`;
+    }
+
+    return `${completedItems}`;
+  }, [completedItems, isResolved, totalItems]);
 
   return (
     <View style={styles.shell}>
       <View style={styles.visualFrame}>
         <Image source={{ uri: photoUri }} style={styles.image} resizeMode="cover" />
-        <View style={styles.darkWash} />
-        <View style={styles.borderLayer} pointerEvents="none">
-          <Svg width="100%" height="100%" viewBox="0 0 100 100">
-            <Defs>
-              <LinearGradient id="outerGlow" x1="0%" y1="0%" x2="100%" y2="100%">
-                <Stop offset="0%" stopColor="#5EEAD4" stopOpacity="1" />
-                <Stop offset="30%" stopColor="#60A5FA" stopOpacity="1" />
-                <Stop offset="65%" stopColor="#F472B6" stopOpacity="1" />
-                <Stop offset="100%" stopColor="#FDE68A" stopOpacity="1" />
-              </LinearGradient>
-              <LinearGradient id="innerGlow" x1="100%" y1="0%" x2="0%" y2="100%">
-                <Stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.9" />
-                <Stop offset="35%" stopColor="#C084FC" stopOpacity="0.85" />
-                <Stop offset="70%" stopColor="#22D3EE" stopOpacity="0.8" />
-                <Stop offset="100%" stopColor="#86EFAC" stopOpacity="0.9" />
-              </LinearGradient>
-            </Defs>
-            <Rect x="1.5" y="1.5" width="97" height="97" rx="8" fill="transparent" stroke="url(#outerGlow)" strokeWidth="2.5" />
-            <Rect x="4" y="4" width="92" height="92" rx="6" fill="transparent" stroke="url(#innerGlow)" strokeWidth="1.4" opacity="0.92" />
-          </Svg>
-        </View>
+        <View style={styles.imageWash} />
+
+        <Animated.View style={[styles.halo, haloStyle]}>
+          <ExpoLinearGradient
+            colors={['rgba(110, 231, 183, 0.42)', 'rgba(34, 197, 94, 0.16)', 'transparent']}
+            start={{ x: 0.1, y: 0.1 }}
+            end={{ x: 0.85, y: 1 }}
+            style={styles.fill}
+          />
+        </Animated.View>
+
+        <AnimatedGradient
+          colors={['rgba(134, 239, 172, 0.55)', 'rgba(74, 222, 128, 0.18)', 'transparent']}
+          start={{ x: 0.05, y: 0.25 }}
+          end={{ x: 0.95, y: 0.85 }}
+          style={[styles.auroraBlobA, auroraStyleA]}
+        />
+        <AnimatedGradient
+          colors={['rgba(187, 247, 208, 0.34)', 'rgba(34, 197, 94, 0.16)', 'transparent']}
+          start={{ x: 0.8, y: 0.15 }}
+          end={{ x: 0.05, y: 0.95 }}
+          style={[styles.auroraBlobB, auroraStyleB]}
+        />
+        <AnimatedGradient
+          colors={['transparent', 'rgba(110, 231, 183, 0.20)', 'transparent']}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
+          style={[styles.auroraSweep, auroraSweepStyle]}
+        />
+
+        {showRipple ? (
+          <View style={styles.rippleWrap} pointerEvents="none">
+            <Animated.View style={[styles.rippleRing, styles.rippleRingOuter, rippleStyleSecondary]} />
+            <Animated.View
+              style={[
+                styles.rippleRing,
+                rippleStylePrimary,
+                { borderColor: customRipple[1] },
+              ]}
+            />
+            <View style={[styles.rippleCore, { shadowColor: customRipple[0] }]}>
+              <ExpoLinearGradient
+                colors={[customRipple[0], customRipple[1], customRipple[2]]}
+                start={{ x: 0.1, y: 0.1 }}
+                end={{ x: 0.9, y: 0.9 }}
+                style={styles.fill}
+              />
+            </View>
+          </View>
+        ) : null}
 
         <View style={styles.overlayContent}>
-          <Text style={styles.largeGlyph}>{largeGlyph}</Text>
-          <View style={styles.copyBlock}>
-            <Text style={styles.kicker}>{stalled ? 'Still working, but slower than expected' : 'Shelf scan in progress'}</Text>
-            <Text style={styles.title}>{title}</Text>
-            <Text style={styles.subtitle}>{subtitle}</Text>
+          <View style={styles.overlayTopRow}>
+            <View style={[styles.phaseBadge, { backgroundColor: tones.badge, borderColor: tones.badgeBorder }]}>
+              <Text style={styles.phaseBadgeText}>{phase === 'inspecting_shelf' ? 'Ripple start' : 'Aurora scan'}</Text>
+            </View>
+            <View style={styles.percentBadge}>
+              <Text style={styles.percentBadgeText}>{progressPercent}%</Text>
+            </View>
           </View>
-          <View style={styles.meterPanel}>
-            <View style={styles.meterTrack}>
-              <View style={[styles.meterFill, { width: progressWidth }]} />
-            </View>
-            <View style={styles.meterMeta}>
-              <Text style={styles.meterText}>{meterLabel}</Text>
-              <Text style={[styles.smallGlyph, { color: stageAccent }]}>{smallGlyph}</Text>
-            </View>
+
+          <View style={styles.heroTextWrap}>
+            <Text style={styles.heroKicker}>Shelf scan</Text>
+            <Text style={styles.heroTitle}>{title}</Text>
+            <Text style={styles.heroSubtitle}>{statusCopy}</Text>
           </View>
         </View>
       </View>
 
-      {showActions ? (
-        <View style={styles.actionRow}>
-          {onRetry ? (
-            <Pressable style={[styles.actionButton, styles.primaryAction]} onPress={onRetry}>
-              <Text style={styles.primaryActionText}>Retry scan</Text>
-            </Pressable>
-          ) : null}
-          {onRetake ? (
-            <Pressable style={[styles.actionButton, styles.secondaryAction]} onPress={onRetake}>
-              <Text style={styles.secondaryActionText}>Retake photo</Text>
-            </Pressable>
-          ) : null}
+      <View style={styles.infoPanel}>
+        <View style={styles.counterHeader}>
+          <View>
+            <Text style={styles.counterLabel}>Item counter</Text>
+            <Text style={styles.counterValue}>{itemCounter}</Text>
+          </View>
+          <Text style={styles.counterGlyph}>{glyph}</Text>
         </View>
-      ) : null}
+
+        <Text style={styles.counterDescription}>{counterLabel}</Text>
+
+        <View style={[styles.progressTrack, { backgroundColor: tones.track }]}>
+          <ExpoLinearGradient
+            colors={tones.fill}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={[styles.progressFill, { width: `${Math.max(progressPercent, 8)}%` }]}
+          />
+        </View>
+
+        <Text style={styles.detailCopy}>{subtitle}</Text>
+      </View>
     </View>
   );
 };
@@ -133,16 +355,28 @@ export const ShelfScanPlaceholderRow: React.FC<{
   subtitle: string;
   isResolved?: boolean;
 }> = ({ title, subtitle, isResolved = false }) => {
-  const glyph = useGlyphFrame(SMALL_RIPPLE_FRAMES, isResolved ? 360 : 180);
+  const glyph = useGlyphFrame(SMALL_FRAMES, isResolved ? 360 : 220);
 
   return (
     <View style={[styles.placeholderRow, isResolved && styles.placeholderRowResolved]}>
-      <View style={[styles.placeholderGlyphWrap, isResolved && styles.placeholderGlyphWrapResolved]}>
-        <Text style={styles.placeholderGlyph}>{glyph}</Text>
+      <View style={styles.placeholderPulse}>
+        <Text style={styles.placeholderPulseText}>{glyph}</Text>
       </View>
-      <View style={styles.placeholderTextBlock}>
-        <Text style={styles.placeholderTitle} numberOfLines={1}>{title}</Text>
-        <Text style={styles.placeholderSubtitle} numberOfLines={1}>{subtitle}</Text>
+      <View style={styles.placeholderTextWrap}>
+        <Text style={styles.placeholderTitle} numberOfLines={1}>
+          {title}
+        </Text>
+        <Text style={styles.placeholderSubtitle} numberOfLines={1}>
+          {subtitle}
+        </Text>
+      </View>
+      <View style={styles.placeholderBar}>
+        <ExpoLinearGradient
+          colors={isResolved ? ['#86EFAC', '#22C55E'] : ['#D9F99D', '#86EFAC']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={styles.fill}
+        />
       </View>
     </View>
   );
@@ -154,163 +388,240 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   visualFrame: {
-    height: 360,
-    borderRadius: 24,
+    height: 318,
+    borderRadius: 28,
     overflow: 'hidden',
-    backgroundColor: '#020617',
+    backgroundColor: '#03130B',
   },
   image: {
     width: '100%',
     height: '100%',
   },
-  darkWash: {
+  imageWash: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(2, 6, 23, 0.55)',
+    backgroundColor: 'rgba(2, 18, 11, 0.60)',
   },
-  borderLayer: {
+  fill: {
+    flex: 1,
+  },
+  halo: {
+    position: 'absolute',
+    top: 22,
+    right: 22,
+    bottom: 22,
+    left: 22,
+    borderRadius: 999,
+  },
+  auroraBlobA: {
+    position: 'absolute',
+    width: 260,
+    height: 220,
+    top: 40,
+    left: -40,
+    borderRadius: 999,
+  },
+  auroraBlobB: {
+    position: 'absolute',
+    width: 260,
+    height: 240,
+    bottom: -30,
+    right: -26,
+    borderRadius: 999,
+  },
+  auroraSweep: {
+    position: 'absolute',
+    top: 88,
+    left: -50,
+    right: -50,
+    height: 124,
+    borderRadius: 40,
+  },
+  rippleWrap: {
     ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rippleRing: {
+    position: 'absolute',
+    width: 142,
+    height: 142,
+    borderRadius: 999,
+    borderWidth: 2,
+    borderColor: '#6EE7B7',
+    backgroundColor: 'rgba(110, 231, 183, 0.04)',
+  },
+  rippleRingOuter: {
+    borderColor: 'rgba(167, 243, 208, 0.72)',
+  },
+  rippleCore: {
+    width: 72,
+    height: 72,
+    borderRadius: 999,
+    overflow: 'hidden',
+    shadowOpacity: 0.55,
+    shadowRadius: 28,
+    shadowOffset: { width: 0, height: 0 },
   },
   overlayContent: {
     ...StyleSheet.absoluteFillObject,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
     justifyContent: 'space-between',
-    paddingHorizontal: 22,
-    paddingVertical: 22,
   },
-  largeGlyph: {
-    color: 'rgba(255,255,255,0.92)',
-    fontSize: 28,
-    lineHeight: 30,
-    letterSpacing: 4,
+  overlayTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  phaseBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  phaseBadgeText: {
+    color: '#F0FDF4',
+    fontSize: 12,
     fontWeight: '700',
-    textAlign: 'center',
-    alignSelf: 'center',
-    marginTop: 10,
+    letterSpacing: 0.2,
   },
-  copyBlock: {
+  percentBadge: {
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  percentBadgeText: {
+    color: '#F0FDF4',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  heroTextWrap: {
     gap: 6,
   },
-  kicker: {
-    color: 'rgba(191,219,254,0.95)',
+  heroKicker: {
+    color: 'rgba(220, 252, 231, 0.86)',
     fontSize: 11,
     fontWeight: '700',
-    letterSpacing: 1.2,
+    letterSpacing: 1.1,
     textTransform: 'uppercase',
   },
-  title: {
-    color: '#FFFFFF',
-    fontSize: 26,
-    lineHeight: 30,
-    fontWeight: '700',
+  heroTitle: {
+    color: '#F0FDF4',
+    fontSize: 30,
+    lineHeight: 34,
+    fontWeight: '800',
   },
-  subtitle: {
-    color: 'rgba(226,232,240,0.92)',
+  heroSubtitle: {
+    color: 'rgba(220, 252, 231, 0.90)',
     fontSize: 14,
     lineHeight: 20,
-    fontWeight: '500',
+    maxWidth: '86%',
   },
-  meterPanel: {
-    gap: 8,
+  infoPanel: {
+    borderRadius: 24,
+    backgroundColor: '#06150D',
+    borderWidth: 1,
+    borderColor: 'rgba(134, 239, 172, 0.14)',
+    paddingHorizontal: 18,
+    paddingVertical: 18,
+    gap: 12,
   },
-  meterTrack: {
-    height: 8,
-    borderRadius: 999,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(255,255,255,0.18)',
-  },
-  meterFill: {
-    height: '100%',
-    borderRadius: 999,
-    backgroundColor: '#FFFFFF',
-  },
-  meterMeta: {
+  counterHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  meterText: {
-    color: '#E2E8F0',
-    fontSize: 13,
+  counterLabel: {
+    color: '#86EFAC',
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.9,
+  },
+  counterValue: {
+    color: '#F0FDF4',
+    fontSize: 28,
+    lineHeight: 32,
+    fontWeight: '800',
+    marginTop: 4,
+  },
+  counterGlyph: {
+    color: '#86EFAC',
+    fontSize: 22,
+    fontWeight: '700',
+  },
+  counterDescription: {
+    color: 'rgba(220, 252, 231, 0.94)',
+    fontSize: 15,
     fontWeight: '600',
   },
-  smallGlyph: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    letterSpacing: 2,
-    fontWeight: '700',
+  progressTrack: {
+    height: 11,
+    borderRadius: 999,
+    overflow: 'hidden',
   },
-  actionRow: {
-    flexDirection: 'row',
-    gap: 10,
+  progressFill: {
+    height: '100%',
+    borderRadius: 999,
   },
-  actionButton: {
-    flex: 1,
-    minHeight: 44,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 14,
-  },
-  primaryAction: {
-    backgroundColor: '#0F172A',
-  },
-  primaryActionText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  secondaryAction: {
-    backgroundColor: '#FFFFFF',
-  },
-  secondaryActionText: {
-    color: '#0F172A',
-    fontSize: 14,
-    fontWeight: '700',
+  detailCopy: {
+    color: 'rgba(187, 247, 208, 0.78)',
+    fontSize: 13,
+    lineHeight: 18,
   },
   placeholderRow: {
+    marginHorizontal: 20,
+    marginBottom: 12,
+    borderRadius: 22,
+    backgroundColor: '#07170F',
+    borderWidth: 1,
+    borderColor: 'rgba(134, 239, 172, 0.12)',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderRadius: 18,
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginBottom: 10,
   },
   placeholderRowResolved: {
-    backgroundColor: '#EEFDF3',
-    borderColor: '#BBF7D0',
+    borderColor: 'rgba(74, 222, 128, 0.22)',
+    backgroundColor: '#0A1C12',
   },
-  placeholderGlyphWrap: {
+  placeholderPulse: {
     width: 42,
     height: 42,
-    borderRadius: 14,
+    borderRadius: 999,
+    backgroundColor: 'rgba(74, 222, 128, 0.16)',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#0F172A',
     marginRight: 12,
   },
-  placeholderGlyphWrapResolved: {
-    backgroundColor: '#14532D',
-  },
-  placeholderGlyph: {
-    color: '#FFFFFF',
-    fontSize: 14,
+  placeholderPulseText: {
+    color: '#86EFAC',
+    fontSize: 18,
     fontWeight: '700',
-    letterSpacing: 1.5,
   },
-  placeholderTextBlock: {
+  placeholderTextWrap: {
     flex: 1,
-    gap: 2,
+    gap: 4,
   },
   placeholderTitle: {
-    color: '#0F172A',
+    color: '#F0FDF4',
     fontSize: 15,
     fontWeight: '700',
   },
   placeholderSubtitle: {
-    color: '#64748B',
-    fontSize: 13,
-    fontWeight: '500',
+    color: 'rgba(187, 247, 208, 0.72)',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  placeholderBar: {
+    width: 46,
+    height: 6,
+    borderRadius: 999,
+    overflow: 'hidden',
+    marginLeft: 12,
+    backgroundColor: 'rgba(134, 239, 172, 0.12)',
   },
 });

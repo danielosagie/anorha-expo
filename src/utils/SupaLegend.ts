@@ -68,6 +68,18 @@ export interface LegendStateObservables {
 // This will hold the initialized observables
 let legendStateObservablesSingleton: LegendStateObservables | null = null;
 
+function buildFallbackLegendState(userId: string): LegendStateObservables {
+    return {
+        productVariants$: observable<Record<string, ProductVariant>>({}),
+        platformProductMappings$: observable<Record<string, PlatformProductMapping>>({}),
+        productImages$: observable<Record<string, ProductImage>>({}),
+        inventoryLevels$: observable<Record<string, InventoryLevel>>({}),
+        marketplaceListings$: observable<Record<string, MarketplaceListing>>({}),
+        platformLocations$: observable<Record<string, PlatformLocation>>({}),
+        userId,
+    };
+}
+
 // Initialization function
 export async function initializeLegendState(
     supabaseClient: SupabaseClient,
@@ -259,6 +271,16 @@ export async function initializeLegendState(
     };
 
     console.log("[SupaLegend] Observables configured for user:", currentUserId);
+    return legendStateObservablesSingleton;
+}
+
+export function initializeFallbackLegendState(userId: string): LegendStateObservables {
+    if (legendStateObservablesSingleton?.userId === userId && legendStateObservablesSingleton.productVariants$) {
+        return legendStateObservablesSingleton;
+    }
+
+    console.warn(`[SupaLegend] Falling back to local-only Legend State for user ${userId}`);
+    legendStateObservablesSingleton = buildFallbackLegendState(userId);
     return legendStateObservablesSingleton;
 }
 
