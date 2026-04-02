@@ -28,7 +28,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Import the context from its new location
 import { AuthContext, AuthContextType } from '../context/AuthContext';
-import { supabase, stopClerkSupabaseBridge, ensureSupabaseJwt } from '../lib/supabase';
+import { OnboardingCheckContext } from '../context/OnboardingCheckContext';
+import { supabase, stopClerkSupabaseBridge, ensureSupabaseJwt, getUserLike } from '../lib/supabase';
 // Screens
 import InitialScreen from '../screens/InitialScreen';
 import OnboardingSlides from '../screens/OnboardingSlides';
@@ -41,6 +42,7 @@ import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
 import ProductDetailScreen from '../screens/ProductDetail';
 import PhoneAuthScreen from '../screens/PhoneAuthScreen';
 import CreateAccountScreen from '../screens/CreateAccountScreen';
+import AccountSyncIssueScreen from '../screens/AccountSyncIssueScreen';
 import PastScansScreen from '../screens/PastScansScreen';
 import TeamScreen from '../screens/TeamScreen';
 import MappingReviewScreen from '../screens/MappingReviewScreen';
@@ -69,7 +71,6 @@ import BillingSupportScreen from '../screens/BillingSupportScreen';
 import DeleteAccountInfoScreen from '../screens/DeleteAccountInfoScreen';
 import { isFeatureEnabled } from '../config/features';
 import { SessionContext } from '../context/SessionContext';
-import { useSystemStatus } from '../context/SystemStatusContext';
 
 // --- Define Param Lists for Type Safety --- //
 export type AuthStackParamList = {
@@ -86,6 +87,7 @@ export type AuthStackParamList = {
 export type AppStackParamList = {
   PendingOrgInvitesScreen: undefined;
   CreateAccountScreen: undefined;
+  AccountSyncIssueScreen: undefined;
   TabNavigator: undefined;
   AddListing?: { // The entire params object for AddListing is optional
     initialData?: {
@@ -347,7 +349,7 @@ export type AppStackParamList = {
 
 type RootStackParamList = {
   AuthStack: { screen?: keyof AuthStackParamList };
-  AppStack: { screen?: keyof AppStackParamList, params?: { initialScreenName: 'CreateAccountScreen' | 'TabNavigator' } }; // Allow passing initial screen for AppStack
+  AppStack: { screen?: keyof AppStackParamList, params?: { initialScreenName: 'CreateAccountScreen' | 'AccountSyncIssueScreen' | 'TabNavigator' } }; // Allow passing initial screen for AppStack
   // Add other root-level screens/stacks
   // PhoneAuthScreen: { phoneNumber: string } | undefined; // Removed
 };
@@ -487,13 +489,14 @@ const AuthStack = ({ isFirstLaunch, devForceOnboarding }: { isFirstLaunch: boole
   </AuthStackNav.Navigator>
 );
 
-const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScreen' | 'TabNavigator' }) => (
+const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScreen' | 'AccountSyncIssueScreen' | 'TabNavigator' }) => (
   <AppStackNav.Navigator
     screenOptions={{ headerShown: false }}
     initialRouteName={initialScreenName}
   >
     <AppStackNav.Screen name="PendingOrgInvitesScreen" component={PendingOrgInvitesScreen} />
     <AppStackNav.Screen name="CreateAccountScreen" component={CreateAccountScreen} />
+    <AppStackNav.Screen name="AccountSyncIssueScreen" component={AccountSyncIssueScreen} />
     <AppStackNav.Screen name="Partners" component={PartnersScreen} />
     <AppStackNav.Screen name="LiquidationCampaignScreen" component={LiquidationCampaignScreen} options={{ headerTitle: 'Campaign Items', animationEnabled: false }} />
     <AppStackNav.Screen name="SproutHomeScreen" component={SproutHomeScreen} options={{ headerTitle: 'Sprout' }} />
@@ -537,13 +540,14 @@ SplashScreen.preventAutoHideAsync();
 const AppNavigator = () => {
   const { isLoaded: clerkLoaded, isSignedIn, signOut: clerkSignOut } = useAuth();
   const session = React.useContext(SessionContext);
-  const systemStatus = useSystemStatus();
   const [isLoading, setIsLoading] = useState(true);
   const [userToken, setUserToken] = useState<string | null>(null);
   const [isFirstLaunch, setIsFirstLaunch] = useState<boolean | null>(null);
   const [appIsReady, setAppIsReady] = useState(false);
   const [initialStackName, setInitialStackName] = useState<'AuthStack' | 'AppStack' | null>(null);
-  const [initialAppScreen, setInitialAppScreen] = useState<'CreateAccountScreen' | 'TabNavigator' | null>(null);
+  const [initialAppScreen, setInitialAppScreen] = useState<'CreateAccountScreen' | 'AccountSyncIssueScreen' | 'TabNavigator' | null>(null);
+  const [retryOnboardingTrigger, setRetryOnboardingTrigger] = useState(0);
+  const [lastOnboardingDebugInfo, setLastOnboardingDebugInfo] = useState('');
 
   // Dev tools to test onboarding flow
   const [devForceOnboarding] = useState(false); // Set this to true only when testing onboarding - FTUX
@@ -591,11 +595,6 @@ const AppNavigator = () => {
     return () => clearTimeout(timer);
   }, []);
 
-  // Log render state changes for debugging without injecting void into JSX
-  useEffect(() => {
-    console.log('[AppNavigator] render', { initialStackName, initialAppScreen, isLoading, clerkLoaded });
-  }, [initialStackName, initialAppScreen, isLoading, clerkLoaded]);
-
   // Create authentication functions (Update signOut slightly)
   const authContext = React.useMemo((): AuthContextType => ({
     signIn: async (token: string) => {
@@ -641,6 +640,14 @@ const AppNavigator = () => {
     }
   }), [clerkSignOut]); // Remove navigation dependency
 
+  const onboardingCheckContextValue = React.useMemo(() => ({
+    retryOnboardingCheck: () => {
+      setIsLoading(true);
+      setRetryOnboardingTrigger(t => t + 1);
+    },
+    debugInfo: lastOnboardingDebugInfo,
+  }), [lastOnboardingDebugInfo]);
+
   // Initial launch check: only determine onboarding slides visibility; don't infer auth from legacy tokens
   useEffect(() => {
     (async () => {
@@ -667,13 +674,17 @@ const AppNavigator = () => {
     if (isSignedIn) {
       // Default to TabNavigator to avoid blank UI, then refine after check
       setInitialAppScreen('TabNavigator');
+      if (!session?.bridgeReady) {
+        setIsLoading(false);
+        return;
+      }
       setIsLoading(true);
       checkOnboardingAndNavigate();
     } else {
       setInitialAppScreen(null);
       setIsLoading(false);
     }
-  }, [clerkLoaded, isSignedIn]);
+  }, [clerkLoaded, isSignedIn, session?.bridgeReady, session?.user?.id, retryOnboardingTrigger]);
 
   // Add AppState listener for session expiry
   useEffect(() => {
@@ -690,43 +701,64 @@ const AppNavigator = () => {
 
   const checkOnboardingAndNavigate = async () => {
     try {
-      // Ensure Supabase is ready
-      await ensureSupabaseJwt();
+      let token: string | null = null;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        token = await ensureSupabaseJwt();
+        if (token) {
+          break;
+        }
 
-      // We use the shimmed getUser which returns DB user data
-      const { data: { user }, error: getUserError } = await supabase.auth.getUser();
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+      }
 
-      // If they are signed into Clerk but we can't find them in the DB,
-      // it means they haven't finished the onboarding form yet.
-      if (!user) {
-        console.log("[Onboarding Check] Clerk authenticated but no DB user found. Going to CreateAccountScreen");
-        setInitialAppScreen('CreateAccountScreen');
-        setIsLoading(false);
+      if (!token) {
+        console.warn('[Onboarding Check] Supabase token unavailable. Keeping existing signed-in user on TabNavigator.');
+        setInitialAppScreen('TabNavigator');
         return;
       }
 
-      // If we DID find them, check if they finished the onboarding steps
-      // Note: The 'me' view might already imply some consistency, but let's check the flag
+      // Resolve canonical user id from me view (JWT sub) — not stale session.user.id
+      const { user: me } = await getUserLike();
+      const userId = me?.id;
+      if (!userId) {
+        const debug = `me=null | session.user.id=${session?.user?.id ?? 'null'}`;
+        setLastOnboardingDebugInfo(debug);
+        console.warn('[Onboarding Check] me view returned no user (JWT sub mismatch or no row). Showing AccountSyncIssue.');
+        setInitialAppScreen('AccountSyncIssueScreen');
+        return;
+      }
+
       const { data: dbUser, error: dbError } = await supabase
         .from('Users')
         .select('isOnboardingComplete')
-        .eq('Id', user.id)
+        .eq('Id', userId)
         .maybeSingle();
 
       if (dbError) {
+        const debug = `dbError=${dbError.message} | userId=${userId}`;
+        setLastOnboardingDebugInfo(debug);
         console.error("[Onboarding Check] DB fetch error:", dbError);
-        setInitialAppScreen('TabNavigator');
+        setInitialAppScreen('AccountSyncIssueScreen');
+      } else if (!dbUser) {
+        const debug = `no Users row | userId=${userId} | me.id=${me?.id}`;
+        setLastOnboardingDebugInfo(debug);
+        console.log(`[Onboarding Check] No Users row found for ${userId}. Showing AccountSyncIssue (ambiguous).`);
+        setInitialAppScreen('AccountSyncIssueScreen');
       } else if (dbUser?.isOnboardingComplete) {
-        console.log(`[Onboarding Check] User ID: ${user.id} - Onboarding complete. Going to TabNavigator`);
+        console.log(`[Onboarding Check] User ID: ${userId} - Onboarding complete. Going to TabNavigator`);
         setInitialAppScreen('TabNavigator');
       } else {
-        console.log(`[Onboarding Check] User ID: ${user.id} - Onboarding INCOMPLETE in DB. Going to CreateAccountScreen`);
+        console.log(`[Onboarding Check] User ID: ${userId} - Onboarding INCOMPLETE in DB. Going to CreateAccountScreen`);
         setInitialAppScreen('CreateAccountScreen');
       }
 
     } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      setLastOnboardingDebugInfo(`catch: ${errMsg}`);
       console.error("Error during onboarding check:", error);
-      setInitialAppScreen('TabNavigator');
+      setInitialAppScreen('AccountSyncIssueScreen');
     } finally {
       setIsLoading(false);
     }
@@ -748,7 +780,6 @@ const AppNavigator = () => {
         title="Restoring navigation"
         message={
           session?.bootstrapError ||
-          systemStatus.message ||
           'Checking sign-in state and rebuilding your last known workspace.'
         }
       />
@@ -757,6 +788,7 @@ const AppNavigator = () => {
   return (
     <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
       <AuthContext.Provider value={authContext}>
+        <OnboardingCheckContext.Provider value={onboardingCheckContextValue}>
         <Stack.Navigator
           key={`${initialStackName}-${isSignedIn}-${initialAppScreen ?? 'none'}`}
           initialRouteName={initialStackName ?? (isSignedIn ? 'AppStack' : 'AuthStack')}
@@ -775,14 +807,13 @@ const AppNavigator = () => {
             {(props: any) => {
               // Check both navigation params and local state for initial screen
               const navInitialScreen = props?.route?.params?.initialScreenName;
-              const effectiveInitialScreen = navInitialScreen || initialAppScreen || 'TabNavigator';
-              console.log('[AppNavigator] AppStack render - navInitialScreen:', navInitialScreen, 'localInitialScreen:', initialAppScreen, 'effective:', effectiveInitialScreen);
-
+              const effectiveInitialScreen = (navInitialScreen || initialAppScreen || 'TabNavigator') as 'CreateAccountScreen' | 'AccountSyncIssueScreen' | 'TabNavigator';
               return <AppStack initialScreenName={effectiveInitialScreen} />;
             }}
           </Stack.Screen>
 
         </Stack.Navigator>
+        </OnboardingCheckContext.Provider>
       </AuthContext.Provider>
     </View>
   );

@@ -1,8 +1,9 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, Linking, ActivityIndicator, Image, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, Linking, ActivityIndicator, Image, Alert, type DimensionValue } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Animated, { FadeInUp } from 'react-native-reanimated';
+import spinners from 'unicode-animations';
 
 // Define Prop Interfaces locally to avoid dependency loops, or import if shared properly
 export interface InsightMetric {
@@ -70,6 +71,67 @@ interface InsightCardProps {
     cacheExpiresAt?: string; // ISO timestamp when insight cache expires (for refresh timer)
 }
 
+type UnicodeSpinnerDefinition = {
+    frames: string[];
+    interval: number;
+};
+
+const NUDGE_REFRESH_WINDOW_MS = 6 * 60 * 60 * 1000;
+const ARRIVAL_SPINNER = (spinners.breathe || spinners.pulse) as UnicodeSpinnerDefinition;
+
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+const formatCountdownClock = (ms: number) => {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    if (hours > 0) {
+        return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    return `${minutes}:${String(seconds).padStart(2, '0')}`;
+};
+
+const formatCountdownShort = (ms: number) => {
+    if (ms <= 0) return 'Ready now';
+
+    const totalMinutes = Math.max(1, Math.ceil(ms / (1000 * 60)));
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    if (hours > 0) {
+        return `${hours}h ${minutes}m`;
+    }
+
+    return `${minutes}m`;
+};
+
+const UnicodeSpinner: React.FC<{
+    spinner: UnicodeSpinnerDefinition;
+    color?: string;
+    size?: number;
+    style?: any;
+}> = ({ spinner, color = '#9A7B54', size = 13, style }) => {
+    const [frameIndex, setFrameIndex] = useState(0);
+
+    useEffect(() => {
+        setFrameIndex(0);
+        const intervalId = setInterval(() => {
+            setFrameIndex((prev) => (prev + 1) % spinner.frames.length);
+        }, spinner.interval);
+
+        return () => clearInterval(intervalId);
+    }, [spinner]);
+
+    return (
+        <Text style={[styles.unicodeSpinnerText, { color, fontSize: size }, style]}>
+            {spinner.frames[frameIndex]}
+        </Text>
+    );
+};
+
 // -------------------------------------------------------------------------
 // STREAMING TEXT COMPONENT (defined outside InsightCard for stable identity)
 // -------------------------------------------------------------------------
@@ -91,8 +153,8 @@ const StreamingText: React.FC<StreamingTextProps> = React.memo(({
     shouldStream = true
 }) => {
     const [displayedText, setDisplayedText] = useState('');
-    const timeoutRef = React.useRef<NodeJS.Timeout | null>(null);
-    const intervalRef = React.useRef<NodeJS.Timeout | null>(null);
+    const timeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const intervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
     const completedRef = React.useRef(false);
     const lastTextRef = React.useRef<string>('');
 
@@ -151,6 +213,7 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
     const [sourcesVisible, setSourcesVisible] = useState(false);
     const [feedbackGiven, setFeedbackGiven] = useState<'up' | 'down' | null>(null);
     const [copied, setCopied] = useState(false);
+    const [nowMs, setNowMs] = useState(() => Date.now());
 
     // Stage 0: Start (Headline streams)
     // Stage 1: Headline done (Description streams)
@@ -162,6 +225,14 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
     useEffect(() => {
         setStreamStage(0);
     }, [insight]);
+
+    useEffect(() => {
+        const intervalId = setInterval(() => {
+            setNowMs(Date.now());
+        }, 1000);
+
+        return () => clearInterval(intervalId);
+    }, []);
 
     // Copy insight + sources to clipboard
     const handleCopy = useCallback(async () => {
@@ -220,18 +291,36 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
         );
     }, [feedbackGiven, onFeedback, insight]);
 
-    // Calculate refresh timer
-    const getRefreshTimeText = useCallback(() => {
-        if (!cacheExpiresAt) return null;
-        const expiresAt = new Date(cacheExpiresAt);
-        const now = new Date();
-        const diffMs = expiresAt.getTime() - now.getTime();
-        if (diffMs <= 0) return 'Ready';
-        const hours = Math.floor(diffMs / (1000 * 60 * 60));
-        const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-        if (hours > 0) return `${hours}h ${mins}m`;
-        return `${mins}m`;
-    }, [cacheExpiresAt]);
+    const hasMeaningfulInsightContent = Boolean(
+        insight && (
+            (insight.bottomDIN.metrics?.length ?? 0) > 0 ||
+            (insight.bottomDIN.affectedProducts?.length ?? 0) > 0 ||
+            insight.bottomDIN.action ||
+            insight.bottomDIN.footer ||
+            (insight.sources?.length ?? 0) > 0 ||
+            insight.reasoning ||
+            insight.suggestionText
+        )
+    );
+    const hasRecommendation = Boolean(insight && (insight.suggestionText || insight.bottomDIN.action?.label));
+    const refreshDeadlineMs = cacheExpiresAt ? new Date(cacheExpiresAt).getTime() : Number.NaN;
+    const hasRefreshTimeline = Boolean(cacheExpiresAt && Number.isFinite(refreshDeadlineMs));
+    const refreshStartMs = hasRefreshTimeline ? refreshDeadlineMs - NUDGE_REFRESH_WINDOW_MS : nowMs;
+    const refreshRemainingMs = hasRefreshTimeline ? Math.max(refreshDeadlineMs - nowMs, 0) : 0;
+    const refreshProgress = hasRefreshTimeline
+        ? clamp((nowMs - refreshStartMs) / NUDGE_REFRESH_WINDOW_MS, 0, 1)
+        : 0;
+    const refreshIsReady = hasRefreshTimeline ? refreshRemainingMs <= 0 : false;
+    const progressWidth: DimensionValue = refreshIsReady
+        ? '100%'
+        : `${Math.max(refreshProgress * 100, 4)}%`;
+    const trackerTitle = refreshIsReady ? 'Window open' : 'Next nudge is lining up';
+    const trackerStatus = refreshIsReady
+        ? 'A fresh insight can generate now.'
+        : `Watching inventory movement, activity spikes, and pricing drift for the next pass.`;
+    const trackerEta = refreshIsReady ? 'Ready now' : formatCountdownShort(refreshRemainingMs);
+    const trackerClock = refreshIsReady ? 'Open' : formatCountdownClock(refreshRemainingMs);
+    const trackerPillLabel = hasRefreshTimeline ? trackerClock : 'Open';
 
     // -------------------------------------------------------------------------
     // LOADING STATE
@@ -259,7 +348,7 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
     // -------------------------------------------------------------------------
     // ERROR STATE
     // -------------------------------------------------------------------------
-    if (error || !insight) {
+    if (error) {
         return (
             <View style={[styles.cardContainer, { backgroundColor: '#FEF2F2', borderColor: '#FECACA' }]}>
                 <View style={styles.headerRow}>
@@ -281,6 +370,78 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                     </TouchableOpacity>
                 </View>
             </View>
+        );
+    }
+
+    if (!insight) {
+        return (
+            <Animated.View entering={FadeInUp.duration(450)} style={styles.cardContainer}>
+                <View style={styles.headerRow}>
+                    <View style={styles.headerLeft}>
+                        <Icon name="sprout-outline" size={20} color="rgba(72, 72, 72, 1)" />
+                        <Text style={styles.headerTitle}>Sprout's Insight</Text>
+                    </View>
+
+                    <View style={styles.timerPill}>
+                        <Icon name="clock-outline" size={14} color="#9A7B54" />
+                        <Text style={styles.timerPillText}>{trackerPillLabel}</Text>
+                    </View>
+                </View>
+
+                <View style={styles.contentCard}>
+                    <View style={styles.arrivalBadge}>
+                        <UnicodeSpinner spinner={ARRIVAL_SPINNER} />
+                        <Text style={styles.arrivalBadgeText}>Tracking the next opening</Text>
+                    </View>
+
+                    <Text style={styles.emptyHeadlineText}>{trackerTitle}</Text>
+                    <Text style={styles.emptyDescriptionText}>
+                        No nudge has landed yet. Sprout is still watching the signals that matter so the next one feels timely instead of noisy.
+                    </Text>
+
+                    <View style={styles.signalChipRow}>
+                        <View style={styles.signalChip}>
+                            <Text style={styles.signalChipText}>Inventory pulse</Text>
+                        </View>
+                        <View style={styles.signalChip}>
+                            <Text style={styles.signalChipText}>Sales activity</Text>
+                        </View>
+                        <View style={styles.signalChip}>
+                            <Text style={styles.signalChipText}>Price pressure</Text>
+                        </View>
+                    </View>
+
+                    {hasRefreshTimeline ? (
+                        <View style={styles.timelineCard}>
+                            <View style={styles.timelineMetaRow}>
+                                <View style={styles.timelineStatusRow}>
+                                    <View style={styles.timelineDotHalo}>
+                                        <View style={styles.timelineDot} />
+                                    </View>
+                                    <Text style={styles.timelineStatusText}>{trackerStatus}</Text>
+                                </View>
+                                <Text style={styles.timelineEtaText}>{trackerEta}</Text>
+                            </View>
+
+                            <View style={styles.timelineTrack}>
+                                <View style={[styles.timelineFill, { width: progressWidth }]}>
+                                    <View style={styles.timelineCurrentDot} />
+                                </View>
+                            </View>
+
+                            <View style={styles.timelineLabelsRow}>
+                                <Text style={styles.timelineLabelText}>now</Text>
+                                <Text style={styles.timelineLabelText}>next pass</Text>
+                            </View>
+                        </View>
+                    ) : null}
+
+                    <TouchableOpacity onPress={onRefresh} style={styles.secondaryActionPill}>
+                        <Icon name="refresh" size={15} color="#6F4D2A" />
+                        <Text style={styles.secondaryActionPillText}>Run analysis now</Text>
+                    </TouchableOpacity>
+                </View>
+            </Animated.View>
         );
     }
 
@@ -344,9 +505,14 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                     </Text>
                 </View>
 
-                <View style={styles.headerRight}>
-                    <Text style={styles.headerTimestamp}>Updated {timeLabel}</Text>
-                </View>
+                {hasRefreshTimeline || !hasMeaningfulInsightContent ? (
+                    <View style={styles.headerRight}>
+                        <View style={styles.timerPill}>
+                            <Icon name={hasRefreshTimeline && refreshIsReady ? 'run-fast' : 'clock-outline'} size={14} color="#9A7B54" />
+                            <Text style={styles.timerPillText}>{trackerPillLabel}</Text>
+                        </View>
+                    </View>
+                ) : null}
             </View>
 
             {/* 2. White Content Card */}
@@ -421,20 +587,49 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                 )}
 
                 {/* Recommendation Spot (Replaces Giant Button) */}
-                {streamStage >= 2 && (
+                {streamStage >= 2 && hasMeaningfulInsightContent ? (
                     <Animated.View entering={FadeInUp.delay(200).duration(500)}>
-                        <View style={styles.recommendationContainer}>
-                            <View style={styles.recommendationHeader}>
-                                <Icon name="lightbulb-on-outline" size={16} color="#854D0E" />
-                                <Text style={styles.recommendationTitle}>Recommendation</Text>
+                        {hasRefreshTimeline ? (
+                            <View style={styles.timelineCard}>
+                                <View style={styles.timelineMetaRow}>
+                                    <View style={styles.timelineStatusRow}>
+                                        <View style={styles.timelineDotHalo}>
+                                            <View style={styles.timelineDot} />
+                                        </View>
+                                        <Text style={styles.timelineStatusText}>
+                                            Updated {timeLabel}. {refreshIsReady ? 'Fresh insight can run now.' : 'Next refresh window is approaching.'}
+                                        </Text>
+                                    </View>
+                                    <Text style={styles.timelineEtaText}>{trackerEta}</Text>
+                                </View>
+
+                                <View style={styles.timelineTrack}>
+                                    <View style={[styles.timelineFill, { width: progressWidth }]}>
+                                        <View style={styles.timelineCurrentDot} />
+                                    </View>
+                                </View>
+
+                                <View style={styles.timelineLabelsRow}>
+                                    <Text style={styles.timelineLabelText}>last run</Text>
+                                    <Text style={styles.timelineLabelText}>next nudge</Text>
+                                </View>
                             </View>
+                        ) : null}
 
-                            <Text style={styles.recommendationText}>
-                                {insight.suggestionText || bottomDIN.action?.label || 'Review these products to determine next steps.'}
-                            </Text>
+                        {hasRecommendation ? (
+                            <View style={styles.recommendationContainer}>
+                                <View style={styles.recommendationHeader}>
+                                    <Icon name="lightbulb-on-outline" size={16} color="#854D0E" />
+                                    <Text style={styles.recommendationTitle}>Recommendation</Text>
+                                </View>
 
-                            {/* Execute Action button hidden for now - suggestion only mode */}
-                        </View>
+                                <Text style={styles.recommendationText}>
+                                    {insight.suggestionText || bottomDIN.action?.label}
+                                </Text>
+
+                                {/* Execute Action button hidden for now - suggestion only mode */}
+                            </View>
+                        ) : null}
 
                         {/* Footer Actions Row */}
                         <View style={styles.footerRow}>
@@ -467,44 +662,40 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                                 </TouchableOpacity>
                                 <TouchableOpacity onPress={onRefresh} style={styles.refreshBtnHeader}>
                                     <Icon name="refresh" size={18} color="#9CA3AF" />
-                                    {getRefreshTimeText() && (
-                                        <Text style={{ fontSize: 10, color: '#9CA3AF', marginLeft: 2 }}>
-                                            {getRefreshTimeText()}
-                                        </Text>
-                                    )}
                                 </TouchableOpacity>
                             </View>
 
-                            {/* Sources Toggle */}
-                            <TouchableOpacity
-                                style={styles.sourcesPill}
-                                onPress={() => setSourcesVisible(true)}
-                            >
-                                <View style={styles.avatarPile}>
-                                    {/* Show Anorha logo for DB + Favicons for Web */}
-                                    <View style={[styles.avatarCircle, { backgroundColor: '#fff', zIndex: 3, borderWidth: 1, borderColor: '#E5E7EB' }]}>
-                                        {/* Anorha Placeholder Icon */}
-                                        <Icon name="leaf" size={10} color="#84CC16" />
-                                    </View>
-
-                                    {insight.sources?.filter(s => s.type === 'web').slice(0, 2).map((src, idx) => (
-                                        <View key={idx} style={[styles.avatarCircle, { zIndex: 2 - idx, marginLeft: -6, backgroundColor: '#fff' }]}>
-                                            {getFaviconUrl(src.url) ? (
-                                                <Image
-                                                    source={{ uri: getFaviconUrl(src.url) || '' }}
-                                                    style={{ width: 14, height: 14, borderRadius: 7 }}
-                                                />
-                                            ) : (
-                                                <Icon name="web" size={10} color="#9CA3AF" />
-                                            )}
+                            {(insight.sources?.length ?? 0) > 0 ? (
+                                <TouchableOpacity
+                                    style={styles.sourcesPill}
+                                    onPress={() => setSourcesVisible(true)}
+                                >
+                                    <View style={styles.avatarPile}>
+                                        {/* Show Anorha logo for DB + Favicons for Web */}
+                                        <View style={[styles.avatarCircle, { backgroundColor: '#fff', zIndex: 3, borderWidth: 1, borderColor: '#E5E7EB' }]}>
+                                            {/* Anorha Placeholder Icon */}
+                                            <Icon name="leaf" size={10} color="#84CC16" />
                                         </View>
-                                    ))}
-                                </View>
-                                <Text style={styles.sourcesText}>Sources</Text>
-                            </TouchableOpacity>
+
+                                        {insight.sources?.filter(s => s.type === 'web').slice(0, 2).map((src, idx) => (
+                                            <View key={idx} style={[styles.avatarCircle, { zIndex: 2 - idx, marginLeft: -6, backgroundColor: '#fff' }]}>
+                                                {getFaviconUrl(src.url) ? (
+                                                    <Image
+                                                        source={{ uri: getFaviconUrl(src.url) || '' }}
+                                                        style={{ width: 14, height: 14, borderRadius: 7 }}
+                                                    />
+                                                ) : (
+                                                    <Icon name="web" size={10} color="#9CA3AF" />
+                                                )}
+                                            </View>
+                                        ))}
+                                    </View>
+                                    <Text style={styles.sourcesText}>Sources</Text>
+                                </TouchableOpacity>
+                            ) : null}
                         </View>
                     </Animated.View>
-                )}
+                ) : null}
 
             </View>
 
@@ -681,6 +872,24 @@ const styles = StyleSheet.create({
     refreshBtnHeader: {
         padding: 4,
     },
+    timerPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 999,
+        backgroundColor: 'rgba(173, 138, 96, 0.12)',
+        borderWidth: 1,
+        borderColor: 'rgba(154, 123, 84, 0.12)',
+    },
+    timerPillText: {
+        fontSize: 12,
+        color: '#8B6C49',
+        fontWeight: '700',
+        letterSpacing: 0.2,
+        fontVariant: ['tabular-nums'],
+    },
 
     // Content Card
     contentCard: {
@@ -706,6 +915,159 @@ const styles = StyleSheet.create({
         color: '#4B5563',
         lineHeight: 22,
         marginBottom: 20,
+    },
+    unicodeSpinnerText: {
+        fontWeight: '700',
+        letterSpacing: -0.4,
+    },
+    arrivalBadge: {
+        alignSelf: 'flex-start',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 999,
+        backgroundColor: '#F6EFE5',
+        marginBottom: 14,
+    },
+    arrivalBadgeText: {
+        fontSize: 12,
+        color: '#8B6C49',
+        fontWeight: '700',
+        letterSpacing: 0.2,
+        textTransform: 'uppercase',
+    },
+    emptyHeadlineText: {
+        fontSize: 24,
+        lineHeight: 29,
+        fontWeight: '700',
+        color: '#2F241A',
+        letterSpacing: -0.7,
+        marginBottom: 10,
+    },
+    emptyDescriptionText: {
+        fontSize: 15,
+        lineHeight: 22,
+        color: '#6A5B49',
+        marginBottom: 18,
+    },
+    signalChipRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+        marginBottom: 18,
+    },
+    signalChip: {
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        borderRadius: 999,
+        backgroundColor: '#F7F4EE',
+        borderWidth: 1,
+        borderColor: '#EFE6D8',
+    },
+    signalChipText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#7B684E',
+    },
+    timelineCard: {
+        backgroundColor: '#FAF6EF',
+        borderRadius: 14,
+        padding: 14,
+        marginBottom: 16,
+        borderWidth: 1,
+        borderColor: '#EFE4D4',
+    },
+    timelineMetaRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        justifyContent: 'space-between',
+        gap: 12,
+        marginBottom: 12,
+    },
+    timelineStatusRow: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 10,
+    },
+    timelineDotHalo: {
+        width: 18,
+        height: 18,
+        borderRadius: 9,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(175, 132, 74, 0.16)',
+        marginTop: 1,
+    },
+    timelineDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: '#A37740',
+    },
+    timelineStatusText: {
+        flex: 1,
+        fontSize: 14,
+        lineHeight: 20,
+        color: '#6E5A42',
+        fontWeight: '600',
+    },
+    timelineEtaText: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#8B6C49',
+        fontVariant: ['tabular-nums'],
+    },
+    timelineTrack: {
+        height: 8,
+        borderRadius: 999,
+        backgroundColor: '#EBDDCA',
+        overflow: 'hidden',
+        marginBottom: 10,
+    },
+    timelineFill: {
+        height: '100%',
+        minWidth: 10,
+        backgroundColor: '#C9A06C',
+        borderRadius: 999,
+        justifyContent: 'center',
+        alignItems: 'flex-end',
+        paddingRight: 1,
+    },
+    timelineCurrentDot: {
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        backgroundColor: '#6F4D2A',
+        borderWidth: 2,
+        borderColor: '#FFF7EC',
+    },
+    timelineLabelsRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    timelineLabelText: {
+        fontSize: 12,
+        color: '#9A866B',
+        fontWeight: '500',
+    },
+    secondaryActionPill: {
+        alignSelf: 'flex-start',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderRadius: 999,
+        backgroundColor: '#6F4D2A',
+    },
+    secondaryActionPillText: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#FFF8EF',
     },
 
     // Metrics Box

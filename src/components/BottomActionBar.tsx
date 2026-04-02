@@ -8,12 +8,18 @@ type Props = {
   primaryLabel: string;
   primaryDisabled?: boolean;
   onPrimary: () => void;
+  primaryIcon?: React.ReactNode;
   secondaryLabel?: string;
   secondaryDisabled?: boolean;
   onSecondary?: () => void;
+  secondaryIcon?: React.ReactNode;
   /** Optional content rendered above the action buttons (e.g., SmartCommandInput) */
   tertiaryContent?: React.ReactNode;
   style?: any;
+  primaryButtonStyle?: any;
+  secondaryButtonStyle?: any;
+  primaryTextStyle?: any;
+  secondaryTextStyle?: any;
   /** When set, the primary button shows step-through navigation arrows */
   stepNav?: {
     /** e.g. "SKU" — the current missing field label */
@@ -29,7 +35,23 @@ type Props = {
   };
 };
 
-export default function BottomActionBar({ primaryLabel, primaryDisabled, onPrimary, secondaryLabel, secondaryDisabled, onSecondary, tertiaryContent, style, stepNav }: Props) {
+export default function BottomActionBar({
+  primaryLabel,
+  primaryDisabled,
+  onPrimary,
+  primaryIcon,
+  secondaryLabel,
+  secondaryDisabled,
+  onSecondary,
+  secondaryIcon,
+  tertiaryContent,
+  style,
+  primaryButtonStyle,
+  secondaryButtonStyle,
+  primaryTextStyle,
+  secondaryTextStyle,
+  stepNav,
+}: Props) {
   const showStepNav = stepNav && primaryDisabled;
   const insets = useSafeAreaInsets();
 
@@ -69,16 +91,24 @@ export default function BottomActionBar({ primaryLabel, primaryDisabled, onPrima
         </View>
       ) : (
         /* Normal publish button */
-        <TouchableOpacity disabled={!!primaryDisabled} onPress={onPrimary} style={[styles.primaryBtn, primaryDisabled && styles.disabled]}>
-          <CloudUpload size={20} color="white" />
-          <Text style={styles.primaryText}>{primaryLabel}</Text>
+        <TouchableOpacity
+          disabled={!!primaryDisabled}
+          onPress={onPrimary}
+          style={[styles.primaryBtn, primaryButtonStyle, primaryDisabled && styles.disabled]}
+        >
+          {primaryIcon ?? <CloudUpload size={20} color="white" />}
+          <Text style={[styles.primaryText, primaryTextStyle]}>{primaryLabel}</Text>
         </TouchableOpacity>
       )}
 
       {secondaryLabel ? (
-        <TouchableOpacity disabled={!!secondaryDisabled} onPress={onSecondary} style={[styles.secondaryBtn, secondaryDisabled && styles.disabled]}>
-          <Save size={20} color="#71717A" />
-          <Text style={styles.secondaryText}>{secondaryLabel}</Text>
+        <TouchableOpacity
+          disabled={!!secondaryDisabled}
+          onPress={onSecondary}
+          style={[styles.secondaryBtn, secondaryButtonStyle, secondaryDisabled && styles.disabled]}
+        >
+          {secondaryIcon ?? <Save size={20} color="#71717A" />}
+          <Text style={[styles.secondaryText, secondaryTextStyle]}>{secondaryLabel}</Text>
         </TouchableOpacity>
       ) : null}
     </View>

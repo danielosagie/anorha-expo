@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle, u
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Modal, Pressable, FlatList, SectionList, Alert, ActivityIndicator, Dimensions, Linking, Platform } from 'react-native';
 import { ScrollView as ScrollViewHorizontal } from 'react-native-gesture-handler';
 import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
-import { Paths, Directory, File } from 'expo-file-system/next';
+import { Paths, Directory, File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import VariantInventoryEditor, { InventoryItemData, VariantInventoryEditorProps } from './VariantInventoryEditor';
 import BaseModal from './BaseModal';

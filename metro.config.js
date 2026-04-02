@@ -19,24 +19,16 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
 };
 
 // Add SVG support
-config.resolver.sourceExts = [
-  ...config.resolver.sourceExts,
-  'mjs',
-  'svg',
-];
+config.resolver.sourceExts = [...config.resolver.sourceExts, 'mjs', 'svg'];
 
 config.resolver.unstable_conditionNames = ['require', 'default', 'browser'];
 
-// Make sure these asset extensions are included
-config.resolver.assetExts = [
-  ...config.resolver.assetExts.filter((ext) => ext !== 'svg'),
-  'png', 'jpg', 'jpeg', 'gif', 'bmp', 'ttf', 'otf', 'webp'
-];
+config.resolver.assetExts = config.resolver.assetExts.filter((ext) => ext !== 'svg');
 
 // Add this transformer configuration for SVG files
 config.transformer = {
   ...config.transformer,
-  babelTransformerPath: require.resolve('react-native-svg-transformer'),
+  babelTransformerPath: require.resolve('react-native-svg-transformer/expo'),
 };
 
 module.exports = config;

@@ -28,6 +28,66 @@ let refreshIntervalHandle: ReturnType<typeof setInterval> | null = null;
 let getClerkTokenFn: (() => Promise<string | null>) | null = null;
 // Promise lock to prevent race conditions when multiple components call ensureSupabaseJwt concurrently
 let exchangeInProgress: Promise<boolean> | null = null;
+let lastExchangeOutcome: 'idle' | 'success' | 'exchange_failed' | 'clerk_token_missing' = 'idle';
+
+export type SupabaseJwtAcquisitionState =
+  | 'ready'
+  | 'exchange_in_progress'
+  | 'bridge_unconfigured'
+  | 'exchange_failed'
+  | 'clerk_token_missing';
+
+export interface SupabaseJwtStatus {
+  token: string | null;
+  state: SupabaseJwtAcquisitionState;
+}
+
+type SupabaseJwtListener = (status: SupabaseJwtStatus) => void;
+
+const supabaseJwtListeners = new Set<SupabaseJwtListener>();
+
+function computeSupabaseJwtState(): SupabaseJwtAcquisitionState {
+  if (currentSupabaseJwt) return 'ready';
+  if (exchangeInProgress) return 'exchange_in_progress';
+  if (!getClerkTokenFn) return 'bridge_unconfigured';
+  if (lastExchangeOutcome === 'clerk_token_missing') return 'clerk_token_missing';
+  if (lastExchangeOutcome === 'exchange_failed') return 'exchange_failed';
+  return 'bridge_unconfigured';
+}
+
+function emitSupabaseJwtState() {
+  const snapshot = getSupabaseJwtState();
+  supabaseJwtListeners.forEach((listener) => {
+    try {
+      listener(snapshot);
+    } catch (error) {
+      console.warn('[supabase.ts] Supabase JWT listener failed:', error);
+    }
+  });
+}
+
+export function getSupabaseJwtState(): SupabaseJwtStatus {
+  return {
+    token: currentSupabaseJwt,
+    state: computeSupabaseJwtState(),
+  };
+}
+
+export function subscribeToSupabaseJwtState(listener: SupabaseJwtListener): () => void {
+  supabaseJwtListeners.add(listener);
+  listener(getSupabaseJwtState());
+  return () => {
+    supabaseJwtListeners.delete(listener);
+  };
+}
+
+export function isSupabaseBridgeWarmingUp(state: SupabaseJwtAcquisitionState): boolean {
+  return state === 'exchange_in_progress';
+}
+
+export function isSupabaseBridgeUnavailableState(state: SupabaseJwtAcquisitionState): boolean {
+  return state === 'exchange_failed' || state === 'bridge_unconfigured' || state === 'clerk_token_missing';
+}
 
 // Custom fetch for Supabase client to inject Authorization and handle 401 refresh
 const realFetch = globalThis.fetch.bind(globalThis);
@@ -80,34 +140,44 @@ async function refreshSupabaseToken(): Promise<boolean> {
   // Start exchange and store the promise so concurrent calls can wait
   exchangeInProgress = exchangeClerkForSupabase().finally(() => {
     exchangeInProgress = null;
+    emitSupabaseJwtState();
   });
+  emitSupabaseJwtState();
   
   return exchangeInProgress;
 }
 
 export async function ensureSupabaseJwt(): Promise<string | null> {
-  // Fast path: return cached token if available
-  if (currentSupabaseJwt) return currentSupabaseJwt;
-  
-  // If exchange is in progress, wait for it
+  const current = getSupabaseJwtState();
+  if (current.state === 'ready') return current.token;
+
   if (exchangeInProgress) {
     console.log('[supabase.ts] ensureSupabaseJwt: waiting for in-progress exchange...');
     await exchangeInProgress;
-    return currentSupabaseJwt;
+    return getSupabaseJwtState().token;
   }
-  
-  // Start new exchange
+
   const ok = await refreshSupabaseToken();
-  return ok ? currentSupabaseJwt : null;
+  return ok ? getSupabaseJwtState().token : null;
 }
 
 async function exchangeClerkForSupabase(): Promise<boolean> {
-  if (!getClerkTokenFn) return false;
+  if (!getClerkTokenFn) {
+    currentSupabaseJwt = null;
+    lastExchangeOutcome = 'idle';
+    emitSupabaseJwtState();
+    return false;
+  }
   try {
     const clerkToken = await getClerkTokenFn();
     const hasClerk = !!clerkToken;
     console.log('[supabase.ts] exchangeClerkForSupabase start. hasClerkToken =', hasClerk);
-    if (!clerkToken) return false;
+    if (!clerkToken) {
+      currentSupabaseJwt = null;
+      lastExchangeOutcome = 'clerk_token_missing';
+      emitSupabaseJwtState();
+      return false;
+    }
     const base = apiBaseUrl.endsWith('/api') ? apiBaseUrl : `${apiBaseUrl}/api`;
     const url = `${base}/auth/exchange`;
     console.log('[supabase.ts] Exchanging Clerk token for Supabase JWT at', url);
@@ -120,12 +190,16 @@ async function exchangeClerkForSupabase(): Promise<boolean> {
     if (!resp.ok) {
       const text = await resp.text().catch(() => '<no body>');
       console.log('[supabase.ts] Exchange error body:', text);
+      currentSupabaseJwt = null;
+      lastExchangeOutcome = 'exchange_failed';
+      emitSupabaseJwtState();
       return false;
     }
     const body = await resp.json();
     console.log('[supabase.ts] Exchange body:', body);
     currentSupabaseJwt = body.supabase_token as string;
     if (currentSupabaseJwt) {
+      lastExchangeOutcome = 'success';
       console.log('[supabase.ts] Supabase JWT set, length:', currentSupabaseJwt.length);
       try {
         // Ensure Realtime uses the latest JWT for RLS-enabled channels
@@ -134,12 +208,17 @@ async function exchangeClerkForSupabase(): Promise<boolean> {
         console.warn('[supabase.ts] Failed to set Realtime auth token:', e);
       }
     } else {
+      lastExchangeOutcome = 'exchange_failed';
       console.log('[supabase.ts] No supabase_token in response');
     }
+    emitSupabaseJwtState();
     console.log('[supabase.ts] received supabase_token length =', currentSupabaseJwt ? currentSupabaseJwt.length : 0);
     return !!currentSupabaseJwt;
   } catch (e) {
     console.error('[supabase.ts] exchangeClerkForSupabase error:', e);
+    currentSupabaseJwt = null;
+    lastExchangeOutcome = 'exchange_failed';
+    emitSupabaseJwtState();
     return false;
   }
 }
@@ -149,8 +228,9 @@ export async function configureClerkSupabaseBridge(options: {
   autoRefreshMinutes?: number;
 }) {
   getClerkTokenFn = options.getClerkToken;
+  lastExchangeOutcome = 'idle';
   console.log('[supabase.ts] configureClerkSupabaseBridge called. autoRefreshMinutes =', options.autoRefreshMinutes);
-  const ok = await exchangeClerkForSupabase();
+  const ok = await refreshSupabaseToken();
   if (!ok) throw new Error('Failed to exchange Clerk token for Supabase JWT');
 
   // Start background refresh slightly before expiry
@@ -169,6 +249,8 @@ export function stopClerkSupabaseBridge() {
   refreshIntervalHandle = null;
   currentSupabaseJwt = null;
   getClerkTokenFn = null;
+  lastExchangeOutcome = 'idle';
+  emitSupabaseJwtState();
 }
 
 // Compatibility shim: replace supabase.auth.getUser() with a view-based lookup

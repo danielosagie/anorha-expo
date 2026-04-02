@@ -8,7 +8,7 @@ import 'react-native-get-random-values';
 import { ensureSupabaseJwt, supabase } from './src/lib/supabase';
 import { LegendStateContext } from './src/context/LegendStateContext';
 import { LegendStateControlContext } from './src/context/LegendStateControlContext';
-import { initializeLegendState, LegendStateObservables } from './src/utils/SupaLegend';
+import { initializeFallbackLegendState, initializeLegendState, LegendStateObservables } from './src/utils/SupaLegend';
 import { Session, AuthChangeEvent } from '@supabase/supabase-js';
 import FlashMessage from 'react-native-flash-message';
 import { PlatformConnectionsProvider, usePlatformConnections } from './src/context/PlatformConnectionsContext';
@@ -32,9 +32,8 @@ import { PostHogProvider, PostHogIdentify } from './src/providers/PostHogProvide
 import * as WebBrowser from 'expo-web-browser';
 import { init as initFlowLogger } from './src/lib/mobileFlowLogger';
 import { LiveActivityProvider } from './src/context/LiveActivityContext';
+import { AppDataProvider } from './src/context/AppDataContext';
 import AppStartupShell from './src/components/AppStartupShell';
-import SystemStatusBanner from './src/components/SystemStatusBanner';
-import { SystemStatusProvider } from './src/context/SystemStatusContext';
 import { OfflineQueueProvider } from './src/context/OfflineQueueContext';
 import {
   ActiveFlowCheckpoint,
@@ -252,13 +251,41 @@ const App: React.FC = () => {
       // Wait until the Clerk→Supabase bridge has been configured
       if (!session?.ready) return;
 
+      const userId = session?.user?.id;
+      if (!userId) {
+        console.warn('[App] Session is ready but user id is missing, skipping Legend State init');
+        return;
+      }
+
+      let cancelled = false;
+      let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const applyFallbackLegendState = (reason: 'timeout' | 'init_failed') => {
+        if (cancelled) return;
+        console.warn(`[App] Using fallback Legend State (${reason}) for user: ${userId}`);
+        setLegendStateModules((current) => {
+          if (current?.userId === userId && current.productVariants$) {
+            return current;
+          }
+          return initializeFallbackLegendState(userId);
+        });
+      };
+
       (async () => {
         try {
-          const { data: { user } } = await supabase.auth.getUser();
-          if (!user?.id) return;
-          if (legendStateModules && legendStateModules.userId === user.id) return;
-          console.log(`[App] Initializing Legend State for user: ${user.id}`);
-          const initialized = await initializeLegendState(supabase, user.id);
+          if (legendStateModules && legendStateModules.userId === userId) return;
+
+          fallbackTimer = setTimeout(() => {
+            applyFallbackLegendState('timeout');
+          }, 4000);
+
+          console.log(`[App] Initializing Legend State for user: ${userId}`);
+          const initialized = await initializeLegendState(supabase, userId);
+          if (cancelled) return;
+          if (fallbackTimer) {
+            clearTimeout(fallbackTimer);
+            fallbackTimer = null;
+          }
           setLegendStateModules(initialized);
           console.log('[App] Legend State ready');
 
@@ -278,10 +305,21 @@ const App: React.FC = () => {
           }
         } catch (e) {
           console.error('[App] Legend State init failed:', e);
-          setLegendStateModules(null);
+          if (fallbackTimer) {
+            clearTimeout(fallbackTimer);
+            fallbackTimer = null;
+          }
+          applyFallbackLegendState('init_failed');
         }
       })();
-    }, [clerkLoaded, isSignedIn, session?.ready]);
+
+      return () => {
+        cancelled = true;
+        if (fallbackTimer) {
+          clearTimeout(fallbackTimer);
+        }
+      };
+    }, [clerkLoaded, isSignedIn, session?.ready, session?.user?.id]);
 
     useEffect(() => {
       if (!clerkLoaded || !isSignedIn || !session?.ready) return;
@@ -396,14 +434,15 @@ const App: React.FC = () => {
 
     const resetLegendState = async () => {
       console.log('[App] Manually resetting Legend State by forcing re-initialization...');
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session && session.user) {
+      const userId = session?.user?.id;
+      if (userId) {
         try {
-          const reinitializedModules = await initializeLegendState(supabase, session.user.id, { force: true });
+          const reinitializedModules = await initializeLegendState(supabase, userId, { force: true });
           setLegendStateModules(reinitializedModules);
           console.log('[App] Legend State has been forcefully reset and re-initialized.');
         } catch (error) {
           console.error('[App] Error during forced Legend State re-initialization:', error);
+          setLegendStateModules(initializeFallbackLegendState(userId));
         }
       } else {
         console.warn('[App] Could not reset Legend State: No active session.');
@@ -440,10 +479,6 @@ const App: React.FC = () => {
       const overlay = usePlatformPickerOverlay();
       const { connections } = usePlatformConnections();
 
-      // DEBUG: Log overlay state
-      console.log('[GlobalPlatformPickerOverlay] Rendering with overlay.visible:', overlay.visible);
-      console.log('[GlobalPlatformPickerOverlay] Overlay onStartConnect exists:', !!overlay.onStartConnect);
-
       const counts: Record<string, number> = {};
       (connections || []).forEach((c: any) => {
         if ((c.Status || '').toLowerCase() === 'active') {
@@ -452,17 +487,14 @@ const App: React.FC = () => {
       });
 
       if (!overlay.visible) {
-        console.log('[GlobalPlatformPickerOverlay] Not visible, returning null');
         return null;
       }
 
-      console.log('[GlobalPlatformPickerOverlay] Rendering overlay!');
       return (
         <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, justifyContent: 'flex-end', zIndex: 9999 }} pointerEvents="box-none">
           <Pressable
             style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)' }}
             onPress={() => {
-              console.log('[GlobalPlatformPickerOverlay] Backdrop pressed, hiding overlay');
               overlay.hide();
             }}
           />
@@ -484,7 +516,6 @@ const App: React.FC = () => {
               onPlatformToggle={() => { }}
               onGeneratePress={() => { }}
               onStartConnect={(platform) => {
-                console.log('[GlobalPlatformPickerOverlay] onStartConnect called with platform:', platform);
                 overlay.hide();
                 overlay.onStartConnect?.(platform);
               }}
@@ -499,7 +530,6 @@ const App: React.FC = () => {
         <LegendStateContext.Provider value={legendStateModules}>
           <ThemeProvider>
             <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-            <SystemStatusBanner />
             {!clerkLoaded ? (
               <AppStartupShell
                 title="Starting up"
@@ -543,8 +573,13 @@ const App: React.FC = () => {
   const WithSessionProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { getToken } = useAuth();
     const template = process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'mobile';
+    const getClerkToken = useCallback(
+      () => getToken({ template }).catch(async () => getToken()),
+      [getToken, template],
+    );
+
     return (
-      <EnhancedSessionProvider getClerkToken={() => getToken({ template }).catch(async () => getToken())}>
+      <EnhancedSessionProvider getClerkToken={getClerkToken}>
         <PostHogIdentify />
         {children}
       </EnhancedSessionProvider>
@@ -554,9 +589,7 @@ const App: React.FC = () => {
   const DebugClerkState = () => {
     const { isLoaded, isSignedIn } = useAuth();
     const navigationRef = useRef<NavigationContainerRef<any>>(null);
-    const [navigationReady, setNavigationReady] = useState(false);
-    const [forceRefresh, setForceRefresh] = useState(0);
-    const navKey = `navigation-${isSignedIn ? 'signed-in' : 'signed-out'}-${forceRefresh}`;
+    const navKey = `navigation-${isSignedIn ? 'signed-in' : 'signed-out'}-0`;
     console.log('[App] Clerk state:', { isLoaded, isSignedIn, navKey });
 
     // Debug what happens when isSignedIn changes
@@ -572,13 +605,6 @@ const App: React.FC = () => {
     }, [isLoaded, isSignedIn]);
 
 
-
-    // Reset navigationReady when auth state changes to ensure proper re-initialization
-    useEffect(() => {
-      if (!isLoaded) return;
-      console.log('[App] Auth state changed, resetting navigation ready state');
-      setNavigationReady(false);
-    }, [isLoaded, isSignedIn]);
 
     if (!isLoaded) {
       return (
@@ -596,24 +622,24 @@ const App: React.FC = () => {
             ref={navigationRef}
             onReady={() => {
               console.log('[App] Navigation container ready, key:', navKey, 'isSignedIn:', isSignedIn);
-              setNavigationReady(true);
             }}
           >
             <>
               {isSignedIn ? (
                 <WithSessionProvider>
                   {React.createElement(OrgProvider as any, null, (
-                    <LiveActivityProvider>
-                      <JobsProvider>
-                        <AuthedAppContent navigationRef={navigationRef} />
-                      </JobsProvider>
-                    </LiveActivityProvider>
+                    <AppDataProvider>
+                      <LiveActivityProvider>
+                        <JobsProvider>
+                          <AuthedAppContent navigationRef={navigationRef} />
+                        </JobsProvider>
+                      </LiveActivityProvider>
+                    </AppDataProvider>
                   ))}
                 </WithSessionProvider>
               ) : (
                 <ThemeProvider>
                   <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-                  <SystemStatusBanner />
                   <AppNavigator />
                   <FlashMessage position="top" />
                 </ThemeProvider>
@@ -629,13 +655,11 @@ const App: React.FC = () => {
     <ClerkProvider publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!} tokenCache={tokenCache}>
       <PostHogProvider>
         <SafeAreaProvider>
-          <SystemStatusProvider>
-            <OfflineQueueProvider>
-              <SystemNotificationProvider>
-                <DebugClerkState />
-              </SystemNotificationProvider>
-            </OfflineQueueProvider>
-          </SystemStatusProvider>
+          <OfflineQueueProvider>
+            <SystemNotificationProvider>
+              <DebugClerkState />
+            </SystemNotificationProvider>
+          </OfflineQueueProvider>
         </SafeAreaProvider>
       </PostHogProvider>
     </ClerkProvider>

@@ -12,8 +12,9 @@ import {
   TextInput,
   Alert,
   Animated,
+  AppState,
 } from 'react-native';
-import { WebView } from 'react-native-webview';
+import * as WebBrowser from 'expo-web-browser';
 import { useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
@@ -114,7 +115,6 @@ export default function BillingScreen() {
   const [selectedCreditAmount, setSelectedCreditAmount] = useState<number | null>(50);
   const [isTopUpLoading, setIsTopUpLoading] = useState(false);
   const [isAddingPaymentMethod, setIsAddingPaymentMethod] = useState(false);
-  const [managePortalUrl, setManagePortalUrl] = useState<string | null>(null);
 
   const isPartner = userRole === 'partner';
   const hasSummaryData = !!summary && typeof summary === 'object';
@@ -167,6 +167,13 @@ export default function BillingScreen() {
   useEffect(() => {
     refreshBillingData();
   }, []);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') refreshBillingData();
+    });
+    return () => sub.remove();
+  }, [refreshBillingData]);
 
   const planFromSummary =
     summary?.subscription?.CurrentPlan || summary?.tier_name || summary?.subscription?.current_plan;
@@ -244,7 +251,8 @@ export default function BillingScreen() {
       const data = await res.json().catch(() => null);
       if (data?.url) {
         capture(AnalyticsEvents.BILLING_PORTAL_OPENED);
-        setManagePortalUrl(data.url);
+        await WebBrowser.openBrowserAsync(data.url);
+        refreshBillingData();
       } else {
         setActionError('Unable to open subscription portal.');
       }
@@ -530,33 +538,6 @@ export default function BillingScreen() {
         }}
         hasSubscription={hasActiveSubscription}
       />
-
-      {/* Polar portal webview */}
-      <Modal visible={!!managePortalUrl} animationType="slide" presentationStyle="pageSheet">
-        <View style={{ flex: 1, backgroundColor: '#fff', paddingTop: insets.top }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#E5E5EA' }}>
-            <TouchableOpacity onPress={() => { setManagePortalUrl(null); refreshBillingData(); }} style={{ padding: 4 }}>
-              <Text style={{ fontSize: 17, color: '#007AFF', fontWeight: '500' }}>Done</Text>
-            </TouchableOpacity>
-            <Text style={{ fontSize: 17, fontWeight: '600', color: '#000' }}>Subscription</Text>
-            <View style={{ width: 50 }} />
-          </View>
-          {managePortalUrl && (
-            <WebView
-              source={{ uri: managePortalUrl }}
-              style={{ flex: 1 }}
-              onNavigationStateChange={(state) => {
-                // Polar tends to bounce back to an app custom deep link or success/cancel URL
-                if (state.url.includes('app.anorha.app') || state.url.includes('success=true') || state.url.includes('canceled=true') || state.url.includes('sssync.app')) {
-                  // Refresh stats silently behind the scenes
-                  refreshBillingData();
-                  // Maybe delay closing or let the user click Done
-                }
-              }}
-            />
-          )}
-        </View>
-      </Modal>
     </View>
   );
 }

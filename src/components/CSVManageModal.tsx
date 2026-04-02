@@ -3,8 +3,9 @@ import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Pla
 import { CloudDownload, Settings } from 'lucide-react-native';
 import { documentDirectory, writeAsStringAsync, EncodingType } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { supabase } from '../lib/supabase';
+import { ensureSupabaseJwt } from '../lib/supabase';
 import BaseModal from './BaseModal';
+import { useOrg } from '../context/OrgContext';
 
 interface CSVManageModalProps {
     visible: boolean;
@@ -14,69 +15,38 @@ interface CSVManageModalProps {
 
 export default function CSVManageModal({ visible, onClose, onSettings }: CSVManageModalProps) {
     const [isExporting, setIsExporting] = useState(false);
+    const { currentOrg } = useOrg();
+    const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+    const API_BASE = rawApiBase.endsWith('/api') ? rawApiBase : `${rawApiBase}/api`;
 
     const handleExport = async () => {
         try {
             setIsExporting(true);
+            const orgId = currentOrg?.id;
+            if (!orgId) throw new Error('No active organization selected');
 
-            // 1. Get current user
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) throw new Error('Not authenticated');
+            const token = await ensureSupabaseJwt();
+            if (!token) throw new Error('Not authenticated');
 
-            // 2. Fetch products
-            const { data: products, error } = await supabase
-                .from('ProductVariants')
-                .select(`
-          Sku,
-          Title,
-          Description,
-          Price,
-          Quantity,
-          Brand,
-          Category,
-          Condition,
-          Weight,
-          Images
-        `)
-                .eq('UserId', user.id)
-                .order('CreatedAt', { ascending: false })
-                .limit(2000);
+            const response = await fetch(
+                `${API_BASE}/organizations/${encodeURIComponent(orgId)}/export/current`,
+                {
+                    headers: { Authorization: `Bearer ${token}` },
+                }
+            );
 
-            if (error) throw error;
-            if (!products || products.length === 0) {
+            if (!response.ok) throw new Error('Export failed');
+
+            const csvString = await response.text();
+            if (!csvString.trim()) {
                 Alert.alert('No Products', 'You have no products to export.');
-                setIsExporting(false);
                 return;
             }
 
-            // 3. Convert to CSV
-            const headers = ['Sku', 'Title', 'Description', 'Price', 'Quantity', 'Brand', 'Category', 'Condition', 'Weight', 'Images'];
-            const csvRows = [headers.join(',')];
-
-            products.forEach(p => {
-                const row = [
-                    `"${(p.Sku || '').replace(/"/g, '""')}"`,
-                    `"${(p.Title || '').replace(/"/g, '""')}"`,
-                    `"${(p.Description || '').replace(/"/g, '""')}"`,
-                    p.Price || 0,
-                    p.Quantity || 0,
-                    `"${(p.Brand || '').replace(/"/g, '""')}"`,
-                    `"${(p.Category || '').replace(/"/g, '""')}"`,
-                    `"${(p.Condition || '').replace(/"/g, '""')}"`,
-                    p.Weight || 0,
-                    `"${(Array.isArray(p.Images) ? p.Images.join(';') : (p.Images || '')).replace(/"/g, '""')}"`,
-                ];
-                csvRows.push(row.join(','));
-            });
-
-            const csvString = csvRows.join('\n');
-
-            // 4. Save to file
             const fileName = `inventory_export_${new Date().toISOString().split('T')[0]}.csv`;
             const fileUri = documentDirectory + fileName;
             await writeAsStringAsync(fileUri, csvString, { encoding: EncodingType.UTF8 });
 
-            // 5. Share
             if (await Sharing.isAvailableAsync()) {
                 await Sharing.shareAsync(fileUri, { mimeType: 'text/csv', dialogTitle: 'Export Inventory CSV' });
             } else {

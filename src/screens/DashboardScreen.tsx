@@ -1,20 +1,21 @@
 import React, { useMemo, useState, useEffect, useContext, useCallback, useRef } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, Dimensions, Image, Modal, Pressable, Platform } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, Dimensions, Image, Modal, Pressable, Platform, type DimensionValue } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import AppPagerView from '../components/AppPagerView';
 import Animated, { FadeInUp } from 'react-native-reanimated';
+import spinners from 'unicode-animations';
 import { useTheme } from '../context/ThemeContext';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Card from '../components/Card';
 import InsightCard from '../components/InsightCard';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { Sparkles } from 'lucide-react-native';
 import { LegendStateContext } from '../context/LegendStateContext';
 import { supabase } from '../../lib/supabase';
 import InventoryListCard from '../components/InventoryListCard';
 import ActivityEventCard from '../components/ActivityEventCard';
 import SearchBarWithScanner from '../components/SearchBarWithScanner';
 import ShadowSurface from '../components/ui/ShadowSurface';
+import Button from '../components/Button';
 import { useOrg } from '../context/OrgContext';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 import { useProductVariantRealtime } from '../hooks/useProductVariantRealtime';
@@ -26,6 +27,7 @@ import SquareSvg from '../assets/square.svg';
 import CloverSvg from '../assets/clover.svg';
 import { PartnerWelcomeModal } from '../components/PartnerWelcomeModal';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SessionContext } from '../context/SessionContext';
 
 
 // User-relevant event types for activity display (excludes system/webhook events)
@@ -46,6 +48,67 @@ interface PoolPerformance {
   percentage: number;
   barLength: number; // 0-10 bars
 }
+
+type UnicodeSpinnerDefinition = {
+  frames: string[];
+  interval: number;
+};
+
+const NUDGE_REFRESH_WINDOW_MS = 6 * 60 * 60 * 1000;
+const DASHBOARD_TRACKER_SPINNER = (spinners.braillewave || spinners.breathe) as UnicodeSpinnerDefinition;
+
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+const formatCountdownClock = (ms: number) => {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+};
+
+const formatCountdownShort = (ms: number) => {
+  if (ms <= 0) return 'Ready now';
+
+  const totalMinutes = Math.max(1, Math.ceil(ms / (1000 * 60)));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  return `${minutes}m`;
+};
+
+const UnicodeSpinner: React.FC<{
+  spinner: UnicodeSpinnerDefinition;
+  color?: string;
+  size?: number;
+  style?: any;
+}> = ({ spinner, color = '#9A7B54', size = 13, style }) => {
+  const [frameIndex, setFrameIndex] = useState(0);
+
+  useEffect(() => {
+    setFrameIndex(0);
+    const intervalId = setInterval(() => {
+      setFrameIndex((prev) => (prev + 1) % spinner.frames.length);
+    }, spinner.interval);
+
+    return () => clearInterval(intervalId);
+  }, [spinner]);
+
+  return (
+    <Text style={[styles.dashboardTrackerSpinnerText, { color, fontSize: size }, style]}>
+      {spinner.frames[frameIndex]}
+    </Text>
+  );
+};
 
 const PoolPerformanceHeatmap: React.FC<{
   pools: PoolPerformance[];
@@ -143,12 +206,11 @@ const DashboardScreen = () => {
   const theme = useTheme();
   const navigation = useNavigation<any>();
   const legendCtx = useContext(LegendStateContext);
+  const session = useContext(SessionContext);
   const { currentOrg, isLoading: isOrgLoading } = useOrg();
   const { connections } = usePlatformConnections();
   const insets = useSafeAreaInsets();
   const bottomSafePadding = TAB_BAR_HEIGHT + TAB_BAR_BOTTOM_OFFSET + insets.bottom + 16;
-
-
   // Subscribe to real-time product variant changes
   useProductVariantRealtime();
 
@@ -348,7 +410,18 @@ const DashboardScreen = () => {
   );
 
   // AI-generated insights
-  const { insight, loading: loadingInsight, error: insightError, cacheExpiresAt: insightCacheExpiresAt, refetch: refetchInsight, forceRefresh: forceRefreshInsight } = useOrgNudges(currentOrg?.id);
+  // Defer nudges fetch until org is stable (avoid 403 from stale cached org vs server active org)
+  const nudgesOrgId = !isOrgLoading ? currentOrg?.id : undefined;
+  const { insight, loading: loadingInsight, error: insightError, cacheExpiresAt: insightCacheExpiresAt, refetch: refetchInsight, forceRefresh: forceRefreshInsight } = useOrgNudges(nudgesOrgId);
+  const [dashboardNowMs, setDashboardNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      setDashboardNowMs(Date.now());
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, []);
 
   // Handle insight feedback (thumbs up/down) - log for now, can extend to API
   const handleInsightFeedback = useCallback((feedback: 'up' | 'down', insightHeadline: string) => {
@@ -398,10 +471,20 @@ const DashboardScreen = () => {
   // Fetch pool performance data from DB
   const fetchPoolPerformance = async () => {
     if (!currentOrg?.id) return;
+    if (!session?.bridgeReady) {
+      console.log('[Dashboard] Skipping pool performance fetch until auth bridge is ready');
+      setLoadingPools(false);
+      return;
+    }
 
     try {
       setLoadingPools(true);
       const token = await ensureSupabaseJwt();
+      if (!token) {
+        console.warn('[Dashboard] No JWT available for pool performance fetch');
+        setPoolPerformance([]);
+        return;
+      }
 
       // Fetch pools for this org
       const poolsRes = await fetch(`https://api.sssync.app/api/pools/org/${currentOrg.id}`, {
@@ -453,10 +536,20 @@ const DashboardScreen = () => {
   // Fetch location performance data (inventory by location)
   const fetchLocationPerformance = async () => {
     if (!currentOrg?.id) return;
+    if (!session?.bridgeReady) {
+      console.log('[Dashboard] Skipping location performance fetch until auth bridge is ready');
+      computeLocationPerformanceFromLegend();
+      return;
+    }
 
     try {
       setLoadingLocations(true);
       const token = await ensureSupabaseJwt();
+      if (!token) {
+        console.warn('[Dashboard] No JWT available for location performance fetch');
+        computeLocationPerformanceFromLegend();
+        return;
+      }
 
       // Fetch platform locations for this org
       const locationsRes = await fetch(`https://api.sssync.app/api/pools/locations/available?orgId=${currentOrg.id}`, {
@@ -672,6 +765,13 @@ const DashboardScreen = () => {
       return;
     }
 
+    if (!session?.bridgeReady) {
+      console.log('[Dashboard] Skipping activity fetch until auth bridge is ready');
+      setLoadingActivity(false);
+      setInitialDataLoaded(true);
+      return;
+    }
+
     try {
       const token = await ensureSupabaseJwt();
       if (!token) {
@@ -749,6 +849,13 @@ const DashboardScreen = () => {
       return;
     }
 
+    if (!session?.bridgeReady) {
+      console.log('[Dashboard] Waiting for auth bridge to become ready...');
+      setLoadingActivity(false);
+      setInitialDataLoaded(true);
+      return;
+    }
+
     if (!currentOrg?.id) {
       console.log('[Dashboard] No org ID available after org context loaded');
       setLoadingActivity(false);
@@ -762,7 +869,7 @@ const DashboardScreen = () => {
     fetchLocationPerformance();
     // Ensure insights are fetched when org becomes available
     refetchInsight();
-  }, [currentOrg?.id, isOrgLoading, refetchInsight]);
+  }, [currentOrg?.id, isOrgLoading, refetchInsight, session?.bridgeReady]);
 
   // Check for connections ready to sync
   const readyConnection = useMemo(() => {
@@ -823,6 +930,36 @@ const DashboardScreen = () => {
 
   // Sources bottom sheet data
   const insightSources = safeInsight?.sources || [];
+  const insightsDisabled = !currentOrg?.id || !session?.bridgeReady;
+  const hasInsightContent = Boolean(safeInsight && (safeInsight.topDIN || safeInsight.insights));
+  const dashboardRefreshDeadlineMs = insightCacheExpiresAt ? new Date(insightCacheExpiresAt).getTime() : Number.NaN;
+  const hasDashboardRefreshTimeline = Boolean(insightCacheExpiresAt && Number.isFinite(dashboardRefreshDeadlineMs));
+  const dashboardRefreshStartMs = hasDashboardRefreshTimeline ? dashboardRefreshDeadlineMs - NUDGE_REFRESH_WINDOW_MS : dashboardNowMs;
+  const dashboardRefreshRemainingMs = hasDashboardRefreshTimeline ? Math.max(dashboardRefreshDeadlineMs - dashboardNowMs, 0) : 0;
+  const dashboardRefreshProgress = hasDashboardRefreshTimeline
+    ? clamp((dashboardNowMs - dashboardRefreshStartMs) / NUDGE_REFRESH_WINDOW_MS, 0, 1)
+    : 0;
+  const dashboardTrackerWidth: DimensionValue = dashboardRefreshRemainingMs <= 0
+    ? '100%'
+    : `${Math.max(dashboardRefreshProgress * 100, 5)}%`;
+  const dashboardTrackerClock = dashboardRefreshRemainingMs <= 0 ? 'Open' : formatCountdownClock(dashboardRefreshRemainingMs);
+  const dashboardTrackerPillLabel = hasDashboardRefreshTimeline ? dashboardTrackerClock : 'Open';
+  const dashboardTrackerEta = dashboardRefreshRemainingMs <= 0 ? 'Ready now' : formatCountdownShort(dashboardRefreshRemainingMs);
+  const dashboardTrackerMessage = dashboardRefreshRemainingMs <= 0
+    ? 'The next analysis window is open.'
+    : 'Watching live activity so the next nudge arrives with better timing.';
+  const dashboardTrackerHeadline = !hasDashboardRefreshTimeline
+    ? 'Sprout is watching for the next insight'
+    : dashboardRefreshRemainingMs <= 0
+      ? 'Window open'
+      : 'Next nudge is lining up';
+  const dashboardTrackerDescription = !hasDashboardRefreshTimeline
+    ? currentOrg?.name
+      ? `Sprout is watching ${currentOrg.name} in the background and will surface the next nudge automatically when enough signal builds up.`
+      : 'Sprout is watching in the background and will surface the next nudge automatically when enough signal builds up.'
+    : currentOrg?.name
+      ? `Sprout is watching ${currentOrg.name} in the background and will surface the next nudge automatically when the window opens.`
+      : 'Sprout is watching in the background and will surface the next nudge automatically when the window opens.';
   const hasSources = insightSources.length > 0;
   const getFavicon = (url?: string) => {
     if (!url) return null;
@@ -921,8 +1058,17 @@ const DashboardScreen = () => {
 
         {/* Today Card / Insight */}
         <View style={styles.todayCardContainer}>
-          {(loadingInsight || insightError || (safeInsight && (safeInsight.topDIN || safeInsight.insights))) ? (
-            // Handle multi-timeframe insights (Carousel)
+          {loadingInsight ? (
+            <InsightCard
+              insight={safeInsight}
+              loading={loadingInsight}
+              error={null}
+              onAction={handleInsightAction}
+              onRefresh={forceRefreshInsight}
+              onFeedback={handleInsightFeedback}
+              cacheExpiresAt={insightCacheExpiresAt || undefined}
+            />
+          ) : hasInsightContent ? (
             (safeInsight?.insights?.length || 0) > 0 ? (
               <View>
                 <AppPagerView style={{ width: '100%', height: 420 }} initialPage={0} onPageSelected={e => setCurrentInsightPage(e.nativeEvent.position)}>
@@ -964,72 +1110,136 @@ const DashboardScreen = () => {
                 cacheExpiresAt={insightCacheExpiresAt || undefined}
               />
             )
+          ) : insightsDisabled ? (
+            <ShadowSurface shadow="sm" radius={20} style={styles.todayCardShadow} innerStyle={styles.todayCard}>
+              <ShadowSurface shadow="sm" radius={20} style={styles.insightCardGreenShadow} innerStyle={styles.insightCardGreenSurface}>
+                <View style={styles.insightCardGreenContent}>
+                  <View style={styles.insightEmptyHeader}>
+                    <View style={styles.insightEmptyHeaderLeft}>
+                      <Icon name="sprout-outline" size={20} color="rgba(72, 72, 72, 1)" />
+                      <Text style={styles.insightEmptyHeaderTitle}>{"Sprout's Insight"}</Text>
+                    </View>
+                    <View style={styles.dashboardTrackerPill}>
+                      <Icon name="clock-outline" size={14} color="#9A7B54" />
+                      <Text style={styles.dashboardTrackerPillText}>{dashboardTrackerPillLabel}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.insightEmptyContentCard}>
+                    <Text style={styles.insightEmptyHeadline}>Live insights are currently paused</Text>
+                    <Text style={styles.insightEmptyDescription}>
+                      Come back later when they have been re-enabled, contact support if unexpected.
+                    </Text>
+                    <Button
+                      title="Refresh Insights"
+                      onPress={refetchInsight}
+                      icon="refresh"
+                      style={styles.insightEmptyActionButton}
+                      textStyle={styles.insightEmptyActionButtonText}
+                    />
+                  </View>
+                </View>
+              </ShadowSurface>
+            </ShadowSurface>
+          ) : insightError ? (
+            <ShadowSurface shadow="sm" radius={20} style={styles.todayCardShadow} innerStyle={styles.todayCard}>
+              <ShadowSurface shadow="sm" radius={20} style={styles.insightCardGreenShadow} innerStyle={styles.insightCardGreenSurface}>
+                <View style={styles.insightCardGreenContent}>
+                  <View style={styles.insightEmptyHeader}>
+                    <View style={styles.insightEmptyHeaderLeft}>
+                      <Icon name="sprout-outline" size={20} color="rgba(72, 72, 72, 1)" />
+                      <Text style={styles.insightEmptyHeaderTitle}>{"Sprout's Insight"}</Text>
+                    </View>
+                    <Text style={styles.insightEmptyHeaderMeta}>Unable to load</Text>
+                  </View>
+
+                  <View style={styles.insightEmptyContentCard}>
+                    <Text style={styles.insightEmptyHeadline}>Unable to load insights</Text>
+                    <Text style={styles.insightEmptyDescription}>
+                      Try again once your connection is stable.
+                    </Text>
+                    <Button
+                      title="Retry"
+                      onPress={forceRefreshInsight}
+                      icon="refresh"
+                      style={styles.insightEmptyActionButton}
+                      textStyle={styles.insightEmptyActionButtonText}
+                    />
+                  </View>
+                </View>
+              </ShadowSurface>
+            </ShadowSurface>
           ) : (
             <ShadowSurface shadow="sm" radius={20} style={styles.todayCardShadow} innerStyle={styles.todayCard}>
               <ShadowSurface shadow="sm" radius={20} style={styles.insightCardGreenShadow} innerStyle={styles.insightCardGreenSurface}>
-                <TouchableOpacity
-                  activeOpacity={0.95}
-                  style={styles.insightCardGreenContent}
-                  onPress={forceRefreshInsight}
-                >
-                <View style={{ ...styles.insightGreenHeader, marginBottom: 0 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
-                    <Icon name="sprout-outline" size={20} color="rgba(72, 72, 72, 1)" />
-                    <Text style={[styles.todayTitle, { color: 'rgba(72, 72, 72, 1)' }]}>Sprout's Insight</Text>
-                  </View>
-                  <Text style={[styles.todayMeta, { color: 'rgba(72, 72, 72, 1)' }]}>Ready to analyze</Text>
-                </View>
-                <View style={styles.insideContainer}>
-                  {/* Welcome headline */}
-                  <Text style={styles.insightGreenHeadline}>
-                    {currentOrg ? `Ready to grow ${currentOrg.name}?` : "Let's get you started!"}
-                  </Text>
-
-                  {/* Description based on state */}
-                  <Text style={styles.insightGreenDesc}>
-                    {lowStockCount > 0 || totalInventory > 0
-                      ? `You have ${totalInventory} items tracked. Tap to get insights about your inventory.`
-                      : "Connect a platform and watch your business bloom"}
-                  </Text>
-
-                  {/* Quick metrics if we have data */}
-                  {totalInventory > 0 && (
-                    <View style={styles.insightGreenMetrics}>
-                      <View style={styles.insightGreenMetricCol}>
-                        <Text style={styles.insightGreenMetricLabel}>Total Items</Text>
-                        <Text style={styles.insightGreenMetricValue}>{totalInventory.toLocaleString()}</Text>
-                      </View>
-                      <View style={styles.insightGreenMetricCol}>
-                        <Text style={styles.insightGreenMetricLabel}>Low Stock</Text>
-                        <Text style={[styles.insightGreenMetricValue, lowStockCount > 0 ? styles.insightGreenMetricWarning : styles.insightGreenMetricPositive]}>
-                          {lowStockCount}
-                        </Text>
-                      </View>
+                <View style={styles.insightCardGreenContent}>
+                  <View style={styles.insightEmptyHeader}>
+                    <View style={styles.insightEmptyHeaderLeft}>
+                      <Icon name="sprout-outline" size={20} color="rgba(72, 72, 72, 1)" />
+                      <Text style={styles.insightEmptyHeaderTitle}>{"Sprout's Insight"}</Text>
                     </View>
-                  )}
 
-                  {/* CTA Button */}
-                  <TouchableOpacity
-                    onPress={forceRefreshInsight}
-                    style={styles.insightGreenBtn}
-                  >
-                    <Text style={styles.insightGreenBtnText}>
-                      {loadingInsight ? 'Analyzing...' : 'Generate Insight'}
-                    </Text>
-                    <Icon name={loadingInsight ? "loading" : "auto-fix"} size={20} color="#fff" />
-                  </TouchableOpacity>
-
-                  {/* Footer */}
-                  <View style={styles.insightGreenFooter}>
-                    <View style={styles.insightGreenMetaLeft}>
-                      {/* 
-                        <Icon name="robot-outline" size={16} color="#6B7280" style={{ marginRight: 4 }} />
-                        <Text style={styles.insightGreenSourcesText}>Powered by AI</Text> 
-                      */}
+                    <View style={styles.dashboardTrackerPill}>
+                      <Icon name="clock-outline" size={14} color="#9A7B54" />
+                      <Text style={styles.dashboardTrackerPillText}>{dashboardTrackerPillLabel}</Text>
                     </View>
                   </View>
+
+                  <View style={styles.insightEmptyContentCard}>
+                    <View style={styles.dashboardTrackerBadge}>
+                      <UnicodeSpinner spinner={DASHBOARD_TRACKER_SPINNER} />
+                      <Text style={styles.dashboardTrackerBadgeText}>Tracking the next opening</Text>
+                    </View>
+
+                    <Text style={styles.dashboardTrackerHeadline}>{dashboardTrackerHeadline}</Text>
+
+                    <Text style={styles.dashboardTrackerDescription}>{dashboardTrackerDescription}</Text>
+
+                    <View style={styles.dashboardTrackerChipRow}>
+                      <View style={styles.dashboardTrackerChip}>
+                        <Text style={styles.dashboardTrackerChipText}>Inventory pulse</Text>
+                      </View>
+                      <View style={styles.dashboardTrackerChip}>
+                        <Text style={styles.dashboardTrackerChipText}>Sales activity</Text>
+                      </View>
+                      <View style={styles.dashboardTrackerChip}>
+                        <Text style={styles.dashboardTrackerChipText}>Price pressure</Text>
+                      </View>
+                    </View>
+
+                    {hasDashboardRefreshTimeline ? (
+                      <View style={styles.dashboardTrackerTimelineCard}>
+                        <View style={styles.dashboardTrackerTimelineMetaRow}>
+                          <View style={styles.dashboardTrackerTimelineStatusRow}>
+                            <View style={styles.dashboardTrackerDotHalo}>
+                              <View style={styles.dashboardTrackerDot} />
+                            </View>
+                            <Text style={styles.dashboardTrackerTimelineStatusText}>{dashboardTrackerMessage}</Text>
+                          </View>
+                          <Text style={styles.dashboardTrackerTimelineEtaText}>{dashboardTrackerEta}</Text>
+                        </View>
+
+                        <View style={styles.dashboardTrackerTimelineTrack}>
+                          <View style={[styles.dashboardTrackerTimelineFill, { width: dashboardTrackerWidth }]}>
+                            <View style={styles.dashboardTrackerTimelineCurrentDot} />
+                          </View>
+                        </View>
+
+                        <View style={styles.dashboardTrackerTimelineLabelsRow}>
+                          <Text style={styles.dashboardTrackerTimelineLabelText}>now</Text>
+                          <Text style={styles.dashboardTrackerTimelineLabelText}>next pass</Text>
+                        </View>
+                      </View>
+                    ) : null}
+
+                    <View style={styles.dashboardTrackerPassiveRow}>
+                      <Icon name="tray-full" size={15} color="#8B6C49" />
+                      <Text style={styles.dashboardTrackerPassiveText}>
+                        No refresh needed. The next nudge is served here automatically.
+                      </Text>
+                    </View>
+                  </View>
                 </View>
-                </TouchableOpacity>
               </ShadowSurface>
             </ShadowSurface>
           )}
@@ -1311,6 +1521,301 @@ const styles = StyleSheet.create({
   insightCardGreenContent: {
     padding: 16,
     gap: 12,
+  },
+  insightEmptyHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingHorizontal: 2,
+  },
+  insightEmptyHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  insightEmptyHeaderTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: 'rgba(72, 72, 72, 1)',
+    letterSpacing: -0.3,
+  },
+  insightEmptyHeaderMeta: {
+    fontSize: 12,
+    color: 'rgba(72, 72, 72, 1)',
+    fontWeight: '500',
+  },
+  insightEmptyContentCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  insightEmptyHeadline: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111827',
+    marginBottom: 8,
+    lineHeight: 24,
+    letterSpacing: -0.3,
+  },
+  insightEmptyDescription: {
+    fontSize: 15,
+    color: '#4B5563',
+    lineHeight: 22,
+    marginBottom: 20,
+  },
+  insightEmptyMetrics: {
+    flexDirection: 'row',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
+  },
+  insightEmptyMetricColumn: {
+    flex: 1,
+  },
+  insightEmptyMetricDivider: {
+    width: 1,
+    backgroundColor: '#E5E7EB',
+    marginHorizontal: 16,
+  },
+  insightEmptyMetricLabel: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginBottom: 6,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  insightEmptyMetricValue: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111827',
+    letterSpacing: -0.3,
+  },
+  insightEmptyMetricSub: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    marginTop: 4,
+  },
+  insightEmptyMetricPositive: {
+    color: '#059669',
+  },
+  insightEmptyMetricWarning: {
+    color: '#D97706',
+  },
+  insightEmptyRecommendation: {
+    backgroundColor: '#FEF4DD',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#FEF08A',
+  },
+  insightEmptyRecommendationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    gap: 6,
+  },
+  insightEmptyRecommendationTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#854D0E',
+    textTransform: 'uppercase',
+  },
+  insightEmptyRecommendationText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+    lineHeight: 20,
+  },
+  insightEmptyActionButton: {
+    width: '100%',
+    backgroundColor: '#8B5E3C',
+    borderRadius: 14,
+    paddingVertical: 14,
+  },
+  insightEmptyActionButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  dashboardTrackerSpinnerText: {
+    fontWeight: '700',
+    letterSpacing: -0.4,
+  },
+  dashboardTrackerPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(173, 138, 96, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(154, 123, 84, 0.12)',
+  },
+  dashboardTrackerPillText: {
+    fontSize: 12,
+    color: '#8B6C49',
+    fontWeight: '700',
+    letterSpacing: 0.2,
+    fontVariant: ['tabular-nums'],
+  },
+  dashboardTrackerBadge: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#F6EFE5',
+    marginBottom: 14,
+  },
+  dashboardTrackerBadgeText: {
+    fontSize: 12,
+    color: '#8B6C49',
+    fontWeight: '700',
+    letterSpacing: 0.2,
+    textTransform: 'uppercase',
+  },
+  dashboardTrackerHeadline: {
+    fontSize: 24,
+    lineHeight: 29,
+    fontWeight: '700',
+    color: '#2F241A',
+    letterSpacing: -0.7,
+    marginBottom: 10,
+  },
+  dashboardTrackerDescription: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: '#6A5B49',
+    marginBottom: 18,
+  },
+  dashboardTrackerChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 18,
+  },
+  dashboardTrackerChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#F7F4EE',
+    borderWidth: 1,
+    borderColor: '#EFE6D8',
+  },
+  dashboardTrackerChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#7B684E',
+  },
+  dashboardTrackerTimelineCard: {
+    backgroundColor: '#FAF6EF',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#EFE4D4',
+  },
+  dashboardTrackerTimelineMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 12,
+  },
+  dashboardTrackerTimelineStatusRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  dashboardTrackerDotHalo: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(175, 132, 74, 0.16)',
+    marginTop: 1,
+  },
+  dashboardTrackerDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#A37740',
+  },
+  dashboardTrackerTimelineStatusText: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#6E5A42',
+    fontWeight: '600',
+  },
+  dashboardTrackerTimelineEtaText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#8B6C49',
+    fontVariant: ['tabular-nums'],
+  },
+  dashboardTrackerTimelineTrack: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#EBDDCA',
+    overflow: 'hidden',
+    marginBottom: 10,
+  },
+  dashboardTrackerTimelineFill: {
+    height: '100%',
+    minWidth: 10,
+    backgroundColor: '#C9A06C',
+    borderRadius: 999,
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+    paddingRight: 1,
+  },
+  dashboardTrackerTimelineCurrentDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#6F4D2A',
+    borderWidth: 2,
+    borderColor: '#FFF7EC',
+  },
+  dashboardTrackerTimelineLabelsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  dashboardTrackerTimelineLabelText: {
+    fontSize: 12,
+    color: '#9A866B',
+    fontWeight: '500',
+  },
+  dashboardTrackerPassiveRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingTop: 2,
+  },
+  dashboardTrackerPassiveText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#8B6C49',
+    fontWeight: '600',
   },
   insightGreenHeader: {
     flexDirection: 'row',

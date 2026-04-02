@@ -66,10 +66,12 @@ export const SessionProvider: React.FC<{ children: React.ReactNode; getClerkToke
 
   const value: SessionContextType = useMemo(() => ({
     ready,
+    bridgeReady: ready,
     user,
     entitlements,
     bootstrapState: ready ? 'ready' : 'initializing',
     usingCachedSession: false,
+    sessionMode: ready ? 'live' : 'cached',
     bootstrapError: null,
     lastReadyAt: ready ? Date.now() : null,
     refresh,
@@ -77,4 +79,3 @@ export const SessionProvider: React.FC<{ children: React.ReactNode; getClerkToke
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 };
-

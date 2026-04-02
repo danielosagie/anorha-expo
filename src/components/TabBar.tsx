@@ -1,5 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, TouchableOpacity, Text, StyleSheet, ViewStyle, StyleProp, Animated, Easing, Platform, PanResponder, GestureResponderEvent, PanResponderGestureState } from 'react-native';
+import {
+  View,
+  TouchableOpacity,
+  Text,
+  StyleSheet,
+  ViewStyle,
+  StyleProp,
+  Animated,
+  Easing,
+  Platform,
+  PanResponder,
+  PanResponderGestureState,
+} from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import ShadowSurface from './ui/ShadowSurface';
@@ -16,7 +28,7 @@ const getTabIcon = (routeName: string): string => {
       return 'message-outline';
     case 'AddProduct':
       return 'plus';
-    case 'Clearouts': //Sprout Clearouts Tab Button
+    case 'Clearouts':
       return 'sprout-outline';
     case 'Profile':
       return 'cog-outline';
@@ -33,14 +45,19 @@ type TabBarProps = {
   surfaceStyle?: StyleProp<ViewStyle>;
 };
 
-const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, containerStyle, surfaceStyle }) => {
+const TabBar: React.FC<TabBarProps> = ({
+  state,
+  descriptors,
+  navigation,
+  containerStyle,
+  surfaceStyle,
+}) => {
   const theme = useTheme();
   const lastNonAddRouteRef = useRef<string>('Dashboard');
   const currentRouteName = state?.routes?.[state.index]?.name;
   const isAddFocused = currentRouteName === 'AddProduct';
   const [barWidth, setBarWidth] = useState(0);
 
-  // Animated rotation for the Add (+) button → × when focused
   const addRotateAnim = useRef(new Animated.Value(isAddFocused ? 1 : 0)).current;
 
   useEffect(() => {
@@ -63,34 +80,43 @@ const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, contain
     }
   }, [currentRouteName]);
 
-  const handleGestureTabChange = (event: GestureResponderEvent) => {
-    if (!barWidth || !state?.routes?.length) return;
-    const { locationX } = event.nativeEvent;
-    const routes = state.routes;
-    const tabWidth = barWidth / routes.length;
-    let targetIndex = Math.floor(locationX / tabWidth);
-    if (targetIndex < 0) targetIndex = 0;
-    if (targetIndex > routes.length - 1) targetIndex = routes.length - 1;
-
+  const navigateToTabIndex = (targetIndex: number) => {
+    if (!state?.routes?.length) return;
+    if (targetIndex < 0 || targetIndex >= state.routes.length) return;
     if (targetIndex === state.index) return;
 
-    const targetRoute = routes[targetIndex];
+    const targetRoute = state.routes[targetIndex];
     if (!targetRoute) return;
 
     navigation.navigate(targetRoute.name);
   };
 
+  const handleTapToTab = (locationX: number) => {
+    if (!barWidth || !state?.routes?.length) return;
+    const tabWidth = barWidth / state.routes.length;
+    const targetIndex = Math.max(
+      0,
+      Math.min(state.routes.length - 1, Math.floor(locationX / tabWidth)),
+    );
+    navigateToTabIndex(targetIndex);
+  };
+
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderMove: (evt: GestureResponderEvent, _gestureState: PanResponderGestureState) => {
-        handleGestureTabChange(evt);
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_evt, gestureState: PanResponderGestureState) =>
+        Math.abs(gestureState.dx) > 12 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
+      onPanResponderRelease: (evt, gestureState: PanResponderGestureState) => {
+        if (Math.abs(gestureState.dx) > 28) {
+          navigateToTabIndex(state.index + (gestureState.dx < 0 ? 1 : -1));
+          return;
+        }
+
+        if (Math.abs(gestureState.dx) < 8 && Math.abs(gestureState.dy) < 8) {
+          handleTapToTab(evt.nativeEvent.locationX);
+        }
       },
-      onPanResponderRelease: (evt: GestureResponderEvent, _gestureState: PanResponderGestureState) => {
-        handleGestureTabChange(evt);
-      },
-    })
+    }),
   ).current;
 
   return (
@@ -109,16 +135,17 @@ const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, contain
           const isAddButton = route.name === 'AddProduct';
 
           const onPress = () => {
-            // If the Add tab is focused, pressing it acts like a close and returns to the last tab
             if (isAddButton && isFocused) {
               navigation.navigate(lastNonAddRouteRef.current || 'Dashboard');
               return;
             }
+
             const event = navigation.emit({
               type: 'tabPress',
               target: route.key,
               canPreventDefault: true,
             });
+
             if (!isFocused && !event.defaultPrevented) {
               navigation.navigate(route.name);
             } else if (isAddButton && !isFocused) {
@@ -129,7 +156,7 @@ const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, contain
           if (isAddButton) {
             return (
               <TouchableOpacity
-                key={index}
+                key={route.key}
                 accessibilityRole="button"
                 accessibilityLabel={options.tabBarAccessibilityLabel}
                 testID={options.tabBarTestID}
@@ -139,7 +166,7 @@ const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, contain
                 <ShadowSurface shadow="xs" radius={32} style={styles.addShadowWrap} innerStyle={styles.addOuterCircle}>
                   <View style={styles.addInnerCircle}>
                     <Animated.View style={{ transform: [{ rotate: addRotate }] }}>
-                      <Icon name={'plus'} size={28} color={'#FFF'} />
+                      <Icon name="plus" size={28} color="#FFF" />
                     </Animated.View>
                   </View>
                 </ShadowSurface>
@@ -151,11 +178,13 @@ const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, contain
           const tintColor =
             isFocused && route.name === 'Clearouts'
               ? clearoutsActiveColor
-              : (isFocused ? theme.colors.primary : '#999');
+              : isFocused
+                ? theme.colors.primary
+                : '#999';
 
           return (
             <TouchableOpacity
-              key={index}
+              key={route.key}
               accessibilityRole="button"
               accessibilityState={isFocused ? { selected: true } : {}}
               accessibilityLabel={options.tabBarAccessibilityLabel}
@@ -164,16 +193,13 @@ const TabBar: React.FC<TabBarProps> = ({ state, descriptors, navigation, contain
               style={styles.tabItem}
             >
               <View style={[styles.tabInner, isFocused && styles.tabInnerActive]}>
-                <Icon
-                  name={icon}
-                  size={24}
-                  color={tintColor}
-                />
+                <Icon name={icon} size={24} color={tintColor} />
                 <Text
-                  style={[
-                    styles.tabLabel,
-                    { color: tintColor }
-                  ]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.72}
+                  allowFontScaling={false}
+                  style={[styles.tabLabel, { color: tintColor }]}
                 >
                   {label}
                 </Text>
@@ -201,6 +227,7 @@ const styles = StyleSheet.create({
   },
   tabItem: {
     flex: 1,
+    minWidth: 0,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -208,12 +235,14 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 11,
+    width: '100%',
+    minWidth: 0,
+    paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 8,
   },
   tabInnerActive: {
-    backgroundColor: 'rgba(222, 247, 218, 0.4)', // gray-200 style
+    backgroundColor: 'rgba(222, 247, 218, 0.4)',
   },
   addOuterCircle: {
     height: 60,
@@ -223,7 +252,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2.5,
-    borderColor: "rgba(0, 0, 0, 0.15)",
+    borderColor: 'rgba(0, 0, 0, 0.15)',
   },
   addShadowWrap: {
     marginTop: -5,
@@ -239,13 +268,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   tabLabel: {
-    fontSize: 12,
-    lineHeight: 14,
+    width: '100%',
+    fontSize: 11.5,
+    lineHeight: 13,
     marginTop: 4,
     fontWeight: '500',
     includeFontPadding: false,
     textAlignVertical: 'center',
+    textAlign: 'center',
+    flexShrink: 1,
   },
 });
 
-export default TabBar; 
+export default TabBar;

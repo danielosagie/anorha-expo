@@ -156,6 +156,28 @@ const ensureBridge = async (getClerkToken: () => Promise<string | null>) => {
 };
 
 type ActiveTab = 'needs_review' | 'matched' | 'ignored';
+type ReviewReason = 'low_confidence' | 'no_match_found' | 'variant_mismatch';
+
+interface ReviewBadgeConfig {
+  label: string;
+  tone: 'warning' | 'danger' | 'info' | 'success';
+}
+
+interface AnnotatedMappingSuggestion extends MappingSuggestion {
+  reviewReason?: ReviewReason;
+  isStaleClaim: boolean;
+  staleDisplay?: {
+    title: string;
+    sku?: string;
+  } | null;
+}
+
+interface VariantReviewSheetState {
+  visible: boolean;
+  parentId: string | null;
+  parentTitle: string | null;
+  items: MappingSuggestion[];
+}
 
 // Helper function to get platform colors
 const getPlatformColor = (platformType: string): string => {
@@ -228,6 +250,14 @@ const MappingReviewScreen = () => {
   const [isReconcileMode, setIsReconcileMode] = useState(false);
   const [previewingItem, setPreviewingItem] = useState<MappingSuggestion | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>('needs_review');
+  const [activeReviewBucket, setActiveReviewBucket] = useState<ReviewReason | null>(null);
+  const [activeReviewItemIds, setActiveReviewItemIds] = useState<string[] | null>(null);
+  const [variantReviewSheet, setVariantReviewSheet] = useState<VariantReviewSheetState>({
+    visible: false,
+    parentId: null,
+    parentTitle: null,
+    items: [],
+  });
   // --- NEW: State for WebSocket sync progress ---
   const { progressByConnectionId } = usePlatformConnections();
   const syncProgress = progressByConnectionId[connectionId];
@@ -266,7 +296,7 @@ const MappingReviewScreen = () => {
       const cleanQuery = query.trim().toLowerCase();
       
       const allVariants = legendState.productVariants$?.get() || {};
-      const allProducts = legendState.products$?.get() || {};
+      const allProducts = (legendState as any).products$?.get() || {};
       const allMappings = legendState.platformProductMappings$?.get() || {};
 
       // Build a set of variant IDs already mapped to this connection
@@ -316,32 +346,23 @@ const MappingReviewScreen = () => {
 
     // If we have group items (from collapsed group search), map ALL items in the group
     const itemsToMap = groupItemsToMatch || [itemToMatch];
-    const idsToMap = new Set(itemsToMap.map(i => i.platformProduct.id));
-
-    setSuggestions(prev => (prev || []).map(s => {
-      if (idsToMap.has(s.platformProduct.id)) {
-        return {
-          ...s,
-          action: 'LINK_EXISTING',
-          isSelected: true,
-          matchType: 'MANUAL' as any,
-          resolved: true,
-          suggestedCanonicalProduct: {
-            id: canonicalVariant.id,
-            sku: canonicalVariant.sku,
-            title: canonicalVariant.title,
-            price: canonicalVariant.price,
-            imageUrl: canonicalVariant.imageUrl
-          }
-        };
+    const next = applySuggestionUpdates(itemsToMap.map(i => i.platformProduct.id), (item) => ({
+      ...item,
+      action: 'LINK_EXISTING',
+      isSelected: true,
+      matchType: 'MANUAL' as any,
+      resolved: true,
+      suggestedCanonicalProduct: {
+        id: canonicalVariant.id,
+        sku: canonicalVariant.sku,
+        title: canonicalVariant.title,
+        price: canonicalVariant.price,
+        imageUrl: canonicalVariant.imageUrl
       }
-      return s;
     }));
-    setShowSearchModal(false);
-    setItemToMatch(null);
-    setGroupItemsToMatch(null);  // Clear group items
-    setSearchModalQuery('');
-    setSearchModalResults([]);
+
+    maybeOpenVariantReviewSheet(next, itemsToMap.map(i => i.platformProduct.id));
+    closeSearchModal();
   };
   const [isPolling, setIsPolling] = useState(!!jobId); // Will be set to true when isScanningActive is detected
   const [jobProgress, setJobProgress] = useState<JobProgress | null>(null); // Keep for compatibility
@@ -1218,63 +1239,142 @@ const MappingReviewScreen = () => {
   };
 
   // --- ALWAYS-CALLED HOOKS: keep BEFORE any conditional returns to obey Rules of Hooks ---
-  // Get counts for tabs
-  const counts = useMemo(() => {
-    const list = suggestions || [];
-    const all = list.length;
-    const matched = list.filter(s => s.action === 'LINK_EXISTING' || (s.action === 'CREATE_NEW' && s.resolved === true)).length;
-    const needs_review = list.filter(s => s.action === 'UNMATCHED' || (s.action === 'CREATE_NEW' && !s.resolved)).length;
-    const ignored = list.filter(s => s.action === 'IGNORE').length;
+  const matchesListQuery = useCallback((item: MappingSuggestion, query: string) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
 
-    // NEW: Count push items (Anorha items to push to this platform)
-    const push = list.filter(s => s.direction === 'anorha_to_platform' && s.isSelected).length;
-    const pushTotal = list.filter(s => s.direction === 'anorha_to_platform').length;
-    return { all, matched, needs_review, ignored, push, pushTotal } as any;
-  }, [suggestions]);
+    if ((item.platformProduct.title || '').toLowerCase().includes(q)) return true;
+    if ((item.platformProduct.sku || '').toLowerCase().includes(q)) return true;
+    if ((item.suggestedCanonicalProduct?.title || '').toLowerCase().includes(q)) return true;
+    if ((item.suggestedCanonicalProduct?.sku || '').toLowerCase().includes(q)) return true;
+    if ((item.anorhaVariant?.title || '').toLowerCase().includes(q)) return true;
+    if ((item.anorhaVariant?.sku || '').toLowerCase().includes(q)) return true;
+    if ((item.anorhaVariant?.barcode || '').toLowerCase().includes(q)) return true;
+    return false;
+  }, []);
 
-  // Current list by active tab + query + sort (review tab includes missing mappings)
-  const currentList = useMemo(() => {
-    const base = (suggestions || []).filter(s => {
-      if (activeTab === 'matched') return s.action === 'LINK_EXISTING' || (s.action === 'CREATE_NEW' && s.resolved === true);
-      if (activeTab === 'needs_review') return s.action === 'UNMATCHED' || (s.action === 'CREATE_NEW' && !s.resolved);
-      if (activeTab === 'ignored') return s.action === 'IGNORE';
-      return true;
-    });
-
-    const filtered = listQuery
-      ? base.filter(item => {
-        const q = listQuery.toLowerCase();
-        // Search platform product fields
-        if ((item.platformProduct.title || '').toLowerCase().includes(q)) return true;
-        if ((item.platformProduct.sku || '').toLowerCase().includes(q)) return true;
-        // Search matched/suggested Anorha product fields
-        if ((item.suggestedCanonicalProduct?.title || '').toLowerCase().includes(q)) return true;
-        if ((item.suggestedCanonicalProduct?.sku || '').toLowerCase().includes(q)) return true;
-        // Search anorhaVariant fields (bidirectional sync items)
-        if ((item.anorhaVariant?.title || '').toLowerCase().includes(q)) return true;
-        if ((item.anorhaVariant?.sku || '').toLowerCase().includes(q)) return true;
-        if ((item.anorhaVariant?.barcode || '').toLowerCase().includes(q)) return true;
-        return false;
-      })
-      : base;
-
-    const sorted = [...filtered].sort((a, b) => {
+  const sortSuggestionItems = useCallback(<T extends MappingSuggestion>(list: T[]): T[] => {
+    return [...list].sort((a, b) => {
       if (sortBy === 'title') {
         return (a.platformProduct.title || '').localeCompare(b.platformProduct.title || '');
       }
       return (a.platformProduct.sku || '').localeCompare(b.platformProduct.sku || '');
     });
-    return sorted;
-  }, [suggestions, activeTab, listQuery, sortBy]);
+  }, [sortBy]);
 
-  // NEW: Grouping Logic
-  // Groups items by parentId to show variants together
+  const claimedIds = useMemo(() => {
+    const ids = new Set<string>();
+    (suggestions || []).forEach((item) => {
+      if (item.resolved === true && item.action === 'LINK_EXISTING' && item.suggestedCanonicalProduct?.id) {
+        ids.add(item.suggestedCanonicalProduct.id);
+      }
+    });
+    return ids;
+  }, [suggestions]);
+
+  const annotatedSuggestions = useMemo<AnnotatedMappingSuggestion[]>(() => {
+    const list = suggestions || [];
+    const familyResolvedCanonicalIds = new Map<string, Set<string>>();
+
+    list.forEach((item) => {
+      const parentId = item.platformProduct.parentId;
+      const canonicalId = item.suggestedCanonicalProduct?.id || null;
+      if (!parentId || !canonicalId || item.resolved !== true || item.action !== 'LINK_EXISTING') return;
+      if (!familyResolvedCanonicalIds.has(parentId)) {
+        familyResolvedCanonicalIds.set(parentId, new Set<string>());
+      }
+      familyResolvedCanonicalIds.get(parentId)!.add(canonicalId);
+    });
+
+    return list.map((item) => {
+      const unresolved = item.action !== 'IGNORE' && item.resolved !== true;
+      const canonicalId = item.suggestedCanonicalProduct?.id || null;
+      const familyResolvedIds = item.platformProduct.parentId ? familyResolvedCanonicalIds.get(item.platformProduct.parentId) : undefined;
+      const hasFamilyConflict = unresolved
+        && !!item.platformProduct.parentId
+        && !!familyResolvedIds
+        && familyResolvedIds.size > 0
+        && (!canonicalId || !familyResolvedIds.has(canonicalId));
+      const isStaleClaim = unresolved && !!canonicalId && claimedIds.has(canonicalId);
+
+      let reviewReason: ReviewReason | undefined;
+      if (unresolved) {
+        if (hasFamilyConflict) {
+          reviewReason = 'variant_mismatch';
+        } else if (item.action === 'UNMATCHED' && !canonicalId) {
+          reviewReason = 'no_match_found';
+        } else if ((typeof item.confidence === 'number' && item.confidence < 0.6) || isStaleClaim) {
+          reviewReason = 'low_confidence';
+        } else if (canonicalId) {
+          reviewReason = 'low_confidence';
+        } else {
+          reviewReason = 'no_match_found';
+        }
+      }
+
+      return {
+        ...item,
+        reviewReason,
+        isStaleClaim,
+        staleDisplay: isStaleClaim && item.suggestedCanonicalProduct ? {
+          title: item.suggestedCanonicalProduct.title,
+          sku: item.suggestedCanonicalProduct.sku,
+        } : null,
+      };
+    });
+  }, [claimedIds, suggestions]);
+
+  const counts = useMemo(() => {
+    const list = annotatedSuggestions;
+    const all = list.length;
+    const matched = list.filter(s => (s.action === 'LINK_EXISTING' && s.resolved === true) || (s.action === 'CREATE_NEW' && s.resolved === true)).length;
+    const needs_review = list.filter(s => s.action !== 'IGNORE' && s.resolved !== true).length;
+    const ignored = list.filter(s => s.action === 'IGNORE').length;
+    const push = list.filter(s => s.direction === 'anorha_to_platform' && s.isSelected).length;
+    const pushTotal = list.filter(s => s.direction === 'anorha_to_platform').length;
+    return { all, matched, needs_review, ignored, push, pushTotal } as any;
+  }, [annotatedSuggestions]);
+
+  const filteredReviewItems = useMemo<AnnotatedMappingSuggestion[]>(() => {
+    const reviewItems = annotatedSuggestions.filter(item => item.action !== 'IGNORE' && item.resolved !== true && !!item.reviewReason);
+    return sortSuggestionItems(reviewItems.filter(item => matchesListQuery(item, listQuery)));
+  }, [annotatedSuggestions, listQuery, matchesListQuery, sortSuggestionItems]);
+
+  const reviewBuckets = useMemo<Record<ReviewReason, AnnotatedMappingSuggestion[]>>(() => ({
+    low_confidence: filteredReviewItems.filter(item => item.reviewReason === 'low_confidence'),
+    no_match_found: filteredReviewItems.filter(item => item.reviewReason === 'no_match_found'),
+    variant_mismatch: filteredReviewItems.filter(item => item.reviewReason === 'variant_mismatch'),
+  }), [filteredReviewItems]);
+
+  const currentList = useMemo<AnnotatedMappingSuggestion[]>(() => {
+    if (activeTab === 'needs_review') {
+      let base = filteredReviewItems;
+      if (activeReviewBucket) {
+        base = base.filter(item => item.reviewReason === activeReviewBucket);
+      }
+      if (activeReviewItemIds && activeReviewItemIds.length > 0) {
+        const ids = new Set(activeReviewItemIds);
+        base = base.filter(item => ids.has(item.platformProduct.id));
+      }
+      return base;
+    }
+
+    const base = annotatedSuggestions.filter(item => {
+      if (activeTab === 'matched') {
+        return (item.action === 'LINK_EXISTING' && item.resolved === true) || (item.action === 'CREATE_NEW' && item.resolved === true);
+      }
+      if (activeTab === 'ignored') {
+        return item.action === 'IGNORE';
+      }
+      return true;
+    });
+
+    return sortSuggestionItems(base.filter(item => matchesListQuery(item, listQuery)));
+  }, [activeReviewBucket, activeReviewItemIds, activeTab, annotatedSuggestions, filteredReviewItems, listQuery, matchesListQuery, sortSuggestionItems]);
+
   const groupedList = useMemo(() => {
-    if (!currentList) return [];
-
-    // 1. Group items
-    const groups = new Map<string, { title: string, items: MappingSuggestion[] }>();
-    const looseItems: MappingSuggestion[] = [];
+    const groups = new Map<string, { title: string, items: AnnotatedMappingSuggestion[] }>();
+    const looseItems: AnnotatedMappingSuggestion[] = [];
 
     currentList.forEach(item => {
       const parentId = item.platformProduct.parentId;
@@ -1291,25 +1391,17 @@ const MappingReviewScreen = () => {
       }
     });
 
-    // 2. Build flat list with headers
     const result: any[] = [];
-
-    // Add groups - only show header if there are multiple variants
     groups.forEach((group, id) => {
       if (group.items.length > 1) {
-        // Calculate price range for the group
         const prices = group.items
           .map(item => item.platformProduct.price)
           .filter(p => p != null && p > 0);
 
         const minPrice = prices.length > 0 ? Math.min(...prices) : null;
         const maxPrice = prices.length > 0 ? Math.max(...prices) : null;
-
-        // Check if any item in the group is anorha_to_platform direction
-        const isAnorhaToplatform = group.items.some(item => item.direction === 'anorha_to_platform');
         const isExpanded = expandedGroups.has(id);
 
-        // Multiple variants - show a group header with price range
         result.push({
           type: 'header',
           title: group.title,
@@ -1317,26 +1409,221 @@ const MappingReviewScreen = () => {
           count: group.items.length,
           minPrice,
           maxPrice,
-          isAnorhaToplatform,
           isExpanded,
-          items: group.items, // Pass items for collapsed group actions
+          items: group.items,
         });
 
-        // Only add individual items if the group is expanded
         if (isExpanded) {
           result.push(...group.items.map(s => ({ type: 'item', suggestion: s, isChild: true })));
         }
       } else {
-        // Single item - no header, just add the item
         result.push(...group.items.map(s => ({ type: 'item', suggestion: s, isChild: false })));
       }
     });
 
-    // Add loose items (no header needed for individual items)
     result.push(...looseItems.map(s => ({ type: 'item', suggestion: s, isChild: false })));
 
     return result;
-  }, [currentList, expandedGroups, activeTab, listQuery, sortBy]);
+  }, [currentList, expandedGroups]);
+
+  useEffect(() => {
+    if (activeTab !== 'needs_review') {
+      setActiveReviewBucket(null);
+      setActiveReviewItemIds(null);
+    }
+  }, [activeTab]);
+
+  const reviewBucketMeta: Record<ReviewReason, { title: string; bulkLabel: string; description: string; badge: ReviewBadgeConfig }> = {
+    low_confidence: {
+      title: 'Low confidence',
+      bulkLabel: 'Confirm all matches',
+      description: 'These suggestions have weak confidence or need a fresh confirmation.',
+      badge: { label: 'Low confidence', tone: 'warning' },
+    },
+    no_match_found: {
+      title: 'No match found',
+      bulkLabel: 'Add all as new',
+      description: 'Nothing reliable was found, so these need a new item or manual search.',
+      badge: { label: 'No match found', tone: 'info' },
+    },
+    variant_mismatch: {
+      title: 'Variant mismatch',
+      bulkLabel: 'Add unmatched as new',
+      description: 'These variants conflict with the rest of their family and need cleanup.',
+      badge: { label: 'Variant mismatch', tone: 'danger' },
+    },
+  };
+
+  const annotatedSuggestionMap = useMemo(() => {
+    return new Map(annotatedSuggestions.map(item => [item.platformProduct.id, item]));
+  }, [annotatedSuggestions]);
+
+  const modalContextItem = itemToMatch ? annotatedSuggestionMap.get(itemToMatch.platformProduct.id) ?? null : null;
+  const showBucketOverview = activeTab === 'needs_review' && !activeReviewBucket;
+
+  const closeSearchModal = useCallback(() => {
+    setShowSearchModal(false);
+    setItemToMatch(null);
+    setGroupItemsToMatch(null);
+    setSearchModalQuery('');
+    setSearchModalResults([]);
+  }, []);
+
+  const openSearchModalForItem = useCallback((item: MappingSuggestion, groupItems: MappingSuggestion[] | null = null) => {
+    setItemToMatch(item);
+    setGroupItemsToMatch(groupItems);
+    setSearchModalQuery('');
+    setSearchModalResults([]);
+    performProductSearch('');
+    setShowSearchModal(true);
+  }, [performProductSearch]);
+
+  const applySuggestionUpdates = useCallback((ids: string[], updater: (item: MappingSuggestion) => MappingSuggestion) => {
+    const idSet = new Set(ids);
+    const next = (suggestions || []).map(item => idSet.has(item.platformProduct.id) ? updater(item) : item);
+    setSuggestions(next);
+    return next;
+  }, [setSuggestions, suggestions]);
+
+  const maybeOpenVariantReviewSheet = useCallback((nextList: MappingSuggestion[], ids: string[]) => {
+    const idSet = new Set(ids);
+    const resolvedItems = nextList.filter(item => idSet.has(item.platformProduct.id));
+    const parentIds = Array.from(new Set(resolvedItems.map(item => item.platformProduct.parentId).filter(Boolean))) as string[];
+    if (parentIds.length !== 1) return;
+
+    const parentId = parentIds[0];
+    const familyItems = nextList.filter(item => item.platformProduct.parentId === parentId);
+    if (familyItems.length < 2) return;
+
+    const hasNonAutoMatchedSiblings = familyItems.some(item => {
+      const isAutoMatched = (item.matchType === 'SKU' || item.matchType === 'BARCODE')
+        && !!item.platformProduct.sku
+        && !!item.anorhaVariant?.sku
+        && item.platformProduct.sku === item.anorhaVariant?.sku;
+      return !isAutoMatched;
+    });
+
+    if (!hasNonAutoMatchedSiblings) return;
+
+    setVariantReviewSheet({
+      visible: true,
+      parentId,
+      parentTitle: familyItems[0]?.platformProduct.parentTitle || familyItems[0]?.platformProduct.title || null,
+      items: familyItems,
+    });
+  }, []);
+
+  const handleCreateNewForIds = useCallback((ids: string[], options?: { closeModal?: boolean }) => {
+    applySuggestionUpdates(ids, (item) => ({
+      ...item,
+      action: 'CREATE_NEW',
+      isSelected: true,
+      resolved: true,
+    }));
+
+    if (options?.closeModal) {
+      closeSearchModal();
+    }
+  }, [applySuggestionUpdates, closeSearchModal]);
+
+  const handleIgnoreForIds = useCallback((ids: string[], options?: { closeModal?: boolean }) => {
+    applySuggestionUpdates(ids, (item) => {
+      if (activeTab === 'matched' || (item.action === 'CREATE_NEW' && item.resolved)) {
+        return { ...item, action: 'UNMATCHED', matchType: 'TITLE', isSelected: false, resolved: false };
+      }
+
+      return {
+        ...item,
+        prevTab: activeTab,
+        prevAction: item.action,
+        action: 'IGNORE',
+        isSelected: false,
+        resolved: false,
+      };
+    });
+
+    if (options?.closeModal) {
+      closeSearchModal();
+    }
+  }, [activeTab, applySuggestionUpdates, closeSearchModal]);
+
+  const handleConfirmSuggestedForIds = useCallback((ids: string[], options?: { closeModal?: boolean; openVariantSheet?: boolean }) => {
+    const staleIds = new Set(
+      annotatedSuggestions
+        .filter(item => ids.includes(item.platformProduct.id) && item.isStaleClaim)
+        .map(item => item.platformProduct.id)
+    );
+
+    const safeIds = ids.filter(id => !staleIds.has(id));
+    if (safeIds.length === 0) {
+      if (options?.closeModal) {
+        closeSearchModal();
+      }
+      return;
+    }
+
+    const next = applySuggestionUpdates(safeIds, (item) => {
+      if (!item.suggestedCanonicalProduct?.id) return item;
+      return {
+        ...item,
+        action: 'LINK_EXISTING',
+        resolved: true,
+        isSelected: true,
+      };
+    });
+
+    if (options?.openVariantSheet !== false) {
+      maybeOpenVariantReviewSheet(next, safeIds);
+    }
+
+    if (options?.closeModal) {
+      closeSearchModal();
+    }
+  }, [annotatedSuggestions, applySuggestionUpdates, closeSearchModal, maybeOpenVariantReviewSheet]);
+
+  const openVariantReviewBucket = useCallback((items: MappingSuggestion[]) => {
+    setVariantReviewSheet({
+      visible: false,
+      parentId: null,
+      parentTitle: null,
+      items: [],
+    });
+    setActiveTab('needs_review');
+    setActiveReviewBucket('variant_mismatch');
+    setActiveReviewItemIds(items.map(item => item.platformProduct.id));
+  }, []);
+
+  const getFamilyIds = useCallback((item: MappingSuggestion) => {
+    if (!item.platformProduct.parentId) {
+      return [item.platformProduct.id];
+    }
+
+    return annotatedSuggestions
+      .filter(suggestion => suggestion.platformProduct.parentId === item.platformProduct.parentId)
+      .map(suggestion => suggestion.platformProduct.id);
+  }, [annotatedSuggestions]);
+
+  const isVariantAutoMatched = useCallback((item: MappingSuggestion) => {
+    return (item.matchType === 'SKU' || item.matchType === 'BARCODE')
+      && !!item.platformProduct.sku
+      && !!item.anorhaVariant?.sku
+      && item.platformProduct.sku === item.anorhaVariant?.sku;
+  }, []);
+
+  const getReviewBadge = useCallback((item: AnnotatedMappingSuggestion): ReviewBadgeConfig | null => {
+    if (item.isStaleClaim) {
+      return { label: 'Match taken', tone: 'danger' };
+    }
+    if (!item.reviewReason) return null;
+    return reviewBucketMeta[item.reviewReason].badge;
+  }, [reviewBucketMeta]);
+
+  const getPrimaryActionLabel = useCallback((item: AnnotatedMappingSuggestion) => {
+    if (item.isStaleClaim) return 'Find match';
+    if (item.reviewReason === 'variant_mismatch') return 'Review variants';
+    if (item.action === 'UNMATCHED' || !item.suggestedCanonicalProduct?.id) return 'Find match';
+    return 'Confirm match';
+  }, []);
 
   // --- END ALWAYS-CALLED HOOKS ---
 
@@ -2009,6 +2296,31 @@ const MappingReviewScreen = () => {
       height: 1,
       backgroundColor: theme.colors.textSecondary + '20',
       marginLeft: 10,
+    },
+    backToBucketsButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 20,
+      paddingVertical: 10,
+    },
+    backToBucketsText: {
+      color: theme.colors.primary,
+      fontWeight: '600',
+    },
+    bucketScopeHeader: {
+      flex: 1,
+      paddingRight: 16,
+    },
+    bucketScopeTitle: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: theme.colors.text,
+    },
+    bucketScopeDescription: {
+      fontSize: 12,
+      color: theme.colors.textSecondary,
+      marginTop: 2,
     },
     centered: {
       flex: 1,
@@ -2721,6 +3033,27 @@ const MappingReviewScreen = () => {
       color: theme.colors.textSecondary,
       marginLeft: 10,
     },
+    searchModalOptionList: {
+      paddingHorizontal: 16,
+      paddingBottom: 12,
+      gap: 8,
+    },
+    searchModalOptionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      borderRadius: 12,
+      backgroundColor: '#F9FAFB',
+      borderWidth: 1,
+      borderColor: '#E5E7EB',
+    },
+    searchModalOptionText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: theme.colors.text,
+    },
     searchEmptyText: {
       fontSize: 14,
       color: theme.colors.textSecondary,
@@ -2847,6 +3180,74 @@ const MappingReviewScreen = () => {
       paddingHorizontal: 20,
       paddingVertical: 10,
       flexDirection: 'column',
+    },
+    reviewBucketCard: {
+      marginBottom: 14,
+      padding: 16,
+    },
+    reviewBucketHeader: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 12,
+      marginBottom: 14,
+    },
+    reviewBucketTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: theme.colors.text,
+    },
+    reviewBucketDescription: {
+      fontSize: 13,
+      color: theme.colors.textSecondary,
+      marginTop: 4,
+      lineHeight: 18,
+    },
+    reviewBucketCount: {
+      minWidth: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: theme.colors.primary + '14',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 10,
+    },
+    reviewBucketCountText: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: theme.colors.primary,
+    },
+    reviewBucketActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+    },
+    reviewBucketPrimaryAction: {
+      flex: 1,
+      borderRadius: 12,
+      backgroundColor: theme.colors.primary,
+      paddingVertical: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    reviewBucketPrimaryActionDisabled: {
+      opacity: 0.45,
+    },
+    reviewBucketPrimaryActionText: {
+      color: '#fff',
+      fontWeight: '700',
+    },
+    reviewBucketSecondaryAction: {
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: '#E5E7EB',
+      paddingVertical: 12,
+      paddingHorizontal: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    reviewBucketSecondaryActionText: {
+      color: theme.colors.text,
+      fontWeight: '700',
     },
     modernSearchBar: {
       flexDirection: 'row',
@@ -3114,6 +3515,137 @@ const MappingReviewScreen = () => {
       color: theme.colors.textSecondary,
       marginTop: 2,
     },
+    variantSheet: {
+      maxHeight: '78%',
+      backgroundColor: '#fff',
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      paddingHorizontal: 20,
+      paddingTop: 18,
+      paddingBottom: 24,
+    },
+    variantSheetHeader: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      justifyContent: 'space-between',
+      marginBottom: 16,
+      gap: 12,
+    },
+    variantSheetTitle: {
+      fontSize: 20,
+      fontWeight: '700',
+      color: theme.colors.text,
+    },
+    variantSheetSubtitle: {
+      fontSize: 13,
+      color: theme.colors.textSecondary,
+      marginTop: 4,
+      lineHeight: 18,
+    },
+    variantSheetClose: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: '#F3F4F6',
+    },
+    variantSheetRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingVertical: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: '#F3F4F6',
+    },
+    variantSheetColumn: {
+      flex: 1,
+    },
+    variantSheetColumnLabel: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: '#9CA3AF',
+      textTransform: 'uppercase',
+      marginBottom: 4,
+    },
+    variantSheetName: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: theme.colors.text,
+    },
+    variantSheetSku: {
+      fontSize: 12,
+      color: theme.colors.textSecondary,
+      marginTop: 4,
+    },
+    variantSheetPlaceholder: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: '#B45309',
+    },
+    variantSheetStatusWrap: {
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    variantSheetStatusBadge: {
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 999,
+    },
+    variantSheetStatusMatch: {
+      backgroundColor: '#DCFCE7',
+    },
+    variantSheetStatusUnmatched: {
+      backgroundColor: '#FEE2E2',
+    },
+    variantSheetStatusText: {
+      fontSize: 12,
+      fontWeight: '700',
+    },
+    variantSheetStatusTextMatch: {
+      color: '#166534',
+    },
+    variantSheetStatusTextUnmatched: {
+      color: '#B91C1C',
+    },
+    variantSheetActions: {
+      gap: 10,
+      paddingTop: 16,
+      borderTopWidth: 1,
+      borderTopColor: '#F3F4F6',
+    },
+    variantSheetPrimaryAction: {
+      backgroundColor: theme.colors.primary,
+      borderRadius: 12,
+      paddingVertical: 13,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    variantSheetPrimaryActionText: {
+      color: '#fff',
+      fontWeight: '700',
+    },
+    variantSheetSecondaryAction: {
+      borderRadius: 12,
+      paddingVertical: 13,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: '#E5E7EB',
+    },
+    variantSheetSecondaryActionText: {
+      color: theme.colors.text,
+      fontWeight: '700',
+    },
+    variantSheetTertiaryAction: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 4,
+    },
+    variantSheetTertiaryActionText: {
+      color: theme.colors.textSecondary,
+      fontWeight: '600',
+    },
   });
 
   // ✅ UPDATED: Show loading with progress when isPolling or isScanningActive, using WebSocket data
@@ -3261,7 +3793,7 @@ const MappingReviewScreen = () => {
   // MappingReviewScreen is used for ongoing settings, not just product mapping
 
   // --- MODIFIED: If we have existing mappings but no API suggestions, show them ---
-  if (false && existingMappings.length > 0 && (!suggestions || (Array.isArray(suggestions) && suggestions.length === 0))) {
+  if (false && existingMappings.length > 0 && (suggestions?.length ?? 0) === 0) {
     return (
       <View style={styles.container}>
         <ScrollView style={styles.container}>
@@ -3379,290 +3911,324 @@ const MappingReviewScreen = () => {
             />
           </View>
 
-
-          {/* No section titles — pills handle context */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 20, marginBottom: 8, marginTop: 4 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              {/* Effect All Dropdown */}
-              <View style={{ position: 'relative' }}>
+          {!showBucketOverview && (
+            <>
+              {activeTab === 'needs_review' && activeReviewBucket && (
                 <TouchableOpacity
-                  style={{ flexDirection: 'row', backgroundColor: theme.colors.primary, alignItems: 'center', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8 }}
-                  onPress={() => setShowEffectAllDropdown(!showEffectAllDropdown)}
+                  style={styles.backToBucketsButton}
+                  onPress={() => {
+                    setActiveReviewBucket(null);
+                    setActiveReviewItemIds(null);
+                    setExpandedGroups(new Set());
+                  }}
                 >
-                  <Icon name="playlist-edit" size={18} color="#FFF" />
-                  <Text style={{ marginLeft: 6, color: '#FFF', fontWeight: '700' }}>Bulk</Text>
-                  <Icon name={showEffectAllDropdown ? 'chevron-up' : 'chevron-down'} size={16} color="#FFF" style={{ marginLeft: 4 }} />
+                  <Icon name="arrow-left" size={18} color={theme.colors.primary} />
+                  <Text style={styles.backToBucketsText}>Back to review buckets</Text>
                 </TouchableOpacity>
-                {showEffectAllDropdown && (
-                  <View style={{
-                    position: 'absolute',
-                    top: 40,
-                    right: -60,
-                    backgroundColor: '#fff',
-                    borderRadius: 12,
-                    borderWidth: 1,
-                    borderColor: '#E5E7EB',
-                    ...Platform.select({
-                      ios: { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } },
-                      android: { elevation: 10 },
-                    }),
-                    zIndex: 1000,
-                    minWidth: 200,
-                    overflow: 'hidden',
-                  }}>
+              )}
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 8, marginTop: 4 }}>
+                {activeTab === 'needs_review' && activeReviewBucket ? (
+                  <View style={styles.bucketScopeHeader}>
+                    <Text style={styles.bucketScopeTitle}>{reviewBucketMeta[activeReviewBucket].title}</Text>
+                    <Text style={styles.bucketScopeDescription}>{reviewBucketMeta[activeReviewBucket].description}</Text>
+                  </View>
+                ) : <View />}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <View style={{ position: 'relative' }}>
                     <TouchableOpacity
-                      style={{ flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' }}
-                      onPress={() => {
-                        setSuggestions(prev => (prev || []).map(s => {
-                          const isReview = s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved;
-                          if (isReview && s.suggestedCanonicalProduct?.id) {
-                            return { ...s, action: 'LINK_EXISTING', resolved: true, isSelected: true };
-                          }
-                          return s;
-                        }));
-                        setShowEffectAllDropdown(false);
-                      }}
+                      style={{ flexDirection: 'row', backgroundColor: theme.colors.primary, alignItems: 'center', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8 }}
+                      onPress={() => setShowEffectAllDropdown(!showEffectAllDropdown)}
                     >
-                      <Icon name="check-all" size={18} color="#93C822" />
-                      <Text style={{ marginLeft: 8, color: '#374151', fontWeight: '600' }}>Match All</Text>
+                      <Icon name="playlist-edit" size={18} color="#FFF" />
+                      <Text style={{ marginLeft: 6, color: '#FFF', fontWeight: '700' }}>Bulk</Text>
+                      <Icon name={showEffectAllDropdown ? 'chevron-up' : 'chevron-down'} size={16} color="#FFF" style={{ marginLeft: 4 }} />
                     </TouchableOpacity>
-                    <TouchableOpacity
-                      style={{ flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' }}
-                      onPress={() => {
-                        setSuggestions(prev => (prev || []).map(s => {
-                          const isReview = s.action !== 'LINK_EXISTING' && s.action !== 'IGNORE' && !s.resolved;
-                          if (isReview) {
-                            return { ...s, action: 'CREATE_NEW', resolved: true, isSelected: true };
+                    {showEffectAllDropdown && (
+                      <View style={{
+                        position: 'absolute',
+                        top: 40,
+                        right: -60,
+                        backgroundColor: '#fff',
+                        borderRadius: 12,
+                        borderWidth: 1,
+                        borderColor: '#E5E7EB',
+                        ...Platform.select({
+                          ios: { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } },
+                          android: { elevation: 10 },
+                        }),
+                        zIndex: 1000,
+                        minWidth: 200,
+                        overflow: 'hidden',
+                      }}>
+                        <TouchableOpacity
+                          style={{ flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' }}
+                          onPress={() => {
+                            if (activeTab === 'needs_review' && activeReviewBucket === 'low_confidence') {
+                              handleConfirmSuggestedForIds(
+                                currentList
+                                  .filter(s => !!s.suggestedCanonicalProduct?.id && !s.isStaleClaim)
+                                  .map(s => s.platformProduct.id),
+                                { openVariantSheet: false }
+                              );
+                            } else {
+                              handleConfirmSuggestedForIds(
+                                currentList
+                                  .filter(s => !!s.suggestedCanonicalProduct?.id)
+                                  .map(s => s.platformProduct.id),
+                                { openVariantSheet: false }
+                              );
+                            }
+                            setShowEffectAllDropdown(false);
+                          }}
+                        >
+                          <Icon name="check-all" size={18} color="#93C822" />
+                          <Text style={{ marginLeft: 8, color: '#374151', fontWeight: '600' }}>Match Visible</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={{ flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' }}
+                          onPress={() => {
+                            handleCreateNewForIds(currentList.map(s => s.platformProduct.id));
+                            setShowEffectAllDropdown(false);
+                          }}
+                        >
+                          <Icon name="plus-circle" size={18} color="#93C822" />
+                          <Text style={{ marginLeft: 8, color: '#374151', fontWeight: '600' }}>Create Visible as New</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={{ flexDirection: 'row', alignItems: 'center', padding: 12 }}
+                          onPress={() => {
+                            handleIgnoreForIds(currentList.map(s => s.platformProduct.id));
+                            setShowEffectAllDropdown(false);
+                          }}
+                        >
+                          <Icon name="close-circle" size={18} color="#EF4444" />
+                          <Text style={{ marginLeft: 8, color: '#374151', fontWeight: '600' }}>Ignore Visible</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                  <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8 }} onPress={() => setSortBy(sortBy === 'title' ? 'sku' : 'title')} accessibilityLabel="Sort by">
+                    <Icon name="sort" size={18} color={theme.colors.textSecondary} />
+                    <Text style={{ marginLeft: 6, color: theme.colors.textSecondary, fontWeight: '600' }}>Sort By: {sortBy === 'title' ? 'Title' : 'SKU'}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <FlatList
+                data={groupedList}
+                keyExtractor={(item, index) => (item as any).type === 'header' ? `header-${(item as any).id}` : `item-${(item as any).suggestion.platformProduct.id}-${index}`}
+                renderItem={({ item }) => {
+                  if ((item as any).type === 'header') {
+                    let priceText = '';
+                    if (item.minPrice != null && item.maxPrice != null) {
+                      if (item.minPrice === item.maxPrice) {
+                        priceText = `$${item.minPrice.toFixed(2)}`;
+                      } else {
+                        priceText = `$${item.minPrice.toFixed(2)} - $${item.maxPrice.toFixed(2)}`;
+                      }
+                    }
+
+                    if (item.isExpanded) {
+                      return (
+                        <TouchableOpacity
+                          style={styles.expandedGroupHeader}
+                          onPress={() => {
+                            setExpandedGroups(prev => {
+                              const next = new Set(prev);
+                              next.delete(item.id);
+                              return next;
+                            });
+                          }}
+                        >
+                          <Icon name="chevron-up" size={16} color={theme.colors.textSecondary} style={{ marginRight: 6 }} />
+                          <Text style={styles.expandedGroupHeaderText}>{item.title}</Text>
+                          <View style={styles.expandedGroupLine} />
+                        </TouchableOpacity>
+                      );
+                    }
+
+                    const groupItems = item.items as AnnotatedMappingSuggestion[];
+                    const firstItem = groupItems[0];
+                    const hasVariantMismatch = groupItems.some(s => s.reviewReason === 'variant_mismatch');
+                    const allMatched = groupItems.every(s => s.suggestedCanonicalProduct?.id && !s.isStaleClaim);
+                    const groupPrimaryActionLabel = hasVariantMismatch ? 'Review variants' : allMatched ? 'Confirm match' : 'Find match';
+                    const groupAttributes = (() => {
+                      const extractedOptions: string[] = [];
+                      const parentTitle = item.title || '';
+                      groupItems.forEach(gi => {
+                        const variantTitle = gi.platformProduct.title || '';
+                        let optionValue = variantTitle;
+                        if (parentTitle && variantTitle.startsWith(parentTitle)) {
+                          optionValue = variantTitle.slice(parentTitle.length).replace(/^[\s\-\/:]+/, '').trim();
+                        } else if (parentTitle && variantTitle.includes(' - ')) {
+                          optionValue = variantTitle.split(' - ').pop()?.trim() || variantTitle;
+                        }
+                        if (optionValue && optionValue !== variantTitle && optionValue !== parentTitle) {
+                          extractedOptions.push(optionValue);
+                        }
+                      });
+                      return extractedOptions.length > 0 ? [{ label: 'Options', value: extractedOptions }] : undefined;
+                    })();
+
+                    return (
+                      <MappingCard
+                        variant="review"
+                        titleLeft={item.title}
+                        variantCount={item.count}
+                        priceRange={priceText}
+                        imageLeft={firstItem.platformProduct.imageUrl}
+                        selected={groupItems.some(s => s.isSelected)}
+                        attributesLeft={groupAttributes}
+                        reviewBadge={getReviewBadge(groupItems.find(s => s.isStaleClaim) || firstItem)}
+                        primaryActionLabel={groupPrimaryActionLabel}
+                        supportingText={`${item.count} variants need attention`}
+                        onPrimaryAction={() => {
+                          if (groupPrimaryActionLabel === 'Review variants') {
+                            openVariantReviewBucket(groupItems);
+                            return;
                           }
-                          return s;
-                        }));
-                        setShowEffectAllDropdown(false);
-                      }}
-                    >
-                      <Icon name="plus-circle" size={18} color="#93C822" />
-                      <Text style={{ marginLeft: 8, color: '#374151', fontWeight: '600' }}>Create All as New</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={{ flexDirection: 'row', alignItems: 'center', padding: 12 }}
-                      onPress={() => {
-                        setSuggestions(prev => (prev || []).map(s => {
-                          const isInCurrentTab = activeTab === 'matched'
-                            ? (s.action === 'LINK_EXISTING' || (s.action === 'CREATE_NEW' && s.resolved === true))
-                            : activeTab === 'needs_review'
-                              ? (s.action === 'UNMATCHED' || (s.action === 'CREATE_NEW' && !s.resolved))
-                              : activeTab === 'ignored' ? s.action === 'IGNORE' : true;
-                          if (isInCurrentTab && s.action !== 'IGNORE') {
-                            return { ...s, prevAction: s.action, action: 'IGNORE', isSelected: false, resolved: false };
+                          if (groupPrimaryActionLabel === 'Confirm match') {
+                            handleConfirmSuggestedForIds(groupItems.filter(s => !!s.suggestedCanonicalProduct?.id && !s.isStaleClaim).map(s => s.platformProduct.id));
+                            return;
                           }
-                          return s;
-                        }));
-                        setShowEffectAllDropdown(false);
-                      }}
-                    >
-                      <Icon name="close-circle" size={18} color="#EF4444" />
-                      <Text style={{ marginLeft: 8, color: '#374151', fontWeight: '600' }}>Ignore All</Text>
-                    </TouchableOpacity>
+                          openSearchModalForItem(firstItem, groupItems);
+                        }}
+                        onSearch={() => openSearchModalForItem(firstItem, groupItems)}
+                        onPress={() => {
+                          setExpandedGroups(prev => new Set(prev).add(item.id));
+                        }}
+                      />
+                    );
+                  }
+
+                  const s = item.suggestion as AnnotatedMappingSuggestion;
+                  const visualVariant = s.action === 'IGNORE' ? 'ignored'
+                    : s.suggestedCanonicalProduct?.id ? 'matched'
+                      : s.action === 'CREATE_NEW' ? 'new'
+                        : 'review';
+                  const primaryActionLabel = activeTab === 'needs_review' ? getPrimaryActionLabel(s) : undefined;
+
+                  return (
+                    <MappingCard
+                      isChild={item.isChild}
+                      variant={visualVariant as any}
+                      titleLeft={s.platformProduct.title}
+                      skuLeft={s.platformProduct.sku}
+                      priceLeft={s.platformProduct.price}
+                      imageLeft={s.platformProduct.imageUrl}
+                      titleRight={s.action === 'UNMATCHED' && !s.isStaleClaim ? undefined : s.suggestedCanonicalProduct?.title}
+                      skuRight={s.suggestedCanonicalProduct?.sku}
+                      priceRight={s.suggestedCanonicalProduct?.price}
+                      imageRight={s.suggestedCanonicalProduct?.imageUrl}
+                      selected={s.isSelected}
+                      isResolvedNew={s.action === 'CREATE_NEW' && !!s.resolved}
+                      reviewBadge={activeTab === 'needs_review' ? getReviewBadge(s) : null}
+                      primaryActionLabel={primaryActionLabel}
+                      supportingText={s.isStaleClaim ? 'This match is already used elsewhere in this session.' : s.reviewReason === 'variant_mismatch' ? 'This variant family needs a quick pass.' : undefined}
+                      showStaleState={s.isStaleClaim}
+                      struckThroughRightTitle={s.staleDisplay?.title}
+                      onPrimaryAction={primaryActionLabel ? () => {
+                        if (primaryActionLabel === 'Review variants') {
+                          openVariantReviewBucket(
+                            annotatedSuggestions.filter(item => getFamilyIds(s).includes(item.platformProduct.id))
+                          );
+                          return;
+                        }
+                        if (primaryActionLabel === 'Confirm match') {
+                          handleConfirmSuggestedForIds([s.platformProduct.id]);
+                          return;
+                        }
+                        openSearchModalForItem(s);
+                      } : undefined}
+                      onEditNew={() => applySuggestionUpdates([s.platformProduct.id], (item) => ({ ...item, resolved: false, action: 'UNMATCHED', isSelected: false }))}
+                      onIgnore={() => handleIgnoreForIds([s.platformProduct.id])}
+                      onRestore={() => applySuggestionUpdates([s.platformProduct.id], (item) => ({ ...item, action: item.prevAction || 'UNMATCHED', isSelected: false }))}
+                      onCreate={() => handleCreateNewForIds([s.platformProduct.id])}
+                      onApproveMatch={() => handleConfirmSuggestedForIds([s.platformProduct.id])}
+                      onSearch={() => openSearchModalForItem(s)}
+                    />
+                  );
+                }}
+                contentContainerStyle={{ paddingHorizontal: 15, paddingBottom: bottomSafePadding }}
+                initialNumToRender={10}
+                windowSize={10}
+                maxToRenderPerBatch={12}
+                removeClippedSubviews
+                pagingEnabled={false}
+                style={{ flex: 1 }}
+                ListEmptyComponent={(
+                  <View style={styles.modernEmptyState}>
+                    <View style={styles.emptyStateIcon}>
+                      <Icon name={listQuery ? 'magnify' : 'package-variant-closed'} size={48} color={theme.colors.textSecondary} />
+                    </View>
+                    <Text style={styles.emptyStateTitle}>
+                      {listQuery ? 'No matching products' : 'No items in this category'}
+                    </Text>
+                    <Text style={styles.emptyStateDescription}>
+                      {listQuery ? 'Try adjusting your search terms' : 'Items will appear after processing'}
+                    </Text>
                   </View>
                 )}
-              </View>
-              {/* Sort Button */}
-              <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8 }} onPress={() => setSortBy(sortBy === 'title' ? 'sku' : 'title')} accessibilityLabel="Sort by">
-                <Icon name="sort" size={18} color={theme.colors.textSecondary} />
-                <Text style={{ marginLeft: 6, color: theme.colors.textSecondary, fontWeight: '600' }}>Sort By: {sortBy === 'title' ? 'Title' : 'SKU'}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+              />
+            </>
+          )}
 
-          <FlatList
-            data={groupedList}
-            keyExtractor={(item, index) => (item as any).type === 'header' ? `header-${(item as any).id}` : `item-${(item as any).suggestion.platformProduct.id}-${index}`}
-            renderItem={({ item }) => {
-              if ((item as any).type === 'header') {
-                // Format price range for display
-                let priceText = '';
-                if (item.minPrice != null && item.maxPrice != null) {
-                  if (item.minPrice === item.maxPrice) {
-                    priceText = `$${item.minPrice.toFixed(2)}`;
-                  } else {
-                    priceText = `$${item.minPrice.toFixed(2)} - $${item.maxPrice.toFixed(2)}`;
-                  }
-                }
+          {showBucketOverview && (
+            <ScrollView contentContainerStyle={{ paddingHorizontal: 15, paddingBottom: bottomSafePadding }}>
+              {(Object.keys(reviewBucketMeta) as ReviewReason[]).map((bucketKey) => {
+                const items = reviewBuckets[bucketKey];
+                if (!items.length) return null;
 
-                if (item.isExpanded) {
-                  // Breadcrumb style for expanded group
-                  return (
-                    <TouchableOpacity
-                      style={styles.expandedGroupHeader}
-                      onPress={() => {
-                        setExpandedGroups(prev => {
-                          const newSet = new Set(prev);
-                          newSet.delete(item.id);
-                          return newSet;
-                        });
-                      }}
-                    >
-                      <Icon name="chevron-up" size={16} color={theme.colors.textSecondary} style={{ marginRight: 6 }} />
-                      <Text style={styles.expandedGroupHeaderText}>{item.title}</Text>
-                      <View style={styles.expandedGroupLine} />
-                    </TouchableOpacity>
-                  );
-                }
-
-                // Collapsed Group acts as a MappingCard
-                const groupItems = item.items as MappingSuggestion[];
-                const allIgnored = groupItems.every(s => s.action === 'IGNORE');
-                const allMatched = groupItems.every(s => s.action === 'LINK_EXISTING');
-                const allNew = groupItems.every(s => s.action === 'CREATE_NEW');
-
-                const groupVariant = allIgnored ? 'ignored' : allMatched ? 'matched' : allNew ? 'new' : 'review';
-
-                // Representative images/data
-                const firstItem = groupItems[0];
-
-                // Extract variant options from item titles
-                // Option format examples: "Title - Option" or title contains unique suffix
-                const extractedOptions: { label: string; values: string[] } = { label: 'Options', values: [] };
-                const parentTitle = item.title || '';
-                groupItems.forEach(gi => {
-                  const variantTitle = gi.platformProduct.title || '';
-                  // Try to extract the variant part by removing the parent title
-                  let optionValue = variantTitle;
-                  if (parentTitle && variantTitle.startsWith(parentTitle)) {
-                    optionValue = variantTitle.slice(parentTitle.length).replace(/^[\s\-\/:]+/, '').trim();
-                  } else if (parentTitle && variantTitle.includes(' - ')) {
-                    // Common format: "Title - OptionValue"
-                    optionValue = variantTitle.split(' - ').pop()?.trim() || variantTitle;
-                  }
-                  if (optionValue && optionValue !== variantTitle && optionValue !== parentTitle) {
-                    extractedOptions.values.push(optionValue);
-                  }
-                });
-
-                // Build attributesLeft if we found options
-                const groupAttributes = extractedOptions.values.length > 0
-                  ? [{ label: extractedOptions.label, value: extractedOptions.values }]
-                  : undefined;
+                const meta = reviewBucketMeta[bucketKey];
+                const bulkIds = bucketKey === 'low_confidence'
+                  ? items.filter(item => !!item.suggestedCanonicalProduct?.id && !item.isStaleClaim).map(item => item.platformProduct.id)
+                  : items.map(item => item.platformProduct.id);
 
                 return (
-                  <MappingCard
-                    variant={groupVariant}
-                    titleLeft={item.title}
-                    variantCount={item.count}
-                    priceRange={priceText}
-                    imageLeft={firstItem.platformProduct.imageUrl}
-                    selected={groupItems.some(s => s.isSelected)}
-                    attributesLeft={groupAttributes}
-                    onSelect={() => {
-                      const anySelected = groupItems.some(s => s.isSelected);
-                      setSuggestions(prev => (prev || []).map(prevS =>
-                        groupItems.some(gi => gi.platformProduct.id === prevS.platformProduct.id)
-                          ? { ...prevS, isSelected: !anySelected }
-                          : prevS
-                      ));
-                    }}
-                    onIgnore={() => {
-                      setSuggestions(prev => (prev || []).map(prevS =>
-                        groupItems.some(gi => gi.platformProduct.id === prevS.platformProduct.id)
-                          ? { ...prevS, action: allIgnored ? 'UNMATCHED' : 'IGNORE', isSelected: false }
-                          : prevS
-                      ));
-                    }}
-                    onCreate={() => {
-                      setSuggestions(prev => (prev || []).map(prevS =>
-                        groupItems.some(gi => gi.platformProduct.id === prevS.platformProduct.id)
-                          ? { ...prevS, action: 'CREATE_NEW', isSelected: true, resolved: true }
-                          : prevS
-                      ));
-                    }}
-                    onSearch={() => {
-                      // Set group items for bulk mapping when match is selected
-                      setItemToMatch(firstItem);
-                      setGroupItemsToMatch(groupItems);  // Pass all group items
-                      setSearchModalQuery('');
-                      setSearchModalResults([]);
-                      performProductSearch('');
-                      setShowSearchModal(true);
-                    }}
-                    // Click the card itself (not buttons) to expand
-                    onPress={() => {
-                      setExpandedGroups(prev => new Set(prev).add(item.id));
-                    }}
-                  />
+                  <Card key={bucketKey} style={styles.reviewBucketCard}>
+                    <View style={styles.reviewBucketHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.reviewBucketTitle}>{meta.title}</Text>
+                        <Text style={styles.reviewBucketDescription}>{meta.description}</Text>
+                      </View>
+                      <View style={styles.reviewBucketCount}>
+                        <Text style={styles.reviewBucketCountText}>{items.length}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.reviewBucketActions}>
+                      <TouchableOpacity
+                        style={[styles.reviewBucketPrimaryAction, bulkIds.length === 0 && styles.reviewBucketPrimaryActionDisabled]}
+                        disabled={bulkIds.length === 0}
+                        onPress={() => {
+                          if (bucketKey === 'low_confidence') {
+                            handleConfirmSuggestedForIds(bulkIds, { openVariantSheet: false });
+                          } else {
+                            handleCreateNewForIds(bulkIds);
+                          }
+                        }}
+                      >
+                        <Text style={styles.reviewBucketPrimaryActionText}>{meta.bulkLabel}</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.reviewBucketSecondaryAction}
+                        onPress={() => {
+                          setActiveReviewBucket(bucketKey);
+                          setActiveReviewItemIds(null);
+                          setExpandedGroups(new Set());
+                        }}
+                      >
+                        <Text style={styles.reviewBucketSecondaryActionText}>Review -&gt;</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </Card>
                 );
-              }
-
-              // It's a suggestion items
-              const s = item.suggestion;
-              // Map UNMATCHED action to 'review' variant style (empty slot) if not ignored
-              const visualVariant = s.action === 'IGNORE' ? 'ignored'
-                : s.action === 'LINK_EXISTING' ? 'matched'
-                  : s.action === 'UNMATCHED' ? 'review' // Shows empty Link Product slot
-                    : s.action === 'CREATE_NEW' ? 'new' // Shows Green New Item card
-                      : (s.confidence != null && s.confidence > 0 && s.confidence < 0.8) ? 'review'
-                        : 'new';
-
-              return (
-                <MappingCard
-                  isChild={item.isChild}
-                  variant={visualVariant as any}
-                  titleLeft={s.platformProduct.title}
-                  skuLeft={s.platformProduct.sku}
-                  priceLeft={s.platformProduct.price}
-                  imageLeft={s.platformProduct.imageUrl}
-                  // For UNMATCHED, ensure titleRight is undefined so it shows empty slot
-                  titleRight={s.action === 'UNMATCHED' ? undefined : s.suggestedCanonicalProduct?.title}
-                  skuRight={s.suggestedCanonicalProduct?.sku}
-                  priceRight={s.suggestedCanonicalProduct?.price}
-                  imageRight={s.suggestedCanonicalProduct?.imageUrl}
-                  selected={s.isSelected}
-                  isResolvedNew={s.action === 'CREATE_NEW' && !!s.resolved}
-                  onEditNew={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, resolved: false, action: 'UNMATCHED', isSelected: false } : prevS))}
-                  onSelect={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, isSelected: !prevS.isSelected, action: (!prevS.isSelected && (prevS.action === 'IGNORE' || prevS.action === 'UNMATCHED')) ? 'CREATE_NEW' : prevS.action } : prevS))}
-                  onIgnore={() => {
-                    setSuggestions(prev => (prev || []).map(prevS => {
-                      if (prevS.platformProduct.id !== s.platformProduct.id) return prevS;
-                      if (activeTab === 'matched' || (prevS.action === 'CREATE_NEW' && prevS.resolved)) {
-                        // Restore to UNMATCHED if unignoring/removing link
-                        return { ...prevS, action: 'UNMATCHED', matchType: 'TITLE', isSelected: false, resolved: false };
-                      }
-                      return { ...prevS, prevTab: activeTab, prevAction: prevS.action, action: 'IGNORE', isSelected: false, resolved: false };
-                    }));
-                  }}
-                  onRestore={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, action: prevS.prevAction || 'UNMATCHED', isSelected: false } : prevS))}
-                  onCreate={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, action: 'CREATE_NEW', isSelected: true, resolved: true } : prevS))}
-                  onApproveMatch={() => setSuggestions(prev => (prev || []).map(prevS => prevS.platformProduct.id === s.platformProduct.id ? { ...prevS, action: 'LINK_EXISTING', resolved: true, isSelected: true } : prevS))}
-                  onSearch={() => { setItemToMatch(s); setGroupItemsToMatch(null); setSearchModalQuery(''); performProductSearch(''); setShowSearchModal(true); }}
-                />
-              );
-            }}
-            contentContainerStyle={{ paddingHorizontal: 15, paddingBottom: bottomSafePadding }}
-            initialNumToRender={10}
-            windowSize={10}
-            maxToRenderPerBatch={12}
-            removeClippedSubviews
-            pagingEnabled={false}
-            style={{ flex: 1 }}
-            ListEmptyComponent={(
-              <View style={styles.modernEmptyState}>
-                <View style={styles.emptyStateIcon}>
-                  <Icon name={listQuery ? 'magnify' : 'package-variant-closed'} size={48} color={theme.colors.textSecondary} />
-                </View>
-                <Text style={styles.emptyStateTitle}>
-                  {listQuery ? 'No matching products' : 'No items in this category'}
-                </Text>
-                <Text style={styles.emptyStateDescription}>
-                  {listQuery ? 'Try adjusting your search terms' : 'Items will appear after processing'}
-                </Text>
-              </View>
-            )}
-            onEndReachedThreshold={0.6}
-            onEndReached={() => {
-              // Simple client-side pagination: load more from suggestions if we later support server paging
-            }}
-          />
+              })}
+            </ScrollView>
+          )}
 
           {/* Search Modal - Bottom Sheet Style */}
-          <Modal visible={showSearchModal} transparent={true} animationType="slide" onRequestClose={() => setShowSearchModal(false)}>
+          <Modal visible={showSearchModal} transparent={true} animationType="slide" onRequestClose={closeSearchModal}>
             <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
               <View style={{
                 height: '70%',
@@ -3677,8 +4243,25 @@ const MappingReviewScreen = () => {
               }}>
                 <View style={{ paddingHorizontal: 20, marginBottom: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                   <Text style={{ fontSize: 18, fontWeight: '700' }}>Select Product</Text>
-                  <TouchableOpacity onPress={() => setShowSearchModal(false)} style={{ padding: 4, backgroundColor: '#F3F4F6', borderRadius: 20 }}>
+                  <TouchableOpacity onPress={closeSearchModal} style={{ padding: 4, backgroundColor: '#F3F4F6', borderRadius: 20 }}>
                     <Icon name="close" size={20} color="#666" />
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.searchModalOptionList}>
+                  <TouchableOpacity style={styles.searchModalOptionRow} onPress={() => handleCreateNewForIds((groupItemsToMatch || (itemToMatch ? [itemToMatch] : [])).map(item => item.platformProduct.id), { closeModal: true })}>
+                    <Icon name="plus-circle-outline" size={18} color="#166534" />
+                    <Text style={styles.searchModalOptionText}>Add as new</Text>
+                  </TouchableOpacity>
+                  {!!modalContextItem?.suggestedCanonicalProduct && !modalContextItem.isStaleClaim && (
+                    <TouchableOpacity style={styles.searchModalOptionRow} onPress={() => handleConfirmSuggestedForIds((groupItemsToMatch || (itemToMatch ? [itemToMatch] : [])).map(item => item.platformProduct.id), { closeModal: true })}>
+                      <Icon name="content-duplicate" size={18} color="#92400E" />
+                      <Text style={styles.searchModalOptionText}>Mark duplicate</Text>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity style={styles.searchModalOptionRow} onPress={() => handleIgnoreForIds((groupItemsToMatch || (itemToMatch ? [itemToMatch] : [])).map(item => item.platformProduct.id), { closeModal: true })}>
+                    <Icon name="skip-next-outline" size={18} color="#B91C1C" />
+                    <Text style={styles.searchModalOptionText}>Skip</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -3736,6 +4319,97 @@ const MappingReviewScreen = () => {
                       </View>
                   }
                 />
+              </View>
+            </View>
+          </Modal>
+
+          <Modal visible={variantReviewSheet.visible} transparent={true} animationType="slide" onRequestClose={() => setVariantReviewSheet({ visible: false, parentId: null, parentTitle: null, items: [] })}>
+            <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' }}>
+              <View style={styles.variantSheet}>
+                <View style={styles.variantSheetHeader}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.variantSheetTitle}>{variantReviewSheet.parentTitle || 'Review variants'}</Text>
+                    <Text style={styles.variantSheetSubtitle}>Confirm the variants that lined up automatically and review the rest.</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setVariantReviewSheet({ visible: false, parentId: null, parentTitle: null, items: [] })} style={styles.variantSheetClose}>
+                    <Icon name="close" size={20} color="#6B7280" />
+                  </TouchableOpacity>
+                </View>
+
+                <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
+                  {variantReviewSheet.items.map((variantItem) => {
+                    const autoMatched = isVariantAutoMatched(variantItem);
+                    return (
+                      <View key={variantItem.platformProduct.id} style={styles.variantSheetRow}>
+                        <View style={styles.variantSheetColumn}>
+                          <Text style={styles.variantSheetColumnLabel}>Platform</Text>
+                          <Text style={styles.variantSheetName} numberOfLines={2}>{variantItem.platformProduct.title}</Text>
+                          <Text style={styles.variantSheetSku}>SKU: {variantItem.platformProduct.sku || 'N/A'}</Text>
+                        </View>
+                        <View style={styles.variantSheetStatusWrap}>
+                          <View style={[styles.variantSheetStatusBadge, autoMatched ? styles.variantSheetStatusMatch : styles.variantSheetStatusUnmatched]}>
+                            <Text style={[styles.variantSheetStatusText, autoMatched ? styles.variantSheetStatusTextMatch : styles.variantSheetStatusTextUnmatched]}>
+                              {autoMatched ? 'Match' : 'No match'}
+                            </Text>
+                          </View>
+                        </View>
+                        <View style={styles.variantSheetColumn}>
+                          <Text style={styles.variantSheetColumnLabel}>Anora</Text>
+                          {variantItem.anorhaVariant ? (
+                            <>
+                              <Text style={styles.variantSheetName} numberOfLines={2}>{variantItem.anorhaVariant.title || 'Unnamed Variant'}</Text>
+                              <Text style={styles.variantSheetSku}>SKU: {variantItem.anorhaVariant.sku || 'N/A'}</Text>
+                            </>
+                          ) : (
+                            <>
+                              <Text style={styles.variantSheetPlaceholder}>No variant matched yet</Text>
+                              <Text style={styles.variantSheetSku}>Search or add as new</Text>
+                            </>
+                          )}
+                        </View>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+
+                <View style={styles.variantSheetActions}>
+                  <TouchableOpacity
+                    style={styles.variantSheetPrimaryAction}
+                    onPress={() => {
+                      const autoMatchedItems = variantReviewSheet.items.filter(isVariantAutoMatched);
+                      applySuggestionUpdates(autoMatchedItems.map(item => item.platformProduct.id), (item) => ({
+                        ...item,
+                        action: 'LINK_EXISTING',
+                        resolved: true,
+                        isSelected: true,
+                        suggestedCanonicalProduct: item.suggestedCanonicalProduct || (item.anorhaVariant ? {
+                          id: item.anorhaVariant.id,
+                          sku: item.anorhaVariant.sku || '',
+                          title: item.anorhaVariant.title || 'Unnamed Variant',
+                          price: item.anorhaVariant.price,
+                          imageUrl: item.anorhaVariant.imageUrl,
+                        } : item.suggestedCanonicalProduct),
+                      }));
+                      setVariantReviewSheet({ visible: false, parentId: null, parentTitle: null, items: [] });
+                    }}
+                  >
+                    <Text style={styles.variantSheetPrimaryActionText}>Accept all auto-matched</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.variantSheetSecondaryAction}
+                    onPress={() => {
+                      openVariantReviewBucket(variantReviewSheet.items.filter(item => !isVariantAutoMatched(item)));
+                    }}
+                  >
+                    <Text style={styles.variantSheetSecondaryActionText}>Review unmatched</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.variantSheetTertiaryAction}
+                    onPress={() => setVariantReviewSheet({ visible: false, parentId: null, parentTitle: null, items: [] })}
+                  >
+                    <Text style={styles.variantSheetTertiaryActionText}>Skip variants</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
           </Modal>

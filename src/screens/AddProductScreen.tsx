@@ -44,6 +44,7 @@ import { PanGestureHandler, TapGestureHandler, State, PanGestureHandlerGestureEv
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { MaterialIcons } from '@expo/vector-icons';
+import { Camera as CameraIcon, RotateCcw } from 'lucide-react-native';
 
 import { useNavigation, useRoute, useIsFocused, useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -60,7 +61,9 @@ import ManifestReviewSheet from '../components/ManifestReviewSheet';
 import ReceiptReviewSheet from '../components/ReceiptReviewSheet';
 import TierSelectorModal from '../components/TierSelectorModal';
 import UsageCounter from '../components/UsageCounter';
+import BillingGateSheet from '../components/BillingGateSheet';
 import useFreemiumUsage from '../hooks/useFreemiumUsage';
+import useBillingGate from '../hooks/useBillingGate';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import BarcodeEntrySheet from '../components/camera/BarcodeEntrySheet';
 import { ENABLE_DOC_MODES } from '../config/features';
@@ -75,6 +78,14 @@ import {
 import { buildMatchAnalyzeProducts } from '../utils/buildMatchAnalyzeProducts';
 import { openQuickScanStream, QuickScanPhase, QuickScanStreamEvent } from '../lib/quickScanStream';
 import { ShelfScanPlaceholderRow, ShelfScanProgressCard } from '../components/camera/ShelfScanProgressCard';
+import BottomActionBar from '../components/BottomActionBar';
+import { BillingGateResponse, normalizeBillingGateResponse } from '../types/billingGate';
+import {
+  clearPendingBillingAction,
+  loadPendingBillingAction,
+  PendingBillingAction,
+  savePendingBillingAction,
+} from '../utils/billingGatePersistence';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BULK_MODAL_FTUX_KEY = '@anorha_hasSeenBulkItemsModal';
@@ -275,6 +286,37 @@ const initialShelfProgressState = (): ShelfProgressState => ({
   status: 'idle',
 });
 
+const parseShelfScanErrorMessage = (rawMessage?: string) => {
+  if (!rawMessage) {
+    return {
+      reasonCode: undefined as string | undefined,
+      message: 'The shelf stream stopped before results came back.',
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(rawMessage);
+    if (parsed?.statusCode === 402 || parsed?.code === 'free_tier_exhausted') {
+      return {
+        reasonCode: 'free_tier_exhausted',
+        message: 'Free scans are used up. Upgrade to scan another shelf.',
+      };
+    }
+
+    return {
+      reasonCode: parsed?.code || parsed?.reasonCode,
+      message: parsed?.message || rawMessage,
+    };
+  } catch {
+    return {
+      reasonCode: rawMessage.includes('402') ? 'free_tier_exhausted' : undefined,
+      message: rawMessage.includes('402')
+        ? 'Free scans are used up. Upgrade to scan another shelf.'
+        : rawMessage,
+    };
+  }
+};
+
 const getShelfProgressPresentation = (progress: ShelfProgressState) => {
   if (progress.status === 'no_items') {
     return {
@@ -293,6 +335,14 @@ const getShelfProgressPresentation = (progress: ShelfProgressState) => {
   }
 
   if (progress.status === 'error') {
+    if (progress.reasonCode === 'free_tier_exhausted') {
+      return {
+        title: 'Free scans used up',
+        subtitle: 'Upgrade to scan another shelf.',
+        instruction: 'ready' as CameraInstruction,
+      };
+    }
+
     return {
       title: 'Scan hit a snag',
       subtitle: progress.message || 'The shelf stream stopped before results came back.',
@@ -806,7 +856,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Freemium / Paywall state
   const { status: freemiumStatus, refresh: refreshFreemiumStatus, incrementLocalUsage } = useFreemiumUsage();
+  const { preflightAIGate } = useBillingGate();
   const [showTierSelector, setShowTierSelector] = useState(false);
+  const [billingGate, setBillingGate] = useState<BillingGateResponse | null>(null);
+  const [billingGateVisible, setBillingGateVisible] = useState(false);
+  const billingGateResolverRef = useRef<((decision: 'continue' | 'billing' | 'dismiss') => void) | null>(null);
+  const pendingBillingActionRef = useRef<PendingBillingAction | null>(null);
+  const isResumingPendingBillingRef = useRef(false);
 
   // Experimental Text Search
 
@@ -878,6 +934,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     })();
   }, []);
 
+  useEffect(() => {
+    loadPendingBillingAction().then((pending) => {
+      pendingBillingActionRef.current = pending;
+    }).catch((error) => {
+      console.warn('[AddProduct] Failed to hydrate pending billing action:', error);
+    });
+  }, []);
+
   // Show notification function
   const showNotificationMessage = useCallback((message: string, duration: number = 3000) => {
     setNotificationMessage(message);
@@ -895,6 +959,59 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       });
     }, duration);
   }, [notificationOpacity, notificationTranslateY]);
+
+  const closeBillingGateSheet = useCallback((decision: 'continue' | 'billing' | 'dismiss') => {
+    setBillingGateVisible(false);
+    setBillingGate(null);
+    const resolver = billingGateResolverRef.current;
+    billingGateResolverRef.current = null;
+    resolver?.(decision);
+  }, []);
+
+  const presentBillingGateSheet = useCallback((nextGate: BillingGateResponse) => {
+    setBillingGate(nextGate);
+    setBillingGateVisible(true);
+    return new Promise<'continue' | 'billing' | 'dismiss'>((resolve) => {
+      billingGateResolverRef.current = resolve;
+    });
+  }, []);
+
+  const persistPendingQuickScan = useCallback(async (photo: CapturedPhoto, itemId: string) => {
+    const pendingAction: PendingBillingAction = {
+      type: 'quick_scan',
+      featureKey: 'ai_quick_scan',
+      itemId,
+      photo: {
+        id: photo.id,
+        uri: photo.uri,
+        width: photo.width,
+        height: photo.height,
+        timestamp: photo.timestamp,
+        isCover: photo.isCover,
+      },
+      createdAt: Date.now(),
+    };
+
+    pendingBillingActionRef.current = pendingAction;
+    await savePendingBillingAction(pendingAction);
+  }, []);
+
+  const clearPendingQuickScan = useCallback(async () => {
+    pendingBillingActionRef.current = null;
+    await clearPendingBillingAction();
+  }, []);
+
+  const buildFreemiumBlockedGate = useCallback((): BillingGateResponse => normalizeBillingGateResponse({
+    code: 'free_tier_exhausted',
+    message: freemiumStatus
+      ? `Free scans used (${freemiumStatus.usageCount}/${freemiumStatus.freeLimit}). Upgrade billing to keep scanning.`
+      : 'Free scans are used up. Upgrade billing to keep scanning.',
+    featureKey: 'ai_quick_scan',
+    blockingState: 'free_tier_exhausted',
+    canProceed: false,
+    freeUsageCount: freemiumStatus?.usageCount,
+    freeLimit: freemiumStatus?.freeLimit,
+  }), [freemiumStatus]);
 
   const canAddAnotherItem = useCallback((currentCount: number) => {
     if (currentCount < MAX_BATCH_ITEMS) return true;
@@ -1300,12 +1417,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           setShelfProgress((prev) => ({ ...prev, stalled }));
         },
         onConnectionError: (message) => {
+          const parsedError = parseShelfScanErrorMessage(message);
           console.error('[SHELF MODE] Stream error:', message);
           stopShelfScan('error', {
             phase: 'finishing',
             progress: 1,
-            message: 'The shelf stream disconnected before results finished loading.',
-            reasonCode: 'stream_disconnected',
+            message: parsedError.message,
+            reasonCode: parsedError.reasonCode || 'stream_disconnected',
           });
         },
         onEvent: (parsed: QuickScanStreamEvent) => {
@@ -1492,12 +1610,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
           if (parsed.type === 'ERROR') {
             console.error('[SHELF MODE] Agent error:', parsed.message);
+            const parsedError = parseShelfScanErrorMessage(parsed.message);
             stopShelfScan('error', {
               phase: 'finishing',
               progress: 1,
               elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined,
-              reasonCode: parsed.reasonCode,
-              message: parsed.message || 'Error processing shelf scan.',
+              reasonCode: parsed.reasonCode || parsedError.reasonCode,
+              message: parsedError.message || 'Error processing shelf scan.',
             });
           }
         },
@@ -2046,7 +2165,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }, []);
 
   // Auto-quick scan when photo is captured
-  const performQuickScan = useCallback(async (photo: CapturedPhoto, itemId: string) => {
+  const performQuickScan = useCallback(async (
+    photo: CapturedPhoto,
+    itemId: string,
+    options?: { skipPreflight?: boolean },
+  ) => {
     if (isAutoScanning) {
       if (quickScanQueueRef.current.length >= QUICK_SCAN_QUEUE_LIMIT) {
         console.log('[QUICK SCAN] Queue limit reached, dropping oldest queued scan');
@@ -2087,6 +2210,32 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       console.log('[QUICK SCAN] Starting quick scan for photo:', photo.id);
       console.log('[QUICK SCAN] Photo URI:', photo.uri);
       console.log('[QUICK SCAN] Timestamp:', new Date().toISOString());
+
+      if (!options?.skipPreflight) {
+        const gate = await preflightAIGate('ai_quick_scan', 1);
+
+        if (gate.code === 'credits_exhausted_but_invoiceable') {
+          await persistPendingQuickScan(photo, itemId);
+          const decision = await presentBillingGateSheet(gate);
+
+          if (decision === 'billing') {
+            scanErrorMessage = gate.message;
+            return;
+          }
+
+          if (decision !== 'continue') {
+            scanErrorMessage = gate.message;
+            return;
+          }
+
+          await clearPendingQuickScan();
+        } else if (!gate.canProceed) {
+          await persistPendingQuickScan(photo, itemId);
+          const decision = await presentBillingGateSheet(gate);
+          scanErrorMessage = gate.message;
+          return;
+        }
+      }
 
       // Upload image to Supabase Storage first
       console.log('[QUICK SCAN] Uploading image to Supabase...');
@@ -2155,11 +2304,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       if (response.status === 402) {
         const errorData = await response.json();
         console.log('[QUICK SCAN] Free tier exhausted:', errorData);
-        if (errorData.error === 'FREE_TIER_EXHAUSTED') {
-          setShowTierSelector(true);
-          showNotificationMessage(`Free scans used (${errorData.usageCount}/${errorData.freeLimit}). Upgrade to continue!`, 4000);
-          return;
-        }
+        const gate = normalizeBillingGateResponse(errorData, 'ai_quick_scan');
+        await persistPendingQuickScan(photo, itemId);
+        const decision = await presentBillingGateSheet(gate);
+        scanErrorMessage = gate.message;
+        return;
       }
 
       if (!response.ok) {
@@ -2168,6 +2317,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       // Increment local usage count on successful scan
       incrementLocalUsage();
+      await clearPendingQuickScan();
 
       const result = await response.json();
 
@@ -2358,7 +2508,68 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
     }
 
-  }, [uploadImageToSupabase, candidatesToSerpApiData, quickScanStore, showNotificationMessage, isAutoScanning, incrementLocalUsage]);
+  }, [
+    uploadImageToSupabase,
+    candidatesToSerpApiData,
+    quickScanStore,
+    showNotificationMessage,
+    isAutoScanning,
+    incrementLocalUsage,
+    preflightAIGate,
+    persistPendingQuickScan,
+    presentBillingGateSheet,
+    clearPendingQuickScan,
+  ]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+
+      const maybeResumePendingQuickScan = async () => {
+        if (isResumingPendingBillingRef.current) {
+          return;
+        }
+
+        const pending = pendingBillingActionRef.current || await loadPendingBillingAction();
+        if (!active || !pending || pending.type !== 'quick_scan') {
+          return;
+        }
+
+        pendingBillingActionRef.current = pending;
+        const gate = await preflightAIGate(pending.featureKey, 1);
+
+        if (!active) {
+          return;
+        }
+
+        if (!gate.canProceed && gate.code !== 'credits_exhausted_but_invoiceable') {
+          return;
+        }
+
+        isResumingPendingBillingRef.current = true;
+        await clearPendingQuickScan();
+        showNotificationMessage('Resuming pending scan...', 1800);
+
+        try {
+          await performQuickScan(pending.photo as CapturedPhoto, pending.itemId, { skipPreflight: true });
+        } finally {
+          if (active) {
+            isResumingPendingBillingRef.current = false;
+          }
+        }
+      };
+
+      refreshFreemiumStatus().catch(() => null);
+      maybeResumePendingQuickScan().catch((error) => {
+        console.warn('[AddProduct] Failed to resume pending quick scan:', error);
+        isResumingPendingBillingRef.current = false;
+      });
+
+      return () => {
+        active = false;
+      };
+    }, [performQuickScan, preflightAIGate, clearPendingQuickScan, refreshFreemiumStatus, showNotificationMessage])
+  );
 
   // Open Match Selection screen using quick scan results for a given item
   const openMatchSelectionForItem = useCallback((itemId?: string | null) => {
@@ -3069,7 +3280,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           <UsageCounter
             usageCount={freemiumStatus.usageCount}
             freeLimit={freemiumStatus.freeLimit}
-            onUpgradePress={() => setShowTierSelector(true)}
+            onUpgradePress={() => {
+              if (freemiumStatus.isFreeTierExhausted) {
+                setBillingGate(buildFreemiumBlockedGate());
+                setBillingGateVisible(true);
+                return;
+              }
+              setShowTierSelector(true);
+            }}
             isSubscriber={freemiumStatus.hasSubscription}
           />
         </View>
@@ -3644,6 +3862,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           remaining: freemiumStatus.remaining,
         } : undefined}
         hasSubscription={freemiumStatus?.hasSubscription || false}
+      />
+
+      <BillingGateSheet
+        visible={billingGateVisible}
+        gate={billingGate}
+        onClose={() => closeBillingGateSheet('dismiss')}
+        onOpenBilling={() => {
+          closeBillingGateSheet('billing');
+          (navigation as any).navigate('Billing');
+        }}
+        onContinue={() => closeBillingGateSheet('continue')}
       />
     </GestureHandlerRootView>
   );
@@ -4656,7 +4885,6 @@ const BulkItemsSheet: React.FC<{
   const shouldShowShelfRetryActions = Boolean(
     shelfProgress && (shelfProgress.stalled || shelfProgress.status === 'no_items' || shelfProgress.status === 'timeout' || shelfProgress.status === 'error')
   );
-
   const activeBulkItemIds = new Set(displayItems.map((item) => item.id));
   const hasLoadingItems = Object.entries(itemLoadingStates || {}).some(([id, state]) => {
     const loadingState = state as ItemLoadingState;
@@ -4669,6 +4897,10 @@ const BulkItemsSheet: React.FC<{
     cameraMode === 'shelf'
       ? totalItems > 0
       : hasAnyItems || hasAnyPhotos;
+  const shouldShowShelfFailureBar = Boolean(cameraMode === 'shelf' && totalItems === 0 && shouldShowShelfRetryActions);
+  const scrollBottomPadding = shouldShowShelfFailureBar || shouldShowBottomActions
+    ? bottomMargin + 126
+    : bottomMargin;
 
   const submitDirectGenerateJob = React.useCallback(async (
     products: Array<{
@@ -5081,7 +5313,7 @@ const BulkItemsSheet: React.FC<{
             styles.scrollContent,
             {
               flexGrow: 1,
-              paddingBottom: bottomMargin
+              paddingBottom: scrollBottomPadding,
             }
           ]}
         >
@@ -5093,13 +5325,12 @@ const BulkItemsSheet: React.FC<{
                     photoUri={shelfPhotoUri}
                     title={shelfPresentation?.title || 'Inspecting shelf'}
                     subtitle={shelfPresentation?.subtitle || 'Reading the shelf image.'}
+                    phase={shelfProgress.phase}
+                    status={shelfProgress.status}
                     progress={shelfProgress.progress}
                     totalItems={shelfProgress.totalItems}
                     completedItems={shelfProgress.completedItems}
                     stalled={shelfProgress.stalled}
-                    showActions={shouldShowShelfRetryActions}
-                    onRetry={onRetryShelfScan}
-                    onRetake={onRetakeShelfScan}
                   />
                 );
               }
@@ -5111,6 +5342,7 @@ const BulkItemsSheet: React.FC<{
                       photoUri={shelfPhotoUri}
                       title="Inspecting shelf"
                       subtitle="Reading the photo and building the first item list."
+                      phase="inspecting_shelf"
                       progress={0.18}
                       totalItems={0}
                       completedItems={0}
@@ -5423,6 +5655,23 @@ const BulkItemsSheet: React.FC<{
             })()
           )}
         </ScrollView>
+
+        {shouldShowShelfFailureBar && onRetryShelfScan && onRetakeShelfScan ? (
+          <View style={[styles.bottomActions, { paddingBottom: bottomMargin }]}>
+            <BottomActionBar
+              primaryLabel="Retry scan"
+              onPrimary={onRetryShelfScan}
+              primaryIcon={<RotateCcw size={18} color="#FFFFFF" />}
+              secondaryLabel="Retake photo"
+              onSecondary={onRetakeShelfScan}
+              secondaryIcon={<CameraIcon size={18} color="#334155" />}
+              primaryButtonStyle={{ backgroundColor: '#0F172A' }}
+              secondaryButtonStyle={{ backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#CBD5E1' }}
+              secondaryTextStyle={{ color: '#0F172A' }}
+              style={{ position: 'relative', left: 0, right: 0, bottom: 0 }}
+            />
+          </View>
+        ) : null}
 
         {/* Fixed Bottom Actions */}
         {shouldShowBottomActions && (
