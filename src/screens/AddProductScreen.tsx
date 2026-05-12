@@ -5493,7 +5493,7 @@ const BulkItemsSheet: React.FC<{
                           {loadingState?.isLoading ? (
                             <View style={styles.loadingBadge}>
                               <UnicodeSpinner
-                                spinner={{ frames: ['■□■', '□■□', '▪□▪', '□▪□'], interval: 180 }}
+                                spinner={(spinners.braillewave || spinners.dots) as UnicodeSpinnerDefinition}
                                 color="#93C822"
                                 size={12}
                               />

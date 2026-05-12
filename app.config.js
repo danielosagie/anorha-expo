@@ -1,7 +1,7 @@
 export default {
   name: "Anorha",
   slug: "sssync", //DONT CHANGE AT ALL EVER - Need for production builds
-  owner: "anorha",
+  owner: process.env.EAS_BUILD ? "dosagie" : undefined,
   version: "1.0.2",
   scheme: "anorhaapp",
   icon: "./src/assets/1024_anorha.png",
@@ -86,8 +86,8 @@ export default {
   extra: {
     supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL,
     supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
-    eas: {
-      projectId: "b69b9883-c163-494e-aa0a-54b0e70feb3b"
-    }
+    eas: process.env.EAS_BUILD
+      ? { projectId: "b69b9883-c163-494e-aa0a-54b0e70feb3b" }
+      : undefined
   }
 };

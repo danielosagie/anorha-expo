@@ -35,6 +35,7 @@ import InitialScreen from '../screens/InitialScreen';
 import OnboardingSlides from '../screens/OnboardingSlides';
 import AuthScreen from '../screens/AuthScreen';
 import DashboardScreen from '../screens/DashboardScreen';
+import GlobalSearchScreen from '../screens/GlobalSearchScreen';
 import InventoryOrdersScreen from '../screens/InventoryOrdersScreen';
 import MarketplaceScreen from '../screens/MarketplaceScreen';
 import ProfileScreen from '../screens/ProfileScreen';
@@ -89,6 +90,8 @@ export type AppStackParamList = {
   CreateAccountScreen: undefined;
   AccountSyncIssueScreen: undefined;
   TabNavigator: undefined;
+  Dashboard: undefined;
+  GlobalSearch: undefined;
   AddListing?: { // The entire params object for AddListing is optional
     initialData?: {
       title: string;
@@ -380,23 +383,24 @@ const TabNavigator = () => {
   }, [lastNotificationResponse]);
 
   const tabBarBottom = Math.max(18, insets.bottom);
+  const TAB_ROW_HEIGHT = 64;
+  const TAB_FADE_HEIGHT = 36;
   const tabBarContainerStyle = {
     position: 'absolute' as const,
-    left: 12,
-    right: 12,
-    bottom: tabBarBottom,
-    height: 84,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: TAB_ROW_HEIGHT + tabBarBottom + TAB_FADE_HEIGHT,
     backgroundColor: 'transparent',
     overflow: 'visible' as const,
   };
   const tabBarSurfaceStyle = {
-    borderRadius: 30,
-    paddingHorizontal: 16,
+    borderRadius: 32,
+    paddingHorizontal: 6,
     backgroundColor: '#ffffff',
     borderColor: 'rgba(0, 0, 0, 0.07)',
-    borderWidth: 2,
-    height: 84,
-    width: "95%"
+    borderWidth: 1.5,
+    height: TAB_ROW_HEIGHT,
   };
 
   return (
@@ -411,20 +415,12 @@ const TabNavigator = () => {
           {...props}
           containerStyle={tabBarContainerStyle}
           surfaceStyle={tabBarSurfaceStyle}
+          bottomInset={tabBarBottom}
+          rowHeight={TAB_ROW_HEIGHT}
         />
       )}
-      initialRouteName="Dashboard"
+      initialRouteName="Inventory"
     >
-      <Tab.Screen
-        name="Dashboard"
-        component={DashboardScreen}
-        options={{
-          tabBarLabel: 'Home',
-          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
-            <Icon name="view-dashboard-outline" color={color} size={size} />
-          ),
-        }}
-      />
       <Tab.Screen
         name="Inventory"
         component={InventoryOrdersScreen}
@@ -436,28 +432,12 @@ const TabNavigator = () => {
         }}
       />
       <Tab.Screen
-        name="AddProduct"
-        component={AddProductScreen}
-        options={{
-          tabBarLabel: 'Add Products',
-          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
-            <Icon name="plus-circle-outline" color={color} size={size} />
-          ),
-        }}
-      />
-
-
-      <Tab.Screen
         name="Clearouts"
         component={SproutHomeScreen}
         options={{
           tabBarLabel: 'Sprout',
           tabBarIcon: ({ color, size }: { color: string; size: number }) => (
-            <Icon
-              name="cash-fast"
-              color={color} //color={focused ? "#FF9900" : color}
-              size={size}
-            />
+            <Icon name="emoticon-outline" color={color} size={size} />
           ),
         }}
       />
@@ -469,6 +449,14 @@ const TabNavigator = () => {
           tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Icon name="cog-outline" color={color} size={size} />
           ),
+        }}
+      />
+      <Tab.Screen
+        name="AddProduct"
+        component={AddProductScreen}
+        options={{
+          tabBarButton: () => null,
+          tabBarItemStyle: { display: 'none' },
         }}
       />
     </Tab.Navigator>
@@ -511,7 +499,18 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="Team" component={TeamScreen} />
     <AppStackNav.Screen name="Billing" component={BillingScreen} />
     <AppStackNav.Screen name="BillingSupport" component={BillingSupportScreen} />
-    <AppStackNav.Screen name="AddProduct" component={AddProductScreen} />
+    <AppStackNav.Screen name="Dashboard" component={DashboardScreen} />
+    <AppStackNav.Screen
+      name="GlobalSearch"
+      component={GlobalSearchScreen}
+      options={{
+        animationEnabled: true,
+        gestureEnabled: true,
+        gestureDirection: 'vertical',
+        cardStyleInterpolator: CardStyleInterpolators.forVerticalIOS,
+        cardStyle: { backgroundColor: '#000000' },
+      }}
+    />
     <AppStackNav.Screen name="LoadingScreen" component={LoadingScreen} />
     <AppStackNav.Screen
       name="MatchSelectionScreen"

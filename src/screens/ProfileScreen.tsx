@@ -1584,36 +1584,43 @@ const ProfileScreen = () => {
     {
       icon: 'credit-card',
       title: 'Subscription & Billing',
+      bgColor: '#F59E0B',
       onPress: () => navigation.navigate('Billing' as any)
     },
     {
       icon: 'handshake-outline',
       title: 'Partners',
+      bgColor: '#10B981',
       onPress: () => navigation.navigate('Partners' as any)
     },
     {
       icon: 'account-group',
       title: 'Team',
+      bgColor: '#3B82F6',
       onPress: () => navigation.navigate('Team' as any)
     },
     {
       icon: 'bell-outline',
       title: 'Notifications',
+      bgColor: '#FB923C',
       onPress: () => navigation.navigate('NotificationSettings' as any),
     },
     {
       icon: 'clipboard-clock-outline',
       title: 'Activity Logs',
+      bgColor: '#A855F7',
       onPress: () => navigation.navigate('ActivityFeed' as any),
     },
     {
       icon: 'database-export',
       title: 'Backups & Export',
+      bgColor: '#EC4899',
       onPress: () => navigation.navigate('Backups' as any),
     },
     {
       icon: 'help-circle',
       title: 'Give Feedback',
+      bgColor: '#06B6D4',
       onPress: async () => {
         await WebBrowser.openBrowserAsync('https://anorha.userjot.com/');
       }
@@ -1624,8 +1631,8 @@ const ProfileScreen = () => {
 
     // "Show Auth Token" button is now always present
 
-    { icon: 'logout', title: 'Log Out', isDestructive: false, onPress: handleLogout },
-    { icon: 'delete-forever', title: 'Delete Account', isDestructive: true, onPress: handleDeleteAccount },
+    { icon: 'logout', title: 'Log Out', bgColor: '#6B7280', isDestructive: false, onPress: handleLogout },
+    { icon: 'delete-forever', title: 'Delete Account', bgColor: '#EF4444', isDestructive: true, onPress: handleDeleteAccount },
   ];
 
   // Modify the menu item rendering to handle custom components
@@ -1643,14 +1650,17 @@ const ProfileScreen = () => {
         index < menuItems.length - 1 ? styles.menuItemBorder : null
       ]}
       onPress={item.onPress}
+      activeOpacity={0.6}
     >
       <View style={styles.menuItemLeft}>
-        <Icon
-          name={item.icon}
-          size={24}
-          color={item.isDestructive ? theme.colors.error : '#555'}
-          style={styles.menuIcon}
-        />
+        <View
+          style={[
+            styles.menuIconSquare,
+            { backgroundColor: item.bgColor || (item.isDestructive ? theme.colors.error : '#9CA3AF') },
+          ]}
+        >
+          <Icon name={item.icon} size={18} color="#FFFFFF" />
+        </View>
         {item.customComponent || (
           <Text
             style={[
@@ -1668,7 +1678,7 @@ const ProfileScreen = () => {
           <Text style={[styles.menuBadgeText, { color: '#93C822' }]}>{item.badge}</Text>
         </View>
       ) : !item.customComponent && (
-        <Icon name="chevron-right" size={20} color="#999" />
+        <Icon name="chevron-right" size={20} color="#C7C7CC" />
       )}
     </TouchableOpacity>
   );
@@ -1735,9 +1745,10 @@ const ProfileScreen = () => {
       contentContainerStyle={[styles.scrollViewContent, { paddingBottom: bottomSafePadding }]}
       showsVerticalScrollIndicator={false}
     >
+      
 
       {/*
-      <OrgSwitcher 
+      <OrgSwitcher
         onOrgChanged={(orgId, orgName) => {
           // Reload TeamScreen data when org changes
           setRefreshTrigger(prev => prev + 1);
@@ -2502,21 +2513,32 @@ const formatSyncDate = (dateString: string): string => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F2F2F7',
   },
   scrollViewContent: {
-    padding: 16,
+    paddingHorizontal: 16,
     paddingTop: 60,
+  },
+  screenTitle: {
+    fontSize: 34,
+    fontWeight: '700',
+    color: '#000000',
+    marginBottom: 16,
+    marginTop: 4,
+    letterSpacing: -0.4,
   },
   card: {
     marginBottom: 24,
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: '#F2F2F7',
-    paddingHorizontal: 4,
-    paddingVertical: 8,
+    borderRadius: 14,
+    borderWidth: 0,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 2,
+    elevation: 1,
   },
   title: {
     fontSize: 28,
@@ -2692,21 +2714,33 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 16,
+    paddingVertical: 11,
+    minHeight: 48,
   },
   menuItemBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: '#F2F2F7',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E5EA',
   },
   menuItemLeft: {
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 1,
   },
   menuIcon: {
-    marginRight: 16,
+    marginRight: 14,
+  },
+  menuIconSquare: {
+    width: 30,
+    height: 30,
+    borderRadius: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
   },
   menuText: {
-    fontSize: 16,
+    fontSize: 17,
+    color: '#000000',
+    letterSpacing: -0.2,
   },
   menuBadge: {
     paddingHorizontal: 8,
