@@ -399,6 +399,18 @@ const shouldAutoSelectQuickMatch = ({
   topCandidateIsLocalMatch?: boolean;
 }) => {
   if (totalMatches <= 0) return false;
+  // F1: SmartPicker returns confidence: 0 when it explicitly rejects every
+  // candidate ("none of these match"). Treat that as a hard veto so we don't
+  // pre-select a wrong product and silently lead the user to confirm garbage.
+  // Local matches are exempt — those are the user's own past products and the
+  // reranker score is informational at best.
+  if (
+    typeof rerankerConfidence === 'number' &&
+    rerankerConfidence === 0 &&
+    !topCandidateIsLocalMatch
+  ) {
+    return false;
+  }
   if (topCandidateIsLocalMatch) return true;
   if (totalMatches === 1) return true;
   if (recommendedAction === 'show_single_match') return true;
@@ -4990,10 +5002,20 @@ const BulkItemsSheet: React.FC<{
         const selectedIndex = typeof confirmedMatch?.preSelectedIndices?.[0] === 'number'
           ? confirmedMatch.preSelectedIndices[0]
           : null;
+        // F2: A confirmed quick-match — whether the user picked it explicitly
+        // ('quick_scan_confirmed') or auto-pre-selected by SmartPicker and then
+        // implicitly confirmed by tapping Analyze ('quick_scan_auto') — is a
+        // valid match source. We route both to direct-generate, which skips
+        // the redundant /orchestrate/match round-trip (Tier 0/1/2/3 search +
+        // SmartPicker rerank were already done in quick-scan).
+        const isUsableSource =
+          confirmedMatch?.source === 'quick_scan_confirmed' ||
+          confirmedMatch?.source === 'quick_scan_auto';
         const selectedCandidate = (
-          confirmedMatch?.source === 'quick_scan_confirmed' &&
+          isUsableSource &&
           selectedIndex != null &&
-          Array.isArray(confirmedMatch.serpApiData)
+          Array.isArray(confirmedMatch.serpApiData) &&
+          confirmedMatch.serpApiData[selectedIndex]
         )
           ? confirmedMatch.serpApiData[selectedIndex]
           : null;
