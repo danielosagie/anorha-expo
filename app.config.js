@@ -2,7 +2,7 @@ export default {
   name: "Anorha",
   slug: "sssync", //DONT CHANGE AT ALL EVER - Need for production builds
   owner: process.env.EAS_BUILD ? "dosagie" : undefined,
-  version: "1.0.2",
+  version: "1.0.3",
   scheme: "anorhaapp",
   icon: "./src/assets/1024_anorha.png",
   orientation: "portrait",
