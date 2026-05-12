@@ -1,646 +1,2506 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput, ScrollView, Image } from 'react-native';
-import Animated, { FadeInUp } from 'react-native-reanimated';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  FlatList,
+  ScrollView,
+  Modal,
+  ActivityIndicator,
+  Alert,
+  SafeAreaView,
+  TextInput,
+  View as KeyboardAvoidingView, // ALIASING KAV TO VIEW temporarily if needed, but no, I'll just import View
+  Platform,
+  Keyboard,
+  PanResponder,
+  PanResponderInstance,
+  LayoutChangeEvent,
+  Animated as RNAnimated,
+  Easing
+} from 'react-native';
+import Animated, { FadeInUp, FadeInDown, SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import Card from '../components/Card';
 import Button from '../components/Button';
-import PlaceholderImage from '../components/PlaceholderImage';
-import { mockInventoryItems } from '../data/mockData';
 import { mockOrders } from '../data/mockData';
-import { Platform } from 'react-native';
+import { observer } from '@legendapp/state/react';
+import { useLegendState } from '../context/LegendStateContext';
+import { ProductVariant as ProductVariantData, ProductImage, InventoryLevel, PlatformProductMapping, LegendStateObservables, MarketplaceListing, PlatformLocation, PlatformConnection } from '../utils/SupaLegend';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
+import { AppStackParamList } from '../navigation/AppNavigator';
+import { StackNavigationProp } from '@react-navigation/stack';
+import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import SearchBarWithScanner from '../components/SearchBarWithScanner';
+import PlatformFilterChips from '../components/PlatformFilterChips';
+import PoolLocationCombobox from '../components/PoolLocationCombobox';
+import InventoryListCard from '../components/InventoryListCard';
+import BaseModal from '../components/BaseModal';
+import { SmartCommandInput } from '../components/SmartCommandInput';
+import { VoiceRecorder } from '../components/VoiceRecorder';
+import SortByDropdown from '../components/SortByDropdown';
+import { CameraView } from 'expo-camera';
+import { useProductVariantRealtime, useInventoryLevelsRealtime } from '../hooks/useProductVariantRealtime';
+import { useOrg } from '../context/OrgContext';
+import { parseFilterQuery } from '../utils/parseFilterQuery';
+import { logFlowEvent, FlowEvents, startTrace, getTraceHeaders } from '../lib/mobileFlowLogger';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const InventoryOrdersScreen = () => {
-  const theme = useTheme() || { colors: { primary: '#0E8F7F' } };  
-  const [activeTab, setActiveTab] = useState('inventory'); // 'inventory' or 'orders'
+const TAB_BAR_HEIGHT = 84;
+const TAB_BAR_BOTTOM_OFFSET = 18;
+const SCANNER_GROW_HEIGHT = 240;
+const SCANNER_CLOSE_DURATION = 220;
+
+type InventoryOrdersScreenNavigationProp = StackNavigationProp<AppStackParamList, 'TabNavigator'>;
+
+type MatchLocation = 'title' | 'description' | 'sku' | 'barcode' | 'tags';
+
+type EnrichedProductVariant = ProductVariantData & {
+  imageUrl?: string;
+  totalQuantity?: number;
+  platformNames?: string[];
+  minPrice?: number;  // Lowest price across all option variants
+  maxPrice?: number;  // Highest price across all option variants
+  OnShopify?: boolean;
+  OnSquare?: boolean;
+  OnClover?: boolean;
+  OnAmazon?: boolean;
+  OnEbay?: boolean;
+  OnFacebook?: boolean;
+  VariantType?: 'flat' | 'base' | 'option' | null;
+  IsArchived?: boolean;
+  optionVariantCount?: number; // Count of option variants for this product
+  CreatedAt?: string; // For date-based sorting
+  lastSyncedAt?: string | null;
+  isStale?: boolean;
+  matchLocations?: MatchLocation[]; // Where the search query matched
+  matchSnippet?: string; // Snippet of text where match occurred
+};
+
+interface MockOrderItemData {
+  id: string;
+  platform: string;
+  date: string;
+  customer: string;
+  items: number;
+  status: string;
+  total: number;
+}
+
+const InventoryOrdersScreen = observer(() => {
+  const theme = useTheme();
+  const navigation = useNavigation<InventoryOrdersScreenNavigationProp>();
+  const route = useRoute<any>();
+  const legendState: LegendStateObservables | null = useLegendState();
+  const { currentOrg } = useOrg();
+  const insets = useSafeAreaInsets();
+  const bottomSafePadding = TAB_BAR_HEIGHT + TAB_BAR_BOTTOM_OFFSET + insets.bottom + 16;
+
+  // Subscribe to real-time product variant and inventory changes
+  // These hooks return updateCounter values that we'll use to trigger useMemo re-computation
+  const { updateCounter: variantUpdateCounter } = useProductVariantRealtime();
+  const { updateCounter: inventoryUpdateCounter } = useInventoryLevelsRealtime();
+
+  // Filter & Search State
+  const [activeTab, setActiveTab] = useState('inventory');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('date');
   const [filterStatus, setFilterStatus] = useState('all');
-  const [currentPage, setCurrentPage] = useState(1);
-  
-  const renderInventoryItem = ({ item }) => (
-    <TouchableOpacity style={styles.gridItem}>
-      <Card style={styles.gridItemCard}>
-        {item.image ? (
-          <Image source={{ uri: item.image }} style={styles.gridItemImage} />
-        ) : (
-          <PlaceholderImage 
-            size={120} 
-            borderRadius={8} 
-            type="gradient"
-            icon="cube"
-            color={getRandomColor(item.id)}
-            style={styles.gridItemImage}
-          />
-        )}
-        
-        <View style={styles.gridItemDetails}>
-          <Text style={styles.gridItemTitle} numberOfLines={2}>{item.title}</Text>
-          <Text style={styles.gridItemPrice}>${item.price.toFixed(2)}</Text>
-          <Text style={styles.gridItemStock}>{item.quantity} in stock</Text>
-          
-          <View style={styles.platformBadges}>
-            {item.platforms.slice(0, 2).map(platform => (
-              <View 
-                key={platform} 
-                style={[
-                  styles.platformBadge,
-                  { backgroundColor: getPlatformColor(platform, theme) }
-                ]}
-              >
-                <Text style={styles.platformBadgeText}>
-                  {platform[0].toUpperCase()}
-                </Text>
-              </View>
-            ))}
-            {item.platforms.length > 2 && (
-              <View style={styles.platformBadgeMore}>
-                <Text style={styles.platformBadgeMoreText}>+{item.platforms.length - 2}</Text>
-              </View>
-            )}
-          </View>
-        </View>
-      </Card>
-    </TouchableOpacity>
+  const [selectedPlatformType, setSelectedPlatformType] = useState<string | null>(null);
+  const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
+  const [lowStockOnly, setLowStockOnly] = useState(false);
+  const [priceMax, setPriceMax] = useState<number | null>(null);
+  const [presetVariantIds, setPresetVariantIds] = useState<string[] | null>(null);
+  const [loadingSlowMovers, setLoadingSlowMovers] = useState(false);
+  const [scannedBarcode, setScannedBarcode] = useState<string | null>(null);
+  const [barcodeSearchError, setBarcodeSearchError] = useState<string | null>(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerMounted, setScannerMounted] = useState(false);
+  const scannerHeight = useRef(new RNAnimated.Value(0)).current;
+  const [locationPickerOpen, setLocationPickerOpen] = useState(false);
+  const scannerResultHandlerRef = useRef<((code: string) => void) | null>(null);
+  const openScanner = useCallback((handler: (code: string) => void, source: string) => {
+    logFlowEvent(FlowEvents.BARCODE_SCANNER_OPENED, { source });
+    scannerHeight.stopAnimation();
+    scannerHeight.setValue(0);
+    setScannerMounted(true);
+    setScannerOpen(true);
+    scannerResultHandlerRef.current = handler;
+    RNAnimated.spring(scannerHeight, {
+      toValue: SCANNER_GROW_HEIGHT,
+      speed: 18,
+      bounciness: 6,
+      useNativeDriver: false,
+    }).start();
+  }, [scannerHeight]);
+  const closeScanner = useCallback(() => {
+    logFlowEvent(FlowEvents.BARCODE_SCANNER_CLOSED, {});
+    scannerResultHandlerRef.current = null;
+    setScannerOpen(false);
+    scannerHeight.stopAnimation();
+    RNAnimated.timing(scannerHeight, {
+      toValue: 0,
+      duration: SCANNER_CLOSE_DURATION,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished) {
+        setScannerMounted(false);
+      }
+    });
+  }, [scannerHeight]);
+
+  // Handle route params
+  useEffect(() => {
+    const p = route.params;
+    if (p) {
+      console.log('[InventoryOrdersScreen] applying params:', p);
+      if (typeof p.initialSearch === 'string') setSearchQuery(p.initialSearch);
+      if (p.initialSortBy) setSortBy(p.initialSortBy);
+      if (p.initialLocationIds) setSelectedLocationIds(p.initialLocationIds);
+      if (p.lowStockOnly !== undefined) setLowStockOnly(p.lowStockOnly);
+      if (p.initialVariantIds != null) {
+        const ids = Array.isArray(p.initialVariantIds) ? p.initialVariantIds : String(p.initialVariantIds).split(',').filter(Boolean);
+        setPresetVariantIds(ids.length > 0 ? ids : null);
+      }
+
+      if (p.openScannerOnMount) {
+        setTimeout(() => {
+          openScanner((code: string) => {
+            handleBarcodeScan(code);
+            closeScanner();
+          }, 'deep_link');
+        }, 100);
+      }
+
+      if (p.openLocationPicker) {
+        setLocationPickerOpen(true);
+      }
+    }
+  }, [route.params, closeScanner, openScanner]);
+
+  // Loading & Data State
+  const [platformConnections, setPlatformConnections] = useState<PlatformConnection[]>([]);
+  const [platformLocations, setPlatformLocations] = useState<PlatformLocation[]>([]);
+  const [isLoadingConnections, setIsLoadingConnections] = useState(true);
+  const [displayCount, setDisplayCount] = useState(50);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const ITEMS_PER_LOAD = 20;
+
+  // Bulk Selection State
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+
+  // Bulk action modal: filter by type/voice, review, then apply Delete/Archive/Liquidate
+  const [bulkActionModalVisible, setBulkActionModalVisible] = useState(false);
+  const [bulkActionModalQuery, setBulkActionModalQuery] = useState('');
+  const [bulkActionModalMatchIds, setBulkActionModalMatchIds] = useState<string[] | null>(null);
+  const [speechModalVisible, setSpeechModalVisible] = useState(false);
+
+  // Bulk action review flow state
+  type PlannedAction = {
+    itemId: string;
+    title: string;
+    thumbnail?: string;
+    actionType: string;
+    description: string;
+    changes: { field: string; from: string; to: string }[];
+    approved: boolean;
+  };
+  const [bulkPhase, setBulkPhase] = useState<'command' | 'planning' | 'review'>('command');
+  const [plannedActions, setPlannedActions] = useState<PlannedAction[]>([]);
+  const [planSummary, setPlanSummary] = useState('');
+  const [planLoading, setPlanLoading] = useState(false);
+  const [executeLoading, setExecuteLoading] = useState(false);
+  const [reviewModalVisible, setReviewModalVisible] = useState(false);
+
+  // Bulk Selection Handlers
+  // Bulk Selection Handlers
+  const handleLongPressItem = (id: string) => {
+    // Standardize: Long press ALWAYS enters drag mode for that item
+    setIsSelectionMode(true);
+
+    // Select the item if not selected (or ensure it's the start of drag)
+    const newSet = new Set(selectedItems);
+    newSet.add(id);
+    setSelectedItems(newSet);
+
+    // Start Drag Session
+    isDraggingSelection.current = true;
+    lastSelectedId.current = id;
+    setScrollEnabled(false);
+  };
+
+  const handleToggleSelection = useCallback((id: string, forceState?: boolean) => {
+    setSelectedItems(prev => {
+      const next = new Set(prev);
+      const isSelected = next.has(id);
+
+      if (forceState !== undefined) {
+        if (forceState) next.add(id);
+        else next.delete(id);
+      } else {
+        if (isSelected) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleExitSelectionMode = () => {
+    setIsSelectionMode(false);
+    setSelectedItems(new Set());
+    setBulkActionModalVisible(false);
+  };
+
+  // Preset: fetch slow movers variant IDs from nudges API (reuses insights data)
+  const fetchSlowMoversVariantIds = useCallback(async () => {
+    const orgId = currentOrg?.id;
+    if (!orgId) {
+      Alert.alert('No organization', 'Select an organization to load slow movers.');
+      return;
+    }
+    setLoadingSlowMovers(true);
+    try {
+      const token = await ensureSupabaseJwt();
+      if (!token) {
+        Alert.alert('Error', 'Not authenticated.');
+        return;
+      }
+      const response = await fetch(`https://api.sssync.app/api/insights/orgs/${encodeURIComponent(orgId)}/nudges`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        throw new Error(`Nudges failed: ${response.status}`);
+      }
+      const data = await response.json();
+      const insight = data?.insight ?? data;
+      const link = insight?.bottomDIN?.action?.link ?? '';
+      const affected = insight?.bottomDIN?.affectedProducts ?? [];
+      let ids: string[] = [];
+      const match = link.match(/variantIds=([^&]+)/);
+      if (match) {
+        ids = match[1].split(',').map((s: string) => s.trim()).filter(Boolean);
+      }
+      if (ids.length === 0 && affected.length > 0) {
+        ids = affected.map((p: { id: string }) => p.id).filter(Boolean);
+      }
+      setPresetVariantIds(ids.length > 0 ? ids : null);
+      if (ids.length === 0) {
+        Alert.alert('No slow movers', 'No slow-moving products data right now. Try again later.');
+      }
+    } catch (err) {
+      console.error('[InventoryOrdersScreen] fetchSlowMovers failed', err);
+      Alert.alert('Error', err instanceof Error ? err.message : 'Failed to load slow movers.');
+    } finally {
+      setLoadingSlowMovers(false);
+    }
+  }, [currentOrg?.id]);
+
+  const [moreMenuVisible, setMoreMenuVisible] = useState(false);
+  const [archiveModalVisible, setArchiveModalVisible] = useState(false);
+  const [liquidationModalVisible, setLiquidationModalVisible] = useState(false);
+  const [tagsModalVisible, setTagsModalVisible] = useState(false);
+  const [tagInput, setTagInput] = useState("");
+  const [liquidationTimeline, setLiquidationTimeline] = useState("");
+  const [liquidationAmount, setLiquidationAmount] = useState("");
+  const [liquidationStrategy, setLiquidationStrategy] = useState<'aggressive' | 'moderate' | 'conservative'>('moderate');
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [scrollEnabled, setScrollEnabled] = useState(true);
+
+  // Drag-to-select refs
+  const itemLayouts = useRef<{ [key: string]: { y: number; height: number } }>({});
+  const listRef = useRef<FlatList>(null);
+  const isDraggingSelection = useRef(false);
+  const lastSelectedId = useRef<string | null>(null);
+
+  // Auto-scroll refs
+  const listHeight = useRef(0);
+  const autoScrollActive = useRef(false);
+  const autoScrollSpeed = useRef(0);
+  const currentTouchY = useRef(0);
+
+  const performSelectionAt = (touchY: number, offset: number) => {
+    const absoluteY = touchY + offset;
+    for (const [id, layout] of Object.entries(itemLayouts.current)) {
+      if (absoluteY >= layout.y && absoluteY <= layout.y + layout.height) {
+        if (lastSelectedId.current !== id) {
+          handleToggleSelection(id, true);
+          lastSelectedId.current = id;
+        }
+        break;
+      }
+    }
+  };
+
+  const runAutoScroll = () => {
+    if (!autoScrollActive.current) return;
+
+    const speed = autoScrollSpeed.current;
+    if (speed === 0) {
+      requestAnimationFrame(runAutoScroll);
+      return;
+    }
+
+    const newOffset = Math.max(0, scrollOffset.current + speed);
+    listRef.current?.scrollToOffset({ offset: newOffset, animated: false });
+
+    // We manually update scrollOffset here because the onScroll event might be slightly delayed
+    // and we need precise calculation for selection.
+    // However, onScroll will eventually fire and correct it. 
+    // For smoother selection during scroll, we optimistically use newOffset.
+    performSelectionAt(currentTouchY.current, newOffset);
+
+    requestAnimationFrame(runAutoScroll);
+  };
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponderCapture: (evt, gestureState) => {
+        // Only capture if we are explicitly in a drag session (triggered by long press)
+        // AND there is movement.
+        return isDraggingSelection.current && Math.abs(gestureState.dy) > 2;
+      },
+      onPanResponderGrant: () => {
+        // Already handled in long press, but ensure state
+        autoScrollActive.current = false;
+      },
+      onPanResponderMove: (evt, gestureState) => {
+        if (!isDraggingSelection.current) return;
+
+        const y = evt.nativeEvent.locationY;
+        currentTouchY.current = y;
+
+        // Auto-scroll logic
+        const threshold = 100;
+        const maxSpeed = 20;
+        let speed = 0;
+
+        if (y < threshold) {
+          // Top edge - scroll up
+          // closer to 0 (top) -> faster
+          const ratio = (threshold - y) / threshold;
+          speed = -maxSpeed * ratio;
+        } else if (listHeight.current > 0 && y > listHeight.current - threshold) {
+          // Bottom edge - scroll down
+          const ratio = (y - (listHeight.current - threshold)) / threshold;
+          speed = maxSpeed * ratio;
+        }
+
+        autoScrollSpeed.current = speed;
+
+        if (speed !== 0) {
+          if (!autoScrollActive.current) {
+            autoScrollActive.current = true;
+            runAutoScroll();
+          }
+        } else {
+          autoScrollActive.current = false;
+        }
+
+        // Standard selection
+        performSelectionAt(y, scrollOffset.current);
+      },
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderRelease: () => {
+        isDraggingSelection.current = false;
+        lastSelectedId.current = null;
+        autoScrollActive.current = false;
+        setScrollEnabled(true);
+      },
+      onPanResponderTerminate: () => {
+        isDraggingSelection.current = false;
+        lastSelectedId.current = null;
+        autoScrollActive.current = false;
+        setScrollEnabled(true);
+      },
+    })
+  ).current;
+
+  // Track scroll offset
+  const scrollOffset = useRef(0);
+  const handleScroll = (event: any) => {
+    scrollOffset.current = event.nativeEvent.contentOffset.y;
+  };
+
+
+
+
+  useEffect(() => {
+    const keyboardShowListener = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', (e) => {
+      setKeyboardHeight(e.endCoordinates.height);
+    });
+    const keyboardHideListener = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => {
+      setKeyboardHeight(0);
+    });
+    return () => {
+      keyboardShowListener.remove();
+      keyboardHideListener.remove();
+    };
+  }, []);
+
+  const handleSelectAll = () => {
+    // Select all currently filtered items
+    const allIds = filteredInventory.map(item => item.Id);
+    setSelectedItems(new Set(allIds));
+  };
+
+  const runBulkDeleteByIds = useCallback(async (ids: string[]) => {
+    if (ids.length === 0) return;
+    try {
+      const { error } = await supabase
+        .from('ProductVariants')
+        .update({ IsArchived: true })
+        .in('Id', ids);
+      if (error) throw error;
+      setBulkActionModalVisible(false);
+      handleExitSelectionMode();
+    } catch (err) {
+      console.error('Bulk delete failed', err);
+      Alert.alert('Error', 'Failed to delete items. Please try again.');
+    }
+  }, []);
+
+  const handleBulkDelete = () => {
+    const idsToDelete = Array.from(selectedItems);
+    Alert.alert(
+      'Delete Items',
+      `Are you sure you want to delete ${idsToDelete.length} items? This will archive them from your inventory.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => runBulkDeleteByIds(idsToDelete) },
+      ]
+    );
+  };
+
+  const runBulkArchiveByIds = useCallback(async (ids: string[]) => {
+    if (ids.length === 0) return;
+    try {
+      const { error } = await supabase
+        .from('ProductVariants')
+        .update({ IsArchived: true })
+        .in('Id', ids);
+      if (error) throw error;
+      setBulkActionModalVisible(false);
+      handleExitSelectionMode();
+    } catch (err) {
+      console.error('Bulk archive failed', err);
+      Alert.alert('Error', 'Failed to archive items. Please try again.');
+    }
+  }, []);
+
+
+
+  const legendObservables: LegendStateObservables | null = useLegendState();
+
+  // Fetch platform connections and locations
+  useEffect(() => {
+    const fetchPlatformData = async () => {
+      if (!legendState?.userId) return;
+
+      setIsLoadingConnections(true);
+      try {
+        const { data: connectionsData, error: connectionsError } = await supabase
+          .from('PlatformConnections')
+          .select('Id, UserId, OrgId, PlatformType, DisplayName, Status, IsEnabled, LastSyncAttemptAt, LastSyncSuccessAt, CreatedAt, UpdatedAt')
+          .eq('UserId', legendState.userId);
+
+        if (connectionsError) {
+          console.error('[InventoryScreen] Error fetching platform connections:', connectionsError);
+        } else {
+          const normalizedConnections: PlatformConnection[] = (connectionsData || []).map((conn: any) => ({
+            ...conn,
+            Credentials: conn?.Credentials ?? null,
+          }));
+          setPlatformConnections(normalizedConnections);
+        }
+
+        if (connectionsData && connectionsData.length > 0) {
+          const connectionIds = connectionsData.map(conn => conn.Id);
+          const { data: locationsData, error: locationsError } = await supabase
+            .from('PlatformLocations')
+            .select('Id, PlatformConnectionId, PlatformLocationId, Name, IsActive, IsPrimary')
+            .in('PlatformConnectionId', connectionIds);
+
+          if (locationsError) {
+            console.error('[InventoryScreen] Error fetching platform locations:', locationsError);
+          } else {
+            const normalizedLocations: PlatformLocation[] = (locationsData || []).map((location: any) => ({
+              Id: location.Id,
+              PlatformConnectionId: location.PlatformConnectionId,
+              PlatformGeneratedLocationId: location.PlatformGeneratedLocationId ?? location.PlatformLocationId ?? location.Id,
+              Name: location.Name ?? 'Location',
+              IsPOS: Boolean(location.IsPOS),
+              id: location.Id,
+            }));
+            setPlatformLocations(normalizedLocations);
+          }
+        }
+      } catch (error) {
+        console.error('[InventoryScreen] Exception fetching platform data:', error);
+      } finally {
+        setIsLoadingConnections(false);
+      }
+    };
+
+    fetchPlatformData();
+  }, [legendState?.userId]);
+
+  // Fallback state for when Legend observable is empty
+  const [directFetchVariants, setDirectFetchVariants] = useState<Record<string, ProductVariantData>>({});
+  const [directFetchLevels, setDirectFetchLevels] = useState<Record<string, InventoryLevel>>({});
+  const [sharedLinkQuantities, setSharedLinkQuantities] = useState<Record<string, { quantity: number; poolId?: string }>>({});
+  const PRODUCT_VARIANT_SELECT = 'Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, Tags, PrimaryImageUrl, CreatedAt, UpdatedAt';
+
+  const fetchAllProductVariants = useCallback(async (userId: string) => {
+    const pageSize = 200;
+    const allRows: any[] = [];
+    let from = 0;
+
+    while (true) {
+      const to = from + pageSize - 1;
+      const { data, error } = await supabase
+        .from('ProductVariants')
+        .select(PRODUCT_VARIANT_SELECT)
+        .eq('UserId', userId)
+        .not('Sku', 'like', 'DRAFT-%')
+        .range(from, to);
+
+      if (error) throw error;
+
+      const rows = data || [];
+      allRows.push(...rows);
+
+      if (rows.length < pageSize) break;
+      from += pageSize;
+    }
+
+    return allRows;
+  }, []);
+
+  useEffect(() => {
+    const directFetchProducts = async () => {
+      if (supabase && legendState?.userId) {
+        try {
+          // Fetch ProductVariants
+          const data = await fetchAllProductVariants(legendState.userId);
+
+          if (!data) {
+            console.error('[InventoryScreen - Direct Fetch] Error fetching products: empty response');
+          } else {
+            console.log('[InventoryScreen - Direct Fetch] Successfully fetched products:', data?.length);
+            // Store in fallback state, keyed by Id
+            if (data && data.length > 0) {
+              const variantMap: Record<string, ProductVariantData> = {};
+              const variantIds: string[] = [];
+              data.forEach((v: any) => {
+                variantMap[v.Id] = v;
+                variantIds.push(v.Id);
+              });
+              setDirectFetchVariants(variantMap);
+
+              // Fetch CrossOrgProductLinks for shared inventory quantities
+              if (variantIds.length > 0) {
+                const { data: linksData, error: linksError } = await supabase
+                  .from('CrossOrgProductLinks')
+                  .select('TargetVariantId, AvailableQuantity, TargetPoolId, Status')
+                  .in('TargetVariantId', variantIds)
+                  .eq('Status', 'active');
+
+                if (linksError) {
+                  console.warn('[InventoryScreen - Direct Fetch] Error fetching shared links:', linksError);
+                } else {
+                  const linkMap: Record<string, { quantity: number; poolId?: string }> = {};
+                  (linksData || []).forEach((link: any) => {
+                    if (link.TargetVariantId) {
+                      linkMap[link.TargetVariantId] = {
+                        quantity: link.AvailableQuantity || 0,
+                        poolId: link.TargetPoolId || undefined,
+                      };
+                    }
+                  });
+                  setSharedLinkQuantities(linkMap);
+                }
+              }
+
+              // Also fetch InventoryLevels for these variants
+              if (variantIds.length > 0) {
+                const { data: levelsData, error: levelsError } = await supabase
+                  .from('InventoryLevels')
+                  .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt')
+                  .in('ProductVariantId', variantIds);
+
+                if (levelsError) {
+                  console.error('[InventoryScreen - Direct Fetch] Error fetching inventory levels:', levelsError);
+                } else {
+                  console.log('[InventoryScreen - Direct Fetch] Successfully fetched inventory levels:', levelsData?.length);
+                  if (levelsData && levelsData.length > 0) {
+                    const levelsMap: Record<string, InventoryLevel> = {};
+                    levelsData.forEach((l: any) => {
+                      levelsMap[l.Id] = l;
+                    });
+                    setDirectFetchLevels(levelsMap);
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.error('[InventoryScreen - Direct Fetch] Exception during direct fetch:', e);
+        }
+      }
+    };
+
+    if (legendState?.userId) {
+      directFetchProducts();
+    }
+  }, [fetchAllProductVariants, legendState]);
+
+  // Track if this is the first render to avoid double-fetching on initial mount
+  const isFirstRender = useRef(true);
+
+  // CRITICAL: Refresh data when screen comes into focus (e.g., after editing product or CSV import)
+  // This ensures updated products show fresh data without requiring a full app restart
+  // UPDATED: Always refetch on focus since count-only check misses product UPDATES
+  useFocusEffect(
+    useCallback(() => {
+      // Skip the first render since directFetchProducts already runs on mount
+      if (isFirstRender.current) {
+        isFirstRender.current = false;
+        return;
+      }
+
+      const refreshOnFocus = async () => {
+        if (!legendState?.userId) return;
+
+        console.log('[InventoryOrdersScreen] Screen focused - refreshing products...');
+
+        try {
+          // Always refetch products to get latest data (covers both new AND updated products)
+          const data = await fetchAllProductVariants(legendState.userId);
+
+          if (data) {
+            const variantMap: Record<string, ProductVariantData> = {};
+            const variantIds: string[] = [];
+            data.forEach((v: any) => {
+              variantMap[v.Id] = v;
+              variantIds.push(v.Id);
+            });
+            setDirectFetchVariants(variantMap);
+
+            // Refresh CrossOrgProductLinks for shared inventory quantities
+            if (variantIds.length > 0) {
+              const { data: linksData, error: linksError } = await supabase
+                .from('CrossOrgProductLinks')
+                .select('TargetVariantId, AvailableQuantity, TargetPoolId, Status')
+                .in('TargetVariantId', variantIds)
+                .eq('Status', 'active');
+
+              if (linksError) {
+                console.warn('[InventoryOrdersScreen] Error refreshing shared links:', linksError);
+              } else {
+                const linkMap: Record<string, { quantity: number; poolId?: string }> = {};
+                (linksData || []).forEach((link: any) => {
+                  if (link.TargetVariantId) {
+                    linkMap[link.TargetVariantId] = {
+                      quantity: link.AvailableQuantity || 0,
+                      poolId: link.TargetPoolId || undefined,
+                    };
+                  }
+                });
+                setSharedLinkQuantities(linkMap);
+              }
+            }
+
+            // Also refresh inventory levels
+            if (variantIds.length > 0) {
+              const { data: levelsData } = await supabase
+                .from('InventoryLevels')
+                .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt')
+                .in('ProductVariantId', variantIds);
+
+              if (levelsData && levelsData.length > 0) {
+                const levelsMap: Record<string, InventoryLevel> = {};
+                levelsData.forEach((l: any) => {
+                  levelsMap[l.Id] = l;
+                });
+                setDirectFetchLevels(levelsMap);
+              }
+            }
+            console.log('[InventoryOrdersScreen] Refresh complete, now showing', data.length, 'products');
+          }
+        } catch (e) {
+          console.error('[InventoryOrdersScreen] Error during focus refresh:', e);
+        }
+      };
+
+      refreshOnFocus();
+    }, [fetchAllProductVariants, legendState?.userId])
   );
-  
-  const renderOrderItem = ({ item }) => {
+
+
+  // CRITICAL FIX: Use useSelector to properly track observable changes for real-time reactivity
+  // Direct .get() calls outside useMemo don't trigger re-renders when data changes
+  // useSelector creates a subscription that re-renders the component when the observable changes
+  const legendProductVariants = legendObservables?.productVariants$?.get() || {};
+  const activePlatformMappings = (legendObservables?.platformProductMappings$?.get() || {}) as Record<string, PlatformProductMapping>;
+  const legendInventoryLevels = (legendObservables?.inventoryLevels$?.get() || {}) as Record<string, InventoryLevel>;
+  const activeProductImages = (legendObservables?.productImages$?.get() || {}) as Record<string, ProductImage>;
+  const activeMarketplaceListings = (legendObservables?.marketplaceListings$?.get() || {}) as Record<string, MarketplaceListing>;
+
+  // Use Legend data if available, otherwise fall back to direct fetch
+  const legendVariantCount = Object.keys(legendProductVariants).length;
+  const directVariantCount = Object.keys(directFetchVariants).length;
+  const activeProductVariants = legendVariantCount >= directVariantCount
+    ? legendProductVariants
+    : directFetchVariants;
+
+  // Use Legend InventoryLevels if available, otherwise fall back to direct fetch
+  const legendLevelCount = Object.keys(legendInventoryLevels).length;
+  const directLevelCount = Object.keys(directFetchLevels).length;
+  const activeInventoryLevels = legendLevelCount >= directLevelCount
+    ? legendInventoryLevels
+    : directFetchLevels;
+
+  // Debug: Log when observables update (helps diagnose real-time issues)
+  useEffect(() => {
+    console.log('[InventoryOrdersScreen] Observable state updated:', {
+      variantCount: Object.keys(activeProductVariants).length,
+      legendCount: Object.keys(legendProductVariants).length,
+      fallbackCount: Object.keys(directFetchVariants).length,
+      levelCount: Object.keys(activeInventoryLevels).length,
+      legendLevelCount: Object.keys(legendInventoryLevels).length,
+      fallbackLevelCount: Object.keys(directFetchLevels).length,
+      imageCount: Object.keys(activeProductImages).length,
+      mappingCount: Object.keys(activePlatformMappings).length,
+      sharedLinkCount: Object.keys(sharedLinkQuantities).length,
+    });
+  }, [activeProductVariants, legendProductVariants, directFetchVariants, activeInventoryLevels, legendInventoryLevels, directFetchLevels, activeProductImages, activePlatformMappings, sharedLinkQuantities]);
+
+  const enrichedProductVariants = useMemo((): EnrichedProductVariant[] => {
+    const variants = activeProductVariants;
+    const images = activeProductImages;
+    const baseLevels = activeInventoryLevels;
+    const mappings = activePlatformMappings;
+    // CRITICAL: Don't require platformConnections - partners may have products shared with them
+    // without having connected any platforms yet
+    if (Object.keys(variants).length === 0) return [];
+
+    // Merge shared link quantities into inventory levels when pool levels are missing/zero
+    const levels: Record<string, InventoryLevel> = { ...baseLevels };
+    const poolQtyByVariant = new Map<string, number>();
+    Object.values(baseLevels).forEach((level: InventoryLevel) => {
+      if (!level.PlatformConnectionId && (level as any).PoolId) {
+        const current = poolQtyByVariant.get(level.ProductVariantId) || 0;
+        poolQtyByVariant.set(level.ProductVariantId, current + (level.Quantity || 0));
+      }
+    });
+    Object.entries(sharedLinkQuantities).forEach(([variantId, info]) => {
+      const existingPoolQty = poolQtyByVariant.get(variantId) || 0;
+      if (info.quantity > 0 && existingPoolQty <= 0) {
+        const syntheticId = `shared-${variantId}-${info.poolId || 'pool'}`;
+        levels[syntheticId] = {
+          Id: syntheticId,
+          ProductVariantId: variantId,
+          Quantity: info.quantity,
+          PoolId: info.poolId,
+          PlatformConnectionId: null,
+          PlatformLocationId: info.poolId || 'shared',
+          UpdatedAt: new Date().toISOString(),
+        } as unknown as InventoryLevel;
+      }
+    });
+
+    // CRITICAL FIX: Group variants by ProductId to properly handle base/option architecture
+    // Build a map of ProductId -> option variants for inventory aggregation
+    const optionVariantsByProduct = new Map<string, Array<{ id: string; variant: any }>>();
+    const allVariantIds = Object.keys(variants);
+
+    // Build connection -> platformType lookup to filter inventory by platform
+    const connectionToPlatform = new Map<string, string>();
+    platformConnections.forEach(conn => {
+      connectionToPlatform.set(conn.Id, conn.PlatformType.toLowerCase());
+    });
+
+    allVariantIds.forEach(variantId => {
+      const variant = variants[variantId];
+      if (!variant) return;
+
+      // Cast to access VariantType which may not be on the base interface yet
+      const variantWithType = variant as any;
+
+      // Only track option variants for aggregation
+      if (variantWithType.VariantType === 'option') {
+        const productId = variant.ProductId;
+        if (!optionVariantsByProduct.has(productId)) {
+          optionVariantsByProduct.set(productId, []);
+        }
+        optionVariantsByProduct.get(productId)!.push({ id: variantId, variant });
+      }
+    });
+
+    /**
+     * CRITICAL FIX: Helper to get inventory levels for a variant from PRIMARY platform only.
+     * This prevents double-counting when the same product exists on multiple platforms.
+     * Priority order: shopify > square > clover > amazon > ebay > facebook
+     * Also handles pool-based inventory (no platform connection) for partners
+     */
+    const getPrimaryPlatformInventory = (variantId: string): number => {
+      const variantLevels = Object.values(levels).filter((level: InventoryLevel) =>
+        level.ProductVariantId === variantId
+      );
+
+      // If no levels found, return 0
+      if (variantLevels.length === 0) {
+        return 0;
+      }
+
+      const hasRealPlatformLevels = variantLevels.some(level => !!level.PlatformConnectionId);
+
+      // Group by platform (or 'pool' for levels without connection)
+      // IMPORTANT: if real platform levels exist, ignore pool/synthetic rows so list matches editor/platform truth.
+      const byPlatform: Record<string, number> = {};
+      variantLevels.forEach(level => {
+        if (hasRealPlatformLevels && !level.PlatformConnectionId) {
+          return;
+        }
+        // For pool-based inventory (partner shares), use 'pool' as platform
+        const platform = level.PlatformConnectionId
+          ? (connectionToPlatform.get(level.PlatformConnectionId) || 'unknown')
+          : 'pool';
+        byPlatform[platform] = (byPlatform[platform] || 0) + (level.Quantity || 0);
+      });
+
+      // Pick PRIMARY platform only (priority order) - include 'pool' at end for partners
+      const platformPriority = ['shopify', 'square', 'clover', 'amazon', 'ebay', 'facebook', 'pool'];
+      for (const plat of platformPriority) {
+        if (byPlatform[plat] !== undefined && byPlatform[plat] > 0) {
+          return byPlatform[plat];
+        }
+      }
+
+      // If all are zero, fall back to the first available platform entry
+      for (const plat of platformPriority) {
+        if (byPlatform[plat] !== undefined) {
+          return byPlatform[plat];
+        }
+      }
+
+      // Fallback: sum all if no known platform
+      return Object.values(byPlatform).reduce((sum, qty) => sum + qty, 0);
+    };
+
+    // FILTER 1: Only show 'flat' or 'base' variants (not 'option' variants)
+    // Option variants are sub-items that belong to a base variant and shouldn't appear separately
+    // Also filter out archived variants
+    let productVariantIdsToDisplay = allVariantIds.filter(variantId => {
+      const variant = variants[variantId];
+      if (!variant) return false;
+
+      const variantWithType = variant as any;
+
+      // Filter out archived variants (soft delete)
+      if (variantWithType.IsArchived === true) {
+        console.log(`[InventoryScreen] Filtering out archived variant: ${variant.Title} (${variantId})`);
+        return false;
+      }
+
+      // Filter out DRAFT variants (safety check)
+      if (variant.Sku && variant.Sku.startsWith('DRAFT-')) {
+        console.log(`[InventoryScreen] Filtering out DRAFT variant: ${variant.Title} (${variant.Sku})`);
+        return false;
+      }
+
+      // Filter out 'option' variants - these should not appear as separate list items
+      // They are aggregated into their base variant
+      if (variantWithType.VariantType === 'option') {
+        console.log(`[InventoryScreen] Filtering out option variant: ${variant.Sku} (parent: ${variant.ProductId})`);
+        return false;
+      }
+
+      return true; // Show 'flat', 'base', or null/undefined VariantType
+    });
+
+    // Filter by platform
+    if (selectedPlatformType) {
+      const platformFilter = selectedPlatformType.toLowerCase();
+      productVariantIdsToDisplay = productVariantIdsToDisplay.filter(variantId => {
+        const variant = variants[variantId];
+        if (!variant) return false;
+
+        switch (platformFilter) {
+          case 'shopify':
+            if (variant.OnShopify !== undefined) return variant.OnShopify === true;
+            break;
+          case 'square':
+            if (variant.OnSquare !== undefined) return variant.OnSquare === true;
+            break;
+          case 'clover':
+            if (variant.OnClover !== undefined) return variant.OnClover === true;
+            break;
+          case 'amazon':
+            if (variant.OnAmazon !== undefined) return variant.OnAmazon === true;
+            break;
+          case 'ebay':
+            if (variant.OnEbay !== undefined) return variant.OnEbay === true;
+            break;
+          case 'facebook':
+            if (variant.OnFacebook !== undefined) return variant.OnFacebook === true;
+            break;
+        }
+
+        const relevantConnectionIds = platformConnections
+          .filter((conn: PlatformConnection) =>
+            conn.PlatformType.toLowerCase() === selectedPlatformType.toLowerCase() && conn.IsEnabled)
+          .map((conn: PlatformConnection) => conn.Id);
+
+        const hasMapping = Object.values(mappings).some((mapping: PlatformProductMapping) =>
+          mapping.ProductVariantId === variantId &&
+          relevantConnectionIds.includes(mapping.PlatformConnectionId) &&
+          mapping.IsEnabled
+        );
+
+        return hasMapping;
+      });
+    }
+
+    // Filter by location - check both base variant AND its option variants
+    if (selectedLocationIds.length > 0) {
+      productVariantIdsToDisplay = productVariantIdsToDisplay.filter(variantId => {
+        const variant = variants[variantId];
+        if (!variant) return false;
+
+        // Check if base variant has inventory at selected locations
+        const baseHasInventory = Object.values(levels).some((level: InventoryLevel) => {
+          const locationId = level.PlatformLocationId || 'unknown';
+          const poolId = level.PoolId;
+
+          // Match if location ID is selected OR if Pool ID is selected (for partner pools)
+          const isLocationMatch = selectedLocationIds.includes(locationId);
+          const isPoolMatch = poolId && selectedLocationIds.includes(poolId);
+
+          return (level.ProductVariantId === variantId) && (isLocationMatch || isPoolMatch);
+        });
+
+        if (baseHasInventory) return true;
+
+        // Also check option variants for inventory
+        const optionVariants = optionVariantsByProduct.get(variant.ProductId) || [];
+        const optionHasInventory = optionVariants.some(ov =>
+          Object.values(levels).some((level: InventoryLevel) => {
+            const locationId = level.PlatformLocationId || 'unknown';
+            const poolId = level.PoolId;
+
+            // Match if location ID is selected OR if Pool ID is selected
+            const isLocationMatch = selectedLocationIds.includes(locationId);
+            const isPoolMatch = poolId && selectedLocationIds.includes(poolId);
+
+            return (level.ProductVariantId === ov.id) && (isLocationMatch || isPoolMatch);
+          })
+        );
+
+        return optionHasInventory;
+      });
+    }
+
+    const enrichedVariants: EnrichedProductVariant[] = productVariantIdsToDisplay.map(variantId => {
+      const variant = variants[variantId];
+      const variantWithType = variant as any;
+
+      // Get images - check variant first, then product-level images
+      const variantImages = Object.values(images).filter((img: ProductImage) => img.ProductVariantId === variantId);
+      const imageUrl = variantImages.length > 0
+        ? variantImages[0].ImageUrl
+        : (variantWithType.PrimaryImageUrl || undefined);
+
+      // CRITICAL: Aggregate inventory and prices from OPTION variants when this is a 'base' variant
+      // Use getPrimaryPlatformInventory to avoid cross-platform double-counting
+      let totalQuantity = 0;
+      let minPrice: number | undefined = undefined;
+      let maxPrice: number | undefined = undefined;
+      const optionVariants = optionVariantsByProduct.get(variant.ProductId) || [];
+
+      if (variantWithType.VariantType === 'base' && optionVariants.length > 0) {
+        // For base variants, aggregate inventory from BOTH:
+        // 1. The base variant's OWN inventory (for partner-shared products)
+        // 2. All option variants' inventory
+        // CRITICAL: Use getPrimaryPlatformInventory to avoid counting same product on multiple platforms
+
+        // Start with base variant's own inventory (important for partner shares)
+        totalQuantity = getPrimaryPlatformInventory(variantId);
+
+        const optionPrices: number[] = [];
+        // Also include base variant's price in the range
+        if (variant.Price !== undefined && variant.Price !== null) {
+          optionPrices.push(variant.Price);
+        }
+
+        optionVariants.forEach(ov => {
+          // Add each option variant's inventory
+          totalQuantity += getPrimaryPlatformInventory(ov.id);
+          // Collect price from option variant
+          if (ov.variant.Price !== undefined && ov.variant.Price !== null) {
+            optionPrices.push(ov.variant.Price);
+          }
+        });
+
+        // Calculate min/max prices from all variants (base + options)
+        if (optionPrices.length > 0) {
+          minPrice = Math.min(...optionPrices);
+          maxPrice = Math.max(...optionPrices);
+        }
+        console.log(`[InventoryScreen] Base variant ${variant.Sku}: aggregated ${totalQuantity} qty (base + ${optionVariants.length} options), price range: $${minPrice} - $${maxPrice}`);
+      } else {
+        // For flat variants (no options), use getPrimaryPlatformInventory to avoid cross-platform duplication
+        totalQuantity = getPrimaryPlatformInventory(variantId);
+        // Use the variant's own price
+        minPrice = variant.Price;
+        maxPrice = variant.Price;
+      }
+
+      // Use the actual boolean flags from ProductVariants to determine platform status
+      const platformNames: string[] = [];
+      if (variant.OnShopify) platformNames.push('shopify');
+      if (variant.OnSquare) platformNames.push('square');
+      if (variant.OnClover) platformNames.push('clover');
+      if (variant.OnAmazon) platformNames.push('amazon');
+      if (variant.OnEbay) platformNames.push('ebay');
+      if (variant.OnFacebook) platformNames.push('facebook');
+
+      const variantIdsForSync = [variantId, ...optionVariants.map(ov => ov.id)];
+      const syncTimestamps = Object.values(mappings)
+        .filter((mapping: PlatformProductMapping) =>
+          variantIdsForSync.includes(mapping.ProductVariantId) &&
+          mapping.IsEnabled !== false
+        )
+        .map((mapping: PlatformProductMapping) => mapping.LastSyncedAt || mapping.UpdatedAt)
+        .filter((value: any) => typeof value === 'string' && value.length > 0) as string[];
+      const latestSyncMs = syncTimestamps.reduce((max, value) => {
+        const parsed = new Date(value).getTime();
+        return Number.isFinite(parsed) ? Math.max(max, parsed) : max;
+      }, 0);
+      const lastSyncedAt = latestSyncMs > 0 ? new Date(latestSyncMs).toISOString() : null;
+      const staleThresholdMs = 24 * 60 * 60 * 1000;
+      const isStale = !lastSyncedAt || (Date.now() - latestSyncMs) > staleThresholdMs;
+
+      return {
+        ...variant,
+        imageUrl,
+        totalQuantity,
+        platformNames,
+        lastSyncedAt,
+        isStale,
+        minPrice,
+        maxPrice,
+        VariantType: variantWithType.VariantType,
+        IsArchived: variantWithType.IsArchived,
+        optionVariantCount: optionVariants.length,
+        CreatedAt: variant.CreatedAt, // Pass through for date sorting
+      };
+    });
+
+    // Deduplicate by Id to prevent duplicates (defensive coding for real-time updates)
+    // Keep the most recent version (last one encountered) to ensure we have latest updates
+    const uniqueVariants = new Map<string, EnrichedProductVariant>();
+    enrichedVariants.forEach(variant => {
+      // Always set (overwrite) to ensure we get the latest version
+      uniqueVariants.set(variant.Id, variant);
+    });
+
+    return Array.from(uniqueVariants.values());
+  }, [activeProductVariants, activeProductImages, activeInventoryLevels, activePlatformMappings, platformConnections, selectedPlatformType, selectedLocationIds, legendObservables, variantUpdateCounter, inventoryUpdateCounter, sharedLinkQuantities]);
+
+  // Apply search and sort filters
+  const filteredInventory = useMemo(() => {
+    // CRITICAL FIX: Clone the array to ensure reference changes for useMemo
+    let filtered = [...enrichedProductVariants];
+
+    // Search across multiple fields: title, description, sku, barcode, tags
+    if (searchQuery) {
+      const queryLower = searchQuery.toLowerCase();
+      filtered = filtered.filter((item: EnrichedProductVariant) => {
+        const matches: MatchLocation[] = [];
+        let snippet = '';
+
+        // Check title
+        if (item.Title?.toLowerCase().includes(queryLower)) {
+          matches.push('title');
+          snippet = item.Title;
+        }
+
+        // Check description
+        if (item.Description?.toLowerCase().includes(queryLower)) {
+          matches.push('description');
+          if (!snippet) snippet = item.Description.substring(0, 60) + '...';
+        }
+
+        // Check SKU
+        if (item.Sku?.toLowerCase().includes(queryLower)) {
+          matches.push('sku');
+          if (!snippet) snippet = `SKU: ${item.Sku}`;
+        }
+
+        // Check barcode
+        if (item.Barcode?.toLowerCase().includes(queryLower)) {
+          matches.push('barcode');
+          if (!snippet) snippet = `Barcode: ${item.Barcode}`;
+        }
+
+        // Check tags
+        const hasTagMatch = item.Tags?.some(tag => tag.toLowerCase().includes(queryLower));
+        if (hasTagMatch) {
+          matches.push('tags');
+          if (!snippet) {
+            const matchedTag = item.Tags?.find(tag => tag.toLowerCase().includes(queryLower));
+            snippet = `Tag: ${matchedTag}`;
+          }
+        }
+
+        if (matches.length > 0) {
+          item.matchLocations = matches;
+          item.matchSnippet = snippet || item.Title || 'Match found';
+          return true;
+        }
+        return false;
+      });
+    }
+
+    // Low stock filter
+    if (lowStockOnly && !searchQuery) {
+      filtered = filtered.filter((item: EnrichedProductVariant) =>
+        (item.totalQuantity || 0) <= 5
+      );
+    }
+
+    // Preset allowlist (e.g. slow movers from nudges or route param)
+    if (presetVariantIds && presetVariantIds.length > 0) {
+      const allowSet = new Set(presetVariantIds);
+      filtered = filtered.filter((item: EnrichedProductVariant) => allowSet.has(item.Id));
+    }
+
+    // Price max preset (e.g. "Under $50")
+    if (priceMax != null && priceMax > 0) {
+      filtered = filtered.filter((item: EnrichedProductVariant) => {
+        const p = item.minPrice ?? item.Price ?? 0;
+        return p <= priceMax;
+      });
+    }
+
+    // Barcode search
+    if (scannedBarcode && !searchQuery) {
+      filtered = filtered.filter((item: EnrichedProductVariant) =>
+        item.Barcode?.toLowerCase().includes(scannedBarcode.toLowerCase())
+      );
+
+      if (filtered.length === 0) {
+        setBarcodeSearchError(`No product found with barcode: ${scannedBarcode}`);
+      } else {
+        setBarcodeSearchError(null);
+      }
+    }
+
+    // Sort
+    switch (sortBy) {
+      case 'name':
+        filtered.sort((a, b) => (a.Title || '').localeCompare(b.Title || ''));
+        break;
+      case 'price-low':
+        filtered.sort((a, b) => (a.Price || 0) - (b.Price || 0));
+        break;
+      case 'price-high':
+        filtered.sort((a, b) => (b.Price || 0) - (a.Price || 0));
+        break;
+      case 'stock-low':
+        filtered.sort((a, b) => (a.totalQuantity || 0) - (b.totalQuantity || 0));
+        break;
+      case 'stock-high':
+        filtered.sort((a, b) => (b.totalQuantity || 0) - (a.totalQuantity || 0));
+        break;
+      case 'date':
+      default:
+        // Sort by CreatedAt descending (most recent first)
+        filtered.sort((a, b) => {
+          const dateA = a.CreatedAt ? new Date(a.CreatedAt).getTime() : 0;
+          const dateB = b.CreatedAt ? new Date(b.CreatedAt).getTime() : 0;
+          return dateB - dateA;
+        });
+        break;
+    }
+
+    return filtered;
+  }, [enrichedProductVariants, searchQuery, scannedBarcode, sortBy, lowStockOnly, presetVariantIds, priceMax]);
+
+  // Bulk action modal: apply filter query to current list and set match IDs (used inside modal)
+  const applyBulkActionModalFilter = useCallback((query: string): string[] => {
+    const parsed = parseFilterQuery(query);
+    let list = [...filteredInventory];
+    if (parsed.priceMax != null && parsed.priceMax > 0) {
+      list = list.filter((item: EnrichedProductVariant) => (item.minPrice ?? item.Price ?? 0) <= parsed.priceMax!);
+    }
+    if (parsed.lowStockOnly === true) {
+      list = list.filter((item: EnrichedProductVariant) => (item.totalQuantity ?? 0) <= 5);
+    }
+    if (parsed.platform) {
+      const plat = parsed.platform.toLowerCase();
+      list = list.filter((item: EnrichedProductVariant) =>
+        item.platformNames?.includes(plat) ?? false
+      );
+    }
+    if (parsed.triggerSlowMovers === true && presetVariantIds?.length) {
+      const allowSet = new Set(presetVariantIds);
+      list = list.filter((item: EnrichedProductVariant) => allowSet.has(item.Id));
+    }
+    return list.map((item: EnrichedProductVariant) => item.Id);
+  }, [filteredInventory, presetVariantIds]);
+
+  const handleBulkActionModalApply = useCallback(() => {
+    const ids = applyBulkActionModalFilter(bulkActionModalQuery);
+    setBulkActionModalMatchIds(ids.length > 0 ? ids : null);
+  }, [bulkActionModalQuery, applyBulkActionModalFilter]);
+
+  const inventoryToDisplay = useMemo(() => {
+    return filteredInventory.slice(0, displayCount);
+  }, [filteredInventory, displayCount]);
+
+  const handleLoadMore = () => {
+    if (displayCount < filteredInventory.length && !isLoadingMore) {
+      setIsLoadingMore(true);
+      setTimeout(() => {
+        setDisplayCount(prevCount => prevCount + ITEMS_PER_LOAD);
+        setIsLoadingMore(false);
+      }, 500);
+    }
+  };
+
+  const handleBarcodeScan = (barcode: string) => {
+    setScannedBarcode(barcode);
+    setSearchQuery('');
+    // New: Make API call to search backend for barcode
+    searchBarcodeOnBackend(barcode);
+  };
+
+  const searchBarcodeOnBackend = async (barcode: string) => {
+    startTrace();
+    try {
+      setBarcodeSearchError(null);
+      console.log(`[InventoryOrdersScreen] Searching backend for barcode: ${barcode}`);
+
+      const token = await ensureSupabaseJwt();
+      if (!token) {
+        logFlowEvent(FlowEvents.BARCODE_SCAN_FAILED, { barcode, error: 'no_auth_token' });
+        setBarcodeSearchError('Authentication required. Please log in again.');
+        return;
+      }
+
+      const traceHeaders = await getTraceHeaders();
+      const response = await fetch(`https://api.sssync.app/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          ...traceHeaders,
+        },
+      });
+
+      if (!response.ok) {
+        const errMsg = response.status === 404 ? `Product not found with barcode: ${barcode}` : `Search failed: ${response.statusText}`;
+        logFlowEvent(FlowEvents.BARCODE_SCAN_FAILED, { barcode, status: response.status, error: errMsg });
+        if (response.status === 404) {
+          setBarcodeSearchError(`Product not found with barcode: ${barcode}`);
+        } else {
+          setBarcodeSearchError(`Search failed: ${response.statusText}`);
+        }
+        setScannedBarcode(null);
+        return;
+      }
+
+      const data = await response.json();
+
+      if (data.error) {
+        logFlowEvent(FlowEvents.BARCODE_SCAN_FAILED, { barcode, error: data.error });
+        setBarcodeSearchError(data.error);
+        setScannedBarcode(null);
+        return;
+      }
+
+      logFlowEvent(FlowEvents.BARCODE_SCAN_COMPLETED, {
+        barcode,
+        variantId: data.variant?.Id ?? data.variant?.id ?? null,
+      });
+      console.log(`[InventoryOrdersScreen] Backend found variant:`, data.variant);
+      // Result will be used in filteredInventory below
+      // Don't clear the scannedBarcode - it's already set and will filter the list
+    } catch (error) {
+      console.error(`[InventoryOrdersScreen] Barcode search error:`, error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logFlowEvent(FlowEvents.BARCODE_SCAN_FAILED, { barcode, error: errorMessage });
+      setBarcodeSearchError(`Error searching for barcode: ${errorMessage}`);
+      setScannedBarcode(null);
+    }
+  };
+
+  const handleSearchChange = (text: string) => {
+    setSearchQuery(text);
+    setScannedBarcode(null);
+    setBarcodeSearchError(null);
+  };
+
+  const handleSearchClear = () => {
+    setSearchQuery('');
+    setScannedBarcode(null);
+    setBarcodeSearchError(null);
+  };
+
+  // Memoized callback for list items
+  const handleItemPress = useCallback((id: string) => {
+    if (isSelectionMode) {
+      handleToggleSelection(id);
+    } else {
+      navigation.navigate('ProductDetail', { productId: id });
+    }
+  }, [isSelectionMode, navigation, handleToggleSelection]); // Dependencies need check
+
+  // Needs to be defined before renderInventoryItem
+
+  const renderInventoryItem = ({ item, index }: { item: EnrichedProductVariant; index: number }) => {
+    return (
+      <InventoryListCard
+        id={item.Id}
+        title={item.Title}
+        price={item.Price}
+        minPrice={item.minPrice}
+        maxPrice={item.maxPrice}
+        sku={item.Sku}
+        imageUrl={item.imageUrl}
+        totalQuantity={item.totalQuantity}
+        platformNames={item.platformNames}
+        lastSyncedAt={item.lastSyncedAt}
+        isStale={item.isStale}
+        matchLocations={item.matchLocations}
+        matchSnippet={item.matchSnippet}
+        searchQuery={searchQuery}
+        onPress={handleItemPress}
+        onLongPress={() => handleLongPressItem(item.Id)}
+        isSelectionMode={isSelectionMode}
+        isSelected={selectedItems.has(item.Id)}
+        onLayout={(e) => {
+          // Approximate layout tracking (index * estimated height) is faster but less accurate.
+          // Accurate: use event. But unrelated to scroll.
+          // Actually, in FlatList `onLayout` gives relative-to-item coords (0,0)?
+          // We need `index`. 
+          // If implementing drag, we might need a simpler fixed-height assumption or `onLayout` of the container?
+          // Let's use simple estimation for now: index * 130 (card height + margin).
+          // Or aggregate heights.
+
+          // Correction: inside FlatList, item onLayout x/y are relative to parent list content.
+          // So event.nativeEvent.layout.y IS the scroll position Y.
+          itemLayouts.current[item.Id] = {
+            y: e.nativeEvent.layout.y,
+            height: e.nativeEvent.layout.height
+          };
+        }}
+      />
+    );
+  };
+
+  const renderOrderItem = ({ item }: { item: MockOrderItemData }) => {
     const trackButtonStyle = {
       backgroundColor: theme.colors.primary + '00'
     };
 
     return (
-      <Card style={styles.orderCard}>
-        <View style={styles.orderHeader}>
-          <View style={styles.orderIdContainer}>
-            <Text style={styles.orderId}>#{item.id || 'Unknown'}</Text>
-            <View style={[
-              styles.platformBadge, 
-              { backgroundColor: getPlatformColor(item.platform, theme) + '20' }
-            ]}>
-              <Text style={[
-                styles.platformName, 
-                { color: getPlatformColor(item.platform, theme) }
-              ]}>
-                {item.platform || 'Unknown'}
-              </Text>
-            </View>
-          </View>
-          <Text style={styles.orderDate}>{formatDate(item.date)}</Text>
-        </View>
-        
-        <View style={styles.customerRow}>
-          <View style={styles.customerInfo}>
-            <Icon name="account" size={14} color="#777" style={styles.customerIcon} />
-            <Text style={styles.customerName}>{item.customer || 'Unknown customer'}</Text>
-          </View>
-          <Text style={styles.orderItems}>
-            {item.items ? `${item.items} item${item.items > 1 ? 's' : ''}` : ''}
-          </Text>
-        </View>
-        
-        <View style={styles.orderFooter}>
-          <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status, theme) + '20' }]}>
-            <Icon 
-              name={getStatusIcon(item.status)} 
-              size={14} 
-              color={getStatusColor(item.status, theme)} 
-              style={styles.statusIcon} 
-            />
-            <Text 
-              style={[styles.statusText, { color: getStatusColor(item.status, theme) }]}
-            >
-              {item.status ? item.status.charAt(0).toUpperCase() + item.status.slice(1) : 'Unknown'}
-            </Text>
-          </View>
-          
-          <Text style={styles.orderTotal}>${item.total ? item.total.toFixed(2) : '0.00'}</Text>
-        </View>
-        
-        <View style={styles.divider} />
-        
-        <View style={styles.actionButtons}>
-          <TouchableOpacity 
-            style={styles.actionButton}
-            onPress={() => console.log('View details', item.id)}
-          >
-            <Icon name="information-outline" size={16} color="#777" />
-            <Text style={styles.actionButtonText}>Details</Text>
-          </TouchableOpacity>
-          
-          <View style={styles.buttonDivider} />
-
-          <TouchableOpacity 
-            style={[styles.actionButton, trackButtonStyle]}
-            onPress={() => console.log('Track order', item.id)}
-          >
-            <Icon name="truck-delivery-outline" size={16} color={theme.colors.primary} />
-            <Text style={[styles.actionButtonText, {color: theme.colors.primary}]}>Track</Text>
-          </TouchableOpacity>
-          
-          
-        </View>
-      </Card>
+      <TouchableOpacity
+        onPress={() => { }}
+        activeOpacity={0.7}
+      >
+        <Text style={[styles.mockOrderText, { color: theme.colors.textSecondary }]}>
+          Orders view coming soon
+        </Text>
+      </TouchableOpacity>
     );
   };
-  
-  const getPlatformColor = (platform, theme) => {
-    if (!platform) return '#999';
-    
-    const platformLower = platform.toLowerCase();
-    
-    if (platformLower.includes('shopify')) return theme.colors.primary;
-    if (platformLower.includes('amazon')) return '#F17F5F';
-    if (platformLower.includes('ebay')) return '#E53238';
-    if (platformLower.includes('clover')) return theme.colors.accent;
-    if (platformLower.includes('square')) return '#6C757D';
-    if (platformLower.includes('etsy')) return '#F56400';
-    if (platformLower.includes('facebook')) return '#1877F2';
-    
-    return theme.colors.primary;
-  };
-  
-  const getStatusIcon = (status) => {
-    if (!status) return 'help-circle-outline'; // Default icon if status is undefined
-    
-    const statusLower = status.toLowerCase();
-    
-    if (statusLower.includes('pending')) return 'timer-sand';
-    if (statusLower.includes('processing')) return 'progress-check';
-    if (statusLower.includes('intransit') || statusLower.includes('in transit')) return 'truck-delivery';
-    if (statusLower.includes('delivered') || statusLower.includes('completed')) return 'check-circle';
-    if (statusLower.includes('returned')) return 'keyboard-return';
-    if (statusLower.includes('offloaded') || statusLower.includes('off-loaded')) return 'package-variant';
-    
-    return 'help-circle-outline'; // Default icon
-  };
-  
-  const formatDate = (dateString) => {
-    if (!dateString) return 'No date';
-    
-    const date = new Date(dateString);
-    const now = new Date();
-    
-    // Check if date is today
-    if (date.toDateString() === now.toDateString()) {
-      return 'Today';
-    }
-    
-    // Check if date is yesterday
-    const yesterday = new Date(now);
-    yesterday.setDate(now.getDate() - 1);
-    if (date.toDateString() === yesterday.toDateString()) {
-      return 'Yesterday';
-    }
-    
-    // Otherwise return formatted date
-    return date.toLocaleDateString('en-US', { 
-      month: 'short', 
-      day: 'numeric',
-      year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined
-    });
-  };
-  
-  const getStatusColor = (status, theme) => {
-    switch (status) {
-      case 'Delivered':
-        return theme.colors.success;
-      case 'In Transit':
-        return theme.colors.primary;
-      case 'Processing':
-        return theme.colors.secondary;
-      case 'Returned':
-        return theme.colors.error;
-      default:
-        return theme.colors.text;
-    }
-  };
-  
-  const getRandomColor = (id) => {
-    const colors = ['#4B0082', '#1E90FF', '#32CD32', '#FF8C00', '#8A2BE2', '#20B2AA'];
-    return colors[id % colors.length];
-  };
-  
-  const filteredInventory = mockInventoryItems.filter(item => 
-    item.title.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-  
-  const filteredOrders = mockOrders.filter(order => 
+
+  const filteredOrders = mockOrders.filter((order: MockOrderItemData) =>
     filterStatus === 'all' || order.status === filterStatus
   );
-  
+
+  const platformsForChips = ['shopify', 'square', 'clover', 'amazon', 'ebay', 'facebook']
+    .map(platformType => {
+      const connectionCount = platformConnections.filter((conn: PlatformConnection) =>
+        conn.PlatformType.toLowerCase() === platformType && conn.IsEnabled
+      ).length;
+
+      return {
+        name: platformType,
+        type: platformType,
+        connectionCount,
+      };
+    })
+    .filter(p => p.connectionCount > 0);
+
   return (
-    <View style={styles.container} paddingTop={60}>
-      <Animated.View entering={FadeInUp.delay(100).duration(500)}>
-        <Text style={[styles.title, { color: theme.colors.text }]}>
-          {activeTab === 'inventory' ? 'Inventory' : 'Orders'}
-        </Text>
-        
-        {/* Tab Selector */}
-        <View style={styles.tabSelector}>
-          <TouchableOpacity 
-            style={[
-              styles.tab, 
-              activeTab === 'inventory' && [styles.activeTab, { backgroundColor: theme.colors.primary + '20' }]
-            ]}
-            onPress={() => setActiveTab('inventory')}
-          >
-            <Icon 
-              name="cube-outline" 
-              size={20} 
-              color={activeTab === 'inventory' ? theme.colors.primary : '#777'} 
-              style={styles.tabIcon}
-            />
-            <Text style={[
-              styles.tabText,
-              { color: activeTab === 'inventory' ? theme.colors.primary : '#777' }
-            ]}>Inventory</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[
-              styles.tab, 
-              activeTab === 'orders' && [styles.activeTab, { backgroundColor: theme.colors.primary + '20' }]
-            ]}
-            onPress={() => setActiveTab('orders')}
-          >
-            <Icon 
-              name="shopping-outline" 
-              size={20} 
-              color={activeTab === 'orders' ? theme.colors.primary : '#777'} 
-              style={styles.tabIcon}
-            />
-            <Text style={[
-              styles.tabText,
-              { color: activeTab === 'orders' ? theme.colors.primary : '#777' }
-            ]}>Orders</Text>
-          </TouchableOpacity>
-        </View>
-        
-        {/* Search Bar */}
-        <View style={styles.searchContainer}>
-          <View style={styles.searchBar}>
-            <Icon name="magnify" size={20} color="#999" style={styles.searchIcon} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder={`Search ${activeTab === 'inventory' ? 'products' : 'orders'}...`}
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-            {searchQuery ? (
-              <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <Icon name="close" size={20} color="#999" />
-              </TouchableOpacity>
-            ) : null}
-          </View>
-          
-          <TouchableOpacity style={styles.filterButton}>
-            <Icon name="filter-variant" size={20} color="#777" />
-          </TouchableOpacity>
-        </View>
-      </Animated.View>
-      
-      {/* Inventory List */}
-      {activeTab === 'inventory' && (
-        <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
-          <FlatList
-            data={filteredInventory}
-            renderItem={renderInventoryItem}
-            keyExtractor={item => item.id.toString()}
-            numColumns={2}
-            columnWrapperStyle={styles.gridRow}
-            contentContainerStyle={styles.listContent}
-            ListHeaderComponent={
-              <>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersContainer}>
-                  {['all', 'Delivered', 'In Transit', 'Processing', 'Returned'].map(status => (
-                    <TouchableOpacity
-                      key={status}
-                      style={[
-                        styles.filterChip,
-                        filterStatus === status && { backgroundColor: theme.colors.primary + '20' }
-                      ]}
-                      onPress={() => setFilterStatus(status)}
-                    >
-                      <Text
-                        style={[
-                          styles.filterChipText,
-                          filterStatus === status && { color: theme.colors.primary }
-                        ]}
-                      >
-                        {status === 'all' ? 'All' : status}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-                
-                {/* Categories section */}
-                <View style={styles.categoriesSection}>
-                  <Text style={styles.categoriesSectionTitle}>Categories</Text>
-                  <View style={styles.categoriesGrid}>
-                    <TouchableOpacity style={styles.categoryItem}>
-                      <View style={[styles.categoryIcon, {backgroundColor: '#0E8F7F20'}]}>
-                        <Icon name="tag-outline" size={24} color="#0E8F7F" />
-                      </View>
-                      <Text style={styles.categoryName}>Clothing</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.categoryItem}>
-                      <View style={[styles.categoryIcon, {backgroundColor: '#F17F5F20'}]}>
-                        <Icon name="food-apple-outline" size={24} color="#F17F5F" />
-                      </View>
-                      <Text style={styles.categoryName}>Food</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.categoryItem}>
-                      <View style={[styles.categoryIcon, {backgroundColor: '#3CAD4620'}]}>
-                        <Icon name="laptop" size={24} color="#3CAD46" />
-                      </View>
-                      <Text style={styles.categoryName}>Electronics</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.categoryItem}>
-                      <View style={[styles.categoryIcon, {backgroundColor: '#865AF020'}]}>
-                        <Icon name="sofa-outline" size={24} color="#865AF0" />
-                      </View>
-                      <Text style={styles.categoryName}>Home</Text>
-                    </TouchableOpacity>
-                  </View>
+    <View style={[styles.background]}>
+
+
+      <View style={[styles.container, { marginTop: 60, paddingTop: 20, backgroundColor: "#FFF", }]}>
+
+        {activeTab === 'inventory' && (
+          <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
+            {/* Search Bar with Scanner OR Selection Header */}
+            {isSelectionMode ? (
+              <Animated.View entering={FadeInDown} style={styles.selectionHeader}>
+                <View style={styles.selectionHeaderLeft}>
+                  <TouchableOpacity onPress={handleExitSelectionMode} style={styles.closeButton}>
+                    <Icon name="close" size={24} color="#333" />
+                  </TouchableOpacity>
+                  <Text style={styles.selectionCountText}>
+                    {selectedItems.size} Selected
+                  </Text>
                 </View>
-                
-                <View style={styles.sellerStatsSection}>
-                  <Text style={styles.sellerStatsSectionTitle}>Your Activity</Text>
-                  <View style={styles.sellerStatsRow}>
-                    <View style={styles.sellerStatItem}>
-                      <Text style={styles.sellerStatValue}>42</Text>
-                      <Text style={styles.sellerStatLabel}>Products Listed</Text>
-                    </View>
-                    <View style={styles.sellerStatItem}>
-                      <Text style={styles.sellerStatValue}>18</Text>
-                      <Text style={styles.sellerStatLabel}>Active Listings</Text>
-                    </View>
-                    <View style={styles.sellerStatItem}>
-                      <Text style={styles.sellerStatValue}>86%</Text>
-                      <Text style={styles.sellerStatLabel}>Response Rate</Text>
-                    </View>
-                  </View>
-                </View>
-              </>
-            }
-            ListFooterComponent={<View style={styles.listFooter} />}
-          />
-        </Animated.View>
-      )}
-      
-      {/* Orders List */}
-      {activeTab === 'orders' && (
-        <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersContainer}>
-            {['all', 'Delivered', 'In Transit', 'Processing', 'Returned'].map(status => (
-              <TouchableOpacity
-                key={status}
-                style={[
-                  styles.filterChip,
-                  filterStatus === status && { backgroundColor: theme.colors.primary + '20' }
-                ]}
-                onPress={() => setFilterStatus(status)}
-              >
-                <Text
-                  style={[
-                    styles.filterChipText,
-                    filterStatus === status && { color: theme.colors.primary }
-                  ]}
+                <TouchableOpacity
+                  style={styles.selectAllButton}
+                  onPress={() => {
+                    if (selectedItems.size === filteredInventory.length && filteredInventory.length > 0) {
+                      setSelectedItems(new Set());
+                    } else {
+                      handleSelectAll();
+                    }
+                  }}
                 >
-                  {status === 'all' ? 'All' : status}
+                  <Text style={styles.selectAllButtonText}>
+                    {selectedItems.size === filteredInventory.length && filteredInventory.length > 0 ? "Deselect All" : "Select All"}
+                  </Text>
+                </TouchableOpacity>
+              </Animated.View>
+            ) : (
+              <View style={{ paddingHorizontal: 16, marginBottom: 8, backgroundColor: "#FFF", }}>
+                <SearchBarWithScanner
+                  placeholder="Search for a product"
+                  value={searchQuery}
+                  onChangeText={handleSearchChange}
+                  onScan={handleBarcodeScan}
+                  onScannerOpen={() => {
+                    console.log('[InventoryOrdersScreen] Scanner button pressed, opening scanner');
+                    openScanner((code: string) => {
+                      handleBarcodeScan(code);
+                      closeScanner();
+                    }, 'search_bar');
+                  }}
+                  onClear={handleSearchClear}
+                  onVoicePress={() => setSpeechModalVisible(true)}
+                />
+
+                {/* Barcode Search Error Message */}
+                {barcodeSearchError && (
+                  <View style={[styles.errorMessage, { backgroundColor: theme.colors.error + '15' }]}>
+                    <Icon name="alert-circle-outline" size={16} color={theme.colors.error} style={{ marginRight: 8 }} />
+                    <Text style={[styles.errorText, { color: theme.colors.error }]}>
+                      {barcodeSearchError}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {/* Platform Filter Chips */}
+            <View style={{ paddingHorizontal: 8 }}>
+              <PlatformFilterChips
+                platforms={platformsForChips}
+                selectedPlatform={selectedPlatformType}
+                onSelectPlatform={setSelectedPlatformType}
+                activeColor={theme.colors.primary}
+              />
+            </View>
+
+            {/* Preset / smart filter chips
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.presetChipsRow}
+              style={styles.presetChipsScroll}
+            >
+              <TouchableOpacity
+                style={[
+                  styles.presetChip,
+                  lowStockOnly && { backgroundColor: theme.colors.primary + '22', borderColor: theme.colors.primary },
+                ]}
+                onPress={() => setLowStockOnly(prev => !prev)}
+              >
+                <Text style={[styles.presetChipText, lowStockOnly && { color: theme.colors.primary, fontWeight: '600' }]}>Low stock</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.presetChip,
+                  priceMax === 50 && { backgroundColor: theme.colors.primary + '22', borderColor: theme.colors.primary },
+                ]}
+                onPress={() => setPriceMax(prev => (prev === 50 ? null : 50))}
+              >
+                <Text style={[styles.presetChipText, priceMax === 50 && { color: theme.colors.primary, fontWeight: '600' }]}>Under $50</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.presetChip,
+                  priceMax === 100 && { backgroundColor: theme.colors.primary + '22', borderColor: theme.colors.primary },
+                ]}
+                onPress={() => setPriceMax(prev => (prev === 100 ? null : 100))}
+              >
+                <Text style={[styles.presetChipText, priceMax === 100 && { color: theme.colors.primary, fontWeight: '600' }]}>Under $100</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.presetChip,
+                  presetVariantIds != null && presetVariantIds.length > 0 && { backgroundColor: theme.colors.primary + '22', borderColor: theme.colors.primary },
+                ]}
+                onPress={fetchSlowMoversVariantIds}
+                disabled={loadingSlowMovers}
+              >
+                {loadingSlowMovers ? (
+                  <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginRight: 4 }} />
+                ) : null}
+                <Text style={[
+                  styles.presetChipText,
+                  presetVariantIds != null && presetVariantIds.length > 0 && { color: theme.colors.primary, fontWeight: '600' },
+                ]}>
+                  Slow movers
                 </Text>
               </TouchableOpacity>
-            ))}
-          </ScrollView>
-          
+              <TouchableOpacity
+                style={styles.presetChip}
+                onPress={() => {
+                  setPriceMax(null);
+                  setPresetVariantIds(null);
+                }}
+              >
+                <Text style={styles.presetChipText}>Clear</Text>
+              </TouchableOpacity>
+            </ScrollView>
+            */}
+
+            {/* Pool/Location Combobox and Sort Dropdown */}
+            <View style={styles.filterRow}>
+              <View style={{ flex: 1 }}>
+                <PoolLocationCombobox
+                  platformConnections={platformConnections}
+                  selectedItems={selectedLocationIds}
+                  onSelectionChange={setSelectedLocationIds}
+                  startOpen={locationPickerOpen}
+                />
+              </View>
+              <View style={{ marginLeft: 8, marginRight: 0 }}>
+                <SortByDropdown
+                  sortBy={sortBy}
+                  onSortChange={setSortBy}
+                />
+              </View>
+            </View>
+
+            {/* Inventory List */}
+            <View
+              style={{ flex: 1 }}
+              {...panResponder.panHandlers}
+              onLayout={(e) => {
+                listHeight.current = e.nativeEvent.layout.height;
+              }}
+            >
+              <FlatList
+                ref={listRef}
+                scrollEnabled={scrollEnabled}
+                data={inventoryToDisplay}
+                renderItem={renderInventoryItem}
+                keyExtractor={item => item.Id.toString()}
+                contentContainerStyle={styles.listContent}
+                onScroll={handleScroll}
+                scrollEventThrottle={16}
+                onEndReached={handleLoadMore}
+                onEndReachedThreshold={0.5}
+                initialNumToRender={20}
+                maxToRenderPerBatch={20}
+                windowSize={21}
+                ListFooterComponent={
+                  <>
+                    {isLoadingMore && (
+                      <View style={styles.loadingMoreContainer}>
+                        <ActivityIndicator size="small" color={theme.colors.primary} />
+                        <Text style={[styles.loadingMoreText, { color: theme.colors.textSecondary }]}>
+                          Loading more products...
+                        </Text>
+                      </View>
+                    )}
+                    {displayCount < filteredInventory.length && !isLoadingMore && (
+                      <TouchableOpacity
+                        style={styles.loadMoreButton}
+                        onPress={handleLoadMore}
+                      >
+                        <Text style={[styles.loadMoreButtonText, { color: theme.colors.primary }]}>
+                          Load more ({filteredInventory.length - displayCount} remaining)
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    <View style={styles.listFooter} />
+                  </>
+                }
+                ListHeaderComponent={
+                  <>
+
+                  </>
+                }
+                ListEmptyComponent={
+                  isLoadingConnections ? (
+                    <View style={styles.loadingContainer}>
+                      <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
+                        Loading platform connections...
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
+                      No products found.
+                      {selectedPlatformType && ` Try selecting a different platform or location.`}
+                    </Text>
+                  )
+                }
+              />
+            </View>
+          </Animated.View>
+        )}
+
+        {activeTab === 'orders' && (
+          <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
+            <View style={styles.comingSoonContainer}>
+              <Icon name="package-outline" size={48} color={theme.colors.textSecondary} />
+              <Text style={[styles.comingSoonText, { color: theme.colors.textSecondary }]}>
+                Orders view coming soon
+              </Text>
+            </View>
+          </Animated.View>
+        )}
+      </View>
+
+      {/* Full-screen Scanner Modal - renders above everything */}
+      {
+        scannerMounted && (
+          <View style={styles.scannerDockFull} pointerEvents="box-none">
+            <RNAnimated.View pointerEvents={scannerOpen ? 'auto' : 'none'} style={[styles.scannerFullBleed, { height: scannerHeight }]}>
+              <CameraView
+                style={styles.scannerCamera}
+                facing="back"
+                onBarcodeScanned={scannerOpen ? (result: any) => {
+                  const code = result?.data || result?.rawValue;
+                  if (code && scannerResultHandlerRef.current) {
+                    scannerResultHandlerRef.current(code);
+                  }
+                } : undefined}
+                barcodeScannerSettings={{
+                  barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
+                }}
+              />
+              <TouchableOpacity
+                onPress={() => {
+                  console.log('[InventoryOrdersScreen] Scanner close button pressed');
+                  closeScanner();
+                }}
+                style={styles.scannerCloseButton}
+              >
+                <Icon name="close" size={28} color="#fff" />
+              </TouchableOpacity>
+            </RNAnimated.View>
+          </View>
+        )
+      }
+
+      {/* Bulk Action Bar - Cleaner Light Mode */}
+      {
+        isSelectionMode && !bulkActionModalVisible && (
+          <Animated.View
+            entering={SlideInDown.duration(300)}
+            exiting={SlideOutDown}
+            style={styles.bulkActionBar}
+          >
+            <View style={styles.bulkActionContent}>
+              {/* Left: Count Badge with Cancel */}
+              <TouchableOpacity
+                onPress={handleExitSelectionMode}
+                style={styles.countBadge}
+              >
+                <Icon name="close-circle" size={18} color="#4B5563" />
+                <Text style={styles.countBadgeText}>{selectedItems.size}</Text>
+              </TouchableOpacity>
+
+              {/* Center: Horizontal Scrollable Actions */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.actionsScrollContent}
+                style={styles.actionsScroll}
+              >
+                <TouchableOpacity style={styles.actionChip} onPress={() => setBulkActionModalVisible(true)}>
+                  <Icon name="filter-variant-plus" size={18} color="#374151" />
+                  <Text style={styles.actionChipText}>Bulk action</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.actionChip} onPress={() => setLiquidationModalVisible(true)}>
+                  <Icon name="tag-outline" size={18} color="#374151" />
+                  <Text style={styles.actionChipText}>Liquidate</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.actionChip} onPress={handleBulkDelete}>
+                  <Icon name="trash-can-outline" size={18} color="#374151" />
+                  <Text style={styles.actionChipText}>Delete</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.actionChip} onPress={() => setArchiveModalVisible(true)}>
+                  <Icon name="archive-outline" size={18} color="#374151" />
+                  <Text style={styles.actionChipText}>Archive</Text>
+                </TouchableOpacity>
+
+
+
+                <TouchableOpacity style={styles.actionChip} onPress={() => setTagsModalVisible(true)}>
+                  <Icon name="tag-plus-outline" size={18} color="#374151" />
+                  <Text style={styles.actionChipText}>Tags</Text>
+                </TouchableOpacity>
+              </ScrollView>
+
+              {/* Right: More Menu */}
+              <TouchableOpacity
+                style={styles.moreButton}
+                onPress={() => setMoreMenuVisible(true)}
+              >
+                <Icon name="dots-horizontal" size={24} color="#374151" />
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+        )
+      }
+
+      {/* Bulk Action Inline Card — replaces BaseModal, acts as command entry */}
+      {
+        bulkActionModalVisible && (
+          <View
+            style={{
+              position: 'absolute',
+              bottom: keyboardHeight > 0 ? keyboardHeight : (Platform.OS === 'ios' ? 140 : 120),
+              left: 0,
+              right: 0,
+              zIndex: 1001,
+            }}
+          >
+            <TouchableOpacity
+              activeOpacity={1}
+              onPress={() => setBulkActionModalVisible(false)}
+              style={{ position: 'absolute', top: -1000, left: 0, right: 0, bottom: -500, backgroundColor: 'transparent' }}
+            />
+
+            <View style={{
+              backgroundColor: 'rgba(255, 255, 255, 1)',
+              borderRadius: 32,
+              borderWidth: keyboardHeight > 0 ? 0 : 1,
+              borderColor: '#F3F4F6',
+              paddingHorizontal: 20,
+              marginHorizontal: 12,
+              paddingBottom: 16,
+              marginBottom: 16,
+              paddingTop: 16,
+              ...Platform.select({
+                ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12 },
+                android: { elevation: 8 },
+              }),
+            }}>
+              {/* Header */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 }}>
+                <Text style={{ fontSize: 16, fontWeight: '700', color: '#111' }}>Bulk Action</Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    setBulkActionModalVisible(false);
+                    setBulkActionModalQuery('');
+                    setBulkActionModalMatchIds(null);
+                    setBulkPhase('command');
+                  }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Icon name="close" size={20} color="#9CA3AF" />
+                </TouchableOpacity>
+              </View>
+
+              {bulkPhase === 'command' && (
+                <View style={{ paddingHorizontal: 4, paddingBottom: 4 }}>
+                  <SmartCommandInput
+                    mode="voice_filter"
+                    startExpanded={true}
+                    initialMode="text"
+                    variant="inline"
+                    disableKeyboardHandling={true}
+                    fullWidth={true}
+                    apiBaseUrl={process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL}
+                    getAuthToken={ensureSupabaseJwt}
+                    onSubmit={async (text) => {
+                      setBulkActionModalQuery(text);
+                      setBulkPhase('planning');
+                      setPlanLoading(true);
+
+                      try {
+                        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+                        const token = await ensureSupabaseJwt();
+                        if (!baseUrl || !token) throw new Error('Missing config');
+
+                        // Gather selected items data for the planner
+                        const selectedIds = Array.from(selectedItems);
+                        const itemsForPlanner = filteredInventory
+                          .filter(item => selectedIds.includes(item.Id))
+                          .map(item => ({
+                            id: item.Id,
+                            title: item.Title || 'Untitled',
+                            price: item.Price ?? item.minPrice ?? 0,
+                            quantity: item.totalQuantity ?? 0,
+                            sku: item.Sku || '',
+                            platform: item.platformNames?.join(', ') || '',
+                            tags: item.Tags || '',
+                            imageUrl: item.imageUrl || '',
+                          }));
+
+                        const res = await fetch(`${baseUrl}/api/products/bulk-actions/plan`, {
+                          method: 'POST',
+                          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ command: text, items: itemsForPlanner }),
+                        });
+
+                        if (!res.ok) throw new Error(`Plan failed: ${res.status}`);
+                        const plan = await res.json();
+
+                        const actionsWithApproval = (plan.actions || []).map((a: any) => ({ ...a, approved: true }));
+                        setPlannedActions(actionsWithApproval);
+                        setPlanSummary(plan.summary || `${actionsWithApproval.length} actions planned`);
+                        setBulkPhase('review');
+                        setBulkActionModalVisible(false);
+                        setReviewModalVisible(true);
+                      } catch (err) {
+                        console.error('[BulkAction] Planning failed:', err);
+                        Alert.alert('Error', 'Failed to plan bulk actions. Please try again.');
+                        setBulkPhase('command');
+                      } finally {
+                        setPlanLoading(false);
+                      }
+                    }}
+                    onCollapse={() => {
+                      setBulkActionModalVisible(false);
+                      setBulkPhase('command');
+                    }}
+                  />
+                </View>
+              )}
+
+              {bulkPhase === 'planning' && (
+                <View style={{ paddingVertical: 32, alignItems: 'center', gap: 12 }}>
+                  <ActivityIndicator size="large" color="#8BB04F" />
+                  <Text style={{ color: '#6B7280', fontSize: 14, fontWeight: '500' }}>Planning actions…</Text>
+                </View>
+              )}
+            </View>
+          </View>
+        )
+      }
+
+      {/* Full-Screen Review Modal */}
+      <Modal
+        visible={reviewModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => {
+          setReviewModalVisible(false);
+          setBulkPhase('command');
+          setPlannedActions([]);
+        }}
+      >
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#F9FAFB' }}>
+          {/* Review Header */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E5E7EB' }}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: '#111' }}>Review Changes</Text>
+              <Text style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }}>{planSummary}</Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => {
+                setReviewModalVisible(false);
+                setBulkPhase('command');
+                setPlannedActions([]);
+              }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Icon name="close" size={24} color="#6B7280" />
+            </TouchableOpacity>
+          </View>
+
+          {/* Select All / Deselect All bar */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 10, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
+            <Text style={{ fontSize: 13, color: '#6B7280' }}>
+              {plannedActions.filter(a => a.approved).length} of {plannedActions.length} approved
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <TouchableOpacity onPress={() => setPlannedActions(prev => prev.map(a => ({ ...a, approved: true })))}>
+                <Text style={{ fontSize: 13, color: '#8BB04F', fontWeight: '600' }}>Select All</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setPlannedActions(prev => prev.map(a => ({ ...a, approved: false })))}>
+                <Text style={{ fontSize: 13, color: '#9CA3AF', fontWeight: '600' }}>Deselect All</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Action Cards List */}
           <FlatList
-            data={filteredOrders}
-            renderItem={renderOrderItem}
-            keyExtractor={item => item.id}
-            showsVerticalScrollIndicator={false}
-            ListEmptyComponent={
-              <Text style={styles.emptyText}>No orders matching your filters.</Text>
-            }
-            contentContainerStyle={styles.listContent}
-            ListFooterComponent={<View style={styles.listFooter} />}
+            data={plannedActions}
+            keyExtractor={(item) => item.itemId}
+            contentContainerStyle={{ padding: 16, gap: 10, paddingBottom: bottomSafePadding }}
+            renderItem={({ item, index }) => (
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() => setPlannedActions(prev => prev.map((a, i) => i === index ? { ...a, approved: !a.approved } : a))}
+                style={{
+                  backgroundColor: '#fff',
+                  borderRadius: 14,
+                  borderWidth: 1,
+                  borderColor: item.approved ? '#8BB04F' : '#E5E7EB',
+                  padding: 14,
+                  opacity: item.approved ? 1 : 0.5,
+                  ...Platform.select({
+                    ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 4 },
+                    android: { elevation: 1 },
+                  }),
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  {/* Checkbox */}
+                  <View style={{
+                    width: 22, height: 22, borderRadius: 6,
+                    borderWidth: 2, borderColor: item.approved ? '#8BB04F' : '#D1D5DB',
+                    backgroundColor: item.approved ? '#8BB04F' : 'transparent',
+                    alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    {item.approved && <Icon name="check" size={14} color="#fff" />}
+                  </View>
+
+                  {/* Item info */}
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#111' }} numberOfLines={1}>{item.title}</Text>
+                    <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>{item.description}</Text>
+                  </View>
+                </View>
+
+                {/* Changes */}
+                {item.changes.length > 0 && (
+                  <View style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#F3F4F6' }}>
+                    {item.changes.map((change, ci) => (
+                      <View key={ci} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <Text style={{ fontSize: 12, color: '#9CA3AF', fontWeight: '500', textTransform: 'capitalize' }}>{change.field}:</Text>
+                        <Text style={{ fontSize: 12, color: '#EF4444', textDecorationLine: 'line-through' }}>{change.from}</Text>
+                        <Icon name="arrow-right" size={12} color="#D1D5DB" />
+                        <Text style={{ fontSize: 12, color: '#10B981', fontWeight: '600' }}>{change.to}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
           />
-        </Animated.View>
-      )}
-    </View>
+
+          {/* Bottom Action Bar */}
+          <View style={{
+            position: 'absolute', bottom: 0, left: 0, right: 0,
+            backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#E5E7EB',
+            paddingHorizontal: 20, paddingTop: 12, paddingBottom: Platform.OS === 'ios' ? 34 : 16,
+            flexDirection: 'row', gap: 12,
+          }}>
+            <TouchableOpacity
+              style={{
+                flex: 1, paddingVertical: 14, borderRadius: 12,
+                backgroundColor: '#F3F4F6', alignItems: 'center',
+              }}
+              onPress={() => {
+                setReviewModalVisible(false);
+                setBulkPhase('command');
+                setPlannedActions([]);
+              }}
+            >
+              <Text style={{ color: '#6B7280', fontSize: 15, fontWeight: '600' }}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={{
+                flex: 2, paddingVertical: 14, borderRadius: 12,
+                backgroundColor: plannedActions.some(a => a.approved) ? '#8BB04F' : '#D1D5DB',
+                alignItems: 'center',
+                ...Platform.select({
+                  ios: { shadowColor: '#8BB04F', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 6 },
+                  android: { elevation: 3 },
+                }),
+              }}
+              disabled={!plannedActions.some(a => a.approved) || executeLoading}
+              onPress={async () => {
+                const approved = plannedActions.filter(a => a.approved);
+                if (approved.length === 0) return;
+
+                setExecuteLoading(true);
+                try {
+                  const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+                  const token = await ensureSupabaseJwt();
+                  if (!baseUrl || !token) throw new Error('Missing config');
+
+                  const res = await fetch(`${baseUrl}/api/products/bulk-actions/execute`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      actions: approved.map(a => ({
+                        itemId: a.itemId,
+                        actionType: a.actionType,
+                        changes: a.changes,
+                      })),
+                    }),
+                  });
+
+                  if (!res.ok) throw new Error(`Execute failed: ${res.status}`);
+                  const result = await res.json();
+
+                  Alert.alert(
+                    'Done',
+                    `${result.successful} of ${result.total} changes applied successfully.`,
+                    [{ text: 'OK' }]
+                  );
+
+                  setReviewModalVisible(false);
+                  setBulkPhase('command');
+                  setPlannedActions([]);
+                  handleExitSelectionMode();
+                } catch (err) {
+                  console.error('[BulkAction] Execute failed:', err);
+                  Alert.alert('Error', 'Failed to execute bulk actions. Please try again.');
+                } finally {
+                  setExecuteLoading(false);
+                }
+              }}
+            >
+              {executeLoading ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>
+                  Approve {plannedActions.filter(a => a.approved).length} changes
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </Modal>
+
+      {/* Voice Search Modal - Dedicated voice recorder for instant recording */}
+      <Modal
+        visible={speechModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSpeechModalVisible(false)}
+      >
+        <View
+          style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
+        >
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            activeOpacity={1}
+            onPress={() => setSpeechModalVisible(false)}
+          />
+          <View style={{
+            backgroundColor: 'transparent',
+            paddingHorizontal: 16,
+            paddingBottom: bottomSafePadding
+          }}>
+            <VoiceRecorder
+              apiBaseUrl={process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL}
+              getAuthToken={ensureSupabaseJwt}
+              onTranscription={(text) => {
+                setSearchQuery(text);
+                setScannedBarcode(null);
+                setBarcodeSearchError(null);
+                setSpeechModalVisible(false);
+              }}
+              onCancel={() => setSpeechModalVisible(false)}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      {/* More Actions Modal - Cleaner "Lowkey" Design */}
+      <BaseModal
+        visible={moreMenuVisible}
+        onClose={() => setMoreMenuVisible(false)}
+        showCloseButton={true}
+        containerStyle={{ width: '85%', borderRadius: 24, padding: 24 }}
+      >
+        <View style={{ width: '100%' }}>
+          {/* Header - Subtler */}
+          <View style={{ marginBottom: 20 }}>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: '#111', marginBottom: 4 }}>
+              Actions
+            </Text>
+            <Text style={{ fontSize: 13, color: '#6B7280', fontWeight: '500' }}>
+              {selectedItems.size} items selected
+            </Text>
+          </View>
+
+          <View style={{ gap: 12 }}>
+            <TouchableOpacity style={styles.modalOption} onPress={() => {
+              console.log('[Analytics] Print low stock');
+              setMoreMenuVisible(false);
+              Alert.alert("Coming Soon", "Low stock report will be generated as PDF");
+            }}>
+              <View style={styles.modalOptionIconBg}>
+                <Icon name="printer-outline" size={20} color="#4B5563" />
+              </View>
+              <Text style={styles.modalOptionText}>Print Low Stock Report</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.modalOption} onPress={() => {
+              console.log('[Analytics] Fastest movers');
+              setMoreMenuVisible(false);
+              Alert.alert("Coming Soon", "Velocity analysis across platforms/locations");
+            }}>
+              <View style={styles.modalOptionIconBg}>
+                <Icon name="trending-up" size={20} color="#4B5563" />
+              </View>
+              <Text style={styles.modalOptionText}>Show Fastest Movers</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.modalOption} onPress={() => {
+              console.log('[BulkDraft] Setting as draft');
+              setMoreMenuVisible(false);
+            }}>
+              <View style={styles.modalOptionIconBg}>
+                <Icon name="file-document-edit-outline" size={20} color="#4B5563" />
+              </View>
+              <Text style={styles.modalOptionText}>Set as Draft</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </BaseModal>
+
+      {/* Archive Modal */}
+      <BaseModal
+        visible={archiveModalVisible}
+        onClose={() => setArchiveModalVisible(false)}
+        showCloseButton={true}
+        containerStyle={{ width: '85%', borderRadius: 24, padding: 24 }}
+      >
+        <Text style={styles.modalTitle}>Archive Items</Text>
+        <Text style={styles.modalSubtitle}>
+          Are you sure you want to archive {selectedItems.size} items? They will be hidden from the main inventory list.
+        </Text>
+        <View style={styles.modalButtonsRow}>
+          <TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={() => setArchiveModalVisible(false)}>
+            <Text style={styles.cancelButtonText}>Cancel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalButton, styles.confirmButton]}
+            onPress={() => runBulkArchiveByIds(Array.from(selectedItems))}
+          >
+            <Text style={styles.confirmButtonText}>Archive</Text>
+          </TouchableOpacity>
+        </View>
+      </BaseModal>
+
+      {/* Tags Modal */}
+      <BaseModal
+        visible={tagsModalVisible}
+        onClose={() => setTagsModalVisible(false)}
+        showCloseButton={true}
+        containerStyle={{ width: '85%', borderRadius: 24, padding: 24 }}
+      >
+        <Text style={styles.modalTitle}>Add Tags</Text>
+        <Text style={styles.modalSubtitle}>Add a tag to {selectedItems.size} items.</Text>
+
+        <TextInput
+          style={styles.tagsInput}
+          placeholder="Enter tag name..."
+          value={tagInput}
+          onChangeText={setTagInput}
+          autoFocus={true}
+        />
+
+        <View style={styles.modalButtonsRow}>
+          <TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={() => setTagsModalVisible(false)}>
+            <Text style={styles.cancelButtonText}>Cancel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalButton, styles.confirmButton]}
+            onPress={() => {
+              console.log('[BulkTags] Adding tag:', tagInput, 'to', Array.from(selectedItems));
+              setTagInput("");
+              setTagsModalVisible(false);
+              handleExitSelectionMode();
+            }}
+          >
+            <Text style={styles.confirmButtonText}>Add Tag</Text>
+          </TouchableOpacity>
+        </View>
+      </BaseModal>
+
+      {/* Liquidation Modal */}
+      <BaseModal
+        visible={liquidationModalVisible}
+        onClose={() => setLiquidationModalVisible(false)}
+        showCloseButton={true}
+        containerStyle={{ width: '85%', borderRadius: 24, padding: 24 }}
+      >
+        <Text style={styles.modalTitle}>Start Liquidation</Text>
+        <Text style={styles.modalSubtitle}>Configure campaign for {selectedItems.size} items.</Text>
+
+        <View style={{ width: '100%', marginBottom: 16 }}>
+          <Text style={styles.inputLabel}>Timeline (Days)</Text>
+          <TextInput
+            style={styles.modalInput}
+            placeholder="e.g. 30"
+            placeholderTextColor="#9ca3af"
+            keyboardType="number-pad"
+            returnKeyType="done"
+            value={liquidationTimeline}
+            onChangeText={setLiquidationTimeline}
+          />
+
+          <Text style={styles.inputLabel}>Target Recovery ($)</Text>
+          <TextInput
+            style={styles.modalInput}
+            placeholder="e.g. 1500"
+            placeholderTextColor="#9ca3af"
+            keyboardType="numeric"
+            returnKeyType="done"
+            value={liquidationAmount}
+            onChangeText={setLiquidationAmount}
+          />
+        </View>
+
+        <Text style={styles.inputLabel}>Pricing Strategy</Text>
+        <View style={styles.strategyContainer}>
+          {(['aggressive', 'moderate', 'conservative'] as const).map(strategy => (
+            <TouchableOpacity
+              key={strategy}
+              style={[
+                styles.strategyOption,
+                liquidationStrategy === strategy && styles.strategyOptionSelected
+              ]}
+              onPress={() => setLiquidationStrategy(strategy)}
+            >
+              <Text style={[
+                styles.strategyText,
+                liquidationStrategy === strategy && styles.strategyTextSelected
+              ]}>
+                {strategy.charAt(0).toUpperCase() + strategy.slice(1)}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <View style={styles.modalButtonsRow}>
+          <TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={() => setLiquidationModalVisible(false)}>
+            <Text style={styles.cancelButtonText}>Cancel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalButton, styles.confirmButton]}
+            onPress={async () => {
+              try {
+                const token = await ensureSupabaseJwt();
+                if (!token) {
+                  Alert.alert('Error', 'Not authenticated');
+                  return;
+                }
+
+                // Get the selected product IDs
+                const selectedProductIds = Array.from(selectedItems);
+
+                // Build the request body
+                const requestBody = {
+                  targetRevenue: parseFloat(liquidationAmount) || 500,
+                  timeframeDays: parseInt(liquidationTimeline) || 30,
+                  productIds: selectedProductIds,
+                  aggressiveness: liquidationStrategy === 'moderate' ? 'balanced' : liquidationStrategy,
+                };
+
+                console.log('[BulkLiquidate] Starting campaign with:', requestBody);
+
+                // Call the actual API
+                const response = await fetch('https://api.sssync.app/api/agent/quick/liquidation', {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify(requestBody),
+                });
+
+                if (!response.ok) {
+                  const errorData = await response.json().catch(() => ({}));
+                  throw new Error(errorData.message || `Failed to start campaign: ${response.status}`);
+                }
+
+                const result = await response.json();
+                console.log('[BulkLiquidate] Campaign created:', result);
+
+                setLiquidationModalVisible(false);
+                handleExitSelectionMode();
+
+                // Navigate to campaign screen with real session ID
+                navigation.navigate('LiquidationCampaignScreen', {
+                  campaignId: result.sessionId
+                });
+
+              } catch (error: any) {
+                console.error('[BulkLiquidate] Failed:', error);
+                Alert.alert('Error', error.message || 'Failed to start liquidation campaign');
+              }
+            }}
+          >
+            <Text style={styles.confirmButtonText}>Start Campaign</Text>
+          </TouchableOpacity>
+        </View>
+      </BaseModal>
+
+    </View >
   );
-};
+});
 
 const styles = StyleSheet.create({
+  background: {
+    flex: 1,
+    backgroundColor: "rgb(208, 255, 170)",
+  },
   container: {
+    borderTopRightRadius: 32,
+    borderTopLeftRadius: 32,
     flex: 1,
     backgroundColor: '#F8F9FB',
-    padding: 16,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    marginVertical: 16,
-  },
-  tabSelector: {
-    flexDirection: 'row',
-    marginBottom: 16,
-    backgroundColor: '#F0F0F0',
-    borderRadius: 8,
     padding: 4,
   },
-  tab: {
+  listContainer: {
+    backgroundColor: "#FFF",
     flex: 1,
-    paddingVertical: 12,
+  },
+  filterRow: {
     flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: 6,
-  },
-  activeTab: {
-    backgroundColor: 'white',
-  },
-  tabIcon: {
-    marginRight: 6,
-  },
-  tabText: {
-    fontWeight: '500',
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    paddingHorizontal: 8,
     marginBottom: 16,
+    justifyContent: "space-between",
   },
-  searchBar: {
-    flex: 1,
+  filterActRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'white',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    height: 48,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 2,
-      },
-      android: {
-        elevation: 2,
-      },
-    }),
-  },
-  searchIcon: {
-    marginRight: 8,
-  },
-  searchInput: {
-    flex: 1,
-    height: 40,
-  },
-  filterButton: {
-    padding: 12,
-    backgroundColor: 'white',
-    borderRadius: 8,
-    marginLeft: 8,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 2,
-      },
-      android: {
-        elevation: 2,
-      },
-    }),
-  },
-  filtersContainer: {
-    marginBottom: 16,
-  },
-  filterChip: {
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: '#EEE',
-    marginRight: 8,
+    marginBottom: 10,
   },
-  filterChipText: {
+  filterActChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  filterActChipText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  filterMatchStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  filterMatchText: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  filterMatchActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  filterMatchButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+  filterMatchButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  filterMatchButtonSecondary: {
+    backgroundColor: 'transparent',
+  },
+  filterMatchButtonTextSecondary: {
     fontSize: 14,
     fontWeight: '500',
   },
-  listContainer: {
+  presetChipsScroll: {
+    marginBottom: 8,
+  },
+  presetChipsRow: {
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 4,
+  },
+  presetChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#F9FAFB',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  presetChipText: {
+    fontSize: 13,
+    color: '#374151',
+  },
+  nlFilterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    gap: 8,
+  },
+  nlFilterInput: {
     flex: 1,
+    height: 44,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    fontSize: 14,
+  },
+  nlFilterMicButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nlFilterApplyButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  nlFilterApplyText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   listContent: {
     paddingBottom: 16,
-  },
-  gridRow: {
-    justifyContent: 'space-between',
-    width: '100%',
-  },
-  gridItem: {
-    width: '48%',
-    marginBottom: 12,
-  },
-  gridItemCard: {
-    padding: 0,
-    overflow: 'hidden',
-  },
-  gridItemImage: {
-    width: '100%',
-    height: 120,
-    borderTopLeftRadius: 8,
-    borderTopRightRadius: 8,
-  },
-  gridItemDetails: {
-    padding: 10,
-  },
-  gridItemTitle: {
-    fontSize: 14,
-    fontWeight: '500',
-    marginBottom: 4,
-  },
-  gridItemPrice: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  gridItemStock: {
-    fontSize: 12,
-    color: '#777',
-    marginBottom: 4,
-  },
-  platformBadges: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  platformBadge: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginHorizontal: 2,
-  },
-  platformBadgeText: {
-    fontSize: 10,
-    color: 'white',
-    fontWeight: 'bold',
-  },
-  platformBadgeMore: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginHorizontal: 2,
-    backgroundColor: '#777',
-  },
-  platformBadgeMoreText: {
-    fontSize: 10,
-    color: 'white',
-    fontWeight: 'bold',
-  },
-  categoriesSection: {
-    marginBottom: 16,
-  },
-  categoriesSectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 12,
-  },
-  categoriesGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-  categoryItem: {
-    width: '48%',
-    backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  categoryIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  categoryName: {
-    fontSize: 14,
-    fontWeight: '500',
   },
   sellerStatsSection: {
     backgroundColor: 'white',
     borderRadius: 8,
     padding: 16,
     marginBottom: 16,
+    marginHorizontal: 8,
   },
   sellerStatsSectionTitle: {
     fontSize: 16,
@@ -657,144 +2517,381 @@ const styles = StyleSheet.create({
   sellerStatValue: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#0E8F7F',
   },
   sellerStatLabel: {
     fontSize: 12,
-    color: '#777',
     marginTop: 4,
   },
-  orderCard: {
-    marginBottom: 12,
-    borderRadius: 12,
-    padding: 0,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 3,
-      },
-    }),
-  },
-  orderHeader: {
+  errorMessage: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-    paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginTop: 8,
+    marginBottom: 16,
   },
-  orderIdContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  orderId: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    marginRight: 8,
-  },
-  orderDate: {
+  errorText: {
     fontSize: 13,
-    color: '#777',
-  },
-  customerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10,
-    paddingHorizontal: 16,
-  },
-  customerInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  customerIcon: {
-    marginRight: 4,
-  },
-  customerName: {
-    fontSize: 14,
-    color: '#444',
-  },
-  orderItems: {
-    fontSize: 13,
-    color: '#777',
-    backgroundColor: '#f5f5f5',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 12,
-  },
-  orderFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-    paddingHorizontal: 16,
-  },
-  platformBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 12,
-  },
-  platformName: {
-    fontSize: 12,
     fontWeight: '500',
-  },
-  statusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-  },
-  statusIcon: {
-    marginRight: 4,
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  orderTotal: {
-    fontSize: 15,
-    fontWeight: 'bold',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: '#f0f0f0',
-    marginHorizontal: 16,
-  },
-  actionButtons: {
-    flexDirection: 'row',
-    height: 44,
-  },
-  actionButton: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  buttonDivider: {
-    width: 1,
-    backgroundColor: '#f0f0f0',
-  },
-  actionButtonText: {
-    fontSize: 14,
-    fontWeight: '500',
-    marginLeft: 6,
-    color: '#555',
   },
   emptyText: {
     textAlign: 'center',
     fontSize: 16,
-    color: '#777',
     padding: 24,
   },
+  loadingContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+  },
+  loadingText: {
+    textAlign: 'center',
+    fontSize: 16,
+  },
+  loadingMoreContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  loadingMoreText: {
+    marginLeft: 10,
+    fontSize: 14,
+  },
+  loadMoreButton: {
+    alignItems: 'center',
+    paddingVertical: 15,
+    marginHorizontal: 20,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  loadMoreButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
   listFooter: {
-    height: 100, // Extra space at the bottom for the tab bar
+    height: 100,
+  },
+  mockOrderText: {
+    textAlign: 'center',
+    fontSize: 16,
+    padding: 24,
+  },
+  comingSoonContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  comingSoonText: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 16,
+  },
+  scannerModalContainer: {
+    flex: 1,
+    backgroundColor: 'black',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scannerCamera: {
+    width: '100%',
+    height: '100%',
+  },
+  scannerCloseButton: {
+    position: 'absolute',
+    top: 100,
+    right: 20,
+    zIndex: 10,
+  },
+  scannerDockFull: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 5000,
+    width: '100%',
+  },
+  scannerFullBleed: {
+    backgroundColor: '#000',
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16,
+    overflow: 'hidden',
+  },
+  scannerCloseFull: {
+    position: 'absolute',
+    top: 100,
+    right: 12,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  optimizeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eef2ff',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginLeft: 8,
+    gap: 4,
+  },
+  optimizeButtonText: {
+    color: '#6366f1',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+
+  // Selection Styles
+  selectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#FFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+    height: 60,
+    marginBottom: 16, // Added spacing below header
+  },
+  selectionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  closeButton: {
+    padding: 8,
+    marginRight: 12,
+  },
+  selectionCountText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111',
+  },
+  bulkActionBar: {
+    position: 'absolute',
+    bottom: 130, // Increased to clear tab bar
+    left: 12,
+    right: 12,
+    backgroundColor: '#FFFFFF', // Light background
+    borderRadius: 32, // Pill shape
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15, // Softer shadow
+    shadowRadius: 12,
+    elevation: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    zIndex: 1000,
+    borderWidth: 1,
+    borderColor: '#F3F4F6', // Subtle border
+  },
+  bulkActionContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  countBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6', // Light gray standard
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+    gap: 6,
+  },
+  countBadgeText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#374151', // Dark gray text
+  },
+  actionsScroll: {
+    flex: 1,
+    marginHorizontal: 8,
+  },
+  actionsScrollContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  actionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6', // Light gray standard
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    gap: 6,
+  },
+  actionChipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151', // Dark text
+  },
+  moreButton: {
+    padding: 8,
+    backgroundColor: '#F3F4F6', // Light gray standard
+    borderRadius: 20,
+  },
+  // Legacy styles (kept for backwards compatibility)
+  bulkActionText: {
+    fontSize: 15,
+    color: '#374151',
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  bulkActionButtons: {
+    flexDirection: 'row',
+    gap: 16,
+    alignItems: 'center',
+  },
+  bulkActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    gap: 6,
+  },
+  bulkActionLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  selectAllButton: {
+    backgroundColor: '#84CC16', // Lime green
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  selectAllButtonText: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  modalOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: '#F9FAFB', // Very subtle background
+    borderRadius: 12,
+    width: '100%',
+  },
+  modalOptionIconBg: {
+    width: 36,
+    height: 36,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  modalOptionText: {
+    fontSize: 15, // Slightly smaller/cleaner
+    color: '#374151',
+    marginLeft: 12,
+    fontWeight: '600',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111',
+    marginBottom: 8,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#6B7280',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  modalButtonsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 24,
+    width: '100%',
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelButton: {
+    backgroundColor: '#F3F4F6',
+  },
+  confirmButton: {
+    backgroundColor: '#111',
+  },
+  cancelButtonText: {
+    color: '#374151',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  confirmButtonText: {
+    color: '#FFF',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  tagsInput: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 16,
+    color: '#111',
+  },
+  modalInput: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 16,
+    color: '#111',
+    marginBottom: 12,
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 6,
+    marginTop: 4,
+  },
+  strategyContainer: {
+    width: '100%',
+    gap: 8,
+  },
+  strategyOption: {
+    width: '100%',
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  strategyOptionSelected: {
+    borderColor: '#111',
+    backgroundColor: '#F9FAFB',
+  },
+  strategyText: {
+    fontSize: 15,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  strategyTextSelected: {
+    color: '#111',
+    fontWeight: '600',
   },
 });
 
-export default InventoryOrdersScreen; 
+export default InventoryOrdersScreen;

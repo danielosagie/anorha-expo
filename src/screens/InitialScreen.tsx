@@ -29,14 +29,14 @@ const InitialScreen = ({ navigation }: Props) => {
 
   return (
     <View style={styles.container}>
-      <AnimatedGradientBackground />
       
 
       <View style={styles.contentContainer}>  
         <View style={styles.logoContainer}>
             <View style={styles.logoBox}>
-            <Image source={require('../assets/rounded_sssync.png')} style={styles.logoImage} />
+            <Image source={require('../assets/anorha_logo.png')} style={styles.logoImage} />
             </View>
+            <Text style={styles.title}>anorha</Text>
         </View>
         
         <View style={styles.textContainer}>
@@ -83,6 +83,7 @@ const styles = StyleSheet.create({
         gap: 24,
     },
   container: {
+    backgroundColor: '#93C822',
     flex: 1,
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -97,24 +98,21 @@ const styles = StyleSheet.create({
   },
   logoContainer: {
     marginTop: 80,
+    flexDirection: 'row',
     alignItems: 'center',
     zIndex: 1,
+    gap: 20,
+    marginBottom: 40,
   },
   logoBox: {
     borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.2)',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
   },
   logoImage: {
     width: 100,
     height: 100,
-    resizeMode: 'contain',
+    resizeMode: 'stretch',
   },
   logoText: {
     fontSize: 60,
@@ -130,6 +128,12 @@ const styles = StyleSheet.create({
     color: 'white',
     textAlign: 'center',
     marginBottom: 24,
+  }, 
+  title: {
+    fontSize: 70,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: 'white',
+    textAlign: 'center',
   },
   subheading: {
     fontSize: 24,

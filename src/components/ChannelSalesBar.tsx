@@ -3,32 +3,39 @@ import { View, Text, StyleSheet } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 
-const ChannelSalesBar = ({ channel, delay = 0 }) => {
+interface Channel {
+  name: string;
+  percentage: number;
+  value: string | number;
+  color?: string;
+}
+
+const ChannelSalesBar = ({ channel, delay = 0 }: { channel: Channel; delay?: number }) => {
   const theme = useTheme();
   const barWidth = useSharedValue(0);
-  
+
   useEffect(() => {
     setTimeout(() => {
       barWidth.value = withTiming(channel.percentage, { duration: 800 });
     }, delay);
   }, []);
-  
+
   const barStyle = useAnimatedStyle(() => {
     return {
       width: `${barWidth.value}%`,
     };
   });
-  
+
   return (
     <View style={styles.container}>
       <View style={styles.labelContainer}>
         <Text style={styles.channelName}>{channel.name}</Text>
       </View>
       <View style={styles.barContainer}>
-        <Animated.View 
+        <Animated.View
           style={[
-            styles.bar, 
-            barStyle, 
+            styles.bar,
+            barStyle,
             { backgroundColor: channel.color || theme.colors.primary }
           ]}
         />

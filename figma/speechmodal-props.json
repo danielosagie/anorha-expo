@@ -1,0 +1,46 @@
+{
+  "visible": true,
+  "title": "Speech input",
+  "isRecording": false,
+  "recordingUri": "file:///tmp/rec.m4a",
+  "transcribing": false,
+  "streamingDisplay": "Transcribing…",
+  "error": null,
+  "transcript": "This is the transcribed text from the user's voice input.",
+  "idle": {
+    "isRecording": false,
+    "recordingUri": null,
+    "transcribing": false,
+    "error": null,
+    "transcript": ""
+  },
+  "recording": {
+    "isRecording": true,
+    "recordingUri": null,
+    "transcribing": false,
+    "error": null,
+    "transcript": ""
+  },
+  "transcribing": {
+    "isRecording": false,
+    "recordingUri": "file:///tmp/rec.m4a",
+    "transcribing": true,
+    "streamingDisplay": "Transcribing…",
+    "error": null,
+    "transcript": ""
+  },
+  "error": {
+    "isRecording": false,
+    "recordingUri": "file:///tmp/rec.m4a",
+    "transcribing": false,
+    "error": "No speech detected. Try again.",
+    "transcript": ""
+  },
+  "success": {
+    "isRecording": false,
+    "recordingUri": "file:///tmp/rec.m4a",
+    "transcribing": false,
+    "error": null,
+    "transcript": "This is the transcribed text from the user's voice input."
+  }
+}

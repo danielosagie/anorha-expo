@@ -1,0 +1,20 @@
+{
+  "visible": true,
+  "invite": {
+    "id": "inv-1",
+    "sourceOrgName": "Acme Wholesale",
+    "sourcePoolName": "Summer Clearance 2025",
+    "shareType": "Full catalog",
+    "productCount": 24,
+    "variantCount": 48
+  },
+  "selectedLocationIds": [],
+  "availableLocations": {},
+  "locationsLoading": false,
+  "idle": {
+    "loading": false
+  },
+  "loading": {
+    "loading": true
+  }
+}
