@@ -2,6 +2,10 @@ import React from 'react';
 import { TouchableOpacity, Text, StyleSheet, ActivityIndicator, ViewStyle, TextStyle } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
+const ANORHA_GREEN = '#8cc63f';
+const NEUTRAL_GRAY_BG = '#E5E7EB';
+const NEUTRAL_GRAY_TEXT = '#111827';
+
 interface ButtonProps {
   title: string;
   onPress: () => void;
@@ -35,10 +39,17 @@ const Button = ({
       disabled={disabled || loading}
     >
       {loading ? (
-        <ActivityIndicator color="white" />
+        <ActivityIndicator color={outlined ? NEUTRAL_GRAY_TEXT : 'white'} />
       ) : (
         <>
-          {icon && <Icon name={icon} size={20} color="white" style={styles.icon} />}
+          {icon && (
+            <Icon
+              name={icon}
+              size={20}
+              color={outlined ? NEUTRAL_GRAY_TEXT : 'white'}
+              style={styles.icon}
+            />
+          )}
           <Text style={[
             styles.buttonText,
             outlined && styles.outlinedButtonText,
@@ -55,24 +66,25 @@ const Button = ({
 const styles = StyleSheet.create({
   button: {
     flexDirection: 'row',
-    backgroundColor: '#8cc63f',
+    backgroundColor: ANORHA_GREEN,
     borderRadius: 8,
     padding: 16,
     justifyContent: 'center',
     alignItems: 'center',
   },
   outlinedButton: {
-    backgroundColor: 'transparent',
+    backgroundColor: NEUTRAL_GRAY_BG,
     borderWidth: 1,
-    borderColor: 'white',
+    borderColor: NEUTRAL_GRAY_BG,
   },
   buttonText: {
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
+    textAlign: 'center',
   },
   outlinedButtonText: {
-    color: 'white',
+    color: NEUTRAL_GRAY_TEXT,
   },
   disabledButton: {
     opacity: 0.6,

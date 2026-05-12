@@ -91,14 +91,15 @@ const styles = StyleSheet.create({
   
   // Tab bar styles
   tabBar: {
+    paddingHorizontal: 40,
+    marginHorizontal: 10,
     backgroundColor: '#FFFFFF',
-    borderTopColor: '#F0F0F0',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.1,
     shadowRadius: 3,
     elevation: 10,
-    height: 60,
+    height: 80,
     paddingBottom: 5,
   },
   tabBarItem: {
@@ -106,9 +107,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  AddPlusIcon: {
+    backgroundColor: '#0E8F7F',
+    borderRadius: 100,
+    padding: 10,
+  },
   tabBarLabel: {
     fontSize: 12,
     marginTop: 2,
+  },
+
+  specialTabBar: {
+    backgroundColor: "#FF9900",
   },
   
   // List styles

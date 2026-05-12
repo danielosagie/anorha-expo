@@ -1,23 +1,41 @@
 import React from 'react';
-import { View, StyleSheet } from 'react-native';
-import { useTheme } from '../context/ThemeContext';
+import { View, StyleSheet, ViewStyle, TouchableOpacity } from 'react-native';
+import ShadowSurface from './ui/ShadowSurface';
 
-const Card = ({ children, style }) => {
-  const theme = useTheme();
-  
+interface CardProps {
+  children: React.ReactNode;
+  style?: ViewStyle | ViewStyle[] | any;
+  onPress?: () => void;
+}
+
+const Card: React.FC<CardProps> = ({ children, style, onPress }) => {
+  if (onPress) {
+    return (
+      <ShadowSurface shadow="sm" style={[styles.cardOuter, style]} innerStyle={styles.cardSurface}>
+        <TouchableOpacity style={styles.cardContent} onPress={onPress} activeOpacity={0.7}>
+          {children}
+        </TouchableOpacity>
+      </ShadowSurface>
+    );
+  }
+
   return (
-    <View style={[styles.card, theme.shadows.small, style]}>
-      {children}
-    </View>
+    <ShadowSurface shadow="sm" style={[styles.cardOuter, style]} innerStyle={styles.cardSurface}>
+      <View style={styles.cardContent}>{children}</View>
+    </ShadowSurface>
   );
 };
 
 const styles = StyleSheet.create({
-  card: {
+  cardOuter: {
+    marginBottom: 16,
+  },
+  cardSurface: {
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
+  },
+  cardContent: {
     padding: 16,
-    marginBottom: 16,
   },
 });
 

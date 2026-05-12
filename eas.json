@@ -11,9 +11,19 @@
     "preview": {
       "distribution": "internal"
     },
-    "production": {}
+    "production": {
+      "distribution": "store",
+      "autoIncrement": true,
+      "ios": {
+        "simulator": false
+      }
+    }
   },
   "submit": {
-    "production": {}
+    "production": {
+    "android": {
+      "track": "internal"
+    }
+  }
   }
 }

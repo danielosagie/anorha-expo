@@ -1,0 +1,18 @@
+{
+  "colors": {
+    "primary": "#8BB04F",
+    "secondary": "#F17F5F",
+    "accent": "#3CAD46",
+    "accent2": "#FF9900",
+    "background": "#FFFFFF",
+    "surface": "#F8F9FB",
+    "text": "#333333",
+    "textSecondary": "#777777",
+    "success": "#28a745",
+    "error": "#dc3545",
+    "warning": "#ffc107",
+    "info": "#17a2b8"
+  },
+  "spacing": { "xs": 4, "sm": 8, "md": 16, "lg": 24, "xl": 32 },
+  "borderRadius": { "small": 4, "medium": 8, "large": 16, "round": 999 }
+}

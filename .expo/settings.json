@@ -1,10 +1,10 @@
 {
-  "hostType": "lan",
-  "lanType": "ip",
+  "urlRandomness": "3rdM4yc",
   "dev": true,
   "minify": false,
-  "urlRandomness": null,
   "https": false,
-  "scheme": "sssync.alpha",
+  "scheme": "exp+sssync",
+  "hostType": "lan",
+  "lanType": "ip",
   "devClient": false
 }

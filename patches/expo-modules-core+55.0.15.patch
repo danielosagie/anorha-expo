@@ -1,0 +1,21 @@
+diff --git a/node_modules/expo-modules-core/src/sweet/setUpJsLogger.fx.ts b/node_modules/expo-modules-core/src/sweet/setUpJsLogger.fx.ts
+index bda3440..6b63d3f 100644
+--- a/node_modules/expo-modules-core/src/sweet/setUpJsLogger.fx.ts
++++ b/node_modules/expo-modules-core/src/sweet/setUpJsLogger.fx.ts
+@@ -46,10 +46,12 @@ if (
+       onNewTrace,
+     ];
+ 
+-    for (const listener of listeners) {
+-      NativeJSLogger.addListener(listener.eventName, ({ message }: { message: string }) => {
+-        listener.action(message);
+-      });
++    if (typeof NativeJSLogger?.addListener === 'function') {
++      for (const listener of listeners) {
++        NativeJSLogger.addListener(listener.eventName, ({ message }: { message: string }) => {
++          listener.action(message);
++        });
++      }
+     }
+   }
+ }

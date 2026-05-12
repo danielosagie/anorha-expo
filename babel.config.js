@@ -3,10 +3,11 @@ module.exports = function(api) {
   return {
     presets: ['babel-preset-expo'],
     plugins: [
-      'react-native-reanimated/plugin',
       ['@babel/plugin-transform-flow-strip-types'],
       ['@babel/plugin-proposal-decorators', { legacy: true }],
       ['@babel/plugin-proposal-class-properties', { loose: true }],
+      // Reanimated plugin moved to react-native-worklets; must be last
+      'react-native-worklets/plugin',
     ],
   };
-}; 
+};

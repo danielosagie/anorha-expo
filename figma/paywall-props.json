@@ -1,0 +1,17 @@
+{
+  "visible": true,
+  "feature": "AI Product Scanning",
+  "title": "Upgrade to Access This Feature",
+  "subtitle": "You have 5 days left in your trial. Upgrade now to continue using all features.",
+  "entitlements": {
+    "planName": "Growth",
+    "maxConnections": 2,
+    "aiScanLimit": 40,
+    "isPaid": false,
+    "inTrial": true,
+    "trialEndsAt": "2025-03-15",
+    "trialDaysLeft": 5,
+    "subscriptionStatus": "trialing",
+    "hasAccess": true
+  }
+}

@@ -1,205 +1,21 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, TextInput } from 'react-native';
+import React from 'react';
+import { View, Text, StyleSheet } from 'react-native';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
-import OrderListItem from '../components/OrderListItem';
-import { mockOrders } from '../data/mockData';
 
 const OrdersScreen = () => {
   const theme = useTheme();
-  const [selectedPlatform, setSelectedPlatform] = useState('All');
-  const [selectedStatus, setSelectedStatus] = useState('All');
-  const [searchQuery, setSearchQuery] = useState('');
-
-  // Extended mock orders for a fuller list
-  const extendedOrders = [...mockOrders, ...mockOrders.map((order, index) => ({
-    ...order,
-    id: `${1189 + index}`,
-  }))];
-  
-  const filteredOrders = extendedOrders.filter(order => {
-    // Filter by platform
-    if (selectedPlatform !== 'All' && order.platform !== selectedPlatform) {
-      return false;
-    }
-    
-    // Filter by status
-    if (selectedStatus !== 'All' && 
-        order.status.toLowerCase() !== selectedStatus.toLowerCase()) {
-      return false;
-    }
-    
-    // Filter by search query
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      return (
-        order.id.toLowerCase().includes(query) ||
-        order.customer.toLowerCase().includes(query) ||
-        order.platform.toLowerCase().includes(query) ||
-        order.status.toLowerCase().includes(query)
-      );
-    }
-    
-    return true;
-  });
-  
-  // Get unique platforms from orders
-  const platforms = ['All', ...new Set(extendedOrders.map(order => order.platform))];
-  
-  // Get unique statuses from orders
-  const statuses = ['All', ...new Set(extendedOrders.map(order => 
-    order.status.charAt(0).toUpperCase() + order.status.slice(1)
-  ))];
-  
   return (
     <View style={styles.container}>
       <Animated.View entering={FadeInUp.delay(100).duration(500)}>
         <Text style={[styles.title, { color: theme.colors.text }]}>Orders</Text>
-        
         <Card>
-          <View style={styles.statsContainer}>
-            <View style={styles.statItem}>
-              <Text style={styles.statValue}>256</Text>
-              <Text style={styles.statLabel}>Total Orders</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.statItem}>
-              <Text style={styles.statValue}>$8,392</Text>
-              <Text style={styles.statLabel}>Total Revenue</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.statItem}>
-              <Text style={styles.statValue}>14</Text>
-              <Text style={styles.statLabel}>Pending</Text>
-            </View>
+          <View style={{ padding: 16 }}>
+            <Text style={{ fontSize: 16, color: '#555' }}>
+              Orders are temporarily disabled while we finalize the backend. Check back soon.
+            </Text>
           </View>
-        </Card>
-        
-        <Card>
-          {/* Search Bar */}
-          <View style={styles.searchContainer}>
-            <View style={styles.searchBar}>
-              <Icon name="magnify" size={20} color="#999" style={styles.searchIcon} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search orders..."
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-              />
-              {searchQuery ? (
-                <TouchableOpacity onPress={() => setSearchQuery('')}>
-                  <Icon name="close" size={20} color="#999" />
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          </View>
-          
-          {/* Platform Filter */}
-          <View style={styles.filterContainer}>
-            <View style={styles.filterHeader}>
-              <Text style={styles.filterLabel}>Platform:</Text>
-            </View>
-            
-            <ScrollView 
-              horizontal 
-              showsHorizontalScrollIndicator={false}
-              style={styles.tabScrollView}
-            >
-              <View style={styles.tabContainer}>
-                {platforms.map((platform) => (
-                  <TouchableOpacity 
-                    key={platform}
-                    style={[
-                      styles.tab, 
-                      selectedPlatform === platform && [
-                        styles.selectedTab, 
-                        { borderBottomColor: theme.colors.primary }
-                      ]
-                    ]}
-                    onPress={() => setSelectedPlatform(platform)}
-                  >
-                    <Text style={[
-                      styles.tabText, 
-                      selectedPlatform === platform 
-                        ? { color: theme.colors.primary } 
-                        : { color: theme.colors.textSecondary }
-                    ]}>
-                      {platform}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </ScrollView>
-          </View>
-          
-          {/* Status Filter */}
-          <View style={styles.filterContainer}>
-            <ScrollView 
-              horizontal 
-              showsHorizontalScrollIndicator={false} 
-              style={styles.filterScrollView}
-            >
-              <View style={styles.filterChipsContainer}>
-                {statuses.map((status) => (
-                  <TouchableOpacity
-                    key={status}
-                    style={[
-                      styles.filterChip,
-                      selectedStatus === status && { 
-                        backgroundColor: theme.colors.primary 
-                      }
-                    ]}
-                    onPress={() => setSelectedStatus(status)}
-                  >
-                    <Text
-                      style={[
-                        styles.filterChipText,
-                        selectedStatus === status && { color: 'white' }
-                      ]}
-                    >
-                      {status}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </ScrollView>
-          </View>
-          
-          {/* Orders List */}
-          <View style={styles.ordersListContainer}>
-            {filteredOrders.length > 0 ? (
-              filteredOrders.map((order, index) => (
-                <Animated.View 
-                  key={order.id} 
-                  entering={FadeInUp.delay(50 * index).duration(300)}
-                >
-                  <OrderListItem order={order} />
-                </Animated.View>
-              ))
-            ) : (
-              <View style={styles.emptyState}>
-                <Icon name="package-variant" size={40} color="#CCC" />
-                <Text style={styles.emptyStateText}>No orders found</Text>
-                <Text style={styles.emptyStateSubtext}>
-                  Try changing your filters to see more orders
-                </Text>
-              </View>
-            )}
-          </View>
-          
-          {filteredOrders.length > 0 && (
-            <View style={styles.paginationContainer}>
-              <TouchableOpacity style={styles.paginationButton}>
-                <Icon name="chevron-left" size={20} color="#777" />
-              </TouchableOpacity>
-              <Text style={styles.paginationText}>Page 1 of 4</Text>
-              <TouchableOpacity style={styles.paginationButton}>
-                <Icon name="chevron-right" size={20} color="#777" />
-              </TouchableOpacity>
-            </View>
-          )}
         </Card>
       </Animated.View>
     </View>
