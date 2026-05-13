@@ -16,6 +16,7 @@ const CIRCLE_CIRCUMFERENCE = 2 * Math.PI * CIRCLE_RADIUS;
 const ExpoBarcodeScanner: React.FC<ExpoBarcodeScannerProps> = ({ onClose, onCodeScanned }) => {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [scanned, setScanned] = useState(false);
+  const [active, setActive] = useState(true);
   const animationProgress = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -43,9 +44,15 @@ const ExpoBarcodeScanner: React.FC<ExpoBarcodeScannerProps> = ({ onClose, onCode
       setScanned(true);
       startAnimation();
       setTimeout(() => {
-        onCodeScanned(scanningResult.data);
-      }, 800); // Wait for animation to be visible
+        setActive(false);
+        setTimeout(() => onCodeScanned(scanningResult.data), 100);
+      }, 800);
     }
+  };
+
+  const handleClose = () => {
+    setActive(false);
+    setTimeout(() => onClose(), 100);
   };
 
   if (hasPermission === null) {
@@ -60,6 +67,7 @@ const ExpoBarcodeScanner: React.FC<ExpoBarcodeScannerProps> = ({ onClose, onCode
       <CameraView
         onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
         style={StyleSheet.absoluteFillObject}
+        active={active}
         barcodeScannerSettings={{
             barcodeTypes: ["qr", "ean13", "upc_a", "upc_e", "code128"],
         }}
@@ -90,7 +98,7 @@ const ExpoBarcodeScanner: React.FC<ExpoBarcodeScannerProps> = ({ onClose, onCode
             <Text style={styles.promptText}>Point camera at a barcode</Text>
         )}
       </View>
-      <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+      <TouchableOpacity onPress={handleClose} style={styles.closeButton}>
         <Icon name="close" size={30} color="white" />
       </TouchableOpacity>
     </View>

@@ -41,6 +41,12 @@ export function OptimizerPhotoModeView({ onBack, onComplete, queueProducts }: Op
     const cameraRef = useRef<CameraView>(null);
     const [facing, setFacing] = useState<CameraType>('back');
     const [flash, setFlash] = useState<FlashMode>('off');
+    const [cameraActive, setCameraActive] = useState(true);
+
+    const handleBack = () => {
+        setCameraActive(false);
+        setTimeout(() => onBack(), 100);
+    };
 
     // Data State
     const [products, setProducts] = useState<any[]>([]);
@@ -149,7 +155,7 @@ export function OptimizerPhotoModeView({ onBack, onComplete, queueProducts }: Op
         return (
             <View style={styles.loadingContainer}>
                 <Text>No products need photos right now!</Text>
-                <TouchableOpacity onPress={onBack} style={{ marginTop: 20 }}>
+                <TouchableOpacity onPress={handleBack} style={{ marginTop: 20 }}>
                     <Text style={{ color: COLORS.primary, fontWeight: 'bold' }}>Go Back</Text>
                 </TouchableOpacity>
             </View>
@@ -165,6 +171,7 @@ export function OptimizerPhotoModeView({ onBack, onComplete, queueProducts }: Op
                 style={styles.camera}
                 facing={facing}
                 flash={flash}
+                active={cameraActive}
             >
                 {/* Header (Top Left Stack + Close) */}
                 <LinearGradient
@@ -172,7 +179,7 @@ export function OptimizerPhotoModeView({ onBack, onComplete, queueProducts }: Op
                     style={styles.headerOverlay}
                 >
                     <View style={styles.headerLeft}>
-                        <TouchableOpacity onPress={onBack} style={styles.closeBtn}>
+                        <TouchableOpacity onPress={handleBack} style={styles.closeBtn}>
                             <MaterialCommunityIcons name="close" size={24} color="#fff" />
                         </TouchableOpacity>
 
