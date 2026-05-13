@@ -95,9 +95,18 @@ const VisionCamera: React.FC<VisionCameraProps> = ({ onCapture, onClose, styles:
   const toggleCameraFacing = () => setFacing(current => current === "back" ? "front" : "back");
   const getFlashIcon = () => flash === 'on' ? 'flash' : flash === 'auto' ? 'flash-auto' : 'flash-off';
 
-  const handleSave = () => {
-    onCapture(media);
-  };
+  const handleClose = useCallback(() => {
+    setIsActive(false);
+    setIsFocused(false);
+    setTimeout(() => onClose(), 100);
+  }, [onClose]);
+
+  const handleSave = useCallback(() => {
+    setIsActive(false);
+    setIsFocused(false);
+    const captured = media;
+    setTimeout(() => onCapture(captured), 100);
+  }, [onCapture, media]);
 
   if (!hasPermission) {
     return (
@@ -202,7 +211,7 @@ const VisionCamera: React.FC<VisionCameraProps> = ({ onCapture, onClose, styles:
 
       {/* Bottom toolbar */}
       <View style={styles.bottomToolbar}>
-        <TouchableOpacity style={styles.toolbarButton} onPress={onClose}>
+        <TouchableOpacity style={styles.toolbarButton} onPress={handleClose}>
           <Text style={styles.toolbarButtonText}>Cancel</Text>
         </TouchableOpacity>
 
