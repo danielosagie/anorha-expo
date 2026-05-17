@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+
+// Shared key so the in-progress import survives leaving the flow and can be
+// picked back up (status polling / progress banner) when the user returns.
+export const LAST_IMPORT_STORAGE_KEY = 'anorha:lastImport';
 import {
   MappingSuggestion,
   ProductCreationMode,
@@ -888,6 +893,26 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
 
       const result = await confirmRes.json().catch(() => ({}));
       const jobId = result?.jobId;
+      const operationId = result?.operationId;
+
+      // Persist the in-flight import so the user can leave and come back to
+      // accurate, resumable progress (polled via useImportProgress).
+      if (operationId) {
+        try {
+          await AsyncStorage.setItem(
+            LAST_IMPORT_STORAGE_KEY,
+            JSON.stringify({
+              operationId,
+              jobId: jobId || null,
+              connectionId,
+              itemsTotal: confirmedMappings?.length || 0,
+              startedAt: new Date().toISOString(),
+            }),
+          );
+        } catch (e) {
+          // non-fatal: progress UI just won't auto-resume
+        }
+      }
 
       setWizardVisible(false);
       if (onNavigate) {

@@ -37,6 +37,7 @@ import AuthScreen from '../screens/AuthScreen';
 import DashboardScreen from '../screens/DashboardScreen';
 import GlobalSearchScreen from '../screens/GlobalSearchScreen';
 import InventoryOrdersScreen from '../screens/InventoryOrdersScreen';
+import ImportProgressBanner from '../components/ImportProgressBanner';
 import MarketplaceScreen from '../screens/MarketplaceScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
@@ -378,6 +379,12 @@ const TabNavigator = () => {
         setTimeout(() => {
           navigation.navigate('Partners');
         }, 500);
+      } else if (data?.type === 'job_complete') {
+        // Import / sync finished — deep-link the user to their inventory so
+        // they can pick up where they left off.
+        setTimeout(() => {
+          navigation.navigate('Inventory');
+        }, 500);
       }
     }
   }, [lastNotificationResponse]);
@@ -404,6 +411,7 @@ const TabNavigator = () => {
   };
 
   return (
+    <>
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
@@ -460,6 +468,8 @@ const TabNavigator = () => {
         }}
       />
     </Tab.Navigator>
+    <ImportProgressBanner />
+    </>
   );
 };
 
