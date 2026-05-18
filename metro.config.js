@@ -31,4 +31,25 @@ config.transformer = {
   babelTransformerPath: require.resolve('react-native-svg-transformer/expo'),
 };
 
+// serve-sim: host the iOS Simulator inside `expo start` at /.sim.
+// macOS-only dev tooling — guarded so Metro still boots without it
+// (other machines, Linux CI), no fallback behaviour is implied.
+try {
+  const connect = require('connect');
+  const { simMiddleware } = require('serve-sim/middleware');
+  config.server = config.server || {};
+  const originalEnhanceMiddleware = config.server.enhanceMiddleware;
+  config.server.enhanceMiddleware = (metroMiddleware, server) => {
+    const middleware = originalEnhanceMiddleware
+      ? originalEnhanceMiddleware(metroMiddleware, server)
+      : metroMiddleware;
+    const app = connect();
+    app.use(simMiddleware({ basePath: '/.sim' }));
+    app.use(middleware);
+    return app;
+  };
+} catch (e) {
+  if (e && e.code !== 'MODULE_NOT_FOUND') throw e;
+}
+
 module.exports = config;
