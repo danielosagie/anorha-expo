@@ -29,6 +29,7 @@ import { JobsProvider } from './src/context/JobsContext';
 import { SystemNotificationProvider } from './src/context/SystemNotificationContext';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PostHogProvider, PostHogIdentify } from './src/providers/PostHogProvider';
+import * as Sentry from '@sentry/react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { init as initFlowLogger } from './src/lib/mobileFlowLogger';
 import { LiveActivityProvider } from './src/context/LiveActivityContext';
@@ -41,6 +42,22 @@ import {
   loadActiveFlowCheckpoint,
   saveActiveFlowCheckpoint,
 } from './src/utils/activeFlowPersistence';
+
+// Crash visibility. Empty/missing DSN no-ops cleanly so dev builds are
+// unaffected. Must run at module load, before the app renders.
+const SENTRY_DSN = process.env.EXPO_PUBLIC_SENTRY_DSN;
+if (SENTRY_DSN) {
+  try {
+    Sentry.init({
+      dsn: SENTRY_DSN,
+      enableNative: true,
+      environment: process.env.EXPO_PUBLIC_ENV || 'development',
+      tracesSampleRate: 0.1,
+    });
+  } catch (e) {
+    console.warn('[Sentry] init failed:', e);
+  }
+}
 
 // Complete any in-app browser auth session (e.g. OAuth redirect from Google Sign-In)
 WebBrowser.maybeCompleteAuthSession();
@@ -537,7 +554,7 @@ const App: React.FC = () => {
               />
             ) : !isSignedIn ? (
               // If not signed in, don't wait for session/legend state
-              <AppNavigator />
+              <SafeErrorBoundary><AppNavigator /></SafeErrorBoundary>
             ) : !session?.ready ? (
               <AppStartupShell
                 title="Restoring your workspace"
@@ -549,7 +566,7 @@ const App: React.FC = () => {
                 message="Reconnecting shared app state and restoring your last workspace."
               />
             ) : (
-              <AppNavigator />
+              <SafeErrorBoundary><AppNavigator /></SafeErrorBoundary>
             )}
             <FlashMessage position="top" />
             <GlobalPlatformPickerOverlay />
@@ -640,7 +657,7 @@ const App: React.FC = () => {
               ) : (
                 <ThemeProvider>
                   <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-                  <AppNavigator />
+                  <SafeErrorBoundary><AppNavigator /></SafeErrorBoundary>
                   <FlashMessage position="top" />
                 </ThemeProvider>
               )}
@@ -666,4 +683,4 @@ const App: React.FC = () => {
   );
 };
 
-export default App; 
+export default Sentry.wrap(App);

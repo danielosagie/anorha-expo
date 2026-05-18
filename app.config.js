@@ -33,6 +33,7 @@ export default {
     "**/*.{ttf,png,jpg,jpeg,gif,webp,svg}"
   ],
   plugins: [
+    "@sentry/react-native/expo",
     [
       "expo-camera",
       {

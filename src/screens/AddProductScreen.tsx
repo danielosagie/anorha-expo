@@ -76,6 +76,7 @@ import {
   FlowEvents,
 } from '../lib/mobileFlowLogger';
 import { buildMatchAnalyzeProducts } from '../utils/buildMatchAnalyzeProducts';
+import { safeJson } from '../utils/safeJson';
 import { openQuickScanStream, QuickScanPhase, QuickScanStreamEvent } from '../lib/quickScanStream';
 import { ShelfScanPlaceholderRow, ShelfScanProgressCard } from '../components/camera/ShelfScanProgressCard';
 import BottomActionBar from '../components/BottomActionBar';
@@ -1349,7 +1350,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         return;
       }
 
-      const data = await response.json();
+      const data = await safeJson<any>(response);
+
+      if (!data) {
+        console.warn('[BARCODE] Non-JSON response from lookup');
+        setCurrentInstruction('ready');
+        return;
+      }
 
       if (data.error) {
         console.log(`[BARCODE] Product not found: ${data.error}`);
@@ -1865,7 +1872,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           throw new Error(`API error: ${response.status}`);
         }
 
-        const data = await response.json();
+        const data = await safeJson<any>(response);
+        if (!data?.jobId) {
+          throw new Error('Invalid response from manifest endpoint');
+        }
         console.log('[MANIFEST] Job started:', data.jobId);
 
         // Show the ManifestReviewSheet with the job ID
@@ -1942,7 +1952,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           throw new Error(`API error: ${response.status}`);
         }
 
-        const data = await response.json();
+        const data = await safeJson<any>(response);
+        if (!data?.jobId) {
+          throw new Error('Invalid response from receipt endpoint');
+        }
         console.log('[RECEIPT] Job started:', data.jobId);
 
         // Show the ReceiptReviewSheet with the job ID
