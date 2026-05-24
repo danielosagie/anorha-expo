@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { API_BASE_URL } from '../config/env';
 import {
   View,
   Text,
@@ -286,6 +287,32 @@ const initialShelfProgressState = (): ShelfProgressState => ({
   status: 'idle',
 });
 
+// --- Design-export seed data (used only when route.params.designState is set on web) ---
+const DS_SHELF_URI = 'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?w=800&q=70';
+const dsPhoto = (seed: string, isCover = false): CapturedPhoto => ({
+  id: seed, uri: `https://picsum.photos/seed/${seed}/600/800`, width: 600, height: 800, timestamp: Date.now(), isCover,
+});
+const dsBuildItems = () => ([
+  { id: 'ds-1', title: 'Organic Coconut Oil', isActive: true, photos: [dsPhoto('dsa', true), dsPhoto('dsb'), dsPhoto('dsc')] },
+  { id: 'ds-2', title: 'African Spice Set', photos: [dsPhoto('dsd', true), dsPhoto('dse')] },
+  { id: 'ds-3', title: 'Jamaican Coffee Beans', photos: [dsPhoto('dsf', true)] },
+]);
+const DS_MATCH: MatchResponse = {
+  systemAction: 'show_multiple_matches',
+  confidence: 'high',
+  totalMatches: 3,
+  rankedCandidates: [
+    { id: 'm1', title: 'Organic Coconut Oil — 32oz', description: 'Cold-pressed, unrefined', price: 24.99, imageUrl: 'https://picsum.photos/seed/m1/240', productUrl: '', sourceUrl: 'https://amazon.com', isLocalMatch: false } as any,
+    { id: 'm2', title: 'Virgin Coconut Oil Jar', description: 'Organic, 32oz', price: 21.5, imageUrl: 'https://picsum.photos/seed/m2/240', productUrl: '', sourceUrl: 'https://walmart.com', isLocalMatch: false } as any,
+    { id: 'm3', title: 'Cold Pressed Coconut Oil', description: 'Fair trade', price: 27.0, imageUrl: 'https://picsum.photos/seed/m3/240', productUrl: '', sourceUrl: 'https://ebay.com', isLocalMatch: true } as any,
+  ],
+};
+const dsShelfProgress = (status: ShelfProgressStatus): ShelfProgressState => (
+  status === 'completed'
+    ? { phase: 'inspecting_shelf', progress: 1, elapsedMs: 14000, totalItems: 12, completedItems: 12, stalled: false, status: 'completed' }
+    : { phase: 'inspecting_shelf', progress: 0.6, elapsedMs: 8000, totalItems: 12, completedItems: 7, stalled: false, status: 'streaming' }
+);
+
 const parseShelfScanErrorMessage = (rawMessage?: string) => {
   if (!rawMessage) {
     return {
@@ -495,6 +522,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const route = useRoute();
   const theme = useTheme();
   const rawParams = (route.params ?? {}) as any;
+  const __ds = rawParams?.designState as string | undefined; // design-export state seed (web only)
+  const __dsHasItems = !!__ds && ['withItems', 'loading', 'shelfComplete', 'matchSheet'].includes(__ds);
   const params = ((rawParams?.params && typeof rawParams.params === 'object') ? rawParams.params : rawParams) as {
     sessionId?: string;
     firstPhotos?: any[];
@@ -518,7 +547,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [capturedPhotos, setCapturedPhotos] = useState<CapturedPhoto[]>([]);
   const [isCapturing, setIsCapturing] = useState(false);
-  const [cameraMode, setCameraMode] = useState<'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf'>('camera');
+  const [cameraMode, setCameraMode] = useState<'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf'>(
+    (rawParams?.initialCameraMode as any) || 'camera'
+  );
+
+  // Animation values - separate for each modal (declared early to avoid a TDZ crash on web)
+  const sheetTranslateY = useSharedValue((__ds === 'shelfScanning' || __ds === 'shelfComplete') ? 0 : SCREEN_HEIGHT);
+  const matchSheetTranslateY = useSharedValue(__ds === 'matchSheet' ? 0 : SCREEN_HEIGHT);
 
   // Barcode state
   const [scannedBarcode, setScannedBarcode] = useState<string | null>(null);
@@ -540,9 +575,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [receiptJobId, setReceiptJobId] = useState<string | null>(null);
 
   // Shelf state
-  const [shelfPhotoUri, setShelfPhotoUri] = useState<string | null>(null);
-  const [isProcessingShelfScan, setIsProcessingShelfScan] = useState(false);
-  const [shelfProgress, setShelfProgress] = useState<ShelfProgressState>(initialShelfProgressState);
+  const [shelfPhotoUri, setShelfPhotoUri] = useState<string | null>(
+    () => (__ds === 'shelfScanning' || __ds === 'shelfComplete') ? DS_SHELF_URI : null
+  );
+  const [isProcessingShelfScan, setIsProcessingShelfScan] = useState(() => __ds === 'shelfScanning');
+  const [shelfProgress, setShelfProgress] = useState<ShelfProgressState>(
+    () => __ds === 'shelfScanning' ? dsShelfProgress('streaming')
+      : __ds === 'shelfComplete' ? dsShelfProgress('completed')
+        : initialShelfProgressState()
+  );
   const shelfScanStreamRef = useRef<ReturnType<typeof openQuickScanStream> | null>(null);
   const lastShelfScanPhotoRef = useRef<CapturedPhoto | null>(null);
 
@@ -578,7 +619,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     (async () => {
       try {
         const token = await ensureSupabaseJwt();
-        const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+        const API_BASE = API_BASE_URL;
         const res = await fetch(`${API_BASE}/api/products/quick-scan-sessions/${sessionIdParam}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -620,7 +661,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
     draftSessionCreatePromiseRef.current = (async () => {
       const token = await ensureSupabaseJwt();
-      const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+      const API_BASE = API_BASE_URL;
       const res = await fetch(`${API_BASE}/api/products/quick-scan-sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -646,7 +687,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     if (isHydratingRef.current) return;
     try {
       const token = await ensureSupabaseJwt();
-      const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+      const API_BASE = API_BASE_URL;
       let sid = sessionIdRef.current;
       if (!sid) {
         sid = await ensureDraftSessionId(payload);
@@ -664,12 +705,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }, [ensureDraftSessionId]);
 
   // UI state
-  const [currentInstruction, setCurrentInstruction] = useState<CameraInstruction>('ready');
-  const [showMatchSheet, setShowMatchSheet] = useState(false);
+  const [currentInstruction, setCurrentInstruction] = useState<CameraInstruction>(
+    () => __ds === 'loading' ? 'processing' : 'ready'
+  );
+  const [showMatchSheet, setShowMatchSheet] = useState(() => __ds === 'matchSheet');
   const [showViewPhotosModal, setShowViewPhotosModal] = useState(false);
-  const [showDeepSearchSheet, setShowDeepSearchSheet] = useState(false);
+  const [showDeepSearchSheet, setShowDeepSearchSheet] = useState(() => __ds === 'shelfScanning' || __ds === 'shelfComplete');
   const [hasSeenBulkModalFtux, setHasSeenBulkModalFtux] = useState<boolean | null>(null);
-  const [matchData, setMatchData] = useState<MatchResponse | null>(null);
+  const [matchData, setMatchData] = useState<MatchResponse | null>(() => __ds === 'matchSheet' ? DS_MATCH : null);
   // Quick scan storage per item and current sheet context
   const [quickScanStore, setQuickScanStore] = useState<Record<string, { matchData: MatchResponse; serpApiData: any[] }>>({});
   const [currentMatchItemId, setCurrentMatchItemId] = useState<string | null>(null);
@@ -690,8 +733,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     isActive?: boolean;
     preSelectedSource?: any;
     quantity?: number;
-  }>>([]);
-  const [activeItemId, setActiveItemId] = useState<string | null>(null);
+  }>>(() => __dsHasItems ? (dsBuildItems() as any) : []);
+  const [activeItemId, setActiveItemId] = useState<string | null>(() => __dsHasItems ? 'ds-1' : null);
 
   // Debounced auto-save when scan state changes (so drafts appear in Scan Drafts)
   useEffect(() => {
@@ -864,7 +907,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Notification and progress state
   const [showNotification, setShowNotification] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState('');
-  const [showProgressBar, setShowProgressBar] = useState(false);
+  const [showProgressBar, setShowProgressBar] = useState(() => __ds === 'loading');
 
   // Freemium / Paywall state
   const { status: freemiumStatus, refresh: refreshFreemiumStatus, incrementLocalUsage } = useFreemiumUsage();
@@ -906,10 +949,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     console.log('[EFFECT] activeItemId changed! New value:', activeItemId);
   }, [activeItemId]);
 
-
-  // Animation values - separate for each modal
-  const sheetTranslateY = useSharedValue(SCREEN_HEIGHT);
-  const matchSheetTranslateY = useSharedValue(SCREEN_HEIGHT);
 
   // Guard against inconsistent modal state that can leave camera paused with no visible sheet.
   useEffect(() => {
@@ -1332,7 +1371,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
 
       const response = await fetch(
-        `https://api.sssync.app/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`,
+        `${API_BASE_URL}/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`,
         {
           method: 'GET',
           headers: {
@@ -1413,8 +1452,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       });
 
       const token = await ensureSupabaseJwt();
-      const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
-      const API_BASE = /localhost|127\.0\.0\.1/i.test(rawApiBase) ? 'https://api.sssync.app' : rawApiBase;
+      const rawApiBase = API_BASE_URL;
+      const API_BASE = rawApiBase;
 
       console.log(`[SHELF MODE] Starting SSE stream with ${base64.length} bytes`);
       const sseUrl = `${API_BASE}/api/products/orchestrate/quick-scan-stream`;
@@ -1655,8 +1694,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         [itemId]: { isLoading: true, stage: 'Searching catalog...', error: undefined },
       }));
 
-      const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
-      const API_BASE = /localhost|127\.0\.0\.1/i.test(rawApiBase) ? 'https://api.sssync.app' : rawApiBase;
+      const rawApiBase = API_BASE_URL;
+      const API_BASE = rawApiBase;
       const sseUrl = `${API_BASE}/api/products/orchestrate/quick-scan-stream`;
 
       const stream = openQuickScanStream({
@@ -2256,13 +2295,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       const token = tokenMaybe;
 
-      // Call backend /orchestrate/quick-scan endpoint with env-safe fallback.
-      // On physical devices, localhost/127.0.0.1 will fail, so fallback to public API.
-      const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
-      const deviceSafeBase = /localhost|127\.0\.0\.1/i.test(rawApiBase) ? 'https://api.sssync.app' : rawApiBase;
+      // Call backend /orchestrate/quick-scan endpoint.
       const quickScanPath = '/api/products/orchestrate/quick-scan';
-      const quickScanUrlPrimary = `${deviceSafeBase}${quickScanPath}`;
-      const quickScanUrlFallback = `https://api.sssync.app${quickScanPath}`;
+      const quickScanUrlPrimary = `${API_BASE_URL}${quickScanPath}`;
+      const quickScanUrlFallback = `${API_BASE_URL}${quickScanPath}`;
 
       let response: Response;
       try {
@@ -2424,8 +2460,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         // to populate price range and shipping data from real market data.
         const topTitle = nextMatchData.rankedCandidates?.[0]?.title;
         if (topTitle) {
-          const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
-          const API_BASE = /localhost|127\.0\.0\.1/i.test(rawApiBase) ? 'https://api.sssync.app' : rawApiBase;
+          const rawApiBase = API_BASE_URL;
+          const API_BASE = rawApiBase;
           (async () => {
             try {
               const cleanedTitle = topTitle.replace(/\s*[|—–-]\s*(eBay|Amazon|Walmart|Etsy|Target)\s*$/i, '').trim();
@@ -2721,7 +2757,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         platform: Platform.OS,
         productsCount: finalPayload.products.length,
       });
-      const response = await fetch('https://api.sssync.app/api/products/orchestrate/match', {
+      const response = await fetch(`${API_BASE_URL}/api/products/orchestrate/match`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -3519,7 +3555,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             fetchPricingResearch={async (title: string) => {
               try {
                 const token = await getToken();
-                const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+                const API_BASE = API_BASE_URL;
                 const res = await fetch(`${API_BASE}/api/ebay/pricing-research`, {
                   method: 'POST',
                   headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -3731,7 +3767,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                     updatesByVariant[u.variantId].push(u);
                   });
 
-                  const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+                  const API_BASE = API_BASE_URL;
 
                   // Process per variant
                   for (const [variantId, variantUpdates] of Object.entries(updatesByVariant)) {
@@ -4930,8 +4966,8 @@ const BulkItemsSheet: React.FC<{
       throw new Error('No auth token available for generate request');
     }
 
-    const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
-    const API_BASE = /localhost|127\.0\.0\.1/i.test(rawApiBase) ? 'https://api.sssync.app' : rawApiBase;
+    const rawApiBase = API_BASE_URL;
+    const API_BASE = rawApiBase;
     const response = await fetch(`${API_BASE}/api/products/generate/jobs`, {
       method: 'POST',
       headers: {

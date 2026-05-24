@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import { API_BASE_URL } from '../config/env';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard, Animated, Easing } from 'react-native';
 import { CameraView } from 'expo-camera';
 import { StackScreenProps } from '@react-navigation/stack';
@@ -278,7 +279,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
           if (resultArray.length === 0) {
             // Fallback: fetch results if socket didn't include them
-            const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+            const baseUrl = API_BASE_URL;
             const token = await ensureSupabaseJwt();
             if (baseUrl && token) {
               const rr = await fetch(`${baseUrl}/api/products/regenerate/results/${data.jobId}`, {
@@ -495,7 +496,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
     debounceTimerRef.current = setTimeout(async () => {
       try {
-        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+        const baseUrl = API_BASE_URL;
         const token = await ensureSupabaseJwt();
 
         if (!baseUrl || !token) {
@@ -633,7 +634,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   useEffect(() => {
     (async () => {
       try {
-        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+        const baseUrl = API_BASE_URL;
         const token = await ensureSupabaseJwt();
         if (!baseUrl || !token) return;
 
@@ -754,6 +755,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }
   }, [regenModalOpen, regenAutoRun, regenSubmitting]);
 
+  // Get shared JobsContext for cross-screen state sync (defined early to avoid a TDZ crash on web)
+  const jobsContext = useJobsOptional();
+
   // Try to pull items list from params if provided; fallback to single
   const items = useMemo(() => {
     const contextMatchJobId = jobsContext?.matchJobId;
@@ -813,9 +817,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const [bottomNavState, setBottomNavState] = useState<'empty' | 'selection' | 'template' | 'platform'>('empty');
   const [itemGenerateJobs, setItemGenerateJobs] = useState<Record<number, { jobId: string; status?: string }>>(jobMap || {});
-
-  // Get shared JobsContext for cross-screen state sync
-  const jobsContext = useJobsOptional();
 
   // Initialize from generate job only when we didn't navigate with items/jobMap (e.g. deep link)
   // When we have items from params (came from Match), don't call - avoids loading "most recent" match job and mixing jobs
@@ -972,7 +973,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     (async () => {
       try {
         // First try to get versions from the backend API
-        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+        const baseUrl = API_BASE_URL;
         if (baseUrl && productId) {
           const token = await ensureSupabaseJwt();
           const res = await fetch(`${baseUrl}/api/products/generate/versions?productId=${encodeURIComponent(productId)}${variantId ? `&variantId=${encodeURIComponent(variantId)}` : ''}&limit=20&offset=0`, {
@@ -1031,7 +1032,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     let canceled = false;
     (async () => {
       try {
-        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+        const baseUrl = API_BASE_URL;
         if (!baseUrl) return;
         const token = await ensureSupabaseJwt();
         const res = await fetch(`${baseUrl}/api/products/generate/jobs?limit=50`, {
@@ -1414,7 +1415,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     if (isFilling || !ENABLE_AI_REFILL_FEATURES) return;
     try {
       setIsFilling(true);
-      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const baseUrl = API_BASE_URL;
       const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || effectiveResult?.productId;
       const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
@@ -1506,7 +1507,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const submitRegenerateField = async () => {
     try {
       setRegenSubmitting(true);
-      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const baseUrl = API_BASE_URL;
       const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || effectiveResult?.productId;
       const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
@@ -1571,7 +1572,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const doSaveToInventory = async () => {
     console.log('[doSaveToInventory] Starting inventory save...');
     try {
-      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const baseUrl = API_BASE_URL;
       const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || effectiveResult?.productId;
       const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
@@ -1658,7 +1659,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     console.log('platformKeys:', platformKeys);
 
     try {
-      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const baseUrl = API_BASE_URL;
       const token = await ensureSupabaseJwt();
       if (!baseUrl || !token) {
         console.log('doPublish - Missing baseUrl or token');
@@ -1811,7 +1812,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       setPublishModalOpen(false);
       setIsPublishing(true); // Show publishing indicator immediately
 
-      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const baseUrl = API_BASE_URL;
       const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || effectiveResult?.productId;
       const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
@@ -1997,7 +1998,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   };
 
   const pollRegenerateUntilDone = async (regenJobId: string, token?: string) => {
-    const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+    const baseUrl = API_BASE_URL;
     if (!baseUrl) return null;
     for (let i = 0; i < 40; i++) {
       try {
@@ -2020,7 +2021,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const generatePlatform = async (platformKey: string) => {
     try {
-      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const baseUrl = API_BASE_URL;
       const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || effectiveResult?.productId;
       const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
@@ -2084,7 +2085,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const suggestVariants = async (platformKey: string) => {
     try {
-      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const baseUrl = API_BASE_URL;
       const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || effectiveResult?.productId;
       const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
@@ -2132,7 +2133,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const boostListing = async (platformKey: string, kind: 'boost' | 'advanced') => {
     try {
-      const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+      const baseUrl = API_BASE_URL;
       const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || effectiveResult?.productId;
       const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
@@ -2286,7 +2287,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     let canceled = false;
     (async () => {
       try {
-        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+        const baseUrl = API_BASE_URL;
         const token = await ensureSupabaseJwt();
 
         if (!baseUrl || !token) {
@@ -2684,7 +2685,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               onExpand={() => setIsInputExpanded(true)}
               onCollapse={() => setIsInputExpanded(false)}
               isLoading={quickFixLoading}
-              apiBaseUrl={process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL}
+              apiBaseUrl={API_BASE_URL}
               getAuthToken={ensureSupabaseJwt}
               availableFields={(() => {
                 const fields: FieldOption[] = [];
@@ -2699,7 +2700,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               onSubmit={async (text, mentionedFields) => {
                 try {
                   setQuickFixLoading(true);
-                  const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+                  const baseUrl = API_BASE_URL;
                   const token = await ensureSupabaseJwt();
                   const productId = (route.params as any)?.productId || effectiveResult?.productId;
                   const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;

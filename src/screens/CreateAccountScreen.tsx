@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, memo, useContext, useEffect } from 'react';
+import { API_BASE_URL } from '../config/env';
 import {
   View,
   Text,
@@ -21,7 +22,7 @@ import * as Notifications from 'expo-notifications';
 import { Camera } from 'expo-camera';
 import { AudioModule } from 'expo-audio';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
-import { CompositeNavigationProp, useNavigation } from '@react-navigation/native';
+import { CompositeNavigationProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import type { AuthStackParamList, AppStackParamList } from '../navigation/AppNavigator';
 import { useOrganizationList, useUser } from '@clerk/clerk-expo';
@@ -38,7 +39,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 const { width } = Dimensions.get('window');
-const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/$/, '');
+const API_BASE = API_BASE_URL;
 
 // --- THEME (matches OnboardingSlides.tsx) ---
 const ONBOARDING = {
@@ -739,6 +740,7 @@ const PermissionsAndLegalStep = memo(({
 
 export default function CreateAccountScreen() {
   const navigation = useNavigation<CreateAccountScreenNavigationProp>();
+  const route = useRoute<any>();
   const authContext = useContext(AuthContext);
   const { user: clerkUser } = useUser();
   const { createOrganization } = useOrganizationList();
@@ -746,7 +748,7 @@ export default function CreateAccountScreen() {
   const insets = useSafeAreaInsets();
 
   // State
-  const [currentStep, setCurrentStep] = useState<Step>('WELCOME');
+  const [currentStep, setCurrentStep] = useState<Step>((route.params?.initialStep as Step) || 'WELCOME');
   const [loading, setLoading] = useState(false);
   const [isLoadingAddress, setIsLoadingAddress] = useState(false);
   const [isRequestingLoc, setIsRequestingLoc] = useState(false);
