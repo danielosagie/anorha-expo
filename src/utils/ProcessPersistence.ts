@@ -252,7 +252,7 @@ export class ProcessPersistence {
     initialData: T['data'],
     metadata?: Record<string, any>
   ): T {
-    const process: ProcessState = {
+    const process = {
       id: `${type}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       type,
       status: ProcessStatus.PENDING,

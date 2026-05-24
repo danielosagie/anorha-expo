@@ -103,8 +103,9 @@ export const LiveActivityProvider: React.FC<{ children: React.ReactNode }> = ({ 
       if (!activityRef.current) {
         currentJobIdRef.current = jobId;
         try {
-          activityRef.current = activityFactory.start(props);
-          activityRef.current.addPushTokenListener(({ pushToken }) => {
+          const activity = activityFactory.start(props);
+          activityRef.current = activity;
+          activity.addPushTokenListener(({ pushToken }) => {
             void registerPushToken(jobId, jobType, pushToken);
           });
           lastSignatureRef.current = signature;

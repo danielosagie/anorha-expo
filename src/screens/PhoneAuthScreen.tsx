@@ -104,7 +104,7 @@ const PhoneAuthScreen = () => {
         // If CreateAccountScreen relies on AuthContext, ensure it's updated
         // authContext.signIn(data.session.access_token); // Or let the listener handle it
 
-        navigation.navigate('CreateAccountScreen'); // Navigate to the onboarding/profile setup
+        (navigation as any).navigate('CreateAccountScreen'); // Navigate to the onboarding/profile setup
         // ------------------------------------------------------------------ //
       } else {
         throw new Error('OTP verification successful but no session received.');

@@ -59,7 +59,7 @@ export function OptimizerReviewModeView({ onBack, queueProducts }: OptimizerRevi
     const loadPendingReviews = async () => {
         try {
             const token = await getToken();
-            await ensureSupabaseJwt(token);
+            await ensureSupabaseJwt();
 
             // Fetch products. In a real app, we'd specifically fetch from a 'ProductDrafts' table
             // or products with a 'review_pending' status. 

@@ -49,7 +49,7 @@ const ProcessResumptionModal: React.FC<ProcessResumptionModalProps> = ({
   };
 
   const getProcessTitle = (process: ProcessState): string => {
-    switch (process.type) {
+    switch (process.type as ProcessType) {
       case ProcessType.AI_GENERATION:
         return 'AI Product Generation';
       case ProcessType.LISTING_CREATION:

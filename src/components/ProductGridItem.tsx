@@ -1,6 +1,9 @@
 import React from 'react';
-import { Pressable, View, Text, Image, StyleSheet } from 'react-native';
+import { Pressable, View, Text, Image, StyleSheet, Dimensions } from 'react-native';
 import { Icon } from 'react-native-paper';
+
+const ITEM_SPACING = 8;
+const ITEM_WIDTH = (Dimensions.get('window').width - ITEM_SPACING * 4) / 3;
 
 interface SerpApiData {
     thumbnail?: string;
@@ -28,7 +31,7 @@ const ProductGridItem = React.memo(({ item, isSelected, onSelect }: {
             <Image source={{ uri: item.thumbnail || item.image }} style={styles.itemImage} />
             {isSelected && (
                 <View style={styles.selectionOverlay}>
-                    <Icon name="check-circle" size={54} color="#FFFFFF" />
+                    <Icon source="check-circle" size={54} color="#FFFFFF" />
                 </View>
             )}
             <View style={styles.itemDetails}>

@@ -121,7 +121,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
       console.log(`[PlatformConnectionsContext] Refreshing connections (${reason})`);
       fetchConnections();
     }, 600);
-  }, [fetchConnections, scheduleRefresh]);
+  }, [fetchConnections]);
 
   useEffect(() => {
     fetchConnections();
