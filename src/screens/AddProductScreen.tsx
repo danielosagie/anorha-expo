@@ -1459,7 +1459,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       const sseUrl = `${API_BASE}/api/products/orchestrate/quick-scan-stream`;
       shelfScanStreamRef.current = openQuickScanStream({
         url: sseUrl,
-        token,
+        token: token!,
         body: {
           images: [{ base64 }],
           mode: 'vlm-multi',
@@ -1700,7 +1700,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       const stream = openQuickScanStream({
         url: sseUrl,
-        token,
+        token: token!,
         body: {
           textQuery: newQuery,
           mode: 'ocr-vlm-search',

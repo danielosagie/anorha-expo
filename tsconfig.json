@@ -21,7 +21,9 @@
     "src/screens/designExport",
     "src/screens/DesignExportScreen.tsx",
     "src/examples",
-    "App.web.tsx"
+    "App.web.tsx",
+    "src/components/VisionCamera.tsx",
+    "src/hooks/useVisionCamera.tsx"
   ],
   "include": ["**/*.ts", "**/*.tsx", "../Archive/BarcodeScanner.tsx"]
 }

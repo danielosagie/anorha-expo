@@ -1888,7 +1888,7 @@ const ProfileScreen = () => {
                 } else {
                   return (
                     <ConnectedPlatformList
-                      connections={filteredConnections}
+                      connections={filteredConnections as any}
                       isEditMode={isEditMode}
                       onStartScan={startPlatformScan}
                       onReview={handleReviewAndSync}

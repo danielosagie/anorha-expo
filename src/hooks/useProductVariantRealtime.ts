@@ -38,12 +38,13 @@ export function useProductVariantRealtime() {
       const observables = getLegendStateObservables();
       if (!observables?.productVariants$) return;
 
+      const pv$ = observables.productVariants$;
       const updates = pendingUpdatesRef.current;
       if (updates.size === 0) return;
 
       console.log(`[Real-time] Flushing ${updates.size} batched updates`);
       updates.forEach((variant, id) => {
-        observables.productVariants$[id].set(variant);
+        pv$[id].set(variant);
       });
       updates.clear();
 
@@ -62,7 +63,7 @@ export function useProductVariantRealtime() {
           table: 'ProductVariants',
         },
         (payload) => {
-          const variantId = payload.new?.Id || payload.old?.Id;
+          const variantId = (payload.new as any)?.Id || (payload.old as any)?.Id;
           const variantType = (payload.new as any)?.VariantType || (payload.old as any)?.VariantType;
           const isArchived = (payload.new as any)?.IsArchived;
 
@@ -71,7 +72,7 @@ export function useProductVariantRealtime() {
             variantId,
             variantType,
             isArchived,
-            title: payload.new?.Title || payload.old?.Title,
+            title: (payload.new as any)?.Title || (payload.old as any)?.Title,
           });
 
           const observables = getLegendStateObservables();
@@ -231,9 +232,9 @@ export function useInventoryLevelsRealtime() {
             table: 'InventoryLevels',
           },
           (payload) => {
-            const levelId = payload.new?.Id || payload.old?.Id;
-            const variantId = payload.new?.ProductVariantId || payload.old?.ProductVariantId;
-            const quantity = payload.new?.Quantity;            console.log('[Real-time] InventoryLevel change:', {
+            const levelId = (payload.new as any)?.Id || (payload.old as any)?.Id;
+            const variantId = (payload.new as any)?.ProductVariantId || (payload.old as any)?.ProductVariantId;
+            const quantity = (payload.new as any)?.Quantity;            console.log('[Real-time] InventoryLevel change:', {
               eventType: payload.eventType,
               levelId,
               variantId,
@@ -243,7 +244,7 @@ export function useInventoryLevelsRealtime() {
               console.warn('[Real-time] Legend-state inventoryLevels$ not available');
               return;
             }            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-              const level = payload.new;
+              const level = payload.new as any;
               console.log('[Real-time] ✅ Updating inventory level', levelId, 'qty:', quantity);
               observables.inventoryLevels$[levelId].set(level);
             } else if (payload.eventType === 'DELETE') {

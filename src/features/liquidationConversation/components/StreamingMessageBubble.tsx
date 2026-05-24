@@ -291,7 +291,7 @@ const styles = StyleSheet.create({
       fontSize: 12,
       color: '#111827',
     },
-  },
+  } as any,
   userMessageText: {
     color: '#FFFFFF',
   },
