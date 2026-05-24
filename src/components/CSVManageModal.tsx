@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Platform } from 'react-native';
 import { CloudDownload, Settings } from 'lucide-react-native';
-import { documentDirectory, writeAsStringAsync, EncodingType } from 'expo-file-system';
+import { documentDirectory, writeAsStringAsync, EncodingType } from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';

@@ -13,7 +13,7 @@ export default function AccountSyncIssueScreen() {
   const debugInfo = onboardingCtx?.debugInfo ?? '';
   const onSignOut = () => authCtx?.signOut();
   const theme = useTheme();
-  const isDark = theme.colorScheme === 'dark';
+  const isDark = false; // theme is static (no dark-mode variant)
 
   const handleCopyDebug = async () => {
     try {

@@ -181,7 +181,7 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
             return prevPools.map(pool => {
               // If it's a partner pool, modify it to include itself as a location ID
               // This is a "virtual location" that represents the whole pool
-              if (pool.isPartnerPool || (partnerPools.find(pp => pp.id === pool.id))) {
+              if ((pool as any).isPartnerPool || (partnerPools.find(pp => pp.id === pool.id))) {
                 const virtualLocationId = pool.id; // Use Pool ID as virtual Location ID
 
                 // Add to singleLocations so metadata map picks it up (needs mock connection)

@@ -39,7 +39,7 @@ const PlaceholderImage = ({
   if (type === 'gradient') {
     return (
       <LinearGradient
-        colors={colors}
+        colors={colors as any}
         start={start}
         end={end}
         style={[
@@ -76,7 +76,7 @@ const PlaceholderImage = ({
 };
 
 // Helper function to adjust color brightness
-const adjustColor = (color, amount) => {
+const adjustColor = (color: string, amount: number) => {
   // Handle hex colors
   if (color.startsWith('#')) {
     const hex = color.slice(1);

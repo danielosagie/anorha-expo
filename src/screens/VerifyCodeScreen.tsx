@@ -142,7 +142,7 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
           triggerErrorShake();
         }
       } else {
-        const res = await signUp.attemptEmailAddressVerification({ code });
+        const res = await signUp!.attemptEmailAddressVerification({ code });
 
         if (res.status === 'complete' && res.createdSessionId) {
           try { await auth.setActive?.({ session: res.createdSessionId }); } catch { }
