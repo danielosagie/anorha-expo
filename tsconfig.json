@@ -23,7 +23,8 @@
     "src/examples",
     "App.web.tsx",
     "src/components/VisionCamera.tsx",
-    "src/hooks/useVisionCamera.tsx"
+    "src/hooks/useVisionCamera.tsx",
+    "__tests__"
   ],
   "include": ["**/*.ts", "**/*.tsx", "../Archive/BarcodeScanner.tsx"]
 }
