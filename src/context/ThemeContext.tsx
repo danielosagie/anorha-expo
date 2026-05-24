@@ -20,6 +20,8 @@ const theme = {
     error: '#dc3545',
     warning: '#ffc107',
     info: '#17a2b8',
+    border: '#E5E7EB',
+    card: '#FFFFFF',
   },
   spacing: {
     xs: 4,
