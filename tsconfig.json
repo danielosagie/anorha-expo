@@ -17,7 +17,11 @@
   "exclude": [
     "node_modules",
     "babel.config.js",
-    "metro.config.js"
+    "metro.config.js",
+    "src/screens/designExport",
+    "src/screens/DesignExportScreen.tsx",
+    "src/examples",
+    "App.web.tsx"
   ],
   "include": ["**/*.ts", "**/*.tsx", "../Archive/BarcodeScanner.tsx"]
 }
