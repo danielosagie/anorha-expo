@@ -1,5 +1,6 @@
+import React from 'react';
 import { AppState } from 'react-native';
-import { supabase } from './supabase';
+import { supabase } from '../lib/supabase';
 
 // A simple hook to manage auth state
 export const useAuth = () => {

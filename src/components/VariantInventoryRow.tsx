@@ -45,8 +45,8 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
     const [localQty, setLocalQty] = useState(String(quantity));
     const [localPrice, setLocalPrice] = useState(String(price));
 
-    const qtyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const priceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const qtyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const priceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Sync props to local state - this is critical for Shopify global pricing
     // When parent updates price for ALL locations, each row should receive new price prop

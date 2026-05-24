@@ -5,6 +5,7 @@
 
 import { Platform } from 'react-native';
 import * as Crypto from 'expo-crypto';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { capture } from './analytics';
 
 const SESSION_KEY = '@anorha_flow_session_id';
@@ -22,11 +23,10 @@ function generateId(): string {
 async function ensureSessionId(): Promise<string> {
   if (sessionId) return sessionId;
   try {
-    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
     const stored = await AsyncStorage.getItem(SESSION_KEY);
     if (stored) {
       sessionId = stored;
-      return sessionId;
+      return stored;
     }
   } catch {
     // ignore
@@ -34,7 +34,6 @@ async function ensureSessionId(): Promise<string> {
   const id = generateId();
   sessionId = id;
   try {
-    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
     await AsyncStorage.setItem(SESSION_KEY, id);
   } catch {
     // ignore

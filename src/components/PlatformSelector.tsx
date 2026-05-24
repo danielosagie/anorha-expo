@@ -34,7 +34,7 @@ const platforms = [
   },
 ];
 
-const getPlatformColor = (platformId) => {
+const getPlatformColor = (platformId: string) => {
   switch (platformId) {
     case 'shopify':
       return '#0E8F7F';
@@ -55,7 +55,7 @@ const getPlatformColor = (platformId) => {
   }
 };
 
-const getIconForPlatform = (platform) => {
+const getIconForPlatform = (platform: string) => {
   switch (platform) {
     case 'shopify':
       return 'shopping';
@@ -76,10 +76,10 @@ const getIconForPlatform = (platform) => {
   }
 };
 
-const PlatformSelector = ({ platforms: selectedPlatforms, onChange }) => {
+const PlatformSelector = ({ platforms: selectedPlatforms, onChange }: { platforms: Record<string, boolean>; onChange: (next: Record<string, boolean>) => void }) => {
   const theme = useTheme();
   
-  const togglePlatform = (platformId) => {
+  const togglePlatform = (platformId: string) => {
     onChange({
       ...selectedPlatforms,
       [platformId]: !selectedPlatforms[platformId]

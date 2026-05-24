@@ -3,11 +3,11 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 
-const OrderListItem = ({ order }) => {
+const OrderListItem = ({ order }: { order: any }) => {
   const theme = useTheme();
   
   // Helper function to safely check status
-  const getStatusColor = (status) => {
+  const getStatusColor = (status?: string) => {
     if (!status) return '#999'; // Default gray if status is undefined
     
     const statusLower = status.toLowerCase();
@@ -23,7 +23,7 @@ const OrderListItem = ({ order }) => {
   };
   
   // Helper function to get status icon
-  const getStatusIcon = (status) => {
+  const getStatusIcon = (status?: string) => {
     if (!status) return 'help-circle-outline'; // Default icon if status is undefined
     
     const statusLower = status.toLowerCase();
@@ -39,7 +39,7 @@ const OrderListItem = ({ order }) => {
   };
   
   // Get platform icon
-  const getPlatformIcon = (platform) => {
+  const getPlatformIcon = (platform?: string) => {
     if (!platform) return 'store-outline'; // Default icon if platform is undefined
     
     const platformLower = platform.toLowerCase();
@@ -56,7 +56,7 @@ const OrderListItem = ({ order }) => {
   };
   
   // Format date to be more readable
-  const formatDate = (dateString) => {
+  const formatDate = (dateString?: string) => {
     if (!dateString) return 'No date';
     
     const date = new Date(dateString);
