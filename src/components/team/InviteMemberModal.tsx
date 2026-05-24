@@ -15,16 +15,14 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../context/ThemeContext';
 import Button from '../Button';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import { API_BASE_URL as ENV_API_BASE_URL } from '../../config/env';
 import { showMessage } from 'react-native-flash-message';
 
 const ANORHA_GREEN = '#8cc63f';
 const NEUTRAL_GRAY = '#6B7280';
 const MEMBER_YELLOW = '#F59E0B';
 
-const API_BASE_URL =
-  process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL ||
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  'https://api.sssync.app';
+const API_BASE_URL = ENV_API_BASE_URL;
 const API_BASE_RAW = API_BASE_URL.replace(/\/$/, '');
 const API_BASE = API_BASE_RAW.endsWith('/api') ? API_BASE_RAW : `${API_BASE_RAW}/api`;
 

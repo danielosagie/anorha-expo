@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import { API_BASE_URL } from '../config/env';
 
 interface SyncProgress {
   connectionId: string;
@@ -34,7 +35,7 @@ export function useSyncProgress(connectionId: string) {
         }
 
         // ✅ Pass auth token in connection query
-        newSocket = io('https://api.sssync.app/collaboration', {
+        newSocket = io(`${API_BASE_URL}/collaboration`, {
           transports: ['websocket'],
           timeout: 5000,
           auth: {

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useContext } from 'react';
+import { API_BASE_URL } from '../config/env';
 import {
   View,
   Text,
@@ -228,7 +229,7 @@ const ActivityFeedScreen = observer(() => {
       const token = await ensureSupabaseJwt();
 
       // Fetch org members from backend (should include Clerk data)
-      const membersRes = await fetch(`https://api.sssync.app/api/organizations/${currentOrg.id}/members`, {
+      const membersRes = await fetch(`${API_BASE_URL}/api/organizations/${currentOrg.id}/members`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -296,7 +297,7 @@ const ActivityFeedScreen = observer(() => {
         queryString += `&orgId=${encodeURIComponent(currentOrg.id)}`;
       }
 
-      const base = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+      const base = API_BASE_URL;
       const fullUrl = `${base}/api/activity?${queryString}`;
 
       const response = await fetch(
@@ -456,7 +457,7 @@ const ActivityFeedScreen = observer(() => {
     }
     try {
       const token = await ensureSupabaseJwt();
-      const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app'}/api/liquidation/campaigns`, {
+      const response = await fetch(`${API_BASE_URL}/api/liquidation/campaigns`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (response.ok) {
@@ -479,7 +480,7 @@ const ActivityFeedScreen = observer(() => {
       const token = await ensureSupabaseJwt();
       if (!token) throw new Error('Not authenticated');
       const res = await fetch(
-        `${process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app'}/api/organizations/${encodeURIComponent(orgId)}/activity/${encodeURIComponent(activityId)}/undo`,
+        `${API_BASE_URL}/api/organizations/${encodeURIComponent(orgId)}/activity/${encodeURIComponent(activityId)}/undo`,
         { method: 'POST', headers: { Authorization: `Bearer ${token}` } }
       );
       const data = await res.json().catch(() => ({}));

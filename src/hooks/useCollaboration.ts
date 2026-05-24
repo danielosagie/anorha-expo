@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useAuth, useUser } from '@clerk/clerk-expo';
 import { ensureSupabaseJwt } from '../lib/supabase';
+import { API_BASE_URL } from '../config/env';
 
-const COLLABORATION_URL = 'https://api.sssync.app/collaboration';
+const COLLABORATION_URL = `${API_BASE_URL}/collaboration`;
 
 interface ProductUpdate {
   productId: string;

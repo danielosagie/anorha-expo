@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { API_BASE_URL } from '../config/env';
 import {
   View,
   Text,
@@ -268,7 +269,7 @@ const InventoryOrdersScreen = observer(() => {
         Alert.alert('Error', 'Not authenticated.');
         return;
       }
-      const response = await fetch(`https://api.sssync.app/api/insights/orgs/${encodeURIComponent(orgId)}/nudges`, {
+      const response = await fetch(`${API_BASE_URL}/api/insights/orgs/${encodeURIComponent(orgId)}/nudges`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!response.ok) {
@@ -1294,7 +1295,7 @@ const InventoryOrdersScreen = observer(() => {
       }
 
       const traceHeaders = await getTraceHeaders();
-      const response = await fetch(`https://api.sssync.app/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`, {
+      const response = await fetch(`${API_BASE_URL}/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -1831,7 +1832,7 @@ const InventoryOrdersScreen = observer(() => {
                     variant="inline"
                     disableKeyboardHandling={true}
                     fullWidth={true}
-                    apiBaseUrl={process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL}
+                    apiBaseUrl={API_BASE_URL}
                     getAuthToken={ensureSupabaseJwt}
                     onSubmit={async (text) => {
                       setBulkActionModalQuery(text);
@@ -1839,7 +1840,7 @@ const InventoryOrdersScreen = observer(() => {
                       setPlanLoading(true);
 
                       try {
-                        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+                        const baseUrl = API_BASE_URL;
                         const token = await ensureSupabaseJwt();
                         if (!baseUrl || !token) throw new Error('Missing config');
 
@@ -2039,7 +2040,7 @@ const InventoryOrdersScreen = observer(() => {
 
                 setExecuteLoading(true);
                 try {
-                  const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+                  const baseUrl = API_BASE_URL;
                   const token = await ensureSupabaseJwt();
                   if (!baseUrl || !token) throw new Error('Missing config');
 
@@ -2109,7 +2110,7 @@ const InventoryOrdersScreen = observer(() => {
             paddingBottom: bottomSafePadding
           }}>
             <VoiceRecorder
-              apiBaseUrl={process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL}
+              apiBaseUrl={API_BASE_URL}
               getAuthToken={ensureSupabaseJwt}
               onTranscription={(text) => {
                 setSearchQuery(text);
@@ -2320,7 +2321,7 @@ const InventoryOrdersScreen = observer(() => {
                 console.log('[BulkLiquidate] Starting campaign with:', requestBody);
 
                 // Call the actual API
-                const response = await fetch('https://api.sssync.app/api/agent/quick/liquidation', {
+                const response = await fetch(`${API_BASE_URL}/api/agent/quick/liquidation`, {
                   method: 'POST',
                   headers: {
                     'Authorization': `Bearer ${token}`,

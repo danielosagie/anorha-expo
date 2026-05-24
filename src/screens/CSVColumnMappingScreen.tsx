@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { API_BASE_URL } from '../config/env';
 import {
     View,
     Text,
@@ -82,7 +83,7 @@ export function CSVColumnMappingScreen() {
                     return;
                 }
 
-                const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/api/products/csv-column-mapping`, {
+                const response = await fetch(`${API_BASE_URL}/api/products/csv-column-mapping`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${token}`,

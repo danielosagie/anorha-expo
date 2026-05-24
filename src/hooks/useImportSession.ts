@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Alert } from 'react-native';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import { API_BASE_URL } from '../config/env';
 import {
   MappingSuggestion,
   ProductCreationMode,
@@ -8,11 +9,7 @@ import {
   ImportSessionCounts,
 } from '../types/importSession';
 
-const SSSYNC_API_BASE_URL = (
-  process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL ||
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  'https://api.sssync.app'
-).replace(/\/+$/, '');
+const SSSYNC_API_BASE_URL = API_BASE_URL;
 
 export interface UseImportSessionOptions {
   connectionId: string | undefined;

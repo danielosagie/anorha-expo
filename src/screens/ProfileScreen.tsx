@@ -1,4 +1,5 @@
 import React, { useState, useContext, useEffect, useCallback, useMemo } from 'react';
+import { API_BASE_URL } from '../config/env';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput, Image, Linking, InteractionManager, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
 import Animated, { FadeInUp } from 'react-native-reanimated';
@@ -56,10 +57,7 @@ const TAB_BAR_BOTTOM_OFFSET = 18;
 
 
 
-const SSSYNC_API_BASE_URL =
-  process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL ||
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  'https://api.sssync.app';
+const SSSYNC_API_BASE_URL = API_BASE_URL;
 // --- Constants for Feature Flags / Testing ---
 const USE_EXTERNAL_BROWSER_FOR_FACEBOOK = true; // Set to true to use Chrome/Safari instead of in-app session
 // --- END Re-inlined Constants ---
@@ -1011,7 +1009,7 @@ const ProfileScreen = () => {
     // This URL still initiates the backend picker, which will eventually lead the user
     // to their Shopify dashboard after login/selection if needed.
     // The user just needs to copy the URL *from* that dashboard.
-    const backendInitiationUrlBase = 'https://api.sssync.app/api/auth/shopify/initiate-store-picker';
+    const backendInitiationUrlBase = `${API_BASE_URL}/api/auth/shopify/initiate-store-picker`;
     // Define and encode the final redirect URI needed by the backend
     const finalRedirectUri = 'anorhaapp://auth-callback';
     const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
@@ -1051,7 +1049,7 @@ const ProfileScreen = () => {
     const userId = user.id;
 
     // Backend endpoint for direct login/authorization with shop name
-    const directLoginUrlBase = 'https://api.sssync.app/api/auth/shopify/login';
+    const directLoginUrlBase = `${API_BASE_URL}/api/auth/shopify/login`;
     const finalRedirectUri = 'anorhaapp://auth-callback';
     const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
 

@@ -4,6 +4,7 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { useAuth, useUser } from '@clerk/clerk-expo';
+import { API_BASE_URL } from '../config/env';
 
 // Configure how notifications appear when app is in foreground
 Notifications.setNotificationHandler({
@@ -77,7 +78,7 @@ export function usePushNotifications() {
 
         try {
             const authToken = await getToken({ template: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase' });
-            const base = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || '').replace(/\/$/, '');
+            const base = API_BASE_URL;
             if (!base) {
                 console.warn('[PushNotifications] No API base URL found');
                 return;

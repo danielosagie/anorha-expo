@@ -4,6 +4,7 @@ import { useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '@clerk/clerk-expo';
+import { API_BASE_URL } from '../config/env';
 
 export default function NotificationSettingsScreen() {
     const { colors } = useTheme();
@@ -28,7 +29,7 @@ export default function NotificationSettingsScreen() {
         try {
             setLoading(true);
             const token = await getToken({ template: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase' });
-            const apiBaseUrl = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || '').replace(/\/$/, '');
+            const apiBaseUrl = API_BASE_URL;
             if (!apiBaseUrl) {
                 console.warn('API Base URL not found');
                 setLoading(false);
@@ -62,7 +63,7 @@ export default function NotificationSettingsScreen() {
 
         try {
             const token = await getToken({ template: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase' });
-            const apiBaseUrl = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || '').replace(/\/$/, '');
+            const apiBaseUrl = API_BASE_URL;
 
             // Map frontend key (PascalCase) to backend key (camelCase)
             const backendKey = key.charAt(0).toLowerCase() + key.slice(1);
@@ -87,7 +88,7 @@ export default function NotificationSettingsScreen() {
         try {
             setTestSending(true);
             const token = await getToken({ template: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase' });
-            const apiBaseUrl = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || '').replace(/\/$/, '');
+            const apiBaseUrl = API_BASE_URL;
             if (!apiBaseUrl) {
                 Alert.alert('Error', 'API base URL not configured');
                 return;

@@ -4,6 +4,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Progress from 'react-native-progress';
 import { useTheme } from '../context/ThemeContext';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import { API_BASE_URL } from '../config/env';
 import ShopifySvg from '../assets/shopify.svg';
 import AmazonSvg from '../assets/amazon.svg';
 import FacebookSvg from '../assets/facebook.svg';
@@ -211,7 +212,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
             const token = await ensureSupabaseJwt();
             if (!token) throw new Error('Not authenticated');
 
-            const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+            const rawApiBase = API_BASE_URL;
             const apiBase = rawApiBase.endsWith('/api') ? rawApiBase : `${rawApiBase}/api`;
             const platformFilter = encodeURIComponent((connection.PlatformType || '').toLowerCase());
             const response = await fetch(

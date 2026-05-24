@@ -10,6 +10,7 @@ import Card from '../components/Card';
 import InsightCard from '../components/InsightCard';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LegendStateContext } from '../context/LegendStateContext';
+import { API_BASE_URL } from '../config/env';
 import { supabase } from '../../lib/supabase';
 import InventoryListCard from '../components/InventoryListCard';
 import ActivityEventCard from '../components/ActivityEventCard';
@@ -487,7 +488,7 @@ const DashboardScreen = () => {
       }
 
       // Fetch pools for this org
-      const poolsRes = await fetch(`https://api.sssync.app/api/pools/org/${currentOrg.id}`, {
+      const poolsRes = await fetch(`${API_BASE_URL}/api/pools/org/${currentOrg.id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -552,7 +553,7 @@ const DashboardScreen = () => {
       }
 
       // Fetch platform locations for this org
-      const locationsRes = await fetch(`https://api.sssync.app/api/pools/locations/available?orgId=${currentOrg.id}`, {
+      const locationsRes = await fetch(`${API_BASE_URL}/api/pools/locations/available?orgId=${currentOrg.id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -781,7 +782,7 @@ const DashboardScreen = () => {
         return;
       }
 
-      const base = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+      const base = API_BASE_URL;
       // Fetch more events so we can filter and still have enough to show
       const url = `${base}/api/activity?limit=20&orgId=${encodeURIComponent(currentOrg.id)}`;
 

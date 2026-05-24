@@ -7,6 +7,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import { API_BASE_URL } from '../config/env';
 import BackButton from '../components/BackButton';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { JobResponse } from './MatchSelectionScreen';
@@ -251,7 +252,7 @@ const PastScansScreen = () => {
       setError(null);
       const token = await ensureSupabaseJwt();
       if (!token) throw new Error('Not authenticated');
-      const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+      const API_BASE = API_BASE_URL;
       const res = await fetch(`${API_BASE}/api/products/quick-scan-sessions`, {
         headers: { Authorization: `Bearer ${token}` },
       });
