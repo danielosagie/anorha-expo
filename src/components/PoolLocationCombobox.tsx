@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import {
   View,
   TouchableOpacity,
@@ -16,7 +17,7 @@ import ShopifySvg from '../assets/shopify.svg';
 import SquareSvg from '../assets/square.svg';
 import CloverSvg from '../assets/clover.svg';
 
-const API_BASE_URL = 'https://api.sssync.app';
+const API_BASE_URL = ENV_API_BASE_URL;
 
 const PLATFORM_LOGOS: Record<string, any> = {
   shopify: ShopifySvg,

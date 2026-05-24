@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { API_BASE_URL } from '../config/env';
 import {
   View,
   Text,
@@ -39,7 +40,7 @@ interface SnapshotMeta {
   CreatedAt: string;
 }
 
-const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+const API_BASE = API_BASE_URL;
 const ANORHA_GREEN = '#647653';
 
 const FREQUENCY_OPTIONS: { value: 'daily' | 'weekly' | 'off'; label: string }[] = [

@@ -10,6 +10,7 @@
 
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { API_BASE_URL } from '../config/env';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 
 // Types
@@ -75,7 +76,7 @@ interface JobsContextValue {
 const JobsContext = createContext<JobsContextValue | null>(null);
 
 const STORAGE_PREFIX = 'jobs_state_';
-const BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
+const BASE_URL = API_BASE_URL;
 
 // Provider component
 export function JobsProvider({ children }: { children: ReactNode }) {

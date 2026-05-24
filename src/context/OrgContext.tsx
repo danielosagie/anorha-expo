@@ -5,6 +5,7 @@ import { useUser, useOrganizationList } from '@clerk/clerk-expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ensureSupabaseJwt, getSupabaseJwtState, isSupabaseBridgeWarmingUp } from '../lib/supabase';
 import { SessionContext } from './SessionContext';
+import { API_BASE_URL } from '../config/env';
 
 export interface UserOrgAccess {
   id: string;
@@ -75,7 +76,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Derived state: check if user has pending org invitations
   const hasPendingInvites = invitationsLoaded && (userInvitations?.data?.length ?? 0) > 0;
 
-  const API_BASE = 'https://api.sssync.app';
+  const API_BASE = API_BASE_URL;
 
   const hydrateFromCache = useCallback(async () => {
     try {

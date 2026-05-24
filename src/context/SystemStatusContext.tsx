@@ -9,6 +9,7 @@ import {
   subscribeToSupabaseJwtState,
   type SupabaseJwtAcquisitionState,
 } from '../lib/supabase';
+import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 
 export type RemoteStatusMode = 'operational' | 'degraded' | 'maintenance';
 export type EffectiveSystemMode = RemoteStatusMode | 'offline';
@@ -39,7 +40,7 @@ interface SystemStatusContextValue {
   retry: () => Promise<void>;
 }
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+const API_BASE_URL = ENV_API_BASE_URL;
 const STATUS_MANIFEST_URL = process.env.EXPO_PUBLIC_STATUS_MANIFEST_URL?.trim() || '';
 const STATUS_POLL_INTERVAL_MS = 60_000;
 const FORCE_OFFLINE_MODE = String(process.env.EXPO_PUBLIC_FORCE_OFFLINE_MODE).toLowerCase() === 'true';

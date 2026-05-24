@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { API_BASE_URL } from '../config/env';
 import {
   View,
   Text,
@@ -23,8 +24,8 @@ import InviteMemberModal from '../components/team/InviteMemberModal';
 import { useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const SSSYNC_API_BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
-const API_BASE_RAW = (process.env.EXPO_PUBLIC_API_BASE_URL || SSSYNC_API_BASE_URL).replace(/\/$/, '');
+const SSSYNC_API_BASE_URL = API_BASE_URL;
+const API_BASE_RAW = API_BASE_URL;
 const API_BASE = API_BASE_RAW.endsWith('/api') ? API_BASE_RAW : `${API_BASE_RAW}/api`;
 const ANORHA_GREEN = '#8cc63f';
 const NEUTRAL_GRAY = '#6B7280';

@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect } from 'react';
+import { API_BASE_URL } from '../config/env';
 import {
   View,
   Text,
@@ -22,7 +23,7 @@ import { Picker } from '@react-native-picker/picker';
 import { useAuth, useUser } from '@clerk/clerk-expo';
 import { useTheme } from '../context/ThemeContext';
 
-const API_BASE_RAW = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+const API_BASE_RAW = API_BASE_URL;
 const API_BASE = API_BASE_RAW.replace(/\/$/, '').endsWith('/api')
   ? API_BASE_RAW.replace(/\/$/, '')
   : `${API_BASE_RAW.replace(/\/$/, '')}/api`;

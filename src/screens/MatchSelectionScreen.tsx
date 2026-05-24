@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { API_BASE_URL } from '../config/env';
 import {
   ActivityIndicator,
   Alert,
@@ -20,7 +21,7 @@ import BackButton from '../components/BackButton';
 import BottomNav from '../components/BottomNav';
 import ItemJobsModal from '../components/ItemJobsModal';
 
-const BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
+const BASE_URL = API_BASE_URL;
 const GRID_COLUMNS = 3;
 
 type ScreenRoute = RouteProp<AppStackParamList, 'MatchSelectionScreen'>;

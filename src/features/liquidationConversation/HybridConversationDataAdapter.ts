@@ -1,5 +1,6 @@
 import { ConvexHttpClient } from 'convex/browser';
 import { ensureSupabaseJwt } from '../../lib/supabase';
+import { API_BASE_URL } from '../../config/env';
 import { clearThreadState, loadThreadState, persistThreadState, updateStoredThreadState } from './LocalConversationStore';
 import type { ConversationDataAdapter } from './ConversationDataAdapter';
 import {
@@ -32,10 +33,6 @@ import type {
   StreamTurnObserver,
 } from './types';
 
-const RAW_API_BASE_URL =
-  process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL ||
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  'https://api.sssync.app';
 const CONVEX_URL = process.env.EXPO_PUBLIC_CONVEX_URL || 'https://merry-buffalo-800.convex.cloud';
 
 type NestSession = {
@@ -101,10 +98,7 @@ class RequestError extends Error {
   }
 }
 
-const getApiBaseUrl = () => {
-  const normalized = RAW_API_BASE_URL.replace(/\/+$/, '');
-  return /localhost|127\.0\.0\.1/i.test(normalized) ? 'https://api.sssync.app' : normalized;
-};
+const getApiBaseUrl = () => API_BASE_URL;
 
 const readString = (value: unknown) => (typeof value === 'string' ? value : undefined);
 

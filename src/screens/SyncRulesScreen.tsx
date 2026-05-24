@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { API_BASE_URL } from '../config/env';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -22,7 +23,7 @@ const SyncRulesScreen = () => {
   const { connectionId } = route.params;
   const [platformName, setPlatformName] = useState<string>('Platform');
   const [displayName, setDisplayName] = useState<string>('');
-  const SSSYNC_API_BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
+  const SSSYNC_API_BASE_URL = API_BASE_URL;
 
   // Sync Rules State
   const [syncDirection, setSyncDirection] = useState<SyncDirection>('two-way');

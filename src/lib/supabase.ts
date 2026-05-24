@@ -1,6 +1,7 @@
 import 'react-native-url-polyfill/auto';
 import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { API_BASE_URL } from '../config/env';
 
 // Require environment variables - fail fast if missing
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -16,12 +17,8 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
-// Prefer SSSYNC-specific base if present; fall back to generic API base; default to production API
-const apiBaseCandidate = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
-const apiBaseUrl = apiBaseCandidate;
-console.log('[supabase.ts] EXPO_PUBLIC_SSSYNC_API_BASE_URL =', process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL);
-console.log('[supabase.ts] EXPO_PUBLIC_API_BASE_URL =', process.env.EXPO_PUBLIC_API_BASE_URL);
-console.log('[supabase.ts] Computed apiBaseUrl candidate =', apiBaseUrl);
+// Resolved once in src/config/env.ts (SSSYNC-specific → generic → prod default).
+const apiBaseUrl = API_BASE_URL;
 
 let currentSupabaseJwt: string | null = null;
 let refreshIntervalHandle: ReturnType<typeof setInterval> | null = null;

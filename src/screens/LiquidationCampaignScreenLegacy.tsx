@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity, RefreshControl, SafeAreaView, StatusBar, Image, TextInput, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -48,7 +49,7 @@ interface AgentMessage {
     approvalStatus?: 'pending' | 'approved' | 'rejected';
 }
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+const API_BASE_URL = ENV_API_BASE_URL;
 
 const LiquidationCampaignScreen = () => {
     const theme = useTheme();

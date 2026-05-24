@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import type { BulkJobActivityProps } from '../live-activities/BulkJobActivity';
 import { ensureSupabaseJwt } from '../lib/supabase';
+import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 
 type LiveActivityJobType = 'match' | 'generate';
 
@@ -16,7 +17,7 @@ const LiveActivityContext = createContext<LiveActivityContextValue>({
   endBulkJobActivity: () => {},
 });
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
+const API_BASE_URL = ENV_API_BASE_URL;
 const CAN_USE_LIVE_ACTIVITY = Platform.OS === 'ios' && Constants.appOwnership !== 'expo';
 
 type BulkJobActivityFactory = typeof import('../live-activities/BulkJobActivity').default;
