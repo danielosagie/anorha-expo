@@ -23,9 +23,10 @@ import ShopifySvg from '../assets/shopify.svg';
 import SquareSvg from '../assets/square.svg';
 import CloverSvg from '../assets/clover.svg';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import { SessionContext } from '../context/SessionContext';
 
-const API_BASE_URL = 'https://api.sssync.app';
+const API_BASE_URL = ENV_API_BASE_URL;
 
 const PLATFORM_LOGOS: Record<string, any> = {
   shopify: ShopifySvg,

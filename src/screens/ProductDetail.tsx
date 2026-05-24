@@ -17,6 +17,7 @@ import { CameraView } from 'expo-camera';
 import Card from '../components/Card';
 import PlaceholderImage from '../components/PlaceholderImage';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import { API_BASE_URL } from '../config/env';
 import { createCanonicalBase } from '../utils/platformDataHydration';
 import { hasPlatformPrice } from '../utils/platformRequirements';
 import {
@@ -41,7 +42,7 @@ const SCANNER_GROW_HEIGHT = 240;
 const SCANNER_CLOSE_DURATION = 220;
 
 // Base URL for API
-const SSSYNC_API_BASE_URL = 'https://api.sssync.app';
+const SSSYNC_API_BASE_URL = API_BASE_URL;
 
 // Debounced autosave keeps listing/inventory changes live without manual refresh.
 const ENABLE_AUTOSAVE = true;
@@ -3029,7 +3030,7 @@ const ProductDetailScreen = observer(
       (async () => {
         try {
           const token = await ensureSupabaseJwt();
-          const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || SSSYNC_API_BASE_URL;
+          const baseUrl = API_BASE_URL;
 
           if (!token) {
             console.log('[ProductDetail] No auth token for draft loading');

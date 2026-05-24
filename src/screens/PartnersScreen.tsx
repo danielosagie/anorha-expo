@@ -24,10 +24,11 @@ import { capture, AnalyticsEvents } from '../lib/analytics';
 import * as Clipboard from 'expo-clipboard';
 import { useOrg } from '../context/OrgContext';
 import { PartnerAcceptModal } from '../components/PartnerAcceptModal';
+import { API_BASE_URL } from '../config/env';
 import BaseModal from '../components/BaseModal';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const SSSYNC_API_BASE_URL = "https://api.sssync.app";
+const SSSYNC_API_BASE_URL = API_BASE_URL;
 
 export interface Partnership {
     id: string;

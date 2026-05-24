@@ -17,8 +17,9 @@ import * as WebBrowser from 'expo-web-browser';
 import { X, CheckCircle2, Users } from 'lucide-react-native';
 import { useTheme } from '../context/ThemeContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
+import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 
-const API_BASE_URL = 'https://api.sssync.app/api';
+const API_BASE_URL = `${ENV_API_BASE_URL}/api`;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
 interface Tier {

@@ -21,6 +21,7 @@ import InteractiveMapModal from './InteractiveMapModal';
 import { black, grey400 } from 'react-native-paper/lib/typescript/styles/themes/v2/colors';
 import { overlay } from 'react-native-paper';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { LineChart, BarChart } from 'react-native-chart-kit';
 import { logger } from 'react-native-reanimated/lib/typescript/common';
@@ -32,7 +33,7 @@ const ACTION_BAR_BOTTOM_OFFSET = 24;
 
 export type PlatformsData = Record<string, any>;
 
-const API_BASE_URL = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/$/, '');
+const API_BASE_URL = ENV_API_BASE_URL;
 
 type Props = {
   platforms: PlatformsData;

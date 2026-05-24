@@ -21,10 +21,11 @@ import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '@clerk/clerk-expo';
 import Card from '../components/Card';
 import TierSelectorModal from '../components/TierSelectorModal';
+import { API_BASE_URL } from '../config/env';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 
-const API_BASE_RAW = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+const API_BASE_RAW = API_BASE_URL;
 const API_BASE = API_BASE_RAW.replace(/\/$/, '').endsWith('/api')
   ? API_BASE_RAW.replace(/\/$/, '')
   : `${API_BASE_RAW.replace(/\/$/, '')}/api`;
