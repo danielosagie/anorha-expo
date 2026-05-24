@@ -1,25 +1,69 @@
-node_modules
-package-lock.json
-android/
-ios/
-dist/
-/node_modules
+# ───────────────────────────── Dependencies ─────────────────────────────
 node_modules/
-env.local
-ANTI_PATTERNS_FOUND.md
-LISTING_EDITOR_ARCHITECTURE_REVIEW.md
-PHASE_1_IMPLEMENTATION.md
-.env.local
-.env.local
-FRONTEND_SYNC_LESSON.md
-HOOKS_COMPARISON.md
-QUICK_REFERENCE.md
-REACT_TYPESCRIPT_FUNDAMENTALS.md
-SPREAD_OPERATOR_GUIDE.md
-FIX_BARCODE_INVENTORY.md
-formatting.js
-formatting.js
-formatting.js
-*.local
+# Lockfile intentionally untracked (legacy); revisit committing it later.
+package-lock.json
+
+# ───────────────────────────── Expo / build ─────────────────────────────
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+*.tsbuildinfo
+
+# Native projects (managed/prebuild — regenerated, not source of truth)
+/ios
+/android
+
+# Metro
+.metro-health-check*
+
+# ──────────────────── Secrets — NEVER commit (rotate if leaked) ──────────
 .env
-.env.local
+.env.*
+*.local
+!.env.example
+*.pem
+*.p12
+*.p8
+*.key
+*.jks
+*.keystore
+*.mobileprovision
+# Cloud service-account / Firebase credential files
+*-service-account*.json
+*serviceAccount*.json
+anorha-*.json
+google-services.json
+GoogleService-Info.plist
+
+# ──────────────────── Build artifacts (use EAS, not git) ─────────────────
+*.ipa
+*.aab
+*.apk
+*.app
+
+# ───────────────────────────── Logs & dumps ─────────────────────────────
+*.log
+logs/
+logs*.json
+ts_errors.txt
+diff.txt
+
+# ─────────────────────── Scratch / debug scripts ────────────────────────
+test-braces*.js
+test-jsx*.js
+test-platform-filtering.js
+formatting.js
+cleanup_*.sql
+
+# Root-level scratch markdown (keep real docs in docs/ ; README/CONTRIBUTING tracked)
+/*.md
+!/README.md
+!/CONTRIBUTING.md
+
+# ───────────────────────────── OS / editor ──────────────────────────────
+.DS_Store
+*.orig.*
+npm-debug.*
+yarn-debug.*
+yarn-error.*
