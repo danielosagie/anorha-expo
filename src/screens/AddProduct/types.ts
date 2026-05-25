@@ -1,4 +1,7 @@
 // Shared types for the AddProduct feature (extracted from AddProductScreen.tsx).
+// NOTE: AddProductScreen.tsx still has local copies of several of these (structurally
+// compatible). Consolidating to this single source is a cleanup follow-up.
+import { QuickScanPhase } from '../../lib/quickScanStream';
 
 export type CameraMode = 'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf';
 
@@ -41,3 +44,58 @@ export interface MatchResponse {
     alternatives?: any[];
   };
 }
+
+export interface JobResponse {
+  jobId: string;
+  status: string;
+  estimatedTimeMinutes: number;
+  totalProducts: number;
+  message: string;
+}
+
+export type QuickMatchSelection = {
+  serpApiData: any[];
+  preSelectedIndices: number[];
+  source?: 'quick_scan_auto' | 'quick_scan_confirmed';
+  confidence?: number;
+  reasoning?: string;
+};
+
+export type ItemLoadingState = {
+  isLoading: boolean;
+  stage: string;
+  error?: string;
+};
+
+export type CameraInstruction =
+  | 'ready'
+  | 'move_closer'
+  | 'move_back'
+  | 'add_light'
+  | 'focus'
+  | 'processing'
+  | 'matches_found'
+  | 'no_matches'
+  | 'barcode_scanned'
+  | 'analyzing'
+  | 'extracting'
+  | 'optimizing'
+  | 'searching'
+  | 'capturing'
+  | 'recognizing'
+  | 'matched'
+  | 'needs_review';
+
+export type ShelfProgressStatus = 'idle' | 'streaming' | 'completed' | 'no_items' | 'timeout' | 'error';
+
+export type ShelfProgressState = {
+  phase: QuickScanPhase;
+  progress: number;
+  elapsedMs: number;
+  totalItems: number;
+  completedItems: number;
+  stalled: boolean;
+  status: ShelfProgressStatus;
+  reasonCode?: string;
+  message?: string;
+};
