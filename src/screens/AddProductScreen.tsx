@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../config/env';
-import type { UnicodeSpinnerDefinition } from './AddProduct/types';
+import type { UnicodeSpinnerDefinition, CameraMode } from './AddProduct/types';
 import { UnicodeSpinner } from './AddProduct/UnicodeSpinner';
+import { CenterOverlay } from './AddProduct/CenterOverlay';
 import { ProgressBarOverlay } from './AddProduct/ProgressBarOverlay';
 import { NotificationBar } from './AddProduct/NotificationBar';
 import {
@@ -265,8 +266,6 @@ type CameraInstruction =
   | 'recognizing'
   | 'matched'
   | 'needs_review';
-
-type CameraMode = 'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf';
 type ShelfProgressStatus = 'idle' | 'streaming' | 'completed' | 'no_items' | 'timeout' | 'error';
 
 type ShelfProgressState = {
@@ -3934,153 +3933,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
 
 // Center Overlay Component
-const CenterOverlay: React.FC<{
-  instruction: string;
-  isProcessing: boolean;
-  cameraMode: CameraMode;
-  scannedBarcode: string | null;
-  onCopyBarcode: () => void;
-  matchPreview?: {
-    imageUrl?: string | null;
-    title: string;
-    label: string;
-    subtitle: string;
-    isConfirmed: boolean;
-  } | null;
-  onPress?: () => void;
-  totalPhotos?: number;
-}> = ({ instruction, isProcessing, cameraMode, scannedBarcode, onCopyBarcode, matchPreview, onPress, totalPhotos = 0 }) => {
-  const [showCompletionPulse, setShowCompletionPulse] = useState(false);
-  const completionPulseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const wasProcessingRef = useRef(false);
-  const [showPostCaptureHold, setShowPostCaptureHold] = useState(false);
-  const postCaptureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const previousTotalPhotosRef = useRef(totalPhotos);
-
-  useEffect(() => {
-    if (completionPulseTimeoutRef.current) {
-      clearTimeout(completionPulseTimeoutRef.current);
-      completionPulseTimeoutRef.current = null;
-    }
-
-    if (isProcessing) {
-      wasProcessingRef.current = true;
-      setShowCompletionPulse(false);
-      return;
-    }
-
-    if (wasProcessingRef.current) {
-      const pulseCycles = 1;
-      const pulseExtraDelayMs = 150;
-      const pulseDuration = (spinners.pulse.frames.length * spinners.pulse.interval * pulseCycles) + pulseExtraDelayMs;
-      setShowCompletionPulse(true);
-      completionPulseTimeoutRef.current = setTimeout(() => {
-        setShowCompletionPulse(false);
-        completionPulseTimeoutRef.current = null;
-      }, pulseDuration);
-      wasProcessingRef.current = false;
-    }
-  }, [isProcessing]);
-
-  useEffect(() => {
-    return () => {
-      if (completionPulseTimeoutRef.current) {
-        clearTimeout(completionPulseTimeoutRef.current);
-        completionPulseTimeoutRef.current = null;
-      }
-      if (postCaptureTimeoutRef.current) {
-        clearTimeout(postCaptureTimeoutRef.current);
-        postCaptureTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (totalPhotos > previousTotalPhotosRef.current) {
-      if (postCaptureTimeoutRef.current) {
-        clearTimeout(postCaptureTimeoutRef.current);
-        postCaptureTimeoutRef.current = null;
-      }
-      setShowPostCaptureHold(true);
-      postCaptureTimeoutRef.current = setTimeout(() => {
-        setShowPostCaptureHold(false);
-        postCaptureTimeoutRef.current = null;
-      }, 1200);
-    }
-    previousTotalPhotosRef.current = totalPhotos;
-  }, [totalPhotos]);
-
-  // Barcode overlay at top middle
-  if (cameraMode === 'barcode' && scannedBarcode) {
-    return (
-      <View style={styles.barcodeOverlayContainer}>
-        <Animated.View style={styles.barcodeOverlay} entering={FadeIn}>
-          <Text style={styles.barcodeText}>{scannedBarcode}</Text>
-          <TouchableOpacity style={styles.copyButton} onPress={onCopyBarcode}>
-            <Icon name="content-copy" size={16} color="white" />
-            <Text style={styles.copyButtonText}>Copy</Text>
-          </TouchableOpacity>
-        </Animated.View>
-      </View>
-    );
-  }
-
-  if (matchPreview && cameraMode !== 'barcode' && !isProcessing && !showCompletionPulse) {
-    return (
-      <View style={styles.barcodeOverlayContainer}>
-        <TouchableOpacity style={styles.centerOverlayMatchTouchable} onPress={onPress} activeOpacity={0.9}>
-          <Animated.View style={[
-            styles.centerOverlayMatchCard,
-            matchPreview.isConfirmed ? styles.centerOverlayMatchCardConfirmed : styles.centerOverlayMatchCardPending,
-          ]}>
-            {matchPreview.imageUrl ? (
-              <Image source={{ uri: matchPreview.imageUrl }} style={styles.centerOverlayMatchImage} />
-            ) : (
-              <View style={[styles.centerOverlayMatchImage, styles.centerOverlayMatchImageFallback]}>
-                <Icon name="image-outline" size={18} color="#64748B" />
-              </View>
-            )}
-            <View style={styles.centerOverlayMatchTextBlock}>
-              <Text style={styles.centerOverlayMatchLabel} numberOfLines={1}>{matchPreview.label}</Text>
-              <Text style={styles.centerOverlayMatchTitle} numberOfLines={1}>{matchPreview.title}</Text>
-              <Text style={styles.centerOverlayMatchSubtitle} numberOfLines={1}>{matchPreview.subtitle}</Text>
-            </View>
-            <View style={styles.centerOverlayChevron}>
-              <Icon name={matchPreview.isConfirmed ? 'check-circle' : 'chevron-right-circle'} size={20} color={matchPreview.isConfirmed ? '#93C822' : '#CBD5E1'} />
-            </View>
-          </Animated.View>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  if (cameraMode === 'camera' && totalPhotos > 0 && !isProcessing && !showCompletionPulse && !showPostCaptureHold) {
-    return null;
-  }
-
-  const idleInstruction = cameraMode === 'shelf' ? 'Capture shelf to find items' : 'Take a photo to find a match';
-  const displayInstruction = showCompletionPulse
-    ? 'Likely Match Found'
-    : (!isProcessing && instruction === 'Capturing') ? idleInstruction : instruction;
-  const showSpinner = isProcessing || showCompletionPulse || showPostCaptureHold;
-  const spinner = showCompletionPulse ? spinners.pulse : spinners.helix;
-
-  // Regular instruction overlay - moved to top-middle like barcode
-  return (
-    <View style={styles.barcodeOverlayContainer}>
-      <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
-        <Animated.View style={styles.centerOverlay}>
-          <Text style={styles.centerOverlayText}>{displayInstruction}</Text>
-          {showSpinner && (
-            <View style={styles.processingIndicator}>
-              <UnicodeSpinner spinner={spinner} color="#FFFFFF" size={16} />
-            </View>
-          )}
-        </Animated.View>
-      </TouchableOpacity>
-    </View>
-  );
-};
 
 
 // Bottom Controls Component
