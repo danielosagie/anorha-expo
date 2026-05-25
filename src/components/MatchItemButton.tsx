@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, Image, StyleSheet, TouchableOpacity, Linking, Animated } from 'react-native';
-import { Analysis } from '../screens/AddProductScreen';
+import { Analysis } from '../screens/AddProductScreen.types';
 
 
 // Enhanced SerpApiItem with selection state
