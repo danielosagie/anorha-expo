@@ -1,5 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../config/env';
+import type { UnicodeSpinnerDefinition } from './AddProduct/types';
+import { UnicodeSpinner } from './AddProduct/UnicodeSpinner';
+import { ProgressBarOverlay } from './AddProduct/ProgressBarOverlay';
+import { NotificationBar } from './AddProduct/NotificationBar';
 import {
   View,
   Text,
@@ -3928,84 +3932,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
 
 
-type UnicodeSpinnerDefinition = {
-  frames: string[];
-  interval: number;
-};
-
-const UnicodeSpinner: React.FC<{
-  spinner: UnicodeSpinnerDefinition;
-  color?: string;
-  size?: number;
-  style?: any;
-}> = ({ spinner, color = '#4CAF50', size = 18, style }) => {
-  const [frameIndex, setFrameIndex] = useState(0);
-
-  useEffect(() => {
-    setFrameIndex(0);
-    const intervalId = setInterval(() => {
-      setFrameIndex((prev) => (prev + 1) % spinner.frames.length);
-    }, spinner.interval);
-    return () => clearInterval(intervalId);
-  }, [spinner]);
-
-  return (
-    <Text style={[styles.unicodeSpinnerText, { color, fontSize: size }, style]}>
-      {spinner.frames[frameIndex]}
-    </Text>
-  );
-};
-
-// Progress Bar Overlay Component
-const ProgressBarOverlay: React.FC<{
-  progressWidth: any;
-  spinRotation: any;
-}> = ({ progressWidth, spinRotation }) => {
-  const progressBarStyle = useAnimatedStyle(() => ({
-    width: `${progressWidth.value}%`,
-  }));
-
-  const spinnerStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${spinRotation.value}deg` }],
-  }));
-
-  return (
-    <View style={styles.progressBarContainer}>
-      <View style={styles.progressBarBackground}>
-        <Animated.View style={[styles.progressBarFill, progressBarStyle]} />
-      </View>
-      <Animated.View style={[styles.progressSpinner, spinnerStyle]}>
-        <Icon name="loading" size={20} color="#4CAF50" />
-      </Animated.View>
-    </View>
-  );
-};
-
-// Notification Bar Component  
-const NotificationBar: React.FC<{
-  message: string;
-  opacity: any;
-  translateY: any;
-  onPress?: () => void;
-}> = ({ message, opacity, translateY, onPress }) => {
-  const notificationStyle = useAnimatedStyle(() => ({
-    opacity: opacity.value,
-    transform: [{ translateY: translateY.value }],
-  }));
-
-  return (
-    <Animated.View style={[styles.notificationBar, notificationStyle]}>
-      <TouchableOpacity
-        onPress={onPress}
-        activeOpacity={0.8}
-        style={{ flexDirection: 'row', alignItems: 'center' }}
-      >
-        <Icon name="information-outline" size={20} color="white" />
-        <Text style={styles.notificationText}>{message}</Text>
-      </TouchableOpacity>
-    </Animated.View>
-  );
-};
 
 // Center Overlay Component
 const CenterOverlay: React.FC<{
