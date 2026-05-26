@@ -3167,16 +3167,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         {/* Flash overlay */}
         <Animated.View style={[styles.flashOverlay, flashAnimatedStyle]} />
 
-        {/* Camera paused overlay */}
-        {isAnySheetVisible && (
-          <View style={styles.cameraPausedOverlay}>
-            <View style={styles.cameraPausedIndicator}>
-              <MaterialIcons name="pause-circle-filled" size={48} color="rgba(255,255,255,0.8)" />
-              <Text style={styles.cameraPausedText}>Camera Paused</Text>
-              <Text style={styles.cameraPausedSubtext}>Saving battery while sheet is open</Text>
-            </View>
+        {/* Camera paused overlay - always rendered so CameraView's child indices stay
+            stable across Fabric reconciliation (a conditional child here shifts every
+            sibling's index and triggers the unmountChildComponentView assertion). */}
+        <View
+          style={[styles.cameraPausedOverlay, { opacity: isAnySheetVisible ? 1 : 0 }]}
+          pointerEvents={isAnySheetVisible ? 'auto' : 'none'}
+        >
+          <View style={styles.cameraPausedIndicator}>
+            <MaterialIcons name="pause-circle-filled" size={48} color="rgba(255,255,255,0.8)" />
+            <Text style={styles.cameraPausedText}>Camera Paused</Text>
+            <Text style={styles.cameraPausedSubtext}>Saving battery while sheet is open</Text>
           </View>
-        )}
+        </View>
 
         {/* Tap to focus overlay */}
         <Pressable
@@ -5292,21 +5295,23 @@ const BulkItemsSheet: React.FC<{
 
                     if (currentInstruction === 'extracting' || currentInstruction === 'optimizing') {
                       return (
-                        <ShelfScanPlaceholderRow
-                          key={`shelf-placeholder-${item.id}`}
-                          title={item.title || `Item ${id + 1}`}
-                          subtitle={currentInstruction === 'optimizing' ? 'Refining the best search wording.' : 'Splitting the shelf into distinct packages.'}
-                        />
+                        <Animated.View key={item.id} entering={FadeIn.delay(id * 60).duration(280)}>
+                          <ShelfScanPlaceholderRow
+                            title={item.title || `Item ${id + 1}`}
+                            subtitle={currentInstruction === 'optimizing' ? 'Refining the best search wording.' : 'Splitting the shelf into distinct packages.'}
+                          />
+                        </Animated.View>
                       );
                     }
 
                     if (currentInstruction === 'searching' && !hasQuickScanData && !loadingState?.isLoading) {
                       return (
-                        <ShelfScanPlaceholderRow
-                          key={`searching-placeholder-${item.id}`}
-                          title={item.title || `Item ${id + 1}`}
-                          subtitle="Searching matches and streaming results into this row."
-                        />
+                        <Animated.View key={item.id} entering={FadeIn.delay(id * 60).duration(280)}>
+                          <ShelfScanPlaceholderRow
+                            title={item.title || `Item ${id + 1}`}
+                            subtitle="Searching matches and streaming results into this row."
+                          />
+                        </Animated.View>
                       );
                     }
 

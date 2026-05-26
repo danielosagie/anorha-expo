@@ -56,17 +56,16 @@ export const ShelfScanProgressCard: React.FC<ShelfScanProgressCardProps> = ({
 }) => {
   const [touchTime, setTouchTime] = useState(0);
   const rafRef = useRef<number | null>(null);
-  const triggeredRef = useRef(false);
 
   useEffect(() => {
-    if (status !== 'streaming' || triggeredRef.current) return;
-    triggeredRef.current = true;
-    const start = Date.now();
+    if (status !== 'streaming') return;
+    let cycleStart = Date.now();
     const tick = () => {
-      const elapsed = (Date.now() - start) / 1000;
+      const elapsed = (Date.now() - cycleStart) / 1000;
       if (elapsed >= RIPPLE_DURATION_S) {
-        setTouchTime(RIPPLE_DURATION_S);
-        rafRef.current = null;
+        cycleStart = Date.now();
+        setTouchTime(0);
+        rafRef.current = requestAnimationFrame(tick);
         return;
       }
       setTouchTime(elapsed);
@@ -83,7 +82,7 @@ export const ShelfScanProgressCard: React.FC<ShelfScanProgressCardProps> = ({
 
   const auroraOpacity = useSharedValue(0);
   useEffect(() => {
-    const target = status === 'streaming' ? 1 : 0;
+    const target = status === 'streaming' ? 0.22 : 0;
     auroraOpacity.value = withTiming(target, { duration: 450 });
   }, [status, auroraOpacity]);
   const auroraStyle = useAnimatedStyle(() => ({ opacity: auroraOpacity.value }));
