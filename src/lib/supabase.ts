@@ -23,6 +23,17 @@ console.log('[supabase.ts] EXPO_PUBLIC_SSSYNC_API_BASE_URL =', process.env.EXPO_
 console.log('[supabase.ts] EXPO_PUBLIC_API_BASE_URL =', process.env.EXPO_PUBLIC_API_BASE_URL);
 console.log('[supabase.ts] Computed apiBaseUrl candidate =', apiBaseUrl);
 
+/**
+ * Canonical API origin (no trailing slash, no `/api` suffix). Single source of truth for
+ * the base URL — replaces the `process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app'`
+ * fallback that was copy-pasted across ~40 screens. Endpoint paths (e.g. `/api/...`) are
+ * appended by the caller / apiClient.
+ */
+export function getApiBaseUrl(): string {
+  return apiBaseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
+}
+
+
 let currentSupabaseJwt: string | null = null;
 let refreshTimerHandle: ReturnType<typeof setTimeout> | null = null;
 // The backend mints SHORT-LIVED Supabase JWTs (currently ~600s). We must refresh
