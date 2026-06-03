@@ -77,8 +77,8 @@ ios: {
 ## 📦 Dependencies
 
 ### Key Production Concerns
-1. **React Native Version**: `0.81.4` - Check for security updates
-2. **Expo SDK**: `^54.0.2` - Latest version ✅
+1. **React Native Version**: `0.83.2` - Check for security updates
+2. **Expo SDK**: `^55.0.0` - Latest version ✅
 3. **Supabase Client**: `^2.49.8` - Check for updates
 
 ### Build Size Considerations

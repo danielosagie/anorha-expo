@@ -7,7 +7,9 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
+    "lint": "expo lint"
   },
   "dependencies": {
     "@clerk/clerk-expo": "^2.14.20",
@@ -16,7 +18,6 @@
     "@johnn-e/react-mesh-gradient": "^1.1.1",
     "@legendapp/state": "^3.0.0-beta.30",
     "@native-springs/shaders": "file:./vendor/native-springs-shaders",
-    "@react-native-google-signin/google-signin": "^13.2.0",
     "@react-native-picker/picker": "2.11.4",
     "@react-native/assets-registry": "^0.79.0",
     "@react-navigation/bottom-tabs": "^6.6.1",
