@@ -150,9 +150,8 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
 
       if (!configuredRef.current) {
         console.log('[EnhancedSessionProvider] Configuring Supabase bridge...');
-        
-        // Extended to 30 minutes instead of 9
-        await configureClerkSupabaseBridge({ getClerkToken, autoRefreshMinutes: 30 });
+        // Refresh cadence is derived from the token's expires_in inside the bridge.
+        await configureClerkSupabaseBridge({ getClerkToken });
         configuredRef.current = true;
       }
 
