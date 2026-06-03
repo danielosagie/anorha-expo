@@ -1,6 +1,11 @@
 import 'react-native-url-polyfill/auto';
 import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+// After running `npm run db:types` (full generated schema), type the client:
+//   import type { Database } from '../types/database.types';
+//   export const supabase = createClient<Database>(...)
+// Deferred until the generated file covers ALL tables — otherwise queries to
+// not-yet-listed tables fail to type-check.
 
 // Require environment variables - fail fast if missing
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
