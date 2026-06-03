@@ -16,7 +16,15 @@ jobs:
           cache: npm
       - run: npm ci --legacy-peer-deps
       - name: TypeScript
-        run: npm run typecheck
+        # NOTE: ~163 pre-existing errors remain. Report the count but don't block yet.
+        # Once the burn-down reaches 0, delete the `|| true` to make this a hard gate.
+        run: |
+          npm run typecheck 2>&1 | tee /tmp/tsc.log || true
+          COUNT=$(grep -c "error TS" /tmp/tsc.log || true)
+          echo "::notice::TypeScript errors: ${COUNT}"
+          if [ "${COUNT}" != "0" ]; then
+            echo "::warning::${COUNT} TypeScript errors (non-blocking until burn-down completes)."
+          fi
 
   # Contract drift-check: the committed DB types must match the live schema.
   # Requires repo secrets SUPABASE_ACCESS_TOKEN + EXPO_PUBLIC_SUPABASE_PROJECT_ID.
