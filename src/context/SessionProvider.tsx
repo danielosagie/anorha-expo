@@ -20,7 +20,7 @@ export const SessionProvider: React.FC<{ children: React.ReactNode; getClerkToke
       if (token && !configuredRef.current) {
         console.log('[SessionProvider] configuring Supabase bridge...');
         try {
-          await configureClerkSupabaseBridge({ getClerkToken, autoRefreshMinutes: 9 });
+          await configureClerkSupabaseBridge({ getClerkToken });
           configuredRef.current = true;
           console.log('[SessionProvider] bridge configured. Loading me and entitlements...');
           const { user: me } = await getUserLike();

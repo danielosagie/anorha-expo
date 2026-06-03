@@ -620,21 +620,27 @@ const AppNavigator = () => {
       console.log("[AuthContext] signOut called, clearing tokens and Clerk session.")
       setUserToken(null);
       AsyncStorage.removeItem('userToken').catch(() => { });
-      try { stopClerkSupabaseBridge(); } catch { }
-      if (clerkSignOut) {
-        try {
-          await clerkSignOut();
-        } catch (e: any) {
-          // Handle common Clerk sign-out errors gracefully
-          // - "You are signed out" means we're already signed out
-          // - "Cannot read property 'origin'" is a web-specific error on React Native
-          const errorMsg = e?.message || String(e);
-          if (errorMsg.includes('signed out') || errorMsg.includes('origin')) {
-            console.log('[AuthContext] Sign out completed (expected error on React Native)');
-          } else {
-            console.error('[AuthContext] Sign out error:', e);
+      try {
+        if (clerkSignOut) {
+          try {
+            await clerkSignOut();
+          } catch (e: any) {
+            // Handle common Clerk sign-out errors gracefully
+            // - "You are signed out" means we're already signed out
+            // - "Cannot read property 'origin'" is a web-specific error on React Native
+            const errorMsg = e?.message || String(e);
+            if (errorMsg.includes('signed out') || errorMsg.includes('origin')) {
+              console.log('[AuthContext] Sign out completed (expected error on React Native)');
+            } else {
+              console.error('[AuthContext] Sign out error:', e);
+            }
           }
         }
+      } finally {
+        // Tear down the Supabase bridge AFTER attempting Clerk sign-out so we don't
+        // clear the bridge while Clerk still holds a session. `finally` guarantees the
+        // bridge (token + refresh timer) is always cleared, even if clerkSignOut throws.
+        try { stopClerkSupabaseBridge(); } catch { }
       }
       return Promise.resolve();
     },
