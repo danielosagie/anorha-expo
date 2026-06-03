@@ -5,7 +5,7 @@ import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { LogBox } from 'react-native';
 import 'react-native-get-random-values';
-import { ensureSupabaseJwt, supabase } from './src/lib/supabase';
+import { ensureSupabaseJwt, forceRefreshSupabaseJwt, supabase } from './src/lib/supabase';
 import { LegendStateContext } from './src/context/LegendStateContext';
 import { LegendStateControlContext } from './src/context/LegendStateControlContext';
 import { initializeFallbackLegendState, initializeLegendState, LegendStateObservables } from './src/utils/SupaLegend';
@@ -35,7 +35,6 @@ import { init as initFlowLogger } from './src/lib/mobileFlowLogger';
 import { LiveActivityProvider } from './src/context/LiveActivityContext';
 import { AppDataProvider } from './src/context/AppDataContext';
 import AppStartupShell from './src/components/AppStartupShell';
-import { OfflineQueueProvider } from './src/context/OfflineQueueContext';
 import {
   ActiveFlowCheckpoint,
   clearActiveFlowCheckpoint,
@@ -417,6 +416,11 @@ const App: React.FC = () => {
         appState = nextState;
         if (!(nextState === 'active' && wasBackgrounded)) return;
 
+        // On resume, the OS may have suspended the bridge's refresh timer while
+        // backgrounded, leaving an expired Supabase JWT. Force a re-exchange so
+        // Realtime + API calls don't silently 401 before the next scheduled refresh.
+        void forceRefreshSupabaseJwt();
+
         void (async () => {
           const checkpoint = await loadActiveFlowCheckpoint(userId);
           if (!checkpoint || checkpoint.status === 'completed') return;
@@ -672,11 +676,9 @@ const App: React.FC = () => {
     <ClerkProvider publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!} tokenCache={tokenCache}>
       <PostHogProvider>
         <SafeAreaProvider>
-          <OfflineQueueProvider>
-            <SystemNotificationProvider>
-              <DebugClerkState />
-            </SystemNotificationProvider>
-          </OfflineQueueProvider>
+          <SystemNotificationProvider>
+            <DebugClerkState />
+          </SystemNotificationProvider>
         </SafeAreaProvider>
       </PostHogProvider>
     </ClerkProvider>

@@ -23,3 +23,16 @@ formatting.js
 *.local
 .env
 .env.local
+
+# Build artifacts (do not commit — they bloat the repo permanently)
+*.ipa
+*.aab
+*.apk
+
+# Secrets — service-account / credential files must never be committed
+anorha-*.json
+*-service-account*.json
+*.keystore
+*.p8
+*.p12
+*.mobileprovision

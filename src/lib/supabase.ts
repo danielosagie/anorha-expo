@@ -24,7 +24,14 @@ console.log('[supabase.ts] EXPO_PUBLIC_API_BASE_URL =', process.env.EXPO_PUBLIC_
 console.log('[supabase.ts] Computed apiBaseUrl candidate =', apiBaseUrl);
 
 let currentSupabaseJwt: string | null = null;
-let refreshIntervalHandle: ReturnType<typeof setInterval> | null = null;
+let refreshTimerHandle: ReturnType<typeof setTimeout> | null = null;
+// The backend mints SHORT-LIVED Supabase JWTs (currently ~600s). We must refresh
+// based on the token's actual lifetime, not a fixed interval — a previous hardcoded
+// 30-min interval left the JWT expired for ~20 of every 30 minutes (Realtime + raw
+// fetch calls silently 401'd). `expires_in` from /auth/exchange drives the schedule.
+let lastExpiresInSeconds: number | null = null;
+const FALLBACK_REFRESH_SECONDS = 8 * 60; // only used if the backend omits expires_in
+const REFRESH_LEAD_SECONDS = 60; // refresh this many seconds before expiry
 let getClerkTokenFn: (() => Promise<string | null>) | null = null;
 // Promise lock to prevent race conditions when multiple components call ensureSupabaseJwt concurrently
 let exchangeInProgress: Promise<boolean> | null = null;
@@ -198,6 +205,9 @@ async function exchangeClerkForSupabase(): Promise<boolean> {
     const body = await resp.json();
     console.log('[supabase.ts] Exchange body:', body);
     currentSupabaseJwt = body.supabase_token as string;
+    lastExpiresInSeconds = typeof body.expires_in === 'number' && body.expires_in > 0
+      ? body.expires_in
+      : null;
     if (currentSupabaseJwt) {
       lastExchangeOutcome = 'success';
       console.log('[supabase.ts] Supabase JWT set, length:', currentSupabaseJwt.length);
@@ -223,31 +233,63 @@ async function exchangeClerkForSupabase(): Promise<boolean> {
   }
 }
 
+function clearRefreshTimer() {
+  if (refreshTimerHandle) {
+    clearTimeout(refreshTimerHandle);
+    refreshTimerHandle = null;
+  }
+}
+
+// Self-rescheduling refresh keyed off the token's real lifetime. We refresh
+// REFRESH_LEAD_SECONDS before `expires_in` elapses so the JWT (and Realtime auth)
+// never goes stale mid-session.
+function scheduleNextRefresh() {
+  clearRefreshTimer();
+  const lifetime = lastExpiresInSeconds && lastExpiresInSeconds > 0
+    ? lastExpiresInSeconds
+    : FALLBACK_REFRESH_SECONDS;
+  const delaySeconds = Math.max(REFRESH_LEAD_SECONDS, lifetime - REFRESH_LEAD_SECONDS);
+  refreshTimerHandle = setTimeout(() => {
+    console.log(`[supabase.ts] Scheduled token refresh (lifetime=${lifetime}s, delay=${delaySeconds}s)`);
+    refreshSupabaseToken()
+      .catch((e) => console.error('[supabase.ts] Scheduled token refresh failed:', e))
+      .finally(() => scheduleNextRefresh());
+  }, delaySeconds * 1000);
+}
+
 export async function configureClerkSupabaseBridge(options: {
   getClerkToken: () => Promise<string | null>;
+  /** @deprecated Ignored — refresh cadence is derived from the token's `expires_in`. */
   autoRefreshMinutes?: number;
 }) {
   getClerkTokenFn = options.getClerkToken;
   lastExchangeOutcome = 'idle';
-  console.log('[supabase.ts] configureClerkSupabaseBridge called. autoRefreshMinutes =', options.autoRefreshMinutes);
+  console.log('[supabase.ts] configureClerkSupabaseBridge called.');
   const ok = await refreshSupabaseToken();
   if (!ok) throw new Error('Failed to exchange Clerk token for Supabase JWT');
 
-  // Start background refresh slightly before expiry
-  const mins = options.autoRefreshMinutes ?? 30; // Extended from 9 to 30 minutes
-  if (refreshIntervalHandle) clearInterval(refreshIntervalHandle);
-  refreshIntervalHandle = setInterval(() => {
-    console.log(`[supabase.ts] Background token refresh triggered (${mins}min interval)`);
-    refreshSupabaseToken().catch((e) => {
-      console.error('[supabase.ts] Background token refresh failed:', e);
-    });
-  }, mins * 60 * 1000);
+  // Schedule the next refresh from the token's actual lifetime (NOT a fixed interval).
+  scheduleNextRefresh();
+}
+
+/**
+ * Force an immediate token re-exchange and realign the refresh timer.
+ * Use on app foreground: background timers can be suspended by the OS, so the
+ * scheduled refresh may not have fired and `currentSupabaseJwt` could be expired
+ * even though state still reads 'ready'. No-op if the bridge isn't configured
+ * (i.e. signed out).
+ */
+export async function forceRefreshSupabaseJwt(): Promise<boolean> {
+  if (!getClerkTokenFn) return false;
+  const ok = await refreshSupabaseToken();
+  scheduleNextRefresh();
+  return ok;
 }
 
 export function stopClerkSupabaseBridge() {
-  if (refreshIntervalHandle) clearInterval(refreshIntervalHandle);
-  refreshIntervalHandle = null;
+  clearRefreshTimer();
   currentSupabaseJwt = null;
+  lastExpiresInSeconds = null;
   getClerkTokenFn = null;
   lastExchangeOutcome = 'idle';
   emitSupabaseJwtState();
