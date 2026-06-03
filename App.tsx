@@ -610,8 +610,7 @@ const App: React.FC = () => {
   const DebugClerkState = () => {
     const { isLoaded, isSignedIn } = useAuth();
     const navigationRef = useRef<NavigationContainerRef<any>>(null);
-    const navKey = `navigation-${isSignedIn ? 'signed-in' : 'signed-out'}-0`;
-    console.log('[App] Clerk state:', { isLoaded, isSignedIn, navKey });
+    console.log('[App] Clerk state:', { isLoaded, isSignedIn });
 
     // Debug what happens when isSignedIn changes
     useEffect(() => {
@@ -639,10 +638,12 @@ const App: React.FC = () => {
       <PlatformConnectionsProvider>
         <PlatformPickerOverlayProvider>
           <NavigationContainer
-            key={navKey}
+            // NOTE: intentionally NOT keyed on isSignedIn. Keying here remounted the entire
+            // container on every auth toggle, destroying nav state and dropping in-flight deep
+            // links. The signed-in/out trees below swap on their own; the container persists.
             ref={navigationRef}
             onReady={() => {
-              console.log('[App] Navigation container ready, key:', navKey, 'isSignedIn:', isSignedIn);
+              console.log('[App] Navigation container ready, isSignedIn:', isSignedIn);
             }}
           >
             <>
