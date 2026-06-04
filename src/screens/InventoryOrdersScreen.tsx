@@ -45,6 +45,7 @@ import { useProductVariantRealtime, useInventoryLevelsRealtime } from '../hooks/
 import { useOrg } from '../context/OrgContext';
 import { parseFilterQuery } from '../utils/parseFilterQuery';
 import { logFlowEvent, FlowEvents, startTrace, getTraceHeaders } from '../lib/mobileFlowLogger';
+import { getVariantPlatforms } from '../lib/platforms';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const TAB_BAR_HEIGHT = 84;
@@ -1059,14 +1060,8 @@ const InventoryOrdersScreen = observer(() => {
         maxPrice = variant.Price;
       }
 
-      // Use the actual boolean flags from ProductVariants to determine platform status
-      const platformNames: string[] = [];
-      if (variant.OnShopify) platformNames.push('shopify');
-      if (variant.OnSquare) platformNames.push('square');
-      if (variant.OnClover) platformNames.push('clover');
-      if (variant.OnAmazon) platformNames.push('amazon');
-      if (variant.OnEbay) platformNames.push('ebay');
-      if (variant.OnFacebook) platformNames.push('facebook');
+      // Platforms a variant is listed on (Track B seam — see src/lib/platforms.ts).
+      const platformNames: string[] = getVariantPlatforms(variant);
 
       const variantIdsForSync = [variantId, ...optionVariants.map(ov => ov.id)];
       const syncTimestamps = Object.values(mappings)
