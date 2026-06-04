@@ -38,6 +38,18 @@ export function getApiBaseUrl(): string {
   return apiBaseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
 }
 
+/**
+ * Track A (v2): when EXPO_PUBLIC_CLERK_NATIVE_AUTH=true, Supabase trusts Clerk's session
+ * token DIRECTLY (Supabase third-party auth) and the /api/auth/exchange mint bridge is
+ * bypassed — supabase-js attaches the Clerk token to REST + Realtime via its `accessToken`
+ * callback, and the backend's SupabaseAuthGuard PATH 3 already accepts raw Clerk tokens.
+ *
+ * Default OFF. Flip only AFTER: (1) adding Clerk as a Supabase third-party auth provider,
+ * (2) enabling the Clerk→Supabase integration (adds the `role: authenticated` claim), and
+ * (3) applying the app_user_id() RLS migration. See sssync-bknd docs/CLERK_NATIVE_AUTH.md.
+ */
+const CLERK_NATIVE_AUTH = process.env.EXPO_PUBLIC_CLERK_NATIVE_AUTH === 'true';
+
 
 let currentSupabaseJwt: string | null = null;
 let refreshTimerHandle: ReturnType<typeof setTimeout> | null = null;
@@ -135,18 +147,27 @@ async function supabaseFetch(input: RequestInfo | URL, init?: RequestInit): Prom
   return res;
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  // We are not using GoTrue; we keep storage to avoid breaking other code paths
-  auth: {
-    storage: AsyncStorage,
-    autoRefreshToken: false,
-    persistSession: false,
-    detectSessionInUrl: false,
-  },
-  global: {
-    fetch: supabaseFetch,
-  },
-});
+// We are not using GoTrue; we keep storage to avoid breaking other code paths
+const baseAuthOptions = {
+  storage: AsyncStorage,
+  autoRefreshToken: false,
+  persistSession: false,
+  detectSessionInUrl: false,
+} as const;
+
+export const supabase = CLERK_NATIVE_AUTH
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: baseAuthOptions,
+      // Native third-party auth: supabase-js pulls the Clerk token on demand for both
+      // REST and Realtime — no mint, no custom fetch, no refresh timer.
+      accessToken: async () => (getClerkTokenFn ? await getClerkTokenFn() : null),
+    })
+  : createClient(supabaseUrl, supabaseAnonKey, {
+      auth: baseAuthOptions,
+      global: {
+        fetch: supabaseFetch,
+      },
+    });
 
 // Expose current Supabase JWT for backend API calls (SupabaseAuthGuard expects this)
 export function getCurrentSupabaseJwt(): string | null {
@@ -171,6 +192,16 @@ async function refreshSupabaseToken(): Promise<boolean> {
 }
 
 export async function ensureSupabaseJwt(): Promise<string | null> {
+  if (CLERK_NATIVE_AUTH) {
+    // No mint: the Clerk token IS the token backend + Supabase accept. Clerk's SDK
+    // returns a fresh (cached/auto-refreshed) token each call. Warm currentSupabaseJwt
+    // so the synchronous getCurrentSupabaseJwt() stays best-effort current.
+    const token = getClerkTokenFn ? await getClerkTokenFn() : null;
+    currentSupabaseJwt = token;
+    emitSupabaseJwtState();
+    return token;
+  }
+
   const current = getSupabaseJwtState();
   if (current.state === 'ready') return current.token;
 
@@ -281,6 +312,16 @@ export async function configureClerkSupabaseBridge(options: {
   getClerkTokenFn = options.getClerkToken;
   lastExchangeOutcome = 'idle';
   console.log('[supabase.ts] configureClerkSupabaseBridge called.');
+
+  if (CLERK_NATIVE_AUTH) {
+    // Native third-party auth: no exchange, no refresh timer — supabase-js calls the
+    // accessToken callback on demand. Just warm the token for sync getters/state.
+    currentSupabaseJwt = await options.getClerkToken().catch(() => null);
+    lastExchangeOutcome = currentSupabaseJwt ? 'success' : 'clerk_token_missing';
+    emitSupabaseJwtState();
+    return;
+  }
+
   const ok = await refreshSupabaseToken();
   if (!ok) throw new Error('Failed to exchange Clerk token for Supabase JWT');
 
@@ -297,6 +338,12 @@ export async function configureClerkSupabaseBridge(options: {
  */
 export async function forceRefreshSupabaseJwt(): Promise<boolean> {
   if (!getClerkTokenFn) return false;
+  if (CLERK_NATIVE_AUTH) {
+    // No timer to realign; just re-warm the cached token.
+    currentSupabaseJwt = await getClerkTokenFn().catch(() => null);
+    emitSupabaseJwtState();
+    return !!currentSupabaseJwt;
+  }
   const ok = await refreshSupabaseToken();
   scheduleNextRefresh();
   return ok;
