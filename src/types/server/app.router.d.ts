@@ -33,5 +33,28 @@ export declare const appRouter: import("@trpc/server").TRPCBuiltRouter<{
         };
         meta: object;
     }>;
+    jobs: import("@trpc/server").TRPCBuiltRouter<{
+        ctx: import("./context").TrpcContext;
+        meta: object;
+        errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+        transformer: false;
+    }, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+        list: import("@trpc/server").TRPCQueryProcedure<{
+            input: {
+                type?: "match" | "analysis" | "generate" | "regenerate" | undefined;
+                status?: string | undefined;
+                limit?: number | undefined;
+            } | undefined;
+            output: any[];
+            meta: object;
+        }>;
+        get: import("@trpc/server").TRPCQueryProcedure<{
+            input: {
+                id: string;
+            };
+            output: any;
+            meta: object;
+        }>;
+    }>>;
 }>>;
 export type AppRouter = typeof appRouter;
