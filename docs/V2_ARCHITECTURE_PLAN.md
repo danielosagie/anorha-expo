@@ -94,25 +94,35 @@ stay separate (genuinely different domain) or become `type = 'agent'`.
 
 ---
 
-## Track D — Sync engine  (#1)
+## Track D — Sync: formalize Legend State  (#1)  — DECIDED: keep Legend State
 
-**Today:** Legend State + hand-wired `realtime` hooks + (dead) offline queue + 4 persistence layers
-+ manual conflict handling. This is the source of the realtime CPU cost and the offline gaps.
+**Decision (confirmed):** stay on Legend State; **do not** adopt PowerSync. No new infra/dependency.
+This track is now "make the existing Legend State layer solid," not a sync-engine swap.
 
-**Target:** **PowerSync** (Postgres↔on-device SQLite; the only one of PowerSync/Electric/Zero with
-first-class offline). It owns: local DB, scoped realtime replication (sync rules), offline upload
-queue, retry, conflict policy. You own: sync-rules YAML (per-user/org scoping) + an upload
-connector (writes → Supabase) + the client schema. Needs an Expo dev build (CNG) — already in use
-via `expo-dev-client`, so no Expo Go blocker.
+**What's already fine** (verified in `src/utils/SupaLegend.ts`): the offline write queue is *not*
+actually dead — each synced collection runs with `retry: { infinite: true }` + `retrySync: true` +
+AsyncStorage persist, so pending writes survive offline and replay on reconnect. `productVariants$`
+and `marketplaceListings$` already use **scoped** realtime (`realtime: { filter: 'UserId=eq…' }`).
 
-**Steps (pilot-first)**
-1. Depends on **Track A** (PowerSync authenticates with the Clerk/Supabase token).
-2. Stand up PowerSync (Supabase connector + sync rules) for **one table — `InventoryLevels`** as a pilot; reads from local SQLite, writes via connector with the `Version` optimistic-concurrency column.
-3. Validate offline edit → reconnect → converge; measure Supabase CPU/egress vs today.
-4. Expand to `ProductVariants`/mappings; retire the manual realtime hooks + Legend State for synced tables (Legend State can remain for pure UI state).
+**The real remaining work — scope the 2 unfiltered realtime subscriptions** (the realtime CPU cost):
+- `platformProductMappings$` (`realtime: true`) and `inventoryLevels$` (`realtime: true`) subscribe
+  to ALL rows and lean on RLS. Neither has a directly-filterable `UserId` column.
+- **Gated on a small schema choice** (one of):
+  1. add a denormalized `UserId` (or broadcast topic) column to `PlatformProductMappings` /
+     `InventoryLevels` so realtime can filter `UserId=eq.${userId}` like the others; **or**
+  2. a backend broadcast channel the client subscribes to per user; **or**
+  3. `InventoryLevels` has `OrgId` — filter by org for single-org users (insufficient for
+     multi-org members).
+- Until then, leave them as-is (RLS-correct, just chatty).
 
-**Blast radius:** large (data layer). **Risk:** high — new managed/self-hosted service + data-layer swap. **Decision gate:** only proceed past the pilot if the pilot shows clear CPU/offline wins.
-**Alternative (no new infra):** formalize Legend State (single store, scoped subscriptions, real offline queue) — cheaper, but you keep maintaining sync semantics yourself.
+**Lower-risk cleanups (need an on-device smoke test — touch the live cache):**
+- DRY the repeated `customSynced({...})` config into one typed `syncedCollection()` factory
+  (standardize persist-key versioning + retry). Behavior-preserving, but verify on device.
+- Remove the dead commented-out observable examples + disabled diagnostic block in `SupaLegend.ts`.
+
+**Blast radius:** medium (live cache layer). **Risk:** the realtime scoping is gated on the schema
+choice above; the refactors are safe-by-construction but warrant a device smoke test since there's
+no runtime harness here.
 
 ---
 
