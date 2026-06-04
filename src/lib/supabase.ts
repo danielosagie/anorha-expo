@@ -1,6 +1,11 @@
 import 'react-native-url-polyfill/auto';
 import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+// After running `npm run db:types` (full generated schema), type the client:
+//   import type { Database } from '../types/database.types';
+//   export const supabase = createClient<Database>(...)
+// Deferred until the generated file covers ALL tables — otherwise queries to
+// not-yet-listed tables fail to type-check.
 
 // Require environment variables - fail fast if missing
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -22,6 +27,17 @@ const apiBaseUrl = apiBaseCandidate;
 console.log('[supabase.ts] EXPO_PUBLIC_SSSYNC_API_BASE_URL =', process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL);
 console.log('[supabase.ts] EXPO_PUBLIC_API_BASE_URL =', process.env.EXPO_PUBLIC_API_BASE_URL);
 console.log('[supabase.ts] Computed apiBaseUrl candidate =', apiBaseUrl);
+
+/**
+ * Canonical API origin (no trailing slash, no `/api` suffix). Single source of truth for
+ * the base URL — replaces the `process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app'`
+ * fallback that was copy-pasted across ~40 screens. Endpoint paths (e.g. `/api/...`) are
+ * appended by the caller / apiClient.
+ */
+export function getApiBaseUrl(): string {
+  return apiBaseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
+}
+
 
 let currentSupabaseJwt: string | null = null;
 let refreshTimerHandle: ReturnType<typeof setTimeout> | null = null;
