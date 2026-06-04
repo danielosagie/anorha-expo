@@ -19,7 +19,10 @@ type Bucket = 'photo' | 'data' | 'manual';
 type ScreenView =
   | { kind: 'lobby' }
   | { kind: 'lesson'; q: 'photo' | 'data' }
+  | { kind: 'datachoose' }
+  | { kind: 'dataselect' }
   | { kind: 'manual'; i: number }
+  | { kind: 'datamanual'; i: number }
   | { kind: 'done'; n: number; label: string };
 
 const BUCKETS: Record<
@@ -59,6 +62,22 @@ function manualCaseFor(p: ClassifiedProduct): OptimizeCase {
   };
 }
 
+// "Fill by hand" for the details bucket — title + description, not SKU/price.
+function dataManualCase(p: ClassifiedProduct): OptimizeCase {
+  return {
+    id: p.Id,
+    kind: 'manual',
+    title: 'Write the details',
+    note: p.reason,
+    itemTitle: p.Title || 'Item',
+    itemImage: firstImage(p),
+    fields: [
+      { label: 'Title', value: p.Title || '', placeholder: 'Product title', required: (p.Title || '').trim().length < 5 },
+      { label: 'Description', value: p.Description || '', placeholder: 'Describe the item' },
+    ],
+  };
+}
+
 export function BackfillOptimizerScreen() {
   const navigation = useNavigation<StackNavigationProp<any>>();
   const route = useRoute<any>();
@@ -72,6 +91,8 @@ export function BackfillOptimizerScreen() {
   const [view, setView] = useState<ScreenView>({ kind: 'lobby' });
   const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
   const [manualDeck, setManualDeck] = useState<OptimizeCase[]>([]);
+  const [dataDeck, setDataDeck] = useState<OptimizeCase[]>([]); // details "fill by hand"
+  const [dataSubset, setDataSubset] = useState<ClassifiedProduct[] | null>(null); // chosen by "pick how many"
 
   const { loading, products, counts, photoNeededItems, dataNeededItems, manualQueueItems, refresh } =
     useOptimizerQueues({ limit: 100 });
@@ -103,6 +124,28 @@ export function BackfillOptimizerScreen() {
   const readyPct = counts.total ? Math.round((polishedCount / counts.total) * 100) : 100;
   const firstBucket = BUCKET_ORDER.find((b) => remainingFor(b) > 0) || null;
 
+  const dataChooseCase: OptimizeCase = useMemo(
+    () => ({
+      id: 'data-choose',
+      kind: 'datachoose',
+      title: `${dataQueue.length} need details`,
+      note: 'Weak titles & thin copy',
+      count: dataQueue.length,
+      chips: ['Title', 'Description', 'Tags', 'Category'],
+    }),
+    [dataQueue.length],
+  );
+  const dataSelectCase: OptimizeCase = useMemo(
+    () => ({
+      id: 'data-select',
+      kind: 'dataselect',
+      title: 'Pick how many',
+      note: 'Tap to include',
+      rows: dataQueue.map((it) => ({ id: it.Id, title: it.Title || 'Item', sub: it.Sku || undefined, miss: it.reason, on: true })),
+    }),
+    [dataQueue],
+  );
+
   const markDone = useCallback(
     (ids: string[]) => {
       setCompletedIds((prev) => new Set([...prev, ...ids]));
@@ -116,6 +159,8 @@ export function BackfillOptimizerScreen() {
     if (b === 'manual') {
       setManualDeck(manualQueue.map(manualCaseFor));
       setView({ kind: 'manual', i: 0 });
+    } else if (b === 'data') {
+      setView({ kind: 'datachoose' });
     } else {
       setView({ kind: 'lesson', q: b });
     }
@@ -147,11 +192,76 @@ export function BackfillOptimizerScreen() {
   if (view.kind === 'lesson' && view.q === 'data') {
     return (
       <OptimizerBatchGenerateView
-        onBack={() => setView({ kind: 'lobby' })}
+        onBack={() => setView({ kind: 'datachoose' })}
         onComplete={handleLessonComplete('listings drafted')}
-        queueProducts={dataQueue}
+        queueProducts={dataSubset && dataSubset.length ? dataSubset : dataQueue}
       />
     );
+  }
+
+  // ── Details flow: Choose how → (generate all · pick subset · by hand) ──────
+  if (view.kind === 'datachoose') {
+    return (
+      <OptimizeResolver
+        c={dataChooseCase}
+        idx={1}
+        total={1}
+        topInset={insets.top}
+        onBack={() => setView({ kind: 'lobby' })}
+        onResolve={(d, meta) => {
+          if (d === 'alt') return setView({ kind: 'lobby' });
+          const r = meta?.route || 'all';
+          if (r === 'pick') return setView({ kind: 'dataselect' });
+          if (r === 'hand') {
+            setDataDeck(dataQueue.map(dataManualCase));
+            return setView({ kind: 'datamanual', i: 0 });
+          }
+          setDataSubset(null);
+          setView({ kind: 'lesson', q: 'data' });
+        }}
+      />
+    );
+  }
+  if (view.kind === 'dataselect') {
+    return (
+      <OptimizeResolver
+        c={dataSelectCase}
+        idx={1}
+        total={1}
+        topInset={insets.top}
+        onBack={() => setView({ kind: 'datachoose' })}
+        onResolve={(d, meta) => {
+          if (d === 'alt') {
+            setDataSubset(null); // "select all" → generate for everyone
+          } else {
+            const ids = new Set(meta?.selectedIds || []);
+            setDataSubset(dataQueue.filter((it) => ids.has(it.Id)));
+          }
+          setView({ kind: 'lesson', q: 'data' });
+        }}
+      />
+    );
+  }
+  if (view.kind === 'datamanual') {
+    const total = dataDeck.length;
+    const di = Math.min(view.i, Math.max(total - 1, 0));
+    const cur = dataDeck[di];
+    if (cur) {
+      return (
+        <OptimizeResolver
+          c={cur}
+          idx={di + 1}
+          total={total}
+          topInset={insets.top}
+          onBack={() => (di > 0 ? setView({ kind: 'datamanual', i: di - 1 }) : setView({ kind: 'datachoose' }))}
+          onResolve={() => {
+            markDone([cur.id]);
+            if (di + 1 < total) setView({ kind: 'datamanual', i: di + 1 });
+            else setView({ kind: 'done', n: total, label: 'details written' });
+          }}
+        />
+      );
+    }
   }
 
   // ── Manual "Fill the gaps" resolver deck ──────────────────────────────────

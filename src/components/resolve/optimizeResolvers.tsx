@@ -46,13 +46,19 @@ export interface OptimizeCase {
 
 export type Decision = 'primary' | 'alt';
 
+/** Extra payload some optimize resolvers report up (chosen route / selection). */
+export interface OptimizeResolveMeta {
+  route?: 'all' | 'pick' | 'hand';
+  selectedIds?: string[];
+}
+
 interface RProps {
   c: OptimizeCase;
   idx: number;
   total: number;
   topInset: number;
   onBack: () => void;
-  onResolve: (d: Decision) => void;
+  onResolve: (d: Decision, meta?: OptimizeResolveMeta) => void;
 }
 
 // ═══ BAD PHOTO — broken/low-quality existing image ════════════════════════
@@ -110,7 +116,7 @@ function OP_DataChoose({ c, idx, total, topInset, onBack, onResolve }: RProps) {
       primary={pick === 0 ? `Generate all ${n}` : pick === 1 ? 'Pick how many' : 'Fill by hand'}
       primaryIcon={pick === 0 ? 'auto-fix' : pick === 1 ? 'format-list-bulleted' : 'pencil'}
       alt="Choose later"
-      onPrimary={() => onResolve('primary')}
+      onPrimary={() => onResolve('primary', { route: pick === 0 ? 'all' : pick === 1 ? 'pick' : 'hand' })}
       onAlt={() => onResolve('alt')}
     >
       {opts.map((o, i) => (
@@ -151,7 +157,7 @@ function OP_DataSelect({ c, idx, total, topInset, onBack, onResolve }: RProps) {
       primaryReady={count > 0}
       primaryGate="Select at least one"
       alt={allOn ? 'Clear all' : `Select all ${rows.length}`}
-      onPrimary={() => onResolve('primary')}
+      onPrimary={() => onResolve('primary', { selectedIds: Object.keys(sel).filter((k) => sel[k]) })}
       onAlt={() => onResolve('alt')}
     >
       <View style={op.selHead}>
