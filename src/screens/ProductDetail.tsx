@@ -827,7 +827,7 @@ const ProductDetailScreen = observer(
             // Use DisplayName first, then fall back to a constructed name
             const platformName = connection.DisplayName || `${connection.PlatformType} Account`;
             // Use DB lookup for location name
-            const locationName = getLocationNameFromDB(level.PlatformLocationId || 'default', level.PlatformConnectionId);
+            const locationName = getLocationNameFromDB(level.PlatformLocationId || 'default', (level.PlatformConnectionId || ''));
 
             if (!grouped[platformName]) {
               grouped[platformName] = {
@@ -852,7 +852,7 @@ const ProductDetailScreen = observer(
                 id: level.Id || `${level.PlatformConnectionId}-${level.PlatformLocationId}`,
                 locationId: level.PlatformLocationId || 'default',
                 locationName,
-                platformConnectionId: level.PlatformConnectionId,
+                platformConnectionId: level.PlatformConnectionId || '',
                 platformName,
                 platformType: connection.PlatformType,
                 quantity: level.Quantity || 0
@@ -1466,7 +1466,7 @@ const ProductDetailScreen = observer(
             PlatformSpecificData: displayedPlatforms,  // ← Ensure platform data is updated
           };
           console.log('[ProductDetail] setDetailedItem merged result:', JSON.stringify(merged, null, 2).slice(0, 300));
-          return merged;
+          return merged as ProductVariant;
         });
 
         if (editVersionRef.current === saveStartEditVersion) {
@@ -2413,7 +2413,7 @@ const ProductDetailScreen = observer(
           .then(({ data, error }) => {
             if (data) {
               console.log('[ProductDetail] Fetched item from Supabase:', data.Id);
-              setDetailedItem(data);
+              setDetailedItem(data as ProductVariant);
               setFormData({
                 Title: data.Title || '',
                 Description: data.Description || '',
@@ -2667,7 +2667,7 @@ const ProductDetailScreen = observer(
 
       // Group inventory levels by platform type using the connection lookup
       rawInventoryLevels?.forEach(level => {
-        const platformType = connectionToPlatform.get(level.PlatformConnectionId);
+        const platformType = connectionToPlatform.get(level.PlatformConnectionId || '');
 
         // Handle pool-based inventory (forked products with PlatformConnectionId = null)
         // These are shared products where PoolId is set but no platform connection yet
@@ -2723,8 +2723,8 @@ const ProductDetailScreen = observer(
           platformLocationState[platformType].locations.push({
             id: locId,
             name: locationName,
-            connectionId: level.PlatformConnectionId,
-            connectionName: connectionToName.get(level.PlatformConnectionId) || platformType,
+            connectionId: level.PlatformConnectionId || '',
+            connectionName: connectionToName.get(level.PlatformConnectionId || '') || platformType,
           });
         }
 
@@ -2953,7 +2953,7 @@ const ProductDetailScreen = observer(
           // Get the LIVE price from InventoryLevels if available
           // Use the first inventory level's price for this platform as the "base" price
           const platformInventory = rawInventoryLevels?.filter(lvl =>
-            connectionToPlatform.get(lvl.PlatformConnectionId) === platformKeyLower
+            connectionToPlatform.get(lvl.PlatformConnectionId || '') === platformKeyLower
           ) || [];
           const livePrice = platformInventory[0]?.Price;
           const liveCompareAtPrice = platformInventory[0]?.CompareAtPrice;

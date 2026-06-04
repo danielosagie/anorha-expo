@@ -9,7 +9,9 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "db:types": "supabase gen types typescript --project-id $EXPO_PUBLIC_SUPABASE_PROJECT_ID --schema public > src/types/database.types.ts",
+    "db:types:check": "supabase gen types typescript --project-id $EXPO_PUBLIC_SUPABASE_PROJECT_ID --schema public | diff - src/types/database.types.ts"
   },
   "dependencies": {
     "@clerk/clerk-expo": "^2.14.20",
@@ -26,6 +28,8 @@
     "@sentry/react-native": "^8.11.1",
     "@shopify/flash-list": "2.0.2",
     "@supabase/supabase-js": "^2.49.8",
+    "@trpc/client": "^11.17.0",
+    "@trpc/server": "^11.17.0",
     "base64-arraybuffer": "^1.0.2",
     "convex": "^1.31.4",
     "crypto-browserify": "^3.12.1",
@@ -94,7 +98,8 @@
     "react-native-worklets-core": "^1.6.2",
     "readable-stream": "^4.7.0",
     "socket.io-client": "^4.8.1",
-    "unicode-animations": "^1.0.3"
+    "unicode-animations": "^1.0.3",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
