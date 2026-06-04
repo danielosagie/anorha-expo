@@ -11,6 +11,35 @@ import {
 
 const SSSYNC_API_BASE_URL = API_BASE_URL;
 
+/** Pull the v2 matching signals off a raw backend suggestion item so the
+ *  resolver classifier can route precisely (these were being dropped before). */
+function extractV2Signals(item: any): Partial<MappingSuggestion> {
+  const out: Partial<MappingSuggestion> = {};
+  if (item.productShape) out.productShape = item.productShape;
+  if (item.requiresFamilyDecision === true) out.requiresFamilyDecision = true;
+  if (item.familyDecisionReason) out.familyDecisionReason = item.familyDecisionReason;
+  if (item.isDuplicateSuggestedCanonical === true || item.isDuplicatePlatformProduct === true) out.isDuplicate = true;
+  if (typeof item.duplicateCount === 'number') out.duplicateCount = item.duplicateCount;
+  if (Array.isArray(item.fieldConflicts) && item.fieldConflicts.length) {
+    out.fieldConflicts = item.fieldConflicts.map((c: any) => ({
+      field: c.field,
+      platformValue: c.platformValue ?? null,
+      canonicalValue: c.canonicalValue ?? null,
+      severity: c.severity,
+    }));
+  }
+  if (Array.isArray(item.candidateVariants) && item.candidateVariants.length) {
+    out.candidateVariants = item.candidateVariants.map((c: any) => ({
+      id: c.Id || c.id,
+      sku: c.Sku ?? c.sku ?? null,
+      title: c.Title ?? c.title ?? null,
+      price: c.Price ?? c.price ?? null,
+      imageUrl: c.ImageUrl ?? c.imageUrl ?? null,
+    }));
+  }
+  return out;
+}
+
 export interface UseImportSessionOptions {
   connectionId: string | undefined;
   platformName: string;
@@ -345,16 +374,19 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
               // If this item already exists from DB, update it with scan data (richer info)
               if (existingIds.has(itemId)) {
                 const existing = suggestions.find(s => s.platformProduct?.id === itemId);
-                if (existing && item.suggestedCanonicalVariant) {
-                  existing.suggestedCanonicalProduct = {
-                    id: item.suggestedCanonicalVariant.Id,
-                    sku: item.suggestedCanonicalVariant.Sku,
-                    title: item.suggestedCanonicalVariant.Title,
-                    price: item.suggestedCanonicalVariant.Price,
-                    imageUrl: item.suggestedCanonicalVariant.ImageUrl,
-                  };
-                  existing.matchType = item.matchType || existing.matchType;
-                  existing.confidence = item.confidence ?? existing.confidence;
+                if (existing) {
+                  if (item.suggestedCanonicalVariant) {
+                    existing.suggestedCanonicalProduct = {
+                      id: item.suggestedCanonicalVariant.Id,
+                      sku: item.suggestedCanonicalVariant.Sku,
+                      title: item.suggestedCanonicalVariant.Title,
+                      price: item.suggestedCanonicalVariant.Price,
+                      imageUrl: item.suggestedCanonicalVariant.ImageUrl,
+                    };
+                    existing.matchType = item.matchType || existing.matchType;
+                    existing.confidence = item.confidence ?? existing.confidence;
+                  }
+                  Object.assign(existing, extractV2Signals(item));
                 }
                 continue;
               }
@@ -390,6 +422,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
                   isSelected: false,
                   matchType: (item.matchType as any) || 'NONE',
                   confidence: 0,
+                  ...extractV2Signals(item),
                 });
               } else {
                 let action: MappingSuggestion['action'] = 'UNMATCHED';
@@ -421,6 +454,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
                   isSelected,
                   matchType: item.matchType,
                   confidence: typeof item.confidence === 'number' ? item.confidence : undefined,
+                  ...extractV2Signals(item),
                 });
               }
             }

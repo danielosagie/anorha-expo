@@ -40,7 +40,31 @@ export const QUEST = {
   blue: '#3D7BC4',
   blueD: '#2A5A95',
   blueSoft: '#E5EEFB',
+  // v2 import-lobby palette (Duolingo path + match lobby).
+  // Amber is the single "active / next step" highlight; locked steps go grey.
+  amber: '#F5A623',
+  amberD: '#CC8312',
+  amberSoft: '#FFF1D6',
+  lock: '#ACAFB3',
+  lockD: '#83878B',
+  danger: '#E5484D',
+  dangerSoft: '#FCEBEC',
+  dangerBorder: '#F3B6B8',
 } as const;
+
+// Deterministic image-placeholder swatches (the colored squares in the
+// inventory list when a product has no photo yet).
+export const SWATCHES = [
+  '#2F80ED', '#27AE60', '#F2994A', '#9B51E0',
+  '#EB5757', '#2D9CDB', '#BB6BD9', '#F2C94C',
+] as const;
+
+export function swatchFor(seed: string | number): string {
+  const s = String(seed);
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return SWATCHES[h % SWATCHES.length];
+}
 
 export const QFONT = {
   x: 'PlusJakartaSans_800ExtraBold',

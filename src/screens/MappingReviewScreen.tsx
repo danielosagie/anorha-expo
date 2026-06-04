@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
+  FlatList,
   Pressable,
   TextInput,
   Modal,
@@ -35,6 +36,17 @@ import {
   QuestDone,
   QuestSegment,
 } from '../components/quest/QuestKit';
+import {
+  LobbyHeader,
+  HeaderIconBtn,
+  IssueCard,
+  InventoryRow,
+  InventoryItemData,
+  RaisedBtn,
+} from '../components/quest/LobbyKit';
+import { RC } from '../components/resolve/ResolveKit';
+import { MatchResolver, MatchCase, Decision } from '../components/resolve/matchResolvers';
+import { classifyMatch, applyMatchDecision } from '../components/resolve/classifyMatch';
 
 // ---------------------------------------------------------------------------
 // Classification — collapse the old 5 reason buckets into 4 quests (HO4).
@@ -115,7 +127,11 @@ interface VariantFamily {
 }
 
 type QuestId = 'new' | 'fuzzy' | 'variants';
-type ScreenView = { kind: 'lobby' } | { kind: 'lesson'; q: QuestId } | { kind: 'done'; q: QuestId };
+type ScreenView =
+  | { kind: 'lobby' }
+  | { kind: 'lesson'; q: QuestId }
+  | { kind: 'done'; q: QuestId }
+  | { kind: 'resolve'; i: number };
 
 const QUEST_ORDER: QuestId[] = ['new', 'fuzzy', 'variants'];
 const QUEST_META: Record<QuestId, { title: string; sub: string; unit: string; accent: string; accentDark: string; short: string; doneLabel: string }> = {
@@ -195,6 +211,10 @@ const MappingReviewScreen: React.FC = () => {
   const [searchLoading, setSearchLoading] = useState(false);
   const [doneVisible, setDoneVisible] = useState(false);
   const [lessonStart, setLessonStart] = useState(0);
+  // Match-lobby sub-view: the queue of issues, the full inventory, or ignored.
+  const [lobbyTab, setLobbyTab] = useState<'issues' | 'inventory' | 'ignored'>('issues');
+  // Resolver deck — frozen at entry so resolving cards doesn't reshuffle indices.
+  const [deck, setDeck] = useState<MatchCase[]>([]);
 
   const annotated = useMemo<AnnotatedSuggestion[]>(
     () => annotateSuggestions(suggestions || []),
@@ -260,6 +280,62 @@ const MappingReviewScreen: React.FC = () => {
 
   const itemsLeft = newItems.length + fuzzyItems.length + variantFamilies.reduce((n, f) => n + f.items.length, 0);
   const allClear = !activeQuest;
+
+  // ── Match-lobby derivations (issues queue · inventory · ignored) ──────────
+  const ignoredItems = useMemo(
+    () => annotated.filter((s) => s.action === 'IGNORE'),
+    [annotated],
+  );
+  const variantItemCount = useMemo(
+    () => variantFamilies.reduce((n, f) => n + f.items.length, 0),
+    [variantFamilies],
+  );
+  const issueCount =
+    (variantItemCount > 0 ? 1 : 0) + (fuzzyItems.length > 0 ? 1 : 0) + (newItems.length > 0 ? 1 : 0);
+  const firstIssueQuest: QuestId | null =
+    variantItemCount > 0 ? 'variants' : fuzzyItems.length > 0 ? 'fuzzy' : newItems.length > 0 ? 'new' : null;
+
+  const toInvItem = useCallback(
+    (s: AnnotatedSuggestion): InventoryItemData => {
+      const p = s.platformProduct;
+      const priceNum = typeof p.price === 'number' ? p.price : Number(p.price);
+      const price = priceNum > 0 ? `$${priceNum.toFixed(2)}` : undefined;
+      let statusLabel = 'New';
+      if (s.action === 'IGNORE') statusLabel = 'Ignored';
+      else if (s.resolved && (s.action === 'LINK_EXISTING' || s.action === 'CREATE_NEW')) statusLabel = 'Matched';
+      else if (s.reviewReason === 'variant_mismatch') statusLabel = 'Variant';
+      else if (s.reviewReason) statusLabel = 'Review';
+      return {
+        id: p.id,
+        title: p.title || 'Untitled',
+        price,
+        sku: p.sku || undefined,
+        imageUrl: p.imageUrl,
+        platforms: [platformName],
+        statusLabel,
+      };
+    },
+    [platformName],
+  );
+
+  // Enter the v2 resolver deck — classify the draft once, step through cards.
+  const enterResolve = useCallback(() => {
+    const cases = classifyMatch(annotated);
+    if (cases.length === 0) return;
+    setDeck(cases);
+    setView({ kind: 'resolve', i: 0 });
+  }, [annotated]);
+
+  // Write a card's decision back onto the draft so the lobby reflects progress.
+  const applyDecision = useCallback(
+    (c: MatchCase, d: Decision) => {
+      const ids = new Set(c.itemIds || []);
+      setSuggestions((prev) =>
+        (prev || []).map((s) => (ids.has(s.platformProduct.id) ? applyMatchDecision(s, c.kind, d) : s)),
+      );
+    },
+    [setSuggestions],
+  );
 
   // ---------------------------------------------------------------------------
   // Polling for scan completion (unchanged behavior)
@@ -750,6 +826,41 @@ const MappingReviewScreen: React.FC = () => {
   // ---------------------------------------------------------------------------
   // Lobby
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Resolver deck (v2) — one card per classified case from the mapping draft.
+  // ---------------------------------------------------------------------------
+  if (view.kind === 'resolve') {
+    const total = deck.length;
+    const di = Math.min(view.i, Math.max(total - 1, 0));
+    const cur = deck[di];
+    if (!cur) {
+      return (
+        <View style={[styles.screen, { paddingTop: insets.top + 6 }]}>
+          <LobbyHeader title="Match" onBack={() => setView({ kind: 'lobby' })} />
+          <View style={styles.mlEmpty}>
+            <Icon name="check-decagram" size={40} color={RC.green} />
+            <Text style={styles.mlEmptyTitle}>All resolved</Text>
+            <Text style={styles.mlEmptySub}>Every flagged item has a decision.</Text>
+          </View>
+        </View>
+      );
+    }
+    return (
+      <MatchResolver
+        c={cur}
+        idx={di + 1}
+        total={total}
+        topInset={insets.top}
+        onBack={() => (di > 0 ? setView({ kind: 'resolve', i: di - 1 }) : setView({ kind: 'lobby' }))}
+        onResolve={(d) => {
+          applyDecision(cur, d);
+          if (di + 1 < total) setView({ kind: 'resolve', i: di + 1 });
+          else setView({ kind: 'lobby' });
+        }}
+      />
+    );
+  }
+
   const questsDone = QUEST_ORDER.filter((q) => questCount(q) === 0).length;
 
   function renderSearchSheet() {
@@ -768,74 +879,125 @@ const MappingReviewScreen: React.FC = () => {
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top + 6 }]}>
-      <QuestBar
-        segments={segmentsFor(activeQuest)}
-        activeIdx={activeSegIdx(activeQuest)}
-        close="back"
-        onClose={() => navigation.goBack()}
+      <LobbyHeader
+        title={lobbyTab === 'inventory' ? 'Inventory' : lobbyTab === 'ignored' ? 'Ignored Items' : 'Match'}
+        countSuffix={lobbyTab === 'issues' ? `${annotated.length} Items` : undefined}
+        onBack={() => (lobbyTab === 'issues' ? navigation.goBack() : setLobbyTab('issues'))}
         right={
-          <TouchableOpacity
-            onPress={() => setWizardVisible(true)}
-            style={styles.gearBtn}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Icon name="cog-outline" size={18} color={QUEST.sub} />
-          </TouchableOpacity>
+          lobbyTab === 'issues' ? (
+            <>
+              <HeaderIconBtn icon="package-variant-closed" onPress={() => setLobbyTab('inventory')} />
+              <HeaderIconBtn icon="trash-can-outline" onPress={() => setLobbyTab('ignored')} />
+            </>
+          ) : undefined
         }
       />
 
-      <View style={styles.lobbyHead}>
-        <Text style={styles.lobbyTitle}>Match products</Text>
-        <Text style={styles.lobbySub}>
-          {questsDone} of {QUEST_ORDER.length} quests done
-          {itemsLeft > 0 ? ` · ${itemsLeft} items left` : ' · all clear'}
-        </Text>
-      </View>
+      {lobbyTab === 'issues' && (
+        <ScrollView contentContainerStyle={styles.lobbyScroll} showsVerticalScrollIndicator={false}>
+          {matchedItems.length > 0 && (
+            <View style={styles.mlClearBanner}>
+              <View style={styles.mlClearIcon}>
+                <Icon name="check-bold" size={15} color={RC.greenDark} />
+              </View>
+              <Text style={styles.mlClearText} numberOfLines={1}>
+                {matchedItems.length} matched · {autoMatched.length} auto-linked
+              </Text>
+            </View>
+          )}
 
-      <ScrollView contentContainerStyle={styles.lobbyScroll} showsVerticalScrollIndicator={false}>
-        <QuestRow
-          state="done"
-          accent={QUEST.green}
-          accentDark={QUEST.greenD}
-          count={autoMatched.length}
-          unit="items"
-          title="Auto-matched"
-          sub="95%+ confidence · linked automatically"
+          {issueCount === 0 ? (
+            <View style={styles.mlEmpty}>
+              <Icon name="check-decagram" size={40} color={RC.green} />
+              <Text style={styles.mlEmptyTitle}>No issues to fix</Text>
+              <Text style={styles.mlEmptySub}>Every item is matched and ready to confirm.</Text>
+            </View>
+          ) : (
+            <>
+              {variantItemCount > 0 && (
+                <IssueCard
+                  icon="puzzle"
+                  title="Missing variants"
+                  sub={`${variantItemCount} separate products that are probably variants`}
+                  onPress={enterResolve}
+                />
+              )}
+              {fuzzyItems.length > 0 && (
+                <IssueCard
+                  icon="content-copy"
+                  title="Duplicate data"
+                  sub={`${fuzzyItems.length} items that share the same data (SKU, title, images, etc.)`}
+                  onPress={enterResolve}
+                />
+              )}
+              {newItems.length > 0 && (
+                <IssueCard
+                  icon="shape-outline"
+                  title="New to catalog"
+                  sub={`${newItems.length} items with no match found yet`}
+                  onPress={enterResolve}
+                />
+              )}
+            </>
+          )}
+        </ScrollView>
+      )}
+
+      {lobbyTab === 'inventory' && (
+        <FlatList
+          data={annotated}
+          keyExtractor={(s, i) => s.platformProduct.id || String(i)}
+          renderItem={({ item }) => <InventoryRow item={toInvItem(item)} />}
+          ItemSeparatorComponent={() => <View style={styles.mlSep} />}
+          contentContainerStyle={styles.mlList}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={styles.mlEmpty}>
+              <Text style={styles.mlEmptyTitle}>Nothing imported yet</Text>
+            </View>
+          }
         />
-        {QUEST_ORDER.map((q) => {
-          const meta = QUEST_META[q];
-          const st = questState(q);
-          return (
-            <QuestRow
-              key={q}
-              state={st}
-              accent={meta.accent}
-              accentDark={meta.accentDark}
-              count={questCount(q)}
-              unit={meta.unit}
-              title={meta.title}
-              sub={meta.sub}
-              onPress={st === 'active' ? () => enterLesson(q) : undefined}
-            />
-          );
-        })}
-      </ScrollView>
+      )}
 
-      {allClear && (
-        <LinearGradient
-          colors={['rgba(250,247,238,0)', QUEST.bg, QUEST.bg]}
-          style={[styles.sticky, { paddingBottom: insets.bottom + 16 }]}
-          pointerEvents="box-none"
-        >
-          <QuestCTA
+      {lobbyTab === 'ignored' && (
+        <FlatList
+          data={ignoredItems}
+          keyExtractor={(s, i) => s.platformProduct.id || String(i)}
+          renderItem={({ item }) => <InventoryRow item={toInvItem(item)} />}
+          ItemSeparatorComponent={() => <View style={styles.mlSep} />}
+          contentContainerStyle={styles.mlList}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={styles.mlEmpty}>
+              <Icon name="trash-can-outline" size={36} color={RC.muted} />
+              <Text style={styles.mlEmptyTitle}>No ignored items</Text>
+              <Text style={styles.mlEmptySub}>Items you skip during matching land here.</Text>
+            </View>
+          }
+        />
+      )}
+
+      <LinearGradient
+        colors={['rgba(255,255,255,0)', '#FFFFFF', '#FFFFFF']}
+        style={[styles.sticky, { paddingBottom: insets.bottom + 16 }]}
+        pointerEvents="box-none"
+      >
+        {allClear ? (
+          <RaisedBtn
             label={`Confirm mapping (${matchedItems.length})`}
             icon="check"
-            color={QUEST.green}
-            dark={QUEST.greenD}
+            color={RC.green}
+            dark={RC.greenDark}
             onPress={() => setDoneVisible(true)}
           />
-        </LinearGradient>
-      )}
+        ) : (
+          <RaisedBtn
+            label={`Fix ${issueCount} Issue${issueCount === 1 ? '' : 's'}`}
+            icon="wrench"
+            onPress={enterResolve}
+          />
+        )}
+      </LinearGradient>
 
       {renderSearchSheet()}
 
@@ -1048,7 +1210,7 @@ function DoneOverlay({
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: QUEST.bg },
+  screen: { flex: 1, backgroundColor: '#FFFFFF' },
   gearBtn: {
     width: 36,
     height: 36,
@@ -1064,7 +1226,37 @@ const styles = StyleSheet.create({
   lobbyHead: { paddingHorizontal: 20, paddingBottom: 12 },
   lobbyTitle: { fontSize: 18, fontFamily: QFONT.b, color: QUEST.ink, letterSpacing: -0.4 },
   lobbySub: { fontSize: 12, fontFamily: QFONT.m, color: QUEST.sub, marginTop: 2 },
-  lobbyScroll: { paddingHorizontal: 16, paddingBottom: 120 },
+  lobbyScroll: { paddingHorizontal: 16, paddingBottom: 130 },
+
+  // Match-lobby v2 (issues / inventory / ignored)
+  mlClearBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: RC.greenSoft,
+    borderWidth: 1,
+    borderColor: RC.greenLine,
+    borderRadius: 14,
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+  },
+  mlClearIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: RC.greenLine,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mlClearText: { flex: 1, fontSize: 12.5, fontWeight: '700', color: RC.greenDark },
+  mlList: { paddingHorizontal: 12, paddingTop: 2, paddingBottom: 130 },
+  mlSep: { height: 1, backgroundColor: RC.line, marginLeft: 84, marginVertical: 2 },
+  mlEmpty: { alignItems: 'center', paddingTop: 70, paddingHorizontal: 30 },
+  mlEmptyTitle: { fontSize: 16, fontWeight: '700', color: RC.ink, marginTop: 12 },
+  mlEmptySub: { fontSize: 13, fontWeight: '500', color: RC.muted, marginTop: 6, textAlign: 'center', lineHeight: 18 },
 
   // Center / scan / error
   centerBlock: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },

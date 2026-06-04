@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Alert, useWindowDimensions } from 'react-native';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -10,14 +10,14 @@ import { AppStackParamList } from '../navigation/AppNavigator';
 import { supabase } from '../../lib/supabase';
 import { useImportSession } from '../hooks/useImportSession';
 import { ImportWizardSheet } from '../components/import/ImportWizardSheet';
+import { RC } from '../components/resolve/ResolveKit';
 import {
-  QUEST,
-  QFONT,
-  QuestBar,
-  QuestRow,
-  QuestCTA,
-  QuestSegment,
-} from '../components/quest/QuestKit';
+  LobbyHeader,
+  HeaderPill,
+  WindingPath,
+  LobbyCTACard,
+  PathNodeData,
+} from '../components/quest/LobbyKit';
 import ShopifySvg from '../assets/shopify.svg';
 import SquareSvg from '../assets/square.svg';
 import CloverSvg from '../assets/clover.svg';
@@ -58,6 +58,8 @@ const ImportOverviewScreen = () => {
   const route = useRoute<ImportOverviewRouteProp>();
   const navigation = useNavigation<ImportOverviewNavProp>();
   const insets = useSafeAreaInsets();
+  const { width: winW } = useWindowDimensions();
+  const pathWidth = Math.min(winW - 36, 420);
 
   const { connectionId, platformName } = route.params as any;
   const platformColor = getPlatformColor(platformName);
@@ -135,63 +137,91 @@ const ImportOverviewScreen = () => {
     ]);
   };
 
-  // Stage model — Match → Optimize → Settings, each unlocks the next (HO3/HO6).
-  type StageId = 'match' | 'optimize' | 'settings';
-  const stageOrder: StageId[] = ['match', 'optimize', 'settings'];
+  // Stage model — Match → Optimize → Preferences → Finish (the winding path).
+  // Each step unlocks the next; "finish" is the terminal sync action, so it is
+  // only ever locked or active — never "done" from inside the lobby.
+  type StageId = 'match' | 'optimize' | 'preferences' | 'finish';
+  const stageOrder: StageId[] = ['match', 'optimize', 'preferences', 'finish'];
   const stageDone: Record<StageId, boolean> = {
     match: mappingDone,
     optimize: optimizerDone,
-    settings: settingsDone,
+    preferences: settingsDone,
+    finish: false,
   };
-  const activeStage = stageOrder.find((st) => !stageDone[st]) || null;
+  const activeStage: StageId = stageOrder.find((st) => !stageDone[st]) || 'finish';
   const stageState = (st: StageId): 'done' | 'active' | 'locked' => {
     if (stageDone[st]) return 'done';
     return st === activeStage ? 'active' : 'locked';
   };
-  const stagesLeft = stageOrder.filter((st) => !stageDone[st]).length;
-
-  const segments: QuestSegment[] = [
-    {
-      n: Math.max(totalScanned, 1),
-      done: mappingDone,
-      color: QUEST.green,
-      short: 'match',
-      label: activeStage === 'match' ? 'match' : undefined,
-    },
-    {
-      n: Math.max(optimizeCount, 1),
-      done: optimizerDone,
-      color: QUEST.orange,
-      short: 'polish',
-      label: activeStage === 'optimize' ? 'polish' : undefined,
-    },
-    {
-      n: 1,
-      done: settingsDone,
-      color: QUEST.blue,
-      short: 'setup',
-      label: activeStage === 'settings' ? 'setup' : undefined,
-    },
-  ];
-  const activeIdx = activeStage ? stageOrder.indexOf(activeStage) : stageOrder.length - 1;
+  const stagesLeft = (['match', 'optimize', 'preferences'] as StageId[]).filter(
+    (st) => !stageDone[st],
+  ).length;
 
   const onStagePress = (st: StageId) => {
     if (st === 'match') {
       navigation.navigate('MappingReview' as any, { connectionId, platformName });
     } else if (st === 'optimize') {
       navigation.navigate('BackfillOptimizer' as any, { source: 'import' });
-    } else {
-      // Settings opens the existing wizard sheet directly (HO6 — unchanged).
+    } else if (st === 'preferences') {
       setWizardVisible(true);
+    } else {
+      handleCompleteImport();
     }
   };
+
+  const NODE_ICON: Record<StageId, PathNodeData['icon']> = {
+    match: 'puzzle',
+    optimize: 'auto-fix',
+    preferences: 'tune-variant',
+    finish: 'flag-checkered',
+  };
+  const NODE_LABEL: Record<StageId, string> = {
+    match: 'Match',
+    optimize: 'Optimize',
+    preferences: 'Preferences',
+    finish: 'Finish',
+  };
+  const pathNodes: PathNodeData[] = stageOrder.map((st) => ({
+    id: st,
+    label: NODE_LABEL[st],
+    state: stageState(st),
+    icon: NODE_ICON[st],
+    onPress: () => onStagePress(st),
+  }));
+
+  // The bottom CTA mirrors whichever step is currently active.
+  const ctaByStage: Record<StageId, { title: string; sub: string; color?: string; dark?: string }> = {
+    match: { title: 'Match Items', sub: `${reviewCount} item${reviewCount === 1 ? '' : 's'} need review` },
+    optimize: { title: 'Optimize Listings', sub: `${optimizeCount} item${optimizeCount === 1 ? '' : 's'} to polish` },
+    preferences: { title: 'Set Preferences', sub: 'sync direction · pool · behavior' },
+    finish: {
+      title: 'Finish Import',
+      sub: `sync ${totalScanned} product${totalScanned === 1 ? '' : 's'}`,
+      color: RC.green,
+      dark: RC.greenDark,
+    },
+  };
+  const cta = ctaByStage[activeStage];
+
+  const platformPill = (
+    <HeaderPill
+      label={platformName}
+      leading={
+        PlatformLogo ? (
+          <PlatformLogo width={16} height={16} />
+        ) : (
+          <Store size={14} color={platformColor} />
+        )
+      }
+    />
+  );
 
   if (loading) {
     return (
       <View style={[styles.screen, { paddingTop: insets.top + 6 }]}>
-        <QuestBar segments={segments} activeIdx={activeIdx} close="back" onClose={() => navigation.goBack()} />
+        <LobbyHeader title="Import Inventory" onBack={() => navigation.goBack()} right={platformPill} />
         <View style={styles.center}>
-          <ActivityIndicator size="large" color={QUEST.green} />
+          <ActivityIndicator size="large" color={RC.orange} />
           <Text style={styles.centerText}>Loading import…</Text>
         </View>
       </View>
@@ -200,76 +230,30 @@ const ImportOverviewScreen = () => {
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top + 6 }]}>
-      <QuestBar segments={segments} activeIdx={activeIdx} close="back" onClose={() => navigation.goBack()} />
-
-      {/* Compact platform identity row (replaces the hero banner) */}
-      <View style={styles.identity}>
-        <View style={[styles.logo, { backgroundColor: platformColor }]}>
-          {PlatformLogo ? <PlatformLogo width={22} height={22} /> : <Store size={18} color="#fff" />}
-        </View>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={styles.identityTitle} numberOfLines={1}>
-            Import from {platformName}
-          </Text>
-          <Text style={styles.identitySub} numberOfLines={1}>
-            {totalScanned} items scanned
-            {stagesLeft > 0 ? ` · ${stagesLeft} stage${stagesLeft === 1 ? '' : 's'} to go` : ' · all stages clear'}
-          </Text>
-        </View>
-      </View>
+      <LobbyHeader title="Import Inventory" onBack={() => navigation.goBack()} right={platformPill} />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        <QuestRow
-          state={stageState('match')}
-          accent={QUEST.green}
-          accentDark={QUEST.greenD}
-          count={mappingDone ? totalScanned : reviewCount}
-          unit={mappingDone ? 'items' : 'left'}
-          title="Match products"
-          sub={mappingDone ? 'all items linked to your catalog' : 'link imported items to your catalog'}
-          onPress={() => onStagePress('match')}
-        />
-        <QuestRow
-          state={stageState('optimize')}
-          accent={QUEST.orange}
-          accentDark={QUEST.orangeD}
-          count={optimizerDone ? totalScanned : optimizeCount}
-          unit={optimizerDone ? 'items' : 'left'}
-          title="Optimize listings"
-          sub={
-            optimizerDone
-              ? 'photos added · data drafted'
-              : `${missingPhotoCount} need photos · ${missingDataCount} need details`
-          }
-          onPress={stageState('optimize') === 'locked' ? undefined : () => onStagePress('optimize')}
-        />
-        <QuestRow
-          state={stageState('settings')}
-          accent={QUEST.blue}
-          accentDark={QUEST.blueD}
-          count={settingsDone ? '✓' : '—'}
-          unit="setup"
-          title="Import settings"
-          sub={settingsDone ? `${syncDirection} · ${poolName}` : 'direction · pool · sync behavior'}
-          onPress={stageState('settings') === 'locked' ? undefined : () => onStagePress('settings')}
-        />
+        <Text style={styles.scanLine} numberOfLines={1}>
+          {totalScanned} items scanned
+          {stagesLeft > 0 ? ` · ${stagesLeft} step${stagesLeft === 1 ? '' : 's'} to go` : ' · ready to sync'}
+        </Text>
+
+        <WindingPath nodes={pathNodes} width={pathWidth} />
       </ScrollView>
 
       <LinearGradient
-        colors={['rgba(250,247,238,0)', QUEST.bg, QUEST.bg]}
-        style={[styles.sticky, { paddingBottom: insets.bottom + 24 }]}
+        colors={['rgba(255,255,255,0)', '#FFFFFF', '#FFFFFF']}
+        style={[styles.sticky, { paddingBottom: insets.bottom + 18 }]}
         pointerEvents="box-none"
       >
-        {canComplete && <Text style={styles.readyTag}>★ READY TO SYNC</Text>}
-        <QuestCTA
-          label="Complete import"
-          icon={canComplete ? 'chevron-right' : undefined}
-          color={canComplete ? QUEST.green : QUEST.ink}
-          dark={canComplete ? QUEST.greenD : '#000'}
-          disabled={!canComplete || isSubmitting}
-          onPress={handleCompleteImport}
+        <LobbyCTACard
+          title={cta.title}
+          sub={cta.sub}
+          color={cta.color}
+          dark={cta.dark}
+          disabled={activeStage === 'finish' && (!canComplete || isSubmitting)}
+          onPress={() => onStagePress(activeStage)}
         />
-        {!canComplete && <Text style={styles.hint}>finish every stage to unlock</Text>}
       </LinearGradient>
 
       <ImportWizardSheet
@@ -286,51 +270,26 @@ const ImportOverviewScreen = () => {
 };
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: QUEST.bg },
+  screen: { flex: 1, backgroundColor: '#FFFFFF' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  centerText: { fontSize: 13, fontFamily: QFONT.m, color: QUEST.sub, marginTop: 12 },
+  centerText: { fontSize: 13, fontWeight: '500', color: RC.muted, marginTop: 12 },
 
-  identity: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 20,
-    paddingBottom: 16,
+  scroll: { paddingHorizontal: 18, paddingBottom: 170, paddingTop: 2 },
+  scanLine: {
+    textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '600',
+    color: RC.muted,
+    marginBottom: 2,
   },
-  logo: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  identityTitle: { fontSize: 17, fontFamily: QFONT.b, color: QUEST.ink, letterSpacing: -0.4 },
-  identitySub: { fontSize: 11.5, fontFamily: QFONT.m, color: QUEST.sub, marginTop: 2 },
-
-  scroll: { paddingHorizontal: 16, paddingBottom: 160 },
 
   sticky: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    paddingHorizontal: 18,
-    paddingTop: 28,
-  },
-  readyTag: {
-    textAlign: 'center',
-    fontSize: 11,
-    fontFamily: QFONT.x,
-    color: QUEST.greenD,
-    letterSpacing: 0.4,
-    marginBottom: 12,
-  },
-  hint: {
-    textAlign: 'center',
-    fontSize: 11,
-    fontFamily: QFONT.sb,
-    color: QUEST.muted,
-    marginTop: 10,
+    paddingHorizontal: 16,
+    paddingTop: 30,
   },
 });
 
