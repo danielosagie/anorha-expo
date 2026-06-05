@@ -14,6 +14,8 @@ const theme = {
     accent2: "#FF9900",
     background: '#FFFFFF',
     surface: '#F8F9FB',
+    card: '#FFFFFF', // elevated surface (cards, sheets) sitting on top of `surface`
+    border: '#E5E7EB', // subtle hairline border / divider
     text: '#333333',
     textSecondary: '#777777',
     success: '#28a745',

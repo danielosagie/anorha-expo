@@ -201,12 +201,12 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
     return (
         <Animated.View
             entering={SlideInDown.duration(300)}
-            style={[styles.container, { backgroundColor: theme.background }]}
+            style={[styles.container, { backgroundColor: theme.colors.background }]}
         >
             {/* Header */}
             <View style={styles.header}>
                 <View style={styles.sheetHeaderSpacer} />
-                <Text style={[styles.title, { flex: 1, color: theme.text }]}>Receipt Intake</Text>
+                <Text style={[styles.title, { flex: 1, color: theme.colors.text }]}>Receipt Intake</Text>
                 <TouchableOpacity onPress={onClose} style={styles.exitButton} activeOpacity={0.8} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                     <Icon name="close" size={18} color="#64748B" />
                     <Text style={styles.exitButtonText}>Exit</Text>
@@ -221,7 +221,7 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
                             style={[styles.progressFill, { width: `${jobStatus.progress}%` }]}
                         />
                     </View>
-                    <Text style={[styles.progressText, { color: theme.secondaryText }]}>
+                    <Text style={[styles.progressText, { color: theme.colors.textSecondary }]}>
                         {jobStatus.stage === 'parsing' ? '📄 Parsing receipt...' :
                             jobStatus.stage === 'matching' ? '🔍 Matching items...' :
                                 jobStatus.stage === 'reranking' ? '🎯 Verifying matches...' :
@@ -233,8 +233,8 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
             {/* Loading State */}
             {loading && (
                 <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color={theme.primary} />
-                    <Text style={[styles.loadingText, { color: theme.secondaryText }]}>
+                    <ActivityIndicator size="large" color={theme.colors.primary} />
+                    <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
                         Processing receipt...
                     </Text>
                 </View>
@@ -244,7 +244,7 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
             {error && (
                 <View style={styles.errorContainer}>
                     <Icon name="alert-circle" size={48} color="#f44336" />
-                    <Text style={[styles.errorText, { color: theme.text }]}>{error}</Text>
+                    <Text style={[styles.errorText, { color: theme.colors.text }]}>{error}</Text>
                     <TouchableOpacity style={styles.retryButton} onPress={fetchJobStatus}>
                         <Text style={styles.retryButtonText}>Retry</Text>
                     </TouchableOpacity>
@@ -257,7 +257,7 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
                     {/* Matched Items Section */}
                     {matchedItems.length > 0 && (
                         <>
-                            <Text style={[styles.sectionTitle, { color: theme.text }]}>
+                            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
                                 ✅ Matched Items ({matchedItems.length})
                             </Text>
                             {matchedItems.map((item, index) => (
@@ -266,7 +266,7 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
                                     entering={FadeInDown.delay(index * 30)}
                                     style={[
                                         styles.itemCard,
-                                        { backgroundColor: theme.card },
+                                        { backgroundColor: theme.colors.card },
                                         item.isSelected && styles.itemCardSelected,
                                     ]}
                                 >
@@ -277,31 +277,31 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
                                         <Icon
                                             name={item.isSelected ? 'checkbox-marked' : 'checkbox-blank-outline'}
                                             size={24}
-                                            color={item.isSelected ? '#4CAF50' : theme.secondaryText}
+                                            color={item.isSelected ? '#4CAF50' : theme.colors.textSecondary}
                                         />
                                     </TouchableOpacity>
 
                                     <View style={styles.itemContent}>
-                                        <Text style={[styles.itemName, { color: theme.text }]} numberOfLines={2}>
+                                        <Text style={[styles.itemName, { color: theme.colors.text }]} numberOfLines={2}>
                                             {item.matchedProduct?.title || item.parsedName}
                                         </Text>
-                                        <Text style={[styles.itemSubtext, { color: theme.secondaryText }]}>
+                                        <Text style={[styles.itemSubtext, { color: theme.colors.textSecondary }]}>
                                             From receipt: {item.parsedName}
                                         </Text>
 
                                         <View style={styles.qtyRow}>
-                                            <Text style={[styles.qtyLabel, { color: theme.secondaryText }]}>
+                                            <Text style={[styles.qtyLabel, { color: theme.colors.textSecondary }]}>
                                                 Current: {item.matchedProduct?.currentQuantity || 0}
                                             </Text>
                                             <Text style={[styles.qtyPlus, { color: '#4CAF50' }]}>+</Text>
                                             <TextInput
-                                                style={[styles.qtyInput, { color: theme.text, borderColor: theme.border }]}
+                                                style={[styles.qtyInput, { color: theme.colors.text, borderColor: theme.colors.border }]}
                                                 value={String(item.quantity)}
                                                 onChangeText={(t) => updateQuantity(item.id, parseInt(t) || 0)}
                                                 keyboardType="number-pad"
                                             />
-                                            <Text style={[styles.qtyEquals, { color: theme.text }]}>=</Text>
-                                            <Text style={[styles.qtyTotal, { color: theme.primary }]}>
+                                            <Text style={[styles.qtyEquals, { color: theme.colors.text }]}>=</Text>
+                                            <Text style={[styles.qtyTotal, { color: theme.colors.primary }]}>
                                                 {(item.matchedProduct?.currentQuantity || 0) + item.quantity}
                                             </Text>
                                         </View>
@@ -320,20 +320,20 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
                     {/* Unmatched Items Section */}
                     {unmatchedItems.length > 0 && (
                         <>
-                            <Text style={[styles.sectionTitle, { color: theme.text, marginTop: 20 }]}>
+                            <Text style={[styles.sectionTitle, { color: theme.colors.text, marginTop: 20 }]}>
                                 ❓ Unmatched Items ({unmatchedItems.length})
                             </Text>
                             {unmatchedItems.map((item, index) => (
                                 <Animated.View
                                     key={item.id}
                                     entering={FadeInDown.delay((matchedItems.length + index) * 30)}
-                                    style={[styles.itemCard, { backgroundColor: theme.card }]}
+                                    style={[styles.itemCard, { backgroundColor: theme.colors.card }]}
                                 >
                                     <View style={styles.itemContent}>
-                                        <Text style={[styles.itemName, { color: theme.text }]}>
+                                        <Text style={[styles.itemName, { color: theme.colors.text }]}>
                                             {item.parsedName}
                                         </Text>
-                                        <Text style={[styles.itemSubtext, { color: theme.secondaryText }]}>
+                                        <Text style={[styles.itemSubtext, { color: theme.colors.textSecondary }]}>
                                             Qty: {item.quantity} • No match found
                                         </Text>
 
@@ -366,12 +366,12 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
 
             {/* Bottom Action Bar */}
             {items.length > 0 && (
-                <View style={[styles.actionBar, { backgroundColor: theme.card, borderTopColor: theme.border }]}>
+                <View style={[styles.actionBar, { backgroundColor: theme.colors.card, borderTopColor: theme.colors.border }]}>
                     <View style={styles.summaryRow}>
-                        <Text style={[styles.summaryText, { color: theme.secondaryText }]}>
+                        <Text style={[styles.summaryText, { color: theme.colors.textSecondary }]}>
                             {selectedCount} items selected
                         </Text>
-                        <Text style={[styles.summaryText, { color: theme.secondaryText }]}>
+                        <Text style={[styles.summaryText, { color: theme.colors.textSecondary }]}>
                             {unmatchedItems.length} need attention
                         </Text>
                     </View>

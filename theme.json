@@ -6,6 +6,8 @@
     "accent2": "#FF9900",
     "background": "#FFFFFF",
     "surface": "#F8F9FB",
+    "card": "#FFFFFF",
+    "border": "#E5E7EB",
     "text": "#333333",
     "textSecondary": "#777777",
     "success": "#28a745",
