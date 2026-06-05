@@ -39,18 +39,19 @@ const ConnectedPlatformList: React.FC<ConnectedPlatformListProps> = ({
 }) => {
     const [currentPage, setCurrentPage] = useState(1);
 
-    if (connections.length === 0) {
-        return <Text style={styles.noConnectionsText}>No connections yet.</Text>;
-    }
-
     const totalPages = Math.ceil(connections.length / PAGE_SIZE);
 
-    // Ensure current page is valid if items change
+    // Ensure current page is valid if items change.
+    // (Declared before the early return below to satisfy rules-of-hooks.)
     React.useEffect(() => {
         if (currentPage > totalPages && totalPages > 0) {
             setCurrentPage(totalPages);
         }
     }, [connections.length, totalPages]);
+
+    if (connections.length === 0) {
+        return <Text style={styles.noConnectionsText}>No connections yet.</Text>;
+    }
 
     const startIndex = (currentPage - 1) * PAGE_SIZE;
     const visibleConnections = connections.slice(startIndex, startIndex + PAGE_SIZE);

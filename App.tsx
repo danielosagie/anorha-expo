@@ -91,8 +91,10 @@ const App: React.FC = () => {
     const { isLoaded: clerkLoaded, isSignedIn } = useAuth();
     const session = useContext(SessionContext);
 
-    // Use process resumption hook properly
-    const processResumption = ENABLE_PROCESS_FEATURES ? useProcessResumption() : null;
+    // Call the hook unconditionally (rules-of-hooks); it has no side effects
+    // until initializeProcessSystem() is invoked, so gating the *result* is safe.
+    const processResumptionApi = useProcessResumption();
+    const processResumption = ENABLE_PROCESS_FEATURES ? processResumptionApi : null;
     const hasAttemptedAutoResumeRef = useRef(false);
 
     const buildFallbackCompleteRoute = useCallback((processType: 'match' | 'generate' | 'match-and-generate', jobId: string) => {
