@@ -8,7 +8,7 @@ const getFontSize = (baseSize: number): number => Math.round(baseSize * fontScal
 // Colors based on your dashboard screenshot
 const theme = {
   colors: {
-    primary: '#8BB04F', // The teal/green from your chart
+    primary: '#93C822', // Canonical brand green (was #8BB04F; unified to the de-facto value used across the app)
     secondary: '#F17F5F', // The orange/salmon from Amazon bar
     accent: '#3CAD46', // Green from Clover
     accent2: "#FF9900",
