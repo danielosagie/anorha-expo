@@ -16,6 +16,7 @@ import { useTheme } from '../../context/ThemeContext';
 import Button from '../Button';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { showMessage } from 'react-native-flash-message';
+import { capture, AnalyticsEvents } from '../../lib/analytics';
 
 const ANORHA_GREEN = '#8cc63f';
 const NEUTRAL_GRAY = '#6B7280';
