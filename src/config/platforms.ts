@@ -33,7 +33,7 @@ const parseEnabledPlatforms = (): PlatformKey[] => {
 
   const tokens = raw
     .split(',')
-    .map((p) => p.trim().toLowerCase())
+    .map((p: string) => p.trim().toLowerCase())
     .filter(Boolean) as PlatformKey[];
 
   const valid = tokens.filter((p) =>
