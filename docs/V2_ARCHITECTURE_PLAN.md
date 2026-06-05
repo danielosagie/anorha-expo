@@ -187,9 +187,9 @@ Complements **Track F** (which is the LAST, whole-app module restructure). Track
 
 ### G.1b — Follow-up pass (delivered, after the quick-wins)
 - **Correctness:** the 5 `rules-of-hooks` bugs are fixed and the rule is promoted to `error`.
-- **TS burn-down:** `tsc` errors **163 → 51** (deleted more dead/broken files, annotated implicit-anys, added `@types/jest`).
-- **Palette decided → `#93C822`:** `theme.colors.primary` now points at the de-facto brand green (one-place change; the literal→token codemod still remains).
-- **Data layer:** one shared ref-counted `/collaboration` socket client (`src/lib/collaborationSocket.ts`); `useSyncProgress` + `useCollaboration` migrated (⚠️ needs device smoke-test; `PlatformConnectionsContext` still to migrate).
+- **TS burn-down:** `tsc` errors **163 → 43** (deleted dead/broken files, annotated implicit-anys, added `@types/jest`, fixed missing imports).
+- **Palette decided → `#93C822`:** `theme.colors.primary` points at the brand green, and the **color codemod is done** — 223 hardcoded brand-green literals across 58 files now reference `BRAND_PRIMARY` (`src/design/tokens.ts`), so a future palette change is one edit.
+- **Data layer:** one shared ref-counted `/collaboration` socket client (`src/lib/collaborationSocket.ts`); `useSyncProgress` + `useCollaboration` migrated (⚠️ needs device smoke-test; `PlatformConnectionsContext` still to migrate). Both job pollers now share `fetchGenerateJobStatus` (`src/lib/generateJobs.ts`) — code de-duplicated, though the two poll loops still run independently (single-loop = Track C).
 - **Convex 401 → fixed backend-side** via service-to-service auth (`sssync-bknd` PR #7: `SupabaseAuthGuard` PATH 0 + agent forwards Clerk identity behind `CONVEX_SERVICE_TOKEN`). Remaining frontend work: sync `convex/` codegen so `api.agentActions` resolves (the unused `useLiquidationAgent` still has 2 TS errors until then). See `sssync-bknd/convex/SERVICE_AUTH.md`.
 
 ### G.2 — Backlog (sequenced; remaining)
