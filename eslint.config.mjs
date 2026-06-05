@@ -25,10 +25,10 @@ export default [
     rules: {
       // --- Advisory rollout: downgrade Expo's error-level rules to warnings so
       // the build never breaks while the backlog is worked down. Promoting these
-      // back to "error" is a roadmap item (Track G). NOTE: react-hooks/rules-of-hooks
-      // flags 5 *real* conditional-hook bugs (App.tsx, AnimatedGradientBackground,
-      // ConnectedPlatformList) — fix those and promote this rule first.
-      'react-hooks/rules-of-hooks': 'warn',
+      // back to "error" is a roadmap item (Track G).
+      // rules-of-hooks is kept at "error" — the repo is clean and these are real
+      // correctness bugs (the original 5 conditional-hook violations are fixed).
+      'react-hooks/rules-of-hooks': 'error',
       'react/no-unescaped-entities': 'warn',
       'react/display-name': 'warn',
       'import/no-unresolved': 'warn',

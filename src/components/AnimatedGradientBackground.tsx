@@ -30,11 +30,6 @@ const AnimatedGradientBackground = React.memo((props: any) => {
   // Use this flag to disable animation on low-end devices
   const useStaticGradient = false;
 
-  // If static mode is enabled, render a simple non-animated gradient
-  if (useStaticGradient) {
-    return <StaticGradient />;
-  }
-
   const animation = useSharedValue(0);
 
   useEffect(() => {
@@ -66,6 +61,12 @@ const AnimatedGradientBackground = React.memo((props: any) => {
       transform: [{ translateY }]
     };
   });
+
+  // If static mode is enabled, render a simple non-animated gradient.
+  // (Hooks above are declared unconditionally to satisfy rules-of-hooks.)
+  if (useStaticGradient) {
+    return <StaticGradient />;
+  }
 
   return (
     <View style={[styles.container, props.style]}>
