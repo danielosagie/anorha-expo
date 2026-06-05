@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
     View,
     Text,
@@ -541,7 +542,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
                 ]}
             >
                 <View style={styles.recordingBar}>
-                    <ActivityIndicator size="small" color="#8BB04F" />
+                    <ActivityIndicator size="small" color={BRAND_PRIMARY} />
                     <Text style={styles.transcribingInlineText}>Turning your voice note into text…</Text>
                     <View style={{ width: 36 }} />
                 </View>
@@ -629,7 +630,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
                     <Ionicons
                         name="mic"
                         size={20}
-                        color={state === 'loading' ? '#9CA3AF' : (variant === 'inline' && isV2 ? '#FFFFFF' : '#8BB04F')}
+                        color={state === 'loading' ? '#9CA3AF' : (variant === 'inline' && isV2 ? '#FFFFFF' : BRAND_PRIMARY)}
                     />
                 </TouchableOpacity>
             </View>
@@ -646,7 +647,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
                                 style={styles.mentionItem}
                                 onPress={() => insertMention(item)}
                             >
-                                <Ionicons name="at" size={14} color="#8BB04F" />
+                                <Ionicons name="at" size={14} color={BRAND_PRIMARY} />
                                 <Text style={styles.mentionLabel}>{item.label}</Text>
                                 {item.platform && (
                                     <Text style={styles.mentionPlatform}>{item.platform}</Text>
@@ -856,7 +857,7 @@ const styles = StyleSheet.create({
         borderColor: '#E5E7EB',
     },
     chipText: {
-        color: '#8BB04F',
+        color: BRAND_PRIMARY,
         fontSize: 12,
         fontWeight: '600',
     },
@@ -941,7 +942,7 @@ const styles = StyleSheet.create({
         fontWeight: '500',
     },
     submitButton: {
-        backgroundColor: '#8BB04F',
+        backgroundColor: BRAND_PRIMARY,
         paddingVertical: 8,
         paddingHorizontal: 16,
         borderRadius: 20,
@@ -954,7 +955,7 @@ const styles = StyleSheet.create({
         minHeight: 54,
         borderRadius: 12,
         justifyContent: 'center',
-        backgroundColor: '#93C822',
+        backgroundColor: BRAND_PRIMARY,
         paddingHorizontal: 16,
     },
     submitDisabled: {
@@ -998,7 +999,7 @@ const styles = StyleSheet.create({
     },
     compactWaveBar: {
         width: 3,
-        backgroundColor: '#8BB04F',
+        backgroundColor: BRAND_PRIMARY,
         borderRadius: 1.5,
     },
     recordingTimer: {
@@ -1009,7 +1010,7 @@ const styles = StyleSheet.create({
     },
     recordingBarSubmit: {
         padding: 8,
-        backgroundColor: '#8BB04F',
+        backgroundColor: BRAND_PRIMARY,
         borderRadius: 20,
     },
 

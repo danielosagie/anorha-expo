@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
     View,
     Text,
@@ -110,7 +111,7 @@ const styles = StyleSheet.create({
         gap: 12,
     },
     button: {
-        backgroundColor: '#93C822', // Primary Green
+        backgroundColor: BRAND_PRIMARY, // Primary Green
         paddingVertical: 14,
         borderRadius: 12,
         alignItems: 'center',

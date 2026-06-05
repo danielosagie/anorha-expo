@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
     View,
     Text,
@@ -207,7 +208,7 @@ export default function PublishConfirmationModal({
                                                 <Icon
                                                     name={isPlatformSelected ? 'checkbox-marked' : 'checkbox-blank-outline'}
                                                     size={22}
-                                                    color={isPlatformSelected ? '#93C822' : '#9CA3AF'}
+                                                    color={isPlatformSelected ? BRAND_PRIMARY : '#9CA3AF'}
                                                     style={{ marginRight: 8 }}
                                                 />
                                                 <Icon name={meta.icon} size={18} color="#374151" style={{ marginRight: 8 }} />
@@ -225,7 +226,7 @@ export default function PublishConfirmationModal({
                                                         <Text style={[styles.optionText, allSelected && styles.optionTextSelected]}>
                                                             All Accounts ({connections.length})
                                                         </Text>
-                                                        {allSelected && <Icon name="check-circle" size={20} color="#93C822" />}
+                                                        {allSelected && <Icon name="check-circle" size={20} color={BRAND_PRIMARY} />}
                                                     </TouchableOpacity>
                                                 )}
 
@@ -240,7 +241,7 @@ export default function PublishConfirmationModal({
                                                             <Text style={[styles.optionText, isSelected && styles.optionTextSelected]}>
                                                                 {conn.DisplayName || conn.PlatformType}
                                                             </Text>
-                                                            {isSelected && <Icon name="check-circle" size={20} color="#93C822" />}
+                                                            {isSelected && <Icon name="check-circle" size={20} color={BRAND_PRIMARY} />}
                                                         </TouchableOpacity>
                                                     );
                                                 })}
@@ -441,11 +442,11 @@ const styles = StyleSheet.create({
     publishButton: {
         flex: 1,
         paddingVertical: 14,
-        backgroundColor: '#93C822',
+        backgroundColor: BRAND_PRIMARY,
         borderRadius: 12,
         alignItems: 'center',
         justifyContent: 'center',
-        shadowColor: "#93C822",
+        shadowColor: BRAND_PRIMARY,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
         shadowRadius: 8,

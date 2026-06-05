@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, TouchableOpacity, Image, StyleSheet, StyleProp, ViewStyle, TextInput } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -417,7 +418,7 @@ const styles = StyleSheet.create({
   },
   mainButton: {
     flexDirection: 'row',
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     paddingVertical: 18,
     paddingHorizontal: 30,
     borderRadius: 12,

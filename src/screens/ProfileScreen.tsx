@@ -1,4 +1,5 @@
 import React, { useState, useContext, useEffect, useCallback, useMemo } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput, Image, Linking, InteractionManager, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
 import Animated, { FadeInUp } from 'react-native-reanimated';
@@ -163,7 +164,7 @@ const CONNECTION_STATUS = {
 const getStatusDisplay = (status: string): { label: string, color: string, icon: string } => {
   switch (status?.toLowerCase()) {
     case CONNECTION_STATUS.ACTIVE:
-      return { label: 'Connected', color: '#93C822', icon: 'check-circle' };
+      return { label: 'Connected', color: BRAND_PRIMARY, icon: 'check-circle' };
     case CONNECTION_STATUS.INACTIVE:
       return { label: 'Inactive', color: '#8E8E93', icon: 'pause-circle' };
     case CONNECTION_STATUS.PENDING:
@@ -171,11 +172,11 @@ const getStatusDisplay = (status: string): { label: string, color: string, icon:
     case CONNECTION_STATUS.REVIEW:
       return { label: 'Review Products', color: '#FF9500', icon: 'sync-alert' };
     case CONNECTION_STATUS.READY_TO_SYNC:
-      return { label: 'Ready to Sync', color: '#93C822', icon: 'check-circle' };
+      return { label: 'Ready to Sync', color: BRAND_PRIMARY, icon: 'check-circle' };
     case CONNECTION_STATUS.SCANNING:
       return { label: 'Scanning...', color: '#5856D6', icon: 'loading' };
     case CONNECTION_STATUS.SYNCING:
-      return { label: 'Syncing...', color: '#93C822', icon: 'loading' };
+      return { label: 'Syncing...', color: BRAND_PRIMARY, icon: 'loading' };
     case CONNECTION_STATUS.RECONCILING:
       return { label: 'Reconciling...', color: '#5856D6', icon: 'loading' };
     case CONNECTION_STATUS.ERROR:
@@ -1675,7 +1676,7 @@ const ProfileScreen = () => {
 
       {item.badge ? (
         <View style={[styles.menuBadge, { backgroundColor: '#93C82220' }]}>
-          <Text style={[styles.menuBadgeText, { color: '#93C822' }]}>{item.badge}</Text>
+          <Text style={[styles.menuBadgeText, { color: BRAND_PRIMARY }]}>{item.badge}</Text>
         </View>
       ) : !item.customComponent && (
         <Icon name="chevron-right" size={20} color="#C7C7CC" />
@@ -1799,7 +1800,7 @@ const ProfileScreen = () => {
                   }}
                   style={{ marginTop: 8 }}
                 >
-                  <Text style={{ fontSize: 12, color: '#93C822', fontWeight: 'bold', textDecorationLine: 'underline' }}>
+                  <Text style={{ fontSize: 12, color: BRAND_PRIMARY, fontWeight: 'bold', textDecorationLine: 'underline' }}>
                     Switch to {availableOrgs.find(o => !o.name.includes('Workspace'))?.name || 'Real Org'}
                   </Text>
                 </TouchableOpacity>
@@ -1877,7 +1878,7 @@ const ProfileScreen = () => {
           </View>
 
           {isLoadingConnections ? (
-            <ActivityIndicator size="large" color={'#93C822'} style={{ marginVertical: 20 }} />
+            <ActivityIndicator size="large" color={BRAND_PRIMARY} style={{ marginVertical: 20 }} />
           ) : (
             <View style={styles.integrationsContainer}>
               {(() => {
@@ -2005,7 +2006,7 @@ const ProfileScreen = () => {
                     {devBundleLoading ? 'Preparing Dev Bundle...' : 'Copy Dev Bundle'}
                   </Text>
                 </View>
-                {devBundleLoading && <ActivityIndicator size="small" color="#93C822" />}
+                {devBundleLoading && <ActivityIndicator size="small" color={BRAND_PRIMARY} />}
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.menuItem} onPress={logCurrentUserToken}>
@@ -2154,7 +2155,7 @@ const ProfileScreen = () => {
               {/* Option 1: Guided Setup */}
               <View style={styles.shopifyOption}>
                 <View style={styles.shopifyOptionHeader}>
-                  <View style={[styles.stepNumber, { backgroundColor: '#93C822' }]}>
+                  <View style={[styles.stepNumber, { backgroundColor: BRAND_PRIMARY }]}>
                     <Text style={styles.stepNumberText}>1</Text>
                   </View>
                   <Text style={styles.shopifyOptionTitle}>Guided Setup (Recommended)</Text>
@@ -2188,7 +2189,7 @@ const ProfileScreen = () => {
                     onPress={handlePasteFromClipboard}
                     style={styles.shopifyPasteButton}
                   >
-                    <Icon name="content-paste" size={20} color={'#93C822'} />
+                    <Icon name="content-paste" size={20} color={BRAND_PRIMARY} />
                   </TouchableOpacity>
                 </View>
               </View>
@@ -2348,7 +2349,7 @@ const ProfileScreen = () => {
             This action is permanent and cannot be undone. All your data will be lost.
           </Text>
           <TouchableOpacity onPress={() => navigation.getParent()?.navigate('DeleteAccountInfo')} style={{ marginBottom: 20 }}>
-            <Text style={{ fontSize: 14, color: '#93C822', fontWeight: '500' }}>Learn more about account and data deletion</Text>
+            <Text style={{ fontSize: 14, color: BRAND_PRIMARY, fontWeight: '500' }}>Learn more about account and data deletion</Text>
           </TouchableOpacity>
 
           {/* Reason Dropdown */}

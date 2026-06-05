@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, AccessibilityRole } from 'react-native';
-import { tokens } from '../../design/tokens';
+import { tokens, BRAND_PRIMARY} from '../../design/tokens';
 
 export type TabKey = string | number;
 
@@ -73,9 +73,9 @@ const styles = StyleSheet.create({
   },
   tabActive: {
     backgroundColor: '#EEFCE0',
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
   },
-  tabActiveSuccess: { backgroundColor: '#EEFCE0', borderColor: '#93C822' },
+  tabActiveSuccess: { backgroundColor: '#EEFCE0', borderColor: BRAND_PRIMARY },
   tabActiveWarning: { backgroundColor: '#FFFBEB', borderColor: '#FCD34D' },
   tabActiveDanger: { backgroundColor: '#FEF2F2', borderColor: '#FECACA' },
   tabDisabled: {

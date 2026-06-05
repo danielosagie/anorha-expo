@@ -2,6 +2,11 @@
 // Primitive tokens (do not depend on theme)
 import { Platform } from 'react-native';
 
+// Canonical brand green. Single source for the hardcoded literal so a palette
+// change is one edit. Mirrors theme.colors.primary; safe to import in static
+// StyleSheet.create blocks (unlike the useTheme() hook value).
+export const BRAND_PRIMARY = '#93C822';
+
 export const spacing = {
   xxs: 2,
   xs: 4,

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
   View,
   Text,
@@ -369,7 +370,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#93C822" />
+          <ActivityIndicator size="large" color={BRAND_PRIMARY} />
           <Text style={[styles.loadingText, { color: theme.colors.text }]}>Loading product...</Text>
         </View>
       </View>
@@ -945,7 +946,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   locationButtonActive: {
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
   },
   locationButtonText: {
     fontSize: 12,
@@ -1022,7 +1023,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 14,
     borderRadius: 10,
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     gap: 8,
   },
   saveButtonDisabled: {

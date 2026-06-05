@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { BaseModal } from './BaseModal';
@@ -87,13 +88,13 @@ const styles = StyleSheet.create({
         marginBottom: 32,
     },
     connectButton: {
-        backgroundColor: '#93C822',
+        backgroundColor: BRAND_PRIMARY,
         paddingVertical: 16,
         paddingHorizontal: 32,
         borderRadius: 12,
         width: '100%',
         alignItems: 'center',
-        shadowColor: '#93C822',
+        shadowColor: BRAND_PRIMARY,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
         shadowRadius: 8,

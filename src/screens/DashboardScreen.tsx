@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useEffect, useContext, useCallback, useRef } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, Dimensions, Image, Modal, Pressable, Platform, type DimensionValue } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import AppPagerView from '../components/AppPagerView';
@@ -1016,7 +1017,7 @@ const DashboardScreen = () => {
       <View style={styles.fullScreenContainer}>
         <View style={styles.greenHeader} />
         <View style={[styles.container, styles.loadingContainer]}>
-          <ActivityIndicator size="large" color="#93C822" />
+          <ActivityIndicator size="large" color={BRAND_PRIMARY} />
           <Text style={styles.loadingText}>Loading your dashboard...</Text>
         </View>
       </View>
@@ -1391,7 +1392,7 @@ const DashboardScreen = () => {
           >
             <View style={styles.bannerContent}>
               <View style={styles.bannerIcon}>
-                <Icon name="check-circle" size={24} color="#93C822" />
+                <Icon name="check-circle" size={24} color={BRAND_PRIMARY} />
               </View>
               <View style={styles.bannerTextContainer}>
                 <Text style={styles.bannerTitle}>Mappings Ready</Text>
@@ -2256,7 +2257,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   bannerButton: {
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 8,

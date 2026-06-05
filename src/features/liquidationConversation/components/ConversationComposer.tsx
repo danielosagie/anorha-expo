@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../../../design/tokens';
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
@@ -105,7 +106,7 @@ const styles = StyleSheet.create({
     borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
   },
   sendButtonDisabled: {
     backgroundColor: '#D1D5DB',

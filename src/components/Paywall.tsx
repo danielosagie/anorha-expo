@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
   View,
   Text,
@@ -37,7 +38,7 @@ const Paywall: React.FC<PaywallProps> = ({
   const theme = useTheme();
   const themeColors = theme?.colors ?? { text: '#333333', textSecondary: '#777777' };
 
-  const ANORHA_GREEN = '#93C822';
+  const ANORHA_GREEN = BRAND_PRIMARY;
   const WHITE_BG = '#FFFFFF';
 
   const getTitle = () => {
@@ -315,7 +316,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   upgradeButton: {
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
   },
   maybeLaterButton: {
     alignItems: 'center',

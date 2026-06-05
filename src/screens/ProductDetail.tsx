@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, Switch, FlatList, Animated, Easing } from 'react-native';
 import { ChevronLeft, ChevronRight, Copy, Check, Info, Box, AlertTriangle, X } from 'lucide-react-native';
 import BaseModal from '../components/BaseModal';
@@ -3639,7 +3640,7 @@ const ProductDetailScreen = observer(
                 styles.notificationBanner,
                 {
                   opacity: bannerOpacity,
-                  backgroundColor: bannerClickable ? '#93C822' + 'E6' : theme.colors.primary + 'E6', // Green for clickable
+                  backgroundColor: bannerClickable ? BRAND_PRIMARY + 'E6' : theme.colors.primary + 'E6', // Green for clickable
                 }
               ]}
             >
@@ -3885,16 +3886,16 @@ const ProductDetailScreen = observer(
                                 {Logo ? (
                                   <Logo width={18} height={18} />
                                 ) : (
-                                  <Icon name="store" size={18} color={'#93C822'} />
+                                  <Icon name="store" size={18} color={BRAND_PRIMARY} />
                                 )}
                               </View>
                               <View style={styles.platformDetails}>
                                 <Text style={[styles.platformName, { color: theme.colors.text }]}>{platformLabel}</Text>
-                                <Text style={{ fontSize: 12, color: '#93C822' }}>Ready to publish</Text>
+                                <Text style={{ fontSize: 12, color: BRAND_PRIMARY }}>Ready to publish</Text>
                               </View>
                             </View>
                             <TouchableOpacity
-                              style={[styles.syncButton, { backgroundColor: '#93C822', paddingHorizontal: 16, paddingVertical: 8 }]}
+                              style={[styles.syncButton, { backgroundColor: BRAND_PRIMARY, paddingHorizontal: 16, paddingVertical: 8 }]}
                               onPress={() => handlePublishToPlatform(platform)}
                               disabled={isCurrentlyPublishing}
                             >
@@ -3936,13 +3937,13 @@ const ProductDetailScreen = observer(
                           >
                             <View style={styles.platformInfo}>
                               <View style={styles.platformLogoContainer}>
-                                <Icon name="account-group-outline" size={18} color={partnership.isShared ? '#93C822' : '#FFF'} />
+                                <Icon name="account-group-outline" size={18} color={partnership.isShared ? BRAND_PRIMARY : '#FFF'} />
                               </View>
                               <View style={styles.platformDetails}>
                                 <Text style={[styles.platformName, { color: theme.colors.text }]} numberOfLines={1}>
                                   {partnership.partnerOrgName}
                                 </Text>
-                                <Text style={{ fontSize: 12, color: partnership.isShared ? '#93C822' : theme.colors.textSecondary }}>
+                                <Text style={{ fontSize: 12, color: partnership.isShared ? BRAND_PRIMARY : theme.colors.textSecondary }}>
                                   {partnership.isShared ? 'Shared' : 'Not shared'} • {partnership.poolName}
                                 </Text>
                               </View>
@@ -3961,13 +3962,13 @@ const ProductDetailScreen = observer(
                                 </TouchableOpacity>
                               ) : (
                                 <View style={[styles.delistButton, { backgroundColor: '#E0E7FF', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6 }]}>
-                                  <Icon name="check" size={14} color="#93C822" style={{ marginRight: 4 }} />
+                                  <Icon name="check" size={14} color={BRAND_PRIMARY} style={{ marginRight: 4 }} />
                                   <Text style={{ color: '#ffffffff', fontWeight: '500', fontSize: 13 }}>Shared</Text>
                                 </View>
                               )
                             ) : (
                               <TouchableOpacity
-                                style={[styles.syncButton, { backgroundColor: '#93C822', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6 }]}
+                                style={[styles.syncButton, { backgroundColor: BRAND_PRIMARY, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6 }]}
                                 onPress={() => shareWithPartner(partnership.inviteId)}
                               >
                                 <Icon name="share-variant-outline" size={14} color="#fff" style={{ marginRight: 4 }} />

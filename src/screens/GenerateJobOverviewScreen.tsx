@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import { StackScreenProps } from '@react-navigation/stack';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -138,7 +139,7 @@ const GenerateJobOverviewScreen: React.FC<Props> = ({ route, navigation }) => {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#93C822" />
+        <ActivityIndicator size="large" color={BRAND_PRIMARY} />
         <Text style={styles.loadingText}>Loading workflow overview...</Text>
       </View>
     );
@@ -302,7 +303,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   actionButton: {
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: 'center',

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
   View,
   Text,
@@ -4097,7 +4098,7 @@ const CenterOverlay: React.FC<{
               <Text style={styles.centerOverlayMatchSubtitle} numberOfLines={1}>{matchPreview.subtitle}</Text>
             </View>
             <View style={styles.centerOverlayChevron}>
-              <Icon name={matchPreview.isConfirmed ? 'check-circle' : 'chevron-right-circle'} size={20} color={matchPreview.isConfirmed ? '#93C822' : '#CBD5E1'} />
+              <Icon name={matchPreview.isConfirmed ? 'check-circle' : 'chevron-right-circle'} size={20} color={matchPreview.isConfirmed ? BRAND_PRIMARY : '#CBD5E1'} />
             </View>
           </Animated.View>
         </TouchableOpacity>
@@ -5320,7 +5321,7 @@ const BulkItemsSheet: React.FC<{
 
         {/* New Item button
         <TouchableOpacity style={styles.headerNewItemButton} onPress={onAddNewItem}>
-          <Icon name="plus" size={20} color="#93C822" />
+          <Icon name="plus" size={20} color={BRAND_PRIMARY} />
         </TouchableOpacity>
          */}
         </View>
@@ -5493,7 +5494,7 @@ const BulkItemsSheet: React.FC<{
                               Item {id + 1}
                             </Text>
                             {item.quantity != null && item.quantity > 1 && (
-                              <View style={{ backgroundColor: '#93C822', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 }}>
+                              <View style={{ backgroundColor: BRAND_PRIMARY, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 }}>
                                 <Text style={{ fontSize: 11, color: 'white', fontWeight: '600' }}>x{item.quantity}</Text>
                               </View>
                             )}
@@ -5507,7 +5508,7 @@ const BulkItemsSheet: React.FC<{
                             <View style={styles.loadingBadge}>
                               <UnicodeSpinner
                                 spinner={(spinners.braillewave || spinners.dots) as UnicodeSpinnerDefinition}
-                                color="#93C822"
+                                color={BRAND_PRIMARY}
                                 size={12}
                               />
                               <Text style={styles.loadingBadgeText}>{loadingState.stage}</Text>
@@ -5726,7 +5727,7 @@ const BulkItemsSheet: React.FC<{
             <TouchableOpacity
               style={[
                 styles.searchForProductButton,
-                { backgroundColor: hasLoadingItems || (cameraMode !== 'shelf' && totalItems === 0) ? '#A3A3A3' : '#93C822' },
+                { backgroundColor: hasLoadingItems || (cameraMode !== 'shelf' && totalItems === 0) ? '#A3A3A3' : BRAND_PRIMARY },
               ]}
               disabled={hasLoadingItems || (cameraMode !== 'shelf' && totalItems === 0)}
               onPress={() => {
@@ -5809,9 +5810,9 @@ const styles = StyleSheet.create({
   },
   activeItemIndicator: {
     width: 72,
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderWidth: 2,
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
     borderRadius: 12,
     paddingHorizontal: 8,
     paddingVertical: 5,
@@ -6186,7 +6187,7 @@ const styles = StyleSheet.create({
   },
   modePopupIconContainerActive: {
     borderColor: '#fff',
-    backgroundColor: '#93C822', // Anorha green for active icon
+    backgroundColor: BRAND_PRIMARY, // Anorha green for active icon
   },
   modePopupArrow: {
     width: 0,
@@ -6253,7 +6254,7 @@ const styles = StyleSheet.create({
     borderRadius: 7,
     backgroundColor: '#FFFFFF',
     borderWidth: 2,
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
   },
   itemNavArrowDisabled: {
     opacity: 0.4,
@@ -6264,7 +6265,7 @@ const styles = StyleSheet.create({
   continueButton: {
     flex: 1,
     marginHorizontal: 12,
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderRadius: 22,
     paddingVertical: 14,
     flexDirection: 'row',
@@ -6372,7 +6373,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     paddingHorizontal: 16,
     borderRadius: 25,
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     gap: 8,
   },
   listProductButtonDisabled: {
@@ -6405,7 +6406,7 @@ const styles = StyleSheet.create({
     minHeight: 120,
   },
   matchCardSelected: {
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
     backgroundColor: 'rgba(147, 200, 34, 0.08)',
   },
   matchImage: {
@@ -6454,7 +6455,7 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     alignItems: 'center',
     justifyContent: 'center',
     ...Platform.select({
@@ -6512,7 +6513,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   primaryButton: {
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderRadius: 12,
     paddingVertical: 15,
     alignItems: 'center',
@@ -6618,7 +6619,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   quickMatchesButtonText: {
-    color: '#93C822',
+    color: BRAND_PRIMARY,
     fontSize: 13,
     fontWeight: '600',
   },
@@ -6626,7 +6627,7 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
   },
   photoAttachments: {
     borderTopWidth: 1,
@@ -6811,7 +6812,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   searchForProductButton: {
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderRadius: 12,
     paddingVertical: 16,
     marginBottom: 10,
@@ -6871,16 +6872,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   activeItemContainer: {
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
     borderWidth: 2,
     backgroundColor: '#f8fff8',
   },
   activeItemLabel: {
-    color: '#93C822',
+    color: BRAND_PRIMARY,
     fontWeight: '700',
   },
   activeItemBadge: {
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderRadius: 8,
     paddingHorizontal: 6,
     paddingVertical: 2,
@@ -6893,7 +6894,7 @@ const styles = StyleSheet.create({
   },
   loadingBadge: {
     backgroundColor: '#f0f8ff',
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
     borderWidth: 1,
     borderRadius: 8,
     paddingHorizontal: 6,
@@ -6903,7 +6904,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   loadingBadgeText: {
-    color: '#93C822',
+    color: BRAND_PRIMARY,
     fontSize: 10,
     fontWeight: '600',
     marginLeft: 4,
@@ -7118,11 +7119,11 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   coverPhotoSlot: {
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
     borderWidth: 2,
   },
   coverPhotoLabel: {
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
   },
   addPhotoText: {
     fontSize: 12,
@@ -7164,7 +7165,7 @@ const styles = StyleSheet.create({
   },
   progressBarFill: {
     height: '100%',
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderRadius: 2,
   },
   progressSpinner: {
@@ -7225,7 +7226,7 @@ const styles = StyleSheet.create({
     marginBottom: 30,
   },
   permissionButton: {
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderRadius: 25,
     paddingHorizontal: 30,
     paddingVertical: 15,
@@ -7350,7 +7351,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   loadingText: {
-    color: '#93C822',
+    color: BRAND_PRIMARY,
     fontSize: 16,
     fontWeight: '600',
     marginTop: 10,
