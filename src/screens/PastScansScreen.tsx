@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Image } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useNavigation } from '@react-navigation/native';
@@ -695,7 +696,7 @@ const styles = StyleSheet.create({
     width: '31%',
   },
   activeTab: {
-    backgroundColor: '#93C822', // theme.colors.primary
+    backgroundColor: BRAND_PRIMARY, // theme.colors.primary
   },
   tabText: {
     fontWeight: '600',

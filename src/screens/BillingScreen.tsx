@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
   View,
   Text,
@@ -29,7 +30,7 @@ const API_BASE = API_BASE_RAW.replace(/\/$/, '').endsWith('/api')
   ? API_BASE_RAW.replace(/\/$/, '')
   : `${API_BASE_RAW.replace(/\/$/, '')}/api`;
 
-const ANORHA_GREEN = '#93C822';
+const ANORHA_GREEN = BRAND_PRIMARY;
 const CREAM_BG = '#FEF4DD'; // Deprecated, using #ffffff natively
 const WHITE_BG = '#FFFFFF';
 

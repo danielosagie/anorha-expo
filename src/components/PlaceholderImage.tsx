@@ -121,7 +121,7 @@ const PlaceholderImage: React.FC<PlaceholderImageProps> = ({
 };
 
 // Helper function to adjust color brightness
-const adjustColor = (color, amount) => {
+const adjustColor = (color: string, amount: number) => {
   // Handle hex colors
   if (color.startsWith('#')) {
     const hex = color.slice(1);

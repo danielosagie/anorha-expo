@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { BRAND_PRIMARY } from '../../../design/tokens';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Markdown from 'react-native-markdown-display';
@@ -325,7 +326,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   cursor: {
-    color: '#93C822',
+    color: BRAND_PRIMARY,
   },
   decisionCard: {
     marginTop: 12,
@@ -360,7 +361,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   decisionPrimary: {
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
     backgroundColor: 'rgba(147,200,34,0.12)',
   },
   decisionPrimaryText: {

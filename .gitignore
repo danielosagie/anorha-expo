@@ -1,38 +1,47 @@
-node_modules
-package-lock.json
+# Dependencies
+node_modules/
+
+# Native build dirs (managed by Expo prebuild / EAS)
 android/
 ios/
-dist/
-/node_modules
-node_modules/
-env.local
-ANTI_PATTERNS_FOUND.md
-LISTING_EDITOR_ARCHITECTURE_REVIEW.md
-PHASE_1_IMPLEMENTATION.md
-.env.local
-.env.local
-FRONTEND_SYNC_LESSON.md
-HOOKS_COMPARISON.md
-QUICK_REFERENCE.md
-REACT_TYPESCRIPT_FUNDAMENTALS.md
-SPREAD_OPERATOR_GUIDE.md
-FIX_BARCODE_INVENTORY.md
-formatting.js
-formatting.js
-formatting.js
-*.local
-.env
-.env.local
 
-# Build artifacts (do not commit — they bloat the repo permanently)
+# Web / build output (do not commit — bloats the repo permanently)
+dist/
 *.ipa
 *.aab
 *.apk
 
-# Secrets — service-account / credential files must never be committed
+# Env / secrets — never commit
+.env
+.env.local
+*.local
+env.local
+
+# Service-account / credential files
 anorha-*.json
 *-service-account*.json
 *.keystore
 *.p8
 *.p12
 *.mobileprovision
+
+# OS / editor cruft
+.DS_Store
+**/.DS_Store
+
+# Generated diagnostics (regenerate locally, do not commit)
+ts_errors.txt
+
+# Scratch / sample data (kept local, not source)
+formatting.js
+
+# Historical review docs — intentionally kept out of the repo (do not un-hide silently)
+ANTI_PATTERNS_FOUND.md
+LISTING_EDITOR_ARCHITECTURE_REVIEW.md
+PHASE_1_IMPLEMENTATION.md
+FRONTEND_SYNC_LESSON.md
+HOOKS_COMPARISON.md
+QUICK_REFERENCE.md
+REACT_TYPESCRIPT_FUNDAMENTALS.md
+SPREAD_OPERATOR_GUIDE.md
+FIX_BARCODE_INVENTORY.md

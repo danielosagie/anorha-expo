@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, TouchableWithoutFeedback, Alert } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Progress from 'react-native-progress';
@@ -78,7 +79,7 @@ const getPlatformIcon = (platformId: string): React.ComponentType<any> | null =>
 const getStatusDisplay = (status: string): { label: string, color: string, icon: string } => {
     switch (status?.toLowerCase()) {
         case CONNECTION_STATUS.ACTIVE:
-            return { label: 'Connected', color: '#93C822', icon: 'check-circle' };
+            return { label: 'Connected', color: BRAND_PRIMARY, icon: 'check-circle' };
         case CONNECTION_STATUS.INACTIVE:
             return { label: 'Inactive', color: '#8E8E93', icon: 'pause-circle' };
         case CONNECTION_STATUS.PENDING:
@@ -86,11 +87,11 @@ const getStatusDisplay = (status: string): { label: string, color: string, icon:
         case CONNECTION_STATUS.REVIEW:
             return { label: 'Review Products', color: '#FF9500', icon: 'sync-alert' };
         case CONNECTION_STATUS.READY_TO_SYNC:
-            return { label: 'Ready to Sync', color: '#93C822', icon: 'check-circle' };
+            return { label: 'Ready to Sync', color: BRAND_PRIMARY, icon: 'check-circle' };
         case CONNECTION_STATUS.SCANNING:
             return { label: 'Scanning...', color: '#5856D6', icon: 'loading' };
         case CONNECTION_STATUS.SYNCING:
-            return { label: 'Syncing...', color: '#93C822', icon: 'loading' };
+            return { label: 'Syncing...', color: BRAND_PRIMARY, icon: 'loading' };
         case CONNECTION_STATUS.RECONCILING:
             return { label: 'Reconciling...', color: '#5856D6', icon: 'loading' };
         case CONNECTION_STATUS.ERROR:
@@ -427,7 +428,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                                     disabled={isExporting}
                                 >
                                     <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#F0FDF4', alignItems: 'center', justifyContent: 'center' }}>
-                                        {isExporting ? <ActivityIndicator size="small" color="#93C822" /> : <Icon name="cloud-download" size={24} color="#93C822" />}
+                                        {isExporting ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Icon name="cloud-download" size={24} color={BRAND_PRIMARY} />}
                                     </View>
                                     <View>
                                         <Text style={{ fontSize: 16, fontWeight: '600', color: theme.colors.text }}>{isExporting ? 'Exporting...' : 'Export Inventory'}</Text>

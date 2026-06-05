@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Platform } from 'react-native';
 import { CloudDownload, Settings } from 'lucide-react-native';
 import { documentDirectory, writeAsStringAsync, EncodingType } from 'expo-file-system';
@@ -106,14 +107,14 @@ const styles = StyleSheet.create({
     primaryBtn: {
         flexDirection: 'row',
         gap: 8,
-        backgroundColor: '#93C822',
+        backgroundColor: BRAND_PRIMARY,
         borderRadius: 12,
         paddingVertical: 16,
         alignItems: 'center',
         justifyContent: 'center',
         width: '100%',
         // Subtle shadow for primary button
-        shadowColor: '#93C822',
+        shadowColor: BRAND_PRIMARY,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.2,
         shadowRadius: 8,

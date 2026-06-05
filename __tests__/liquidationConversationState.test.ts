@@ -65,8 +65,8 @@ test('queued sends during streaming keep both pending turns in order', () => {
   });
 
   const next = enqueueTurn(first, secondQueue, secondMessage);
-  assert.deepEqual(next.pendingQueue.map(item => item.clientMessageId), ['msg-1', 'msg-2']);
-  assert.deepEqual(next.messages.map(item => item.content), ['First', 'Second']);
+  assert.deepEqual(next.pendingQueue.map((item: any) => item.clientMessageId), ['msg-1', 'msg-2']);
+  assert.deepEqual(next.messages.map((item: any) => item.content), ['First', 'Second']);
 });
 
 test('retryFailedTurn re-queues a failed message', () => {
@@ -95,8 +95,8 @@ test('mergeRemoteMessages keeps unsent local messages while hydrating remote his
 
   const merged = mergeRemoteMessages(localState.messages, [remoteMessage]);
   assert.equal(merged.length, 2);
-  assert.ok(merged.some(message => message.id === 'msg-local'));
-  assert.ok(merged.some(message => message.id === 'server-1'));
+  assert.ok(merged.some((message: any) => message.id === 'msg-local'));
+  assert.ok(merged.some((message: any) => message.id === 'server-1'));
 });
 
 test('acknowledgeMessage reconciles optimistic user bubble with server id', () => {

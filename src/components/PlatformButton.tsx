@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { TouchableOpacity, StyleSheet, Text, View, ActivityIndicator } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import ShopifySvg from '../assets/shopify.svg';
@@ -58,7 +59,7 @@ const PlatformButton = ({ platform, onPress, isSelected, isConnected = false, lo
     if (success) {
         // Wrap in gradient to simulate gradient border
         return (
-            <LinearGradient colors={["#93C822", "#FFD700"]} start={{x:0,y:0}} end={{x:1,y:1}} style={styles.gradientWrap}>
+            <LinearGradient colors={[BRAND_PRIMARY, "#FFD700"]} start={{x:0,y:0}} end={{x:1,y:1}} style={styles.gradientWrap}>
                 {content}
             </LinearGradient>
         );
@@ -86,7 +87,7 @@ const styles = StyleSheet.create({
     },
     platformButtonSelected: {
         backgroundColor: 'rgba(147, 200, 34, 0.1)',
-        borderColor: '#93C822',
+        borderColor: BRAND_PRIMARY,
         borderWidth: 2,
         borderRadius: 8,
         // Keep same size - don't change width/height
@@ -113,7 +114,7 @@ const styles = StyleSheet.create({
         minWidth: 20,
         height: 20,
         paddingHorizontal: 6,
-        backgroundColor: '#93C822',
+        backgroundColor: BRAND_PRIMARY,
         borderRadius: 10,
         alignItems: 'center',
         justifyContent: 'center',

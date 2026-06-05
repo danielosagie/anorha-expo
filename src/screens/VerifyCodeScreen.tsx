@@ -1,4 +1,5 @@
 import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Animated } from 'react-native';
 import { useSignUp, useSignIn, useAuth } from '@clerk/clerk-expo';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -386,7 +387,7 @@ const styles = StyleSheet.create({
     borderColor: '#e8ebe5',
   },
   cellFilled: {
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
     backgroundColor: '#f8fbf2',
   },
   cellError: {

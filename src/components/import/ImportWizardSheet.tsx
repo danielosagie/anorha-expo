@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../../design/tokens';
 import {
   View,
   Text,
@@ -564,7 +565,7 @@ export function ImportWizardSheet({
               {/* Step 6 - Review & Complete */}
               {wizardStep === 6 && (
                 <View style={{ paddingTop: 20 }}>
-                  <View style={{ backgroundColor: '#F0F9EB', borderRadius: 12, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: '#93C822' }}>
+                  <View style={{ backgroundColor: '#F0F9EB', borderRadius: 12, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: BRAND_PRIMARY }}>
                     <Text style={{ fontWeight: '700', color: '#4A6C1C', marginBottom: 8 }}>What will happen:</Text>
                     <Text style={{ color: '#5B8325', fontSize: 14, lineHeight: 22 }}>
                       {productCreationMode === 'sync_everywhere'

@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
   View,
   Text,
@@ -362,7 +363,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F2F2F7',
   },
   submitBtn: {
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',

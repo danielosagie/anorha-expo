@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -125,7 +126,7 @@ const styles = StyleSheet.create({
   primaryBtn: {
     flexDirection: 'row',
     gap: 8,
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
@@ -150,7 +151,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   stepArrowBtn: {
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderRadius: 10,
     padding: 12,
     alignItems: 'center',
@@ -161,7 +162,7 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     gap: 8,
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',

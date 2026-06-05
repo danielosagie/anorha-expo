@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { ensureSupabaseJwt } from '../lib/supabase';
 
 interface DraftData {
   // Define draft structure

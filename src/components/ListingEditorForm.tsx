@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle, useRef, useCallback } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Modal, Pressable, FlatList, SectionList, Alert, ActivityIndicator, Dimensions, Linking, Platform } from 'react-native';
 import { ScrollView as ScrollViewHorizontal } from 'react-native-gesture-handler';
 import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
@@ -281,8 +282,8 @@ const StickyActionBar = ({ onSave, onPublish }: { onSave?: () => void, onPublish
       </TouchableOpacity>
       <View style={{ height: 20, width: 1, backgroundColor: '#E5E7EB' }} />
       <TouchableOpacity onPress={onPublish} style={{ padding: 10, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-        <Text style={{ fontWeight: '700', color: '#93C822' }}>Publish Now</Text>
-        <Icon name="arrow-right" size={16} color="#93C822" />
+        <Text style={{ fontWeight: '700', color: BRAND_PRIMARY }}>Publish Now</Text>
+        <Icon name="arrow-right" size={16} color={BRAND_PRIMARY} />
       </TouchableOpacity>
     </View>
   )
@@ -316,7 +317,7 @@ const ModernInput = ({
     <View style={{ marginBottom: 16 }}>
       <Text style={[
         styles.fieldLabel,
-        isFocused && { color: '#93C822' } // Brand color on focus
+        isFocused && { color: BRAND_PRIMARY } // Brand color on focus
       ]}>
         {label}
       </Text>
@@ -328,7 +329,7 @@ const ModernInput = ({
       ]}>
         {IconComp && (
           <View style={{ marginRight: 10 }}>
-            <IconComp size={18} color={isFocused ? '#93C822' : '#9CA3AF'} />
+            <IconComp size={18} color={isFocused ? BRAND_PRIMARY : '#9CA3AF'} />
           </View>
         )}
         <TextInput
@@ -1777,7 +1778,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               {!generatingPlatforms.has(key) && (
                 isReady ? (
                   <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: '#dcfce7', alignItems: 'center', justifyContent: 'center', marginLeft: 2 }}>
-                    <Icon name="check" size={10} color="#93C822" />
+                    <Icon name="check" size={10} color={BRAND_PRIMARY} />
                   </View>
                 ) : missingCount > 0 ? (
                   <View style={{ height: 16, minWidth: 16, paddingHorizontal: 4, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center', marginLeft: 2 }}>
@@ -1846,7 +1847,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 <Text style={styles.fieldLabel}>Category{categoryRequired ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
                 {typeof activeData.taxonomyConfidence === 'number' && activeData.taxonomyConfidence >= 0.5 && (
                   <View style={{ backgroundColor: activeData.taxonomyConfidence > 0.8 ? 'rgba(147, 200, 34, 0.12)' : 'rgba(234, 179, 8, 0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-                    <Text style={{ color: activeData.taxonomyConfidence > 0.8 ? '#93C822' : '#ca8a04', fontSize: 10, fontWeight: '600' }}>
+                    <Text style={{ color: activeData.taxonomyConfidence > 0.8 ? BRAND_PRIMARY : '#ca8a04', fontSize: 10, fontWeight: '600' }}>
                       {['llm', 'groq', 'tree', 'rerank'].includes(activeData.taxonomySource || '') ? '✨ AI Match' : 'Suggested'} {Math.round(activeData.taxonomyConfidence * 100)}%
                     </Text>
                   </View>
@@ -1860,11 +1861,11 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
                 >
                   {taxonomyLoading[activePlatformKeyLower] ? (
-                    <ActivityIndicator size="small" color="#93C822" />
+                    <ActivityIndicator size="small" color={BRAND_PRIMARY} />
                   ) : (
-                    <Sparkles size={14} color="#93C822" />
+                    <Sparkles size={14} color={BRAND_PRIMARY} />
                   )}
-                  <Text style={{ color: '#93C822', fontSize: 13, fontWeight: '600' }}>
+                  <Text style={{ color: BRAND_PRIMARY, fontSize: 13, fontWeight: '600' }}>
                     {taxonomyLoading[activePlatformKeyLower] ? 'Finding...' : 'Auto-Find'}
                   </Text>
                 </TouchableOpacity>
@@ -2006,15 +2007,15 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             paddingHorizontal: 12,
             borderRadius: 8,
             borderWidth: 1,
-            borderColor: isSelected ? '#93C822' : '#E5E7EB',
+            borderColor: isSelected ? BRAND_PRIMARY : '#E5E7EB',
             backgroundColor: isSelected ? '#F0FFF4' : '#FFF',
             alignItems: 'center' as const,
           });
 
           return (
-            <View style={{ backgroundColor: '#F0FFF4', borderRadius: 8, padding: 10, marginBottom: 8, borderLeftWidth: 3, borderLeftColor: '#93C822' }}>
+            <View style={{ backgroundColor: '#F0FFF4', borderRadius: 8, padding: 10, marginBottom: 8, borderLeftWidth: 3, borderLeftColor: BRAND_PRIMARY }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                <Sparkles size={16} color="#93C822" />
+                <Sparkles size={16} color={BRAND_PRIMARY} />
                 <View style={{ flex: 1 }}>
                   <Text style={{ fontSize: 12, fontWeight: '600', color: '#3f6212' }}>Suggested Price</Text>
                   <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>
@@ -2074,8 +2075,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                   {showResearchPricing && (
                     <TouchableOpacity onPress={fetchPricingResearch} disabled={pricingResearchLoading} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      {pricingResearchLoading ? <ActivityIndicator size="small" color="#93C822" /> : <Package size={14} color="#93C822" />}
-                      <Text style={{ color: '#93C822', fontSize: 13, fontWeight: '600' }}>{pricingResearchLoading ? 'Researching...' : 'Research Pricing'}</Text>
+                      {pricingResearchLoading ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Package size={14} color={BRAND_PRIMARY} />}
+                      <Text style={{ color: BRAND_PRIMARY, fontSize: 13, fontWeight: '600' }}>{pricingResearchLoading ? 'Researching...' : 'Research Pricing'}</Text>
                     </TouchableOpacity>
                   )}
                   {onOpenFieldPanel && (
@@ -2087,7 +2088,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 style={[
                   styles.input,
                   priceError ? { borderColor: '#ef4444' } : null,
-                  hasExternalUpdate('price') ? { borderColor: '#93C822', borderWidth: 2 } : null,
+                  hasExternalUpdate('price') ? { borderColor: BRAND_PRIMARY, borderWidth: 2 } : null,
                   highlightedField === 'price (either flat or all variants)' ? { borderColor: '#ef4444', borderWidth: 2, backgroundColor: '#FEF2F2' } : null
                 ]}
                 value={String((activeData as any).price ?? '')}
@@ -2693,7 +2694,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               padding: 16,
               backgroundColor: '#fff',
               borderWidth: 1,
-              borderColor: shippingEstimateResult && !shippingEstimateResult.error ? '#93C822' : '#E5E7EB',
+              borderColor: shippingEstimateResult && !shippingEstimateResult.error ? BRAND_PRIMARY : '#E5E7EB',
               borderRadius: 12,
             }}
             onPress={() => {
@@ -2712,7 +2713,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                 <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(147,200,34,0.08)', alignItems: 'center', justifyContent: 'center' }}>
-                  <Truck size={20} color="#93C822" />
+                  <Truck size={20} color={BRAND_PRIMARY} />
                 </View>
                 <View>
                   <Text style={{ fontSize: 15, fontWeight: '600', color: '#111827' }}>Delivery & Shipping</Text>
@@ -2743,12 +2744,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   backgroundColor: shippingEstimateResult && !shippingEstimateResult.error ? 'rgba(147,200,34,0.12)' : '#F3F4F6',
                   alignItems: 'center', justifyContent: 'center',
                 }}>
-                  <Package size={16} color={shippingEstimateResult && !shippingEstimateResult.error ? '#93C822' : '#6B7280'} />
+                  <Package size={16} color={shippingEstimateResult && !shippingEstimateResult.error ? BRAND_PRIMARY : '#6B7280'} />
                 </View>
                 <View style={{ flex: 1 }}>
                   {shippingEstimateLoading ? (
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <ActivityIndicator size="small" color="#93C822" />
+                      <ActivityIndicator size="small" color={BRAND_PRIMARY} />
                       <Text style={{ fontSize: 12, color: '#6B7280' }}>Estimating rates…</Text>
                     </View>
                   ) : shippingEstimateResult && typeof shippingEstimateResult.estimatedMin === 'number' && !shippingEstimateResult.error ? (
@@ -3002,7 +3003,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                     <Text style={{ fontSize: 12, fontWeight: '600', color: '#000' }}>Our Suggested Price</Text>
                     <Text style={{ fontSize: 15, fontWeight: '700', color: '#6B7280' }}>${suggestedPrice.toFixed(2)}</Text>
                   </View>
-                  <View style={{ backgroundColor: '#93C822', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 }}>
+                  <View style={{ backgroundColor: BRAND_PRIMARY, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 }}>
                     <Text style={{ color: '#FFF', fontWeight: '600', fontSize: 12 }}>Apply to All</Text>
                   </View>
                 </TouchableOpacity>
@@ -3661,7 +3662,7 @@ function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, re
 
 
   const externalUpdateStyle = externalUpdate ? {
-    borderColor: '#93C822', // iOS green
+    borderColor: BRAND_PRIMARY, // iOS green
     borderWidth: 2,
   } : null;
 
@@ -3842,11 +3843,11 @@ const styles = StyleSheet.create({
   thumbWrap: { width: 86, height: 86, borderRadius: 8, overflow: 'hidden', marginRight: 8, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: '#F5F5F5', alignItems: 'center', justifyContent: 'center' },
   thumb: { width: '100%', height: '100%' },
   addThumb: { borderStyle: 'dashed' },
-  thumbCover: { borderColor: '#93C822', borderWidth: 2 },
+  thumbCover: { borderColor: BRAND_PRIMARY, borderWidth: 2 },
   coverBadge: { position: 'absolute', bottom: 6, left: 6, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2, flexDirection: 'row', alignItems: 'center' },
   mediaHint: { textAlign: 'center', color: '#71717A', marginTop: 6 },
   pill: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, borderColor: '#E5E5E5', marginRight: 8 },
-  pillActive: { backgroundColor: 'rgba(147,200,34,0.12)', borderColor: '#93C822' },
+  pillActive: { backgroundColor: 'rgba(147,200,34,0.12)', borderColor: BRAND_PRIMARY },
   pillText: { color: '#000' },
   pillTextActive: { fontWeight: '700' },
   pillDashed: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: '#E5E5E5' },
@@ -3872,9 +3873,9 @@ const styles = StyleSheet.create({
     minHeight: 48,
   },
   modernInputFocused: {
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
     backgroundColor: '#FFFFFF',
-    shadowColor: '#93C822',
+    shadowColor: BRAND_PRIMARY,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
@@ -3928,7 +3929,7 @@ const styles = StyleSheet.create({
   dropdown: { backgroundColor: 'white', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   dropdownMenu: { backgroundColor: 'white', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, marginTop: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 3 },
   dropdownItem: { padding: 10, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
-  scanBtn: { backgroundColor: '#93C822', width: 38, height: 38, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: -18 },
+  scanBtn: { backgroundColor: BRAND_PRIMARY, width: 38, height: 38, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: -18 },
   sectionTitle: { color: '#000', fontWeight: '700' },
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 18 },
   subtle: { color: '#71717A', marginTop: 4 },
@@ -3940,7 +3941,7 @@ const styles = StyleSheet.create({
   qtyInput: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, width: 100, color: '#000' },
   variantImgSlot: { width: 120, height: 120, borderWidth: 2, borderStyle: 'dashed', borderColor: '#E5E5E5', borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   btnSecondary: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
-  btnPrimary: { backgroundColor: '#93C822', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
+  btnPrimary: { backgroundColor: BRAND_PRIMARY, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
   optionCard: { marginTop: 10, backgroundColor: '#fff' },
   optionSummaryCard: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, padding: 12, marginTop: 10, backgroundColor: '#fff' },
   platformPill: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 8, paddingHorizontal: 12, margin: 6, flexDirection: 'row', alignItems: 'center' },
@@ -3988,7 +3989,7 @@ const styles = StyleSheet.create({
     color: '#6B7280',
   },
   generatePlatformPill: {
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
     backgroundColor: 'rgba(147,200,34,0.05)',
     marginTop: 4,
   },
