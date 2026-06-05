@@ -185,7 +185,14 @@ Complements **Track F** (which is the LAST, whole-app module restructure). Track
   `socket.io-client` imports outside `src/lib`, no raw `fetch()`. Expo's own error-level rules are
   temporarily downgraded to `warn` for the rollout.
 
-### G.2 — Backlog (sequenced; NOT done this pass)
+### G.1b — Follow-up pass (delivered, after the quick-wins)
+- **Correctness:** the 5 `rules-of-hooks` bugs are fixed and the rule is promoted to `error`.
+- **TS burn-down:** `tsc` errors **163 → 51** (deleted more dead/broken files, annotated implicit-anys, added `@types/jest`).
+- **Palette decided → `#93C822`:** `theme.colors.primary` now points at the de-facto brand green (one-place change; the literal→token codemod still remains).
+- **Data layer:** one shared ref-counted `/collaboration` socket client (`src/lib/collaborationSocket.ts`); `useSyncProgress` + `useCollaboration` migrated (⚠️ needs device smoke-test; `PlatformConnectionsContext` still to migrate).
+- **Convex 401 → fixed backend-side** via service-to-service auth (`sssync-bknd` PR #7: `SupabaseAuthGuard` PATH 0 + agent forwards Clerk identity behind `CONVEX_SERVICE_TOKEN`). Remaining frontend work: sync `convex/` codegen so `api.agentActions` resolves (the unused `useLiquidationAgent` still has 2 TS errors until then). See `sssync-bknd/convex/SERVICE_AUTH.md`.
+
+### G.2 — Backlog (sequenced; remaining)
 1. **Design system (do first):** make a brand-palette decision (see below), collapse the 3 token
    sources into one (`src/design/tokens.ts` as primitives → `ThemeContext` as the semantic theme;
    delete `theme.json` or generate it), then a **color codemod** replacing the ~3,237 hex literals with
@@ -194,10 +201,10 @@ Complements **Track F** (which is the LAST, whole-app module restructure). Track
    migrate `console.*` → `logger` behind the lint rule; tighten `max-lines`/`no-restricted-*` to `error`
    for new code; reconcile `app.json`/`app.config.js` to one version source; install test infra
    (`@testing-library/react-native`, jest types) and add an auth/jobs/sync smoke harness.
-3. **Data layer (overlaps A/C/D):** introduce one shared, ref-counted `/collaboration` socket client in
-   `src/lib` and migrate the 3 call sites (needs device verification — different transports/query params);
-   collapse the duplicate job pollers into one source; consolidate the 6 persistence layers; **fix the
-   Convex 401 auth path** so the agent layer is first-class.
+3. **Data layer (overlaps A/C/D):** migrate the 3rd socket call site (`PlatformConnectionsContext`) onto
+   the shared client and device-verify the migration; collapse the duplicate job pollers into one source;
+   consolidate the 6 persistence layers. Convex agent auth is done backend-side (PR #7) — finish the
+   frontend `convex/` codegen sync.
 4. **God components (with Track F):** decompose `ListingEditorForm` / `ProductDetail` / `AddProductScreen`
    into feature hooks + thin screens as they're touched; remove abandoned-rewrite residue.
 
