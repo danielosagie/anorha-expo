@@ -30,7 +30,7 @@ import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { MappingSuggestion } from '../types/importSession';
 import Card from '../components/Card';
 import PillTabs from '../components/ui/PillTabs';
-import { tokens } from '../design/tokens';
+import { tokens, BRAND_PRIMARY} from '../design/tokens';
 
 // ---------------------------------------------------------------------------
 // Reason metadata
@@ -778,7 +778,7 @@ function GroupCard({ theme, reason, items, isOpen, onToggle, onBulk, onReview, o
           onPress={onBulk}
           style={[
             styles.groupBulkBtn,
-            meta.bulkVariant === 'primary' && { backgroundColor: '#EEFCE0', borderColor: '#93C822' },
+            meta.bulkVariant === 'primary' && { backgroundColor: '#EEFCE0', borderColor: BRAND_PRIMARY },
             meta.bulkVariant === 'amber' && { backgroundColor: '#FFFBEB', borderColor: '#FDE68A' },
             meta.bulkVariant === 'ghost' && { backgroundColor: '#F9FAFB', borderColor: '#E5E7EB' },
           ]}
@@ -1148,7 +1148,7 @@ function ReviewView({
                   onConfirm(item);
                   moveNext();
                 }}
-                style={[styles.quickBtn, { backgroundColor: '#EEFCE0', borderColor: '#93C822' }]}
+                style={[styles.quickBtn, { backgroundColor: '#EEFCE0', borderColor: BRAND_PRIMARY }]}
               >
                 <Icon name="check" size={14} color="#4A7C00" />
                 <Text style={[styles.quickBtnText, { color: '#4A7C00' }]}>Yes, link</Text>
@@ -1165,7 +1165,7 @@ function ReviewView({
                   onAddNew(item);
                   moveNext();
                 }}
-                style={[styles.quickBtn, { backgroundColor: '#EEFCE0', borderColor: '#93C822' }]}
+                style={[styles.quickBtn, { backgroundColor: '#EEFCE0', borderColor: BRAND_PRIMARY }]}
               >
                 <Icon name="plus" size={14} color="#4A7C00" />
                 <Text style={[styles.quickBtnText, { color: '#4A7C00' }]}>Add new</Text>

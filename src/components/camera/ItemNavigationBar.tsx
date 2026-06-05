@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../../design/tokens';
 import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Platform } from 'react-native';
 import Animated, { FadeIn, SlideInUp } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -206,7 +207,7 @@ const styles = StyleSheet.create({
         marginHorizontal: 12,
         paddingVertical: 14,
         paddingHorizontal: 16,
-        backgroundColor: '#93C822',
+        backgroundColor: BRAND_PRIMARY,
         borderRadius: 22,
         flexDirection: 'row',
         alignItems: 'center',
@@ -257,7 +258,7 @@ const styles = StyleSheet.create({
         borderRadius: 5,
     },
     matchDot: {
-        backgroundColor: '#93C822',
+        backgroundColor: BRAND_PRIMARY,
     }
 });
 

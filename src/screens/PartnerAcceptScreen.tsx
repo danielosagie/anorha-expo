@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
   View,
   Text,
@@ -371,13 +372,13 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   acceptButton: {
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
   },
   declineButton: {
     borderColor: '#D1D5DB',
   },
   retryButton: {
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     marginTop: 24,
     paddingHorizontal: 32,
   },

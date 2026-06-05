@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
     View,
     Text,
@@ -610,7 +611,7 @@ export default function PartnersScreen() {
             {/* Content */}
             <ScrollView
                 contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomSafePadding }]}
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#93C822" />}
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND_PRIMARY} />}
             >
                 {activeTab === 'active' ? (
                     <>
@@ -654,7 +655,7 @@ export default function PartnersScreen() {
                     </>
                 )}
 
-                {loading && <ActivityIndicator size="large" color="#93C822" style={{ marginTop: 40 }} />}
+                {loading && <ActivityIndicator size="large" color={BRAND_PRIMARY} style={{ marginTop: 40 }} />}
             </ScrollView>
 
 
@@ -885,7 +886,7 @@ const styles = StyleSheet.create({
     },
     addBtn: {
         padding: 8,
-        backgroundColor: '#93C822',
+        backgroundColor: BRAND_PRIMARY,
         borderRadius: 8,
         marginRight: -4,
     },
@@ -906,7 +907,7 @@ const styles = StyleSheet.create({
         gap: 8,
     },
     activeTab: {
-        borderBottomColor: '#93C822',
+        borderBottomColor: BRAND_PRIMARY,
     },
     tabText: {
         color: '#6B7280',
@@ -914,7 +915,7 @@ const styles = StyleSheet.create({
         fontSize: 15,
     },
     activeTabText: {
-        color: '#93C822',
+        color: BRAND_PRIMARY,
         fontWeight: '600',
     },
     requestsBadge: {
@@ -1105,7 +1106,7 @@ const styles = StyleSheet.create({
         color: '#9CA3AF',
     },
     copyLinkText: {
-        color: '#93C822',
+        color: BRAND_PRIMARY,
         fontWeight: '600',
         fontSize: 13,
     },
@@ -1188,7 +1189,7 @@ const styles = StyleSheet.create({
     },
     activePoolChip: {
         backgroundColor: '#ECFCCB',
-        borderColor: '#93C822',
+        borderColor: BRAND_PRIMARY,
     },
     poolChipText: {
         color: '#4B5563',

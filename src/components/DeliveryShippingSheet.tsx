@@ -14,6 +14,7 @@
  * - Preferences persist via AsyncStorage across new items
  */
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
     View,
     Text,
@@ -390,7 +391,7 @@ export default function DeliveryShippingSheet({
                         <View style={s.headerRow}>
                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                                 <View style={s.headerIcon}>
-                                    <Truck size={20} color="#93C822" />
+                                    <Truck size={20} color={BRAND_PRIMARY} />
                                 </View>
                                 <Text style={s.headerTitle}>Delivery & Shipping</Text>
                             </View>
@@ -442,7 +443,7 @@ export default function DeliveryShippingSheet({
                                         style={[s.methodCard, isActive && s.methodCardActive]}
                                         onPress={() => handleDeliveryMethodChange(method)}
                                     >
-                                        <IconComp size={24} color={isActive ? '#93C822' : '#6B7280'} strokeWidth={2} />
+                                        <IconComp size={24} color={isActive ? BRAND_PRIMARY : '#6B7280'} strokeWidth={2} />
                                         <Text
                                             style={[s.methodLabel, isActive && s.methodLabelActive]}
                                         >
@@ -463,7 +464,7 @@ export default function DeliveryShippingSheet({
                                     onPress={onOpenLocationPicker}
                                 >
                                     <View style={s.locationIconBg}>
-                                        <MapPin size={18} color="#93C822" />
+                                        <MapPin size={18} color={BRAND_PRIMARY} />
                                     </View>
                                     <View style={{ flex: 1 }}>
                                         <Text
@@ -581,7 +582,7 @@ export default function DeliveryShippingSheet({
                                 >
                                     {shippingEstimateLoading ? (
                                         <View style={s.loadingRow}>
-                                            <ActivityIndicator size="small" color="#93C822" />
+                                            <ActivityIndicator size="small" color={BRAND_PRIMARY} />
                                             <Text style={{ fontSize: 13, color: '#6B7280' }}>Calculating rates…</Text>
                                         </View>
                                     ) : shippingEstimateResult &&
@@ -591,7 +592,7 @@ export default function DeliveryShippingSheet({
                                             {/* USPS Ground - show typical + range */}
                                             <View style={[s.rateCard, s.rateCardActive]}>
                                                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                                                    <Truck size={18} color="#93C822" />
+                                                    <Truck size={18} color={BRAND_PRIMARY} />
                                                     <View>
                                                         <Text style={s.rateCarrier}>USPS Ground</Text>
                                                         <Text style={s.rateSpeed}>3–7 business days</Text>
@@ -715,7 +716,7 @@ const s = StyleSheet.create({
         backgroundColor: '#F9FAFB',
     },
     tabActive: {
-        borderColor: '#93C822',
+        borderColor: BRAND_PRIMARY,
         backgroundColor: 'rgba(147,200,34,0.08)',
     },
     tabText: { fontSize: 13, fontWeight: '600', color: '#6B7280' },
@@ -743,11 +744,11 @@ const s = StyleSheet.create({
         borderColor: '#E5E7EB',
     },
     methodCardActive: {
-        borderColor: '#93C822',
+        borderColor: BRAND_PRIMARY,
         backgroundColor: 'rgba(147,200,34,0.08)',
     },
     methodLabel: { marginTop: 8, color: '#374151', fontSize: 13, fontWeight: '600' },
-    methodLabelActive: { color: '#93C822', fontWeight: '700' },
+    methodLabelActive: { color: BRAND_PRIMARY, fontWeight: '700' },
 
     /* Location card */
     locationCard: {
@@ -841,7 +842,7 @@ const s = StyleSheet.create({
         marginBottom: 8,
     },
     rateCardActive: {
-        borderColor: '#93C822',
+        borderColor: BRAND_PRIMARY,
     },
     rateCardDisabled: {
         borderColor: '#E5E7EB',
@@ -866,7 +867,7 @@ const s = StyleSheet.create({
     },
     recalcText: { fontSize: 13, fontWeight: '600', color: '#374151' },
     doneBtn: {
-        backgroundColor: '#93C822',
+        backgroundColor: BRAND_PRIMARY,
         borderRadius: 12,
         paddingVertical: 14,
         alignItems: 'center',

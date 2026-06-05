@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable, Dimensions, Linking, Platform } from 'react-native';
 import { ScrollView as ScrollViewHorizontal } from 'react-native-gesture-handler';
 import { BarChart, LineChart } from 'react-native-chart-kit';
@@ -278,7 +279,7 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                                     </Text>
                                                     {selected.url ? (
                                                         <TouchableOpacity onPress={() => Linking.openURL(selected.url!)}>
-                                                            <Text style={{ fontSize: 12, color: '#93C822', marginTop: 4, fontWeight: '600' }}>View listing</Text>
+                                                            <Text style={{ fontSize: 12, color: BRAND_PRIMARY, marginTop: 4, fontWeight: '600' }}>View listing</Text>
                                                         </TouchableOpacity>
                                                     ) : null}
                                                 </View>
@@ -315,7 +316,7 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                                                         onPress={() => setPricingHistoryRange(r)}
                                                         style={{ paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: pricingHistoryRange === r ? 'rgba(147,200,34,0.15)' : '#F3F4F6' }}
                                                     >
-                                                        <Text style={{ fontSize: 12, fontWeight: '600', color: pricingHistoryRange === r ? '#93C822' : '#6B7280' }}>{r}</Text>
+                                                        <Text style={{ fontSize: 12, fontWeight: '600', color: pricingHistoryRange === r ? BRAND_PRIMARY : '#6B7280' }}>{r}</Text>
                                                     </TouchableOpacity>
                                                 ))}
                                             </View>

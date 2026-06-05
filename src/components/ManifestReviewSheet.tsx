@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
     View,
     Text,
@@ -266,7 +267,7 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
                                 <Icon
                                     name={selectedItems.has(item.id) ? 'checkbox-marked' : 'checkbox-blank-outline'}
                                     size={24}
-                                    color={selectedItems.has(item.id) ? '#93C822' : colors.textSecondary}
+                                    color={selectedItems.has(item.id) ? BRAND_PRIMARY : colors.textSecondary}
                                 />
                             </TouchableOpacity>
 
@@ -439,7 +440,7 @@ const styles = StyleSheet.create({
     },
     progressFill: {
         height: '100%',
-        backgroundColor: '#93C822',
+        backgroundColor: BRAND_PRIMARY,
     },
     progressText: {
         fontSize: 12,
@@ -470,7 +471,7 @@ const styles = StyleSheet.create({
         marginTop: 16,
         paddingHorizontal: 20,
         paddingVertical: 10,
-        backgroundColor: '#93C822',
+        backgroundColor: BRAND_PRIMARY,
         borderRadius: 8,
     },
     retryButtonText: {
@@ -491,7 +492,7 @@ const styles = StyleSheet.create({
         borderColor: 'transparent',
     },
     itemCardSelected: {
-        borderColor: '#93C822',
+        borderColor: BRAND_PRIMARY,
     },
     checkbox: {
         marginRight: 12,
@@ -580,7 +581,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#93C822',
+        backgroundColor: BRAND_PRIMARY,
         paddingVertical: 14,
         borderRadius: 12,
         gap: 8,

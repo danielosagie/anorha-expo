@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../../design/tokens';
 import {
   View,
   Text,
@@ -7,7 +8,7 @@ import {
   Image,
 } from 'react-native';
 
-const ANORHA_GREEN = '#93C822';
+const ANORHA_GREEN = BRAND_PRIMARY;
 
 interface CapturedPhoto {
   id: string;

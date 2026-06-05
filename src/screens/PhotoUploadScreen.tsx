@@ -1,4 +1,5 @@
 import React, { useCallback } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Alert } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -83,7 +84,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   thumbNumberText: { color: 'white', fontSize: 11, fontWeight: 'bold' },
-  doneBtn: { position: 'absolute', left: 16, right: 16, bottom: 24, backgroundColor: '#93C822', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
+  doneBtn: { position: 'absolute', left: 16, right: 16, bottom: 24, backgroundColor: BRAND_PRIMARY, borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
 });
 
 

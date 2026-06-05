@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
   View,
   Text,
@@ -84,7 +85,7 @@ const ActivityEventCard: React.FC<ActivityEventCardProps> = ({
               borderRadius={12}
               type="gradient"
               icon="package-variant"
-              color="#93C822"
+              color={BRAND_PRIMARY}
             />
           )}
           

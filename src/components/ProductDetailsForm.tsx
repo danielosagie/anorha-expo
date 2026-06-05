@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
@@ -575,7 +576,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
-  tabActive: { backgroundColor: 'rgba(147,200,34,0.12)', borderColor: '#93C822' },
+  tabActive: { backgroundColor: 'rgba(147,200,34,0.12)', borderColor: BRAND_PRIMARY },
   tabText: { color: '#666' },
   tabTextActive: { color: '#000', fontWeight: '600' },
   card: { padding: 12 },

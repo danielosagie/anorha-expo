@@ -1,4 +1,5 @@
 import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
   ActivityIndicator,
   Alert,
@@ -281,7 +282,7 @@ const LiquidationCampaignScreen = () => {
         {/* ── Main content ────────────────────────────────────────── */}
         {controller.loading ? (
           <View style={s.loadingWrap}>
-            <ActivityIndicator size="large" color="#93C822" />
+            <ActivityIndicator size="large" color={BRAND_PRIMARY} />
             <Text style={s.loadingText}>Loading...</Text>
           </View>
         ) : (
@@ -605,7 +606,7 @@ const s = StyleSheet.create({
 
 
   // Buttons
-  primaryBtn: { height: 48, borderRadius: 14, backgroundColor: '#93C822', alignItems: 'center', justifyContent: 'center', marginTop: 8 },
+  primaryBtn: { height: 48, borderRadius: 14, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
   primaryBtnText: { color: '#1F2937', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 14 },
   secondaryBtn: { height: 48, borderRadius: 14, borderWidth: 1, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center', marginTop: 8 },
   secondaryBtnText: { color: '#111827', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 14 },

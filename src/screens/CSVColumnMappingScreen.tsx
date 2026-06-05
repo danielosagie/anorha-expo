@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
     View,
     Text,
@@ -261,7 +262,7 @@ export function CSVColumnMappingScreen() {
                 {/* AI Loading Indicator */}
                 {isLoadingAI && (
                     <View style={styles.aiLoadingBar}>
-                        <ActivityIndicator size="small" color="#93C822" />
+                        <ActivityIndicator size="small" color={BRAND_PRIMARY} />
                         <Text style={styles.aiLoadingText}>AI is auto-mapping columns...</Text>
                     </View>
                 )}
@@ -293,7 +294,7 @@ export function CSVColumnMappingScreen() {
                             >
                                 <View style={styles.cardHeader}>
                                     <View style={styles.cardIconBox}>
-                                        <Icon name={field.icon} size={20} color={isMapped ? '#93C822' : '#6b7280'} />
+                                        <Icon name={field.icon} size={20} color={isMapped ? BRAND_PRIMARY : '#6b7280'} />
                                     </View>
                                     <View style={styles.cardTitleBox}>
                                         <Text style={styles.cardTitle}>{field.label}</Text>
@@ -315,7 +316,7 @@ export function CSVColumnMappingScreen() {
                                             </Text>
                                         )}
                                     </View>
-                                    <Icon name="chevron-down" size={20} color={isMapped ? '#93C822' : '#9ca3af'} />
+                                    <Icon name="chevron-down" size={20} color={isMapped ? BRAND_PRIMARY : '#9ca3af'} />
                                 </TouchableOpacity>
                             </Animated.View>
                         );
@@ -428,7 +429,7 @@ const styles = StyleSheet.create({
         color: '#6b7280',
     },
     textSuccess: {
-        color: '#93C822',
+        color: BRAND_PRIMARY,
     },
     aiLoadingBar: {
         flexDirection: 'row',
@@ -440,7 +441,7 @@ const styles = StyleSheet.create({
     },
     aiLoadingText: {
         fontSize: 13,
-        color: '#93C822',
+        color: BRAND_PRIMARY,
         fontWeight: '500',
     },
     tabsWrapper: {
@@ -468,7 +469,7 @@ const styles = StyleSheet.create({
         elevation: 2,
     },
     cardMapped: {
-        borderColor: '#93C822',
+        borderColor: BRAND_PRIMARY,
         backgroundColor: '#f7fee7',
     },
     cardHeader: {
@@ -520,7 +521,7 @@ const styles = StyleSheet.create({
         borderStyle: 'dashed',
     },
     selectorBtnActive: {
-        borderColor: '#93C822',
+        borderColor: BRAND_PRIMARY,
         backgroundColor: '#fff',
     },
     selectorLabel: {
@@ -545,11 +546,11 @@ const styles = StyleSheet.create({
         borderTopColor: '#f3f4f6',
     },
     primaryBtn: {
-        backgroundColor: '#93C822',
+        backgroundColor: BRAND_PRIMARY,
         paddingVertical: 16,
         borderRadius: 12,
         alignItems: 'center',
-        shadowColor: '#93C822',
+        shadowColor: BRAND_PRIMARY,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.2,
         shadowRadius: 8,

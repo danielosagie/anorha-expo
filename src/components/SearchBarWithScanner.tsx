@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
   TextInput,
   TouchableOpacity,
@@ -100,7 +101,7 @@ const styles = StyleSheet.create({
   },
   scannerButton: {
     borderRadius: 8,
-    backgroundColor: "#93C822",
+    backgroundColor: BRAND_PRIMARY,
     padding: 8,
     marginLeft: 8,
   },

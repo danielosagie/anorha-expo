@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -34,7 +35,7 @@ const CampaignCard: React.FC<CampaignCardProps> = ({
 
     const getStatusColor = () => {
         switch (status) {
-            case 'executing': return '#93C822';
+            case 'executing': return BRAND_PRIMARY;
             case 'completed': return '#4CAF50';
             case 'paused': return '#FF9800';
             case 'failed': return '#F44336';

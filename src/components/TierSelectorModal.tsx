@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
     View,
     Text,
@@ -78,7 +79,7 @@ interface TierSelectorModalProps {
     hasSubscription?: boolean;
 }
 
-const ANORHA_GREEN = '#93C822';
+const ANORHA_GREEN = BRAND_PRIMARY;
 const WHITE_BG = '#FFFFFF';
 
 // Mapping features for the tabular view

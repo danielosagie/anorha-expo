@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, Image } from 'react-native';
 import Button from '../components/Button';
 import AnimatedGradientBackground from '../components/AnimatedGradientBackground';
@@ -83,7 +84,7 @@ const styles = StyleSheet.create({
         gap: 24,
     },
   container: {
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     flex: 1,
     justifyContent: 'space-between',
     alignItems: 'center',
