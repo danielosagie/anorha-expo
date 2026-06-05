@@ -8,7 +8,7 @@ import PlaceholderImage from '../components/Placeholder';
 import Button from '../components/Button';
 import { Platform } from 'react-native';
 
-const MarketplaceItem = ({ item, onAddToInventory, navigation }) => {
+const MarketplaceItem = ({ item, onAddToInventory, navigation }: { item: any; onAddToInventory: (item: any) => void; navigation: any }) => {
   const theme = useTheme();
   
   return (
@@ -60,7 +60,7 @@ const MarketplaceItem = ({ item, onAddToInventory, navigation }) => {
   );
 };
 
-const getPlatformColor = (platform) => {
+const getPlatformColor = (platform: string) => {
   switch (platform) {
     case 'Shopify':
       return '#0E8F7F';
@@ -124,21 +124,21 @@ const mockMarketplaceItems = [
   },
 ];
 
-const MarketplaceScreen = ({ navigation }) => {
+const MarketplaceScreen = ({ navigation }: { navigation: any }) => {
   const theme = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   
   const categories = ['All', 'Food', 'Crafts', 'Spices', 'Accessories'];
   
-  const handleAddToInventory = (item) => {
+  const handleAddToInventory = (item: any) => {
     // Add logic to add item to inventory
     console.log(`Added ${item.title} to inventory`);
     // Show a success message or navigate to the inventory screen
   };
   
   return (
-    <View style={styles.container} paddingTop={60}>
+    <View style={[styles.container, { paddingTop: 60 }]}>
       <Animated.View entering={FadeInUp.delay(100).duration(500)}>
         <Text style={[styles.title, { color: theme.colors.text }]}>Marketplace</Text>
         
