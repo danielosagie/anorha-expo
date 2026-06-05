@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { io, Socket } from 'socket.io-client';
-import { useAuth, useUser } from '@clerk/clerk-expo';
-import { ensureSupabaseJwt } from '../lib/supabase';
-
-const COLLABORATION_URL = 'https://api.sssync.app/collaboration';
+import { useUser } from '@clerk/clerk-expo';
+import { acquireCollaborationSocket, releaseCollaborationSocket, type Socket } from '../lib/collaborationSocket';
 
 interface ProductUpdate {
   productId: string;
@@ -26,10 +23,6 @@ interface PresenceUser {
   currentPage?: string;
 }
 
-async function getToken() {
-  return ensureSupabaseJwt();
-}
-
 export function useCollaboration() {
   const { user } = useUser();
   const socketRef = useRef<Socket | null>(null);
@@ -39,64 +32,51 @@ export function useCollaboration() {
   useEffect(() => {
     if (!user) return;
 
+    let active = true;
     let socket: Socket | null = null;
+    const userName = user.fullName || user.primaryEmailAddress?.emailAddress || 'Unknown';
 
-    // Get token and connect
-    (async () => {
-      try {
-        // Try to get Supabase template token, fallback to default Clerk token
-        const token = await getToken()
+    const handleConnect = () => setIsConnected(true);
+    const handleDisconnect = () => setIsConnected(false);
+    const handleConnectError = (error: Error) => {
+      console.error('[Collaboration] Connection error:', error.message);
+    };
+    const handlePresence = ({ users }: { users: PresenceUser[] }) => {
+      setOnlineUsers(users.filter((u) => u.status === 'online'));
+    };
 
-        if (!token) {
-          console.error('[Collaboration] No token available');
+    // Share the single /collaboration connection instead of opening our own.
+    acquireCollaborationSocket({ userName })
+      .then((s) => {
+        if (!active) {
+          releaseCollaborationSocket();
           return;
         }
-
-        // Connect to WebSocket with auth token
-        socket = io(COLLABORATION_URL, {
-          auth: {
-            token: token,
-          },
-          query: {
-            userName: user.fullName || user.primaryEmailAddress?.emailAddress || 'Unknown',
-          },
-          transports: ['websocket', 'polling'], // Fallback to polling if WebSocket fails
-          reconnection: true,
-          reconnectionDelay: 1000,
-          reconnectionAttempts: 5,
-        });
-
-        socket.on('connect', () => {
-          console.log('[Collaboration] Connected');
-          setIsConnected(true);
-        });
-
-        socket.on('disconnect', () => {
-          console.log('[Collaboration] Disconnected');
-          setIsConnected(false);
-        });
-
-        socket.on('connect_error', (error: Error) => {
-          console.error('[Collaboration] Connection error:', error.message);
-        });
-
-        // Listen for presence updates
-        socket.on('presence:update', ({ users }: { users: PresenceUser[] }) => {
-          setOnlineUsers(users.filter((u) => u.status === 'online'));
-        });
-
-        socketRef.current = socket;
-      } catch (error) {
+        if (!s) return;
+        socket = s;
+        socketRef.current = s;
+        if (s.connected) setIsConnected(true);
+        s.on('connect', handleConnect);
+        s.on('disconnect', handleDisconnect);
+        s.on('connect_error', handleConnectError);
+        s.on('presence:update', handlePresence);
+      })
+      .catch((error) => {
         console.error('[Collaboration] Failed to initialize socket:', error);
-      }
-    })();
+      });
 
     return () => {
+      active = false;
       if (socket) {
-        socket.disconnect();
+        socket.off('connect', handleConnect);
+        socket.off('disconnect', handleDisconnect);
+        socket.off('connect_error', handleConnectError);
+        socket.off('presence:update', handlePresence);
       }
+      socketRef.current = null;
+      releaseCollaborationSocket();
     };
-  }, [user, getToken]);
+  }, [user]);
 
   /**
    * Request edit lock for a product
