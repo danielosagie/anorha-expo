@@ -11,9 +11,6 @@ dist/
 *.aab
 *.apk
 
-# Lockfile (intentionally untracked in this repo)
-package-lock.json
-
 # Env / secrets — never commit
 .env
 .env.local
