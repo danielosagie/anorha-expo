@@ -19,5 +19,5 @@
     "babel.config.js",
     "metro.config.js"
   ],
-  "include": ["**/*.ts", "**/*.tsx", "../Archive/BarcodeScanner.tsx"]
+  "include": ["**/*.ts", "**/*.tsx"]
 }

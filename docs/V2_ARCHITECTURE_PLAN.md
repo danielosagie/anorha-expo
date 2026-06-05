@@ -142,6 +142,76 @@ After A–D land (so you restructure the *new* shape, not the old). Target:
 
 ---
 
+## Track G — Frontend hygiene: DX, design system, data-layer dedup  (#8)
+
+Complements **Track F** (which is the LAST, whole-app module restructure). Track G is the
+*immediate* frontend cleanup that can start now and feeds F. Derived from a full review of
+`sssync-native` (~100K LOC). Priorities (per product owner): **design system → DX/cruft → data layer.**
+
+### G.0 — What the review found (the on-the-ground rot)
+- **DX / typed-ness:** ~160 `tsc` errors under `strict`, a stale committed `ts_errors.txt`, ~785
+  `any`/`as any`, **1,068 `console.*`** (a `src/utils/logger.ts` facade exists but is bypassed),
+  286 `Alert.alert` error popups, 18 empty catch blocks, ~0.1% test coverage, **no ESLint config**
+  despite a `lint` script, and `app.json` (v1.0.21) vs `app.config.js` (v1.0.3) version drift.
+- **Design system (no source of truth):** ~407 unique hardcoded hex colors / ~1,810 literals; 229
+  inline style objects in one file; **three conflicting palettes** — `theme.json` green `#8BB04F`,
+  code's de-facto green `#93C822` (50+×), and `.interface-design/system.md`'s yellow `#eab308`
+  (liquidation console). `ThemeContext`, `theme.json`, and `src/design/tokens.ts` are three separate
+  token definitions; most files read `theme.colors.*` but a few read a flat `theme.*` contract.
+- **Data layer (accidental sprawl — Convex *stays* as the agent layer):** 3 independent socket.io
+  connections to the same `/collaboration` endpoint with *different* configs (`useSyncProgress`,
+  `useCollaboration`, `PlatformConnectionsContext`); duplicate pollers (`useJobsState` 2s +
+  `JobsContext` 3s on the same generate-job endpoint); 6 persistence layers; the 216-ref
+  `ensureSupabaseJwt` bridge (→ **Track A**). Convex's agent path currently 401s (`useLiquidationAgent`
+  notes "Liquidation is Nest-only") — finishing that auth path is the real Convex work, not removal.
+- **God components (→ Track F):** `AddProductScreen` 7,430 LOC / 65 `useState`; `ProductDetail` 4,534;
+  `ListingEditorForm` 3,998 (229 inline styles). Abandoned-rewrite residue: `LocationsManagerV2`,
+  `smart-command-v2` (no V1 left).
+- **Real latent bugs surfaced:** 5 `react-hooks/rules-of-hooks` violations (conditional hooks) in
+  `App.tsx`, `AnimatedGradientBackground.tsx`, `ConnectedPlatformList.tsx`.
+
+### G.1 — Delivered in this pass (safe quick-wins)
+- **Cruft untracked / `.gitignore` rewritten:** `dist/`, `ts_errors.txt`, `.DS_Store` removed from the
+  index and the duplicated `.gitignore` collapsed. `tsconfig.json` no longer `include`s the
+  out-of-repo `../Archive/BarcodeScanner.tsx`.
+- **Dead deps removed:** `react-native-dropdown-picker`, `react-native-picker-select`,
+  `react-native-fast-image`, `lucide-react` (all zero imports).
+- **Typecheck: 163 → 80 errors (−51%).** Deleted two dead, broken, unused files
+  (`MatchItemButton.tsx`, `TextField.tsx`); added the missing `card` + `border` design tokens
+  (`theme.colors.border` was already used 6× but undefined) to `ThemeContext` + `theme.json`; migrated
+  `ReceiptReviewSheet` off the flat `theme.*` contract onto the canonical `theme.colors.*`.
+- **ESLint guardrails added** (`eslint.config.mjs`, extends `eslint-config-expo/flat`) — **advisory
+  (`warn`) only, 0 errors so the build never breaks**: `no-console`, `max-lines` (600), no ad-hoc
+  `socket.io-client` imports outside `src/lib`, no raw `fetch()`. Expo's own error-level rules are
+  temporarily downgraded to `warn` for the rollout.
+
+### G.2 — Backlog (sequenced; NOT done this pass)
+1. **Design system (do first):** make a brand-palette decision (see below), collapse the 3 token
+   sources into one (`src/design/tokens.ts` as primitives → `ThemeContext` as the semantic theme;
+   delete `theme.json` or generate it), then a **color codemod** replacing the ~3,237 hex literals with
+   tokens. Standardize the flat `theme.*` stragglers (`smart-command-v2`) onto `theme.colors.*`.
+2. **DX:** drive `tsc` to **zero**; fix the 5 `rules-of-hooks` bugs and promote that rule to `error`;
+   migrate `console.*` → `logger` behind the lint rule; tighten `max-lines`/`no-restricted-*` to `error`
+   for new code; reconcile `app.json`/`app.config.js` to one version source; install test infra
+   (`@testing-library/react-native`, jest types) and add an auth/jobs/sync smoke harness.
+3. **Data layer (overlaps A/C/D):** introduce one shared, ref-counted `/collaboration` socket client in
+   `src/lib` and migrate the 3 call sites (needs device verification — different transports/query params);
+   collapse the duplicate job pollers into one source; consolidate the 6 persistence layers; **fix the
+   Convex 401 auth path** so the agent layer is first-class.
+4. **God components (with Track F):** decompose `ListingEditorForm` / `ProductDetail` / `AddProductScreen`
+   into feature hooks + thin screens as they're touched; remove abandoned-rewrite residue.
+
+### G.3 — Open decision (blocks the color codemod)
+**Brand palette:** green `#8BB04F` (`theme.json`) vs green `#93C822` (de-facto in code) vs yellow
+`#eab308` (liquidation console `system.md`). The quick-win unified only the token *shape*; the *values*
+are a one-place change once chosen.
+
+**Blast radius:** frontend-only; quick-wins already landed. **Risk:** low (G.1) → medium (G.2/3 codemod
++ socket consolidation). **Verify:** `npm run typecheck` count drops; `npx expo lint` warns-only;
+removed cruft untracked but on disk; app metro-bundles with no resolution errors.
+
+---
+
 ## Dependency graph & sequencing
 
 ```
@@ -150,10 +220,11 @@ A (auth) ──┬──────────────► D (sync engine) 
 B (platforms-as-data)  ─ independent, do alongside A
 C (jobs)               ─ independent (backend-heavy)
 E (casing, minimal)    ─ cheap, anytime
+G (frontend hygiene)   ─ start NOW; quick-wins landed; feeds F
 F (module boundaries)  ─ LAST, after A–D, whole-app
 ```
 
-**Per-track risk:** A = security-critical but contained; B = low; C = medium; D = high (decision gate); E = trivial subset; F = large but mechanical with lint enforcement.
+**Per-track risk:** A = security-critical but contained; B = low; C = medium; D = high (decision gate); E = trivial subset; G = low→medium (quick-wins landed; codemod/socket consolidation remain); F = large but mechanical with lint enforcement.
 
 **Already delivered (foundation these build on):** generated DB types + Zod contract, typed
 `apiClient`, tRPC privileged contract, realtime fan-out fix, optimistic-concurrency `guardedUpdate`.
