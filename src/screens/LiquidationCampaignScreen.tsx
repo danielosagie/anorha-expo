@@ -260,7 +260,8 @@ const LiquidationCampaignScreen = () => {
 
   const handleItemRowPress = (item: CampaignItem) => {
     if (selectedItems.size > 0) toggleItem(item.id);
-    else openItemDetail(item);
+    // CampaignItem.productId holds the ProductVariantId, which is what ProductDetail loads by.
+    else navigation.navigate('ProductDetail', { productId: item.productId });
   };
 
   const handleEllipsis = () => setMenuOpen(open => !open);
