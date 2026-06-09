@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Dimensions,
+  Platform,
   RefreshControl,
   ScrollView,
   StatusBar,
@@ -14,6 +15,7 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { useAuth, useUser } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { LineChart } from 'react-native-chart-kit';
 import * as Haptics from 'expo-haptics';
@@ -29,9 +31,6 @@ const CONVEX_TEMPLATE =
   'mobile';
 
 const BRAND = '#93C822';
-const HEADER_FROM = '#9AC53C';
-const HEADER_TO = '#82A632';
-const HEADER_COLORS: readonly [string, string] = [HEADER_FROM, HEADER_TO];
 
 const FONT = {
   regular: 'Inter_400Regular',
@@ -216,35 +215,16 @@ const SproutHomeScreen: React.FC = () => {
 
   return (
     <View style={styles.screen}>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle="dark-content" />
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: insets.bottom + 120 }}
+        contentContainerStyle={{ paddingTop: insets.top + 56, paddingBottom: insets.bottom + 120 }}
         refreshControl={
-          <RefreshControl refreshing={controller.refreshing} onRefresh={controller.onRefresh} tintColor="#FFFFFF" />
+          <RefreshControl refreshing={controller.refreshing} onRefresh={controller.onRefresh} tintColor={BRAND} />
         }
       >
-        {/* ── GREEN HEADER ─────────────────────────────────────────── */}
-        <LinearGradient colors={HEADER_COLORS} style={[styles.header, { paddingTop: insets.top + 10 }]}>
-          <View style={styles.headerTopRow}>
-            <TouchableOpacity
-              style={styles.overviewPill}
-              onPress={() => {
-                tap();
-                setMenuOpen(true);
-              }}
-              activeOpacity={0.8}
-            >
-              <Icon name="menu" size={15} color="#FFFFFF" />
-              <Text style={styles.overviewText}>Overview</Text>
-              <Icon name="chevron-down" size={15} color="#FFFFFF" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.newBtn} onPress={openCreate} activeOpacity={0.85}>
-              <Icon name="plus" size={15} color="#FFFFFF" />
-              <Text style={styles.newBtnText}>New</Text>
-            </TouchableOpacity>
-          </View>
-
+        {/* ── HERO (light, content scrolls under the glass top bar) ──── */}
+        <View style={styles.hero}>
           <Text style={styles.greeting}>
             {greeting}, {firstName}
           </Text>
@@ -307,12 +287,12 @@ const SproutHomeScreen: React.FC = () => {
               withShadow={false}
               bezier
               chartConfig={{
-                backgroundGradientFrom: HEADER_TO,
+                backgroundGradientFrom: '#F6F7F4',
                 backgroundGradientFromOpacity: 0,
-                backgroundGradientTo: HEADER_TO,
+                backgroundGradientTo: '#F6F7F4',
                 backgroundGradientToOpacity: 0,
-                color: () => 'rgba(255,255,255,0.92)',
-                strokeWidth: 2.5,
+                color: (opacity = 1) => `rgba(147,200,34,${opacity})`,
+                strokeWidth: 3,
                 decimalPlaces: 0,
                 propsForBackgroundLines: { strokeWidth: 0 },
               }}
@@ -340,9 +320,9 @@ const SproutHomeScreen: React.FC = () => {
               );
             })}
           </View>
-        </LinearGradient>
+        </View>
 
-        {/* ── WHITE BODY ───────────────────────────────────────────── */}
+        {/* ── BODY ─────────────────────────────────────────────────── */}
         <View style={styles.body}>
           <View style={styles.filterRow}>
             {FILTERS.map(f => {
@@ -400,6 +380,36 @@ const SproutHomeScreen: React.FC = () => {
           )}
         </View>
       </ScrollView>
+
+      {/* ── Floating glass top bar (white at top, fades into content) ─ */}
+      <View pointerEvents="box-none" style={[styles.topBar, { height: insets.top + 54 }]}>
+        <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+          <BlurView intensity={Platform.OS === 'ios' ? 16 : 10} tint="light" style={StyleSheet.absoluteFill} />
+          <LinearGradient
+            colors={['rgba(255,255,255,1)', 'rgba(255,255,255,0.92)', 'rgba(255,255,255,0)']}
+            locations={[0, 0.5, 1]}
+            style={StyleSheet.absoluteFill}
+          />
+        </View>
+        <View style={[styles.topBarRow, { marginTop: insets.top + 2 }]}>
+          <TouchableOpacity
+            style={styles.overviewPill}
+            onPress={() => {
+              tap();
+              setMenuOpen(true);
+            }}
+            activeOpacity={0.85}
+          >
+            <Icon name="menu" size={15} color="#3F3F46" />
+            <Text style={styles.overviewText}>Overview</Text>
+            <Icon name="chevron-down" size={15} color="#71717A" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.newBtn} onPress={openCreate} activeOpacity={0.85}>
+            <Icon name="plus" size={15} color="#FFFFFF" />
+            <Text style={styles.newBtnText}>New</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
 
       {/* ── Overview quick-actions menu ──────────────────────────── */}
       {menuOpen ? (
@@ -506,29 +516,36 @@ const CampaignCard: React.FC<{ campaign: CampaignSummary; onPress: () => void }>
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#F6F7F4' },
 
-  // Header
-  header: {
-    paddingHorizontal: 18,
-    paddingBottom: 14,
-    borderBottomLeftRadius: 28,
-    borderBottomRightRadius: 28,
+  // Floating glass top bar
+  topBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
   },
-  headerTopRow: {
+  topBarRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 14,
+    paddingHorizontal: 16,
   },
   overviewPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    gap: 6,
+    backgroundColor: '#FFFFFF',
     borderRadius: 999,
-    paddingHorizontal: 13,
-    paddingVertical: 7,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.06)',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
   },
-  overviewText: { color: '#FFFFFF', fontFamily: FONT.semibold, fontSize: 14 },
+  overviewText: { color: '#27272A', fontFamily: FONT.semibold, fontSize: 14 },
   overviewMenu: {
     position: 'absolute',
     left: 16,
@@ -549,36 +566,43 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    backgroundColor: 'rgba(20,30,8,0.32)',
+    backgroundColor: BRAND,
     borderRadius: 999,
-    paddingHorizontal: 15,
-    paddingVertical: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    shadowColor: BRAND,
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
   newBtnText: { color: '#FFFFFF', fontFamily: FONT.semibold, fontSize: 14 },
 
-  greeting: { color: '#FFFFFF', fontFamily: FONT.bold, fontSize: 24, marginBottom: 8 },
-  briefingHeadline: { color: 'rgba(255,255,255,0.95)', fontFamily: FONT.semibold, fontSize: 17, marginBottom: 10 },
-  briefingList: { gap: 7 },
+  // Hero (light)
+  hero: { paddingHorizontal: 18, paddingTop: 4, paddingBottom: 8 },
+  greeting: { color: '#18181B', fontFamily: FONT.bold, fontSize: 26, marginBottom: 8 },
+  briefingHeadline: { color: '#3F3F46', fontFamily: FONT.semibold, fontSize: 16, marginBottom: 10 },
+  briefingList: { gap: 8 },
   briefingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  briefingLabel: { flex: 1, color: '#FFFFFF', fontFamily: FONT.medium, fontSize: 15, marginRight: 10 },
+  briefingLabel: { flex: 1, color: '#27272A', fontFamily: FONT.medium, fontSize: 15, marginRight: 10 },
   briefingChip: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
   briefingChipText: { fontFamily: FONT.bold, fontSize: 10, letterSpacing: 0.4 },
 
   dashedDivider: {
-    marginTop: 16,
-    marginBottom: 14,
+    marginTop: 18,
+    marginBottom: 16,
     borderBottomWidth: 1,
-    borderColor: 'rgba(255,255,255,0.35)',
+    borderColor: 'rgba(0,0,0,0.08)',
     borderStyle: 'dashed',
   },
 
   statsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   statBlock: { flex: 1 },
-  statLabel: { color: 'rgba(255,255,255,0.75)', fontFamily: FONT.semibold, fontSize: 11, letterSpacing: 0.6, marginBottom: 4 },
-  statValue: { color: '#FFFFFF', fontFamily: FONT.bold, fontSize: 22 },
-  statDelta: { color: 'rgba(255,255,255,0.85)', fontFamily: FONT.semibold, fontSize: 13 },
+  statLabel: { color: '#9CA3AF', fontFamily: FONT.semibold, fontSize: 11, letterSpacing: 0.6, marginBottom: 4 },
+  statValue: { color: '#18181B', fontFamily: FONT.bold, fontSize: 22 },
+  statDelta: { color: '#5D7E16', fontFamily: FONT.semibold, fontSize: 13 },
 
-  chartWrap: { height: 110, marginTop: 6, marginHorizontal: -18, justifyContent: 'center' },
+  chartWrap: { height: 110, marginTop: 8, marginHorizontal: -18, justifyContent: 'center' },
   chart: { paddingRight: 0 },
   chartBaseline: {
     position: 'absolute',
@@ -586,14 +610,14 @@ const styles = StyleSheet.create({
     right: 18,
     top: '50%',
     borderBottomWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
+    borderColor: 'rgba(0,0,0,0.07)',
     borderStyle: 'dashed',
   },
 
-  rangeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
+  rangeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 },
   rangeChip: { borderRadius: 999, paddingHorizontal: 11, paddingVertical: 6 },
-  rangeChipActive: { backgroundColor: 'rgba(20,30,8,0.34)' },
-  rangeChipText: { color: 'rgba(255,255,255,0.8)', fontFamily: FONT.semibold, fontSize: 12 },
+  rangeChipActive: { backgroundColor: '#18181B' },
+  rangeChipText: { color: '#9CA3AF', fontFamily: FONT.semibold, fontSize: 12 },
   rangeChipTextActive: { color: '#FFFFFF' },
 
   // Body
