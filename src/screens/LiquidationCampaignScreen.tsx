@@ -23,7 +23,7 @@ import { useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ChevronLeft, ChevronDown, Menu, Box, Settings as SettingsIcon, Pencil, Trash2, Check } from 'lucide-react-native';
+import { ChevronLeft, Menu, Box, MessageSquare, Settings as SettingsIcon, Pencil, Trash2, Check } from 'lucide-react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
@@ -405,21 +405,14 @@ const LiquidationCampaignScreen = () => {
               <ChevronLeft size={22} color="#18181B" />
             </TouchableOpacity>
 
-            <TouchableOpacity style={s.titlePill} onPress={handleEllipsis} activeOpacity={0.85}>
-              <View style={s.titlePillRow}>
-                <Text style={s.pillTitle} numberOfLines={1}>{controller.activeCampaign?.title || 'Campaign'}</Text>
-                <ChevronDown size={15} color="#71717A" />
-              </View>
+            <View style={s.titlePill}>
+              <Text style={s.pillTitle} numberOfLines={1}>{controller.activeCampaign?.title || 'Campaign'}</Text>
               <Text style={s.pillSub} numberOfLines={1}>
                 {soldCount}/{totalCount} sold · {controller.campaignConfig?.aggressiveness || 'balanced'}
               </Text>
-            </TouchableOpacity>
+            </View>
 
-            <TouchableOpacity
-              style={s.chatPill}
-              onPress={() => navigation.navigate('CampaignThreadScreen', { campaignId: controller.activeCampaign?.id, title: controller.activeCampaign?.title })}
-              activeOpacity={0.85}
-            >
+            <TouchableOpacity style={s.chatPill} onPress={handleEllipsis} activeOpacity={0.85}>
               <Menu size={16} color="#18181B" />
               <Text style={s.chatPillText}>Chat</Text>
             </TouchableOpacity>
@@ -450,6 +443,12 @@ const LiquidationCampaignScreen = () => {
               <View style={{ flex: 1 }} />
               <Check size={17} color="#43631A" />
             </View>
+            <View style={s.dropDivider} />
+            <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
+              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); navigation.navigate('CampaignThreadScreen', { campaignId: cam?.id, title: cam?.title }); }}>
+              <MessageSquare size={18} color="#3F3F46" />
+              <Text style={s.dropText}>Chat</Text>
+            </TouchableOpacity>
             <View style={s.dropDivider} />
             <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
               onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); if (cam) void openCampaignConfig(cam.id, cam.title); }}>
