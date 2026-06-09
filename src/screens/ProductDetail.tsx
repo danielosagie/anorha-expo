@@ -17,6 +17,7 @@ import { CameraView } from 'expo-camera';
 import Card from '../components/Card';
 import PlaceholderImage from '../components/PlaceholderImage';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { API_BASE_URL } from '../config/env';
 import { createCanonicalBase } from '../utils/platformDataHydration';
 import { hasPlatformPrice } from '../utils/platformRequirements';
@@ -505,6 +506,63 @@ const ProductDetailScreen = observer(
     // Custom Action Menu State
     const [actionMenuVisible, setActionMenuVisible] = useState(false);
     const [draftVersions, setDraftVersions] = useState<Array<{ id: string; createdAt: string; platforms: any; publishedPlatforms?: string[] }>>([]);
+
+    // Add-to-clearout (campaign) state — publish this product into a clearout
+    const [clearoutVisible, setClearoutVisible] = useState(false);
+    const [clearoutCampaigns, setClearoutCampaigns] = useState<any[]>([]);
+    const [clearoutLoading, setClearoutLoading] = useState(false);
+    const [clearoutBusy, setClearoutBusy] = useState<string | null>(null);
+    const campaignAdapter = useMemo(() => new HybridConversationDataAdapter(), []);
+
+    const openClearout = useCallback(async () => {
+      setActionMenuVisible(false);
+      setClearoutVisible(true);
+      setClearoutLoading(true);
+      try {
+        const list = await campaignAdapter.listCampaigns();
+        setClearoutCampaigns((list || []).filter((c: any) => c.status === 'active' || c.status === 'waiting_user' || c.status === 'paused'));
+      } catch {
+        setClearoutCampaigns([]);
+      } finally {
+        setClearoutLoading(false);
+      }
+    }, [campaignAdapter]);
+
+    const addToClearout = useCallback(async (campaignId: string, title: string) => {
+      if (!detailedItem?.Id || clearoutBusy) return;
+      setClearoutBusy(campaignId);
+      try {
+        await campaignAdapter.addCampaignItems(campaignId, [detailedItem.Id]);
+        setClearoutVisible(false);
+        Alert.alert('Added to clearout', `This product is now in "${title}".`);
+      } catch (e: any) {
+        Alert.alert('Could not add', e?.message || 'Please try again.');
+      } finally {
+        setClearoutBusy(null);
+      }
+    }, [campaignAdapter, detailedItem?.Id, clearoutBusy]);
+
+    const createClearoutWithProduct = useCallback(async () => {
+      if (!detailedItem?.Id || clearoutBusy) return;
+      setClearoutBusy('__new__');
+      try {
+        const name = detailedItem?.Title ? `Clearout · ${String(detailedItem.Title).slice(0, 24)}` : 'New clearout';
+        const camp = await campaignAdapter.createCampaign({
+          title: name,
+          targetRevenue: Math.max(50, Math.round(Number(detailedItem?.Price) || 100)),
+          timeframeDays: 14,
+          aggressiveness: 'balanced',
+          inventoryScope: 'all',
+        });
+        await campaignAdapter.addCampaignItems(camp.id, [detailedItem.Id]);
+        setClearoutVisible(false);
+        (navigation as any).navigate('LiquidationCampaignScreen', { campaignId: camp.id, entryPoint: 'detail' });
+      } catch (e: any) {
+        Alert.alert('Could not create clearout', e?.message || 'Please try again.');
+      } finally {
+        setClearoutBusy(null);
+      }
+    }, [campaignAdapter, detailedItem?.Id, detailedItem?.Title, detailedItem?.Price, clearoutBusy, navigation]);
 
     // Current form data (now live)
     const [formData, setFormData] = useState<EditFormData>({
@@ -4026,6 +4084,14 @@ const ProductDetailScreen = observer(
 
             <TouchableOpacity
               style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
+              onPress={openClearout}
+            >
+              <Icon name="sprout-outline" size={20} color="#5D7E16" style={{ marginRight: 10 }} />
+              <Text style={{ fontSize: 16, fontWeight: '600', color: '#5D7E16' }}>Add to clearout</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
               onPress={() => {
                 setActionMenuVisible(false);
                 loadPlatformData();
@@ -4065,6 +4131,68 @@ const ProductDetailScreen = observer(
               <Icon name="delete-outline" size={20} color={theme.colors.error} style={{ marginRight: 10 }} />
               <Text style={{ fontSize: 16, fontWeight: '500', color: theme.colors.error }}>Delete Product</Text>
             </TouchableOpacity>
+          </View>
+        </BaseModal>
+
+        {/* Add-to-clearout picker */}
+        <BaseModal
+          onClose={() => setClearoutVisible(false)}
+          visible={clearoutVisible}
+          showCloseButton={false}
+          containerStyle={{ width: '88%', maxWidth: 380 }}
+        >
+          <View style={{ width: '100%' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
+              <View style={{ width: 24 }} />
+              <Text style={{ fontSize: 18, fontWeight: '700', flex: 1, textAlign: 'center' }}>Add to clearout</Text>
+              <TouchableOpacity onPress={() => setClearoutVisible(false)}>
+                <Icon name="close" size={24} color="#000" />
+              </TouchableOpacity>
+            </View>
+
+            {clearoutLoading ? (
+              <View style={{ paddingVertical: 24, alignItems: 'center' }}>
+                <ActivityIndicator color="#93C822" />
+              </View>
+            ) : (
+              <>
+                {clearoutCampaigns.map((c: any) => (
+                  <TouchableOpacity
+                    key={c.id}
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}
+                    onPress={() => addToClearout(c.id, c.title)}
+                    disabled={!!clearoutBusy}
+                  >
+                    <View style={{ width: 36, height: 36, borderRadius: 11, backgroundColor: 'rgba(147,200,34,0.14)', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                      <Icon name="leaf" size={18} color="#5D7E16" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 15, fontWeight: '600', color: '#18181B' }} numberOfLines={1}>{c.title}</Text>
+                      <Text style={{ fontSize: 12, color: '#71717A', marginTop: 1 }}>
+                        {(c.stats?.soldCount ?? 0)}/{(c.stats?.totalCount ?? 0)} sold
+                      </Text>
+                    </View>
+                    {clearoutBusy === c.id ? <ActivityIndicator size="small" color="#93C822" /> : <Icon name="chevron-right" size={20} color="#D4D4D8" />}
+                  </TouchableOpacity>
+                ))}
+                {clearoutCampaigns.length === 0 ? (
+                  <Text style={{ textAlign: 'center', color: '#9CA3AF', fontSize: 13, paddingVertical: 16 }}>No active clearouts yet.</Text>
+                ) : null}
+
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, marginTop: 10, backgroundColor: '#93C822', borderRadius: 14 }}
+                  onPress={createClearoutWithProduct}
+                  disabled={!!clearoutBusy}
+                >
+                  {clearoutBusy === '__new__' ? <ActivityIndicator color="#FFFFFF" /> : (
+                    <>
+                      <Icon name="plus" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                      <Text style={{ fontSize: 15, fontWeight: '700', color: '#FFFFFF' }}>New clearout with this product</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         </BaseModal>
 
