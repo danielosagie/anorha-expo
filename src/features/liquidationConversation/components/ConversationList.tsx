@@ -16,6 +16,9 @@ type Props = {
   onDecision: (prompt: DecisionPrompt, action: 'approve' | 'revise' | 'follow_up') => void;
   onRetry: (clientMessageId: string) => void;
   ListHeaderComponent?: React.ReactElement | null;
+  /** Padding so the feed clears the floating glass header/footer. */
+  contentTopInset?: number;
+  contentBottomInset?: number;
 };
 
 export const ConversationList = ({
@@ -24,6 +27,8 @@ export const ConversationList = ({
   onDecision,
   onRetry,
   ListHeaderComponent = null,
+  contentTopInset,
+  contentBottomInset,
 }: Props) => {
   const listRef = useRef<any>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
@@ -70,7 +75,11 @@ export const ConversationList = ({
         ref={listRef}
         data={messages}
         keyExtractor={item => item.clientMessageId || item.serverMessageId || item.id}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={{
+          paddingHorizontal: 12,
+          paddingTop: contentTopInset ?? 10,
+          paddingBottom: contentBottomInset ?? 18,
+        }}
         ListHeaderComponent={ListHeaderComponent}
         renderItem={({ item }) => (
           <StreamingMessageBubble message={item} onDecision={onDecision} onRetry={onRetry} />

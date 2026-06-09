@@ -3,7 +3,7 @@ import { ActivityIndicator, Animated, Image, StyleSheet, Text, TextInput, Toucha
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { AudioModule, RecordingPresets, useAudioRecorder } from 'expo-audio';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { Plus, ArrowRight, AudioLines, X, Check, Clock } from 'lucide-react-native';
 import { API_BASE_URL } from '../../../config/env';
 
 type Props = {
@@ -155,26 +155,17 @@ export const ConversationComposer = ({
     <View style={styles.wrap}>
       {isStreaming || queuedCount > 1 ? (
         <View style={styles.queueBanner}>
-          <Icon name="progress-clock" size={13} color="#5D7E16" />
+          <Clock size={13} color="#5D7E16" />
           <Text style={styles.queueText}>
             {isStreaming ? 'Sprout is responding.' : 'Messages queued.'} {Math.max(queuedCount - 1, 0)} waiting.
           </Text>
         </View>
       ) : null}
 
-      {imageUri && !recording ? (
-        <View style={styles.previewRow}>
-          <Image source={{ uri: imageUri }} style={styles.previewImg} />
-          <TouchableOpacity style={styles.previewRemove} onPress={() => setImageUri(null)}>
-            <Icon name="close" size={13} color="#FFFFFF" />
-          </TouchableOpacity>
-        </View>
-      ) : null}
-
       {recording ? (
         <View style={styles.recordingBar}>
           <TouchableOpacity style={styles.recCancel} onPress={cancelRecording} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Icon name="close" size={20} color="#6B7280" />
+            <X size={20} color="#6B7280" />
           </TouchableOpacity>
           <View style={styles.recCenter}>
             <View style={styles.waveRow}>
@@ -200,38 +191,48 @@ export const ConversationComposer = ({
             <Text style={styles.recTimer}>{fmt(duration)}</Text>
           </View>
           <TouchableOpacity style={styles.recDone} onPress={finishRecording} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Icon name="check" size={20} color="#FFFFFF" />
+            <Check size={20} color="#FFFFFF" />
           </TouchableOpacity>
         </View>
       ) : (
         <View style={styles.row}>
           <TouchableOpacity style={styles.attachBtn} onPress={attach} activeOpacity={0.8}>
-            <Icon name="plus" size={22} color="#52525B" />
+            <Plus size={22} color="#18181B" />
           </TouchableOpacity>
 
           <View style={styles.card}>
-            <TextInput
-              style={styles.input}
-              placeholder={placeholder}
-              placeholderTextColor="#9CA3AF"
-              multiline
-              value={value}
-              onChangeText={onChangeText}
-              editable={!transcribing}
-            />
-            {transcribing ? (
-              <View style={[styles.actionBtn, styles.neutralBtn]}>
-                <ActivityIndicator size="small" color="#71717A" />
+            {imageUri ? (
+              <View style={styles.previewRow}>
+                <Image source={{ uri: imageUri }} style={styles.previewImg} />
+                <TouchableOpacity style={styles.previewRemove} onPress={() => setImageUri(null)}>
+                  <X size={13} color="#FFFFFF" />
+                </TouchableOpacity>
               </View>
-            ) : hasText ? (
-              <TouchableOpacity style={[styles.actionBtn, styles.sendBtn]} onPress={send}>
-                <Icon name="arrow-up" size={18} color="#FFFFFF" />
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity style={[styles.actionBtn, styles.voiceBtn]} onPress={startRecording}>
-                <Icon name="microphone" size={18} color="#FFFFFF" />
-              </TouchableOpacity>
-            )}
+            ) : null}
+            <View style={styles.inputRow}>
+              <TextInput
+                style={styles.input}
+                placeholder={placeholder}
+                placeholderTextColor="#9CA3AF"
+                multiline
+                value={value}
+                onChangeText={onChangeText}
+                editable={!transcribing}
+              />
+              {transcribing ? (
+                <View style={[styles.actionBtn, styles.neutralBtn]}>
+                  <ActivityIndicator size="small" color="#71717A" />
+                </View>
+              ) : hasText ? (
+                <TouchableOpacity style={[styles.actionBtn, styles.sendBtn]} onPress={send} activeOpacity={0.85}>
+                  <ArrowRight size={19} color="#FFFFFF" />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity style={[styles.actionBtn, styles.voiceBtn]} onPress={startRecording} activeOpacity={0.85}>
+                  <AudioLines size={19} color="#FFFFFF" />
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
         </View>
       )}
@@ -242,11 +243,9 @@ export const ConversationComposer = ({
 const styles = StyleSheet.create({
   wrap: {
     paddingHorizontal: 12,
-    paddingTop: 8,
-    paddingBottom: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
-    backgroundColor: '#FFFFFF',
+    paddingTop: 4,
+    paddingBottom: 2,
+    backgroundColor: 'transparent',
   },
   queueBanner: {
     marginBottom: 8,
@@ -262,8 +261,35 @@ const styles = StyleSheet.create({
   },
   queueText: { color: '#5D7E16', fontFamily: FONT.medium, fontSize: 12 },
 
-  previewRow: { marginBottom: 8, alignSelf: 'flex-start' },
-  previewImg: { width: 64, height: 64, borderRadius: 12, backgroundColor: '#F3F4F6' },
+  row: { flexDirection: 'row', alignItems: 'flex-end', gap: 9 },
+  attachBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
+  },
+  card: {
+    flex: 1,
+    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+    paddingLeft: 18,
+    paddingRight: 6,
+    paddingVertical: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
+  },
+  previewRow: { alignSelf: 'flex-start', marginBottom: 8, marginLeft: -8, marginTop: 2 },
+  previewImg: { width: 96, height: 96, borderRadius: 14, backgroundColor: '#F3F4F6' },
   previewRemove: {
     position: 'absolute',
     top: -6,
@@ -275,50 +301,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-
-  row: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
-  attachBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#F1F2EE',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  card: {
-    flex: 1,
-    minHeight: 44,
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: '#E4E4E7',
-    backgroundColor: '#FFFFFF',
-    paddingLeft: 16,
-    paddingRight: 5,
-    paddingVertical: 4,
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 8,
-  },
+  inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   input: {
     flex: 1,
-    minHeight: 36,
+    minHeight: 34,
     maxHeight: 120,
     color: '#18181B',
     fontFamily: FONT.medium,
-    fontSize: 15,
-    paddingTop: 8,
-    paddingBottom: 8,
+    fontSize: 16,
+    paddingTop: 7,
+    paddingBottom: 7,
   },
   actionBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    minWidth: 48,
+    height: 38,
+    paddingHorizontal: 14,
+    borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 2,
+    marginBottom: 1,
   },
   sendBtn: { backgroundColor: BRAND },
-  voiceBtn: { backgroundColor: '#9CA3AF' },
+  voiceBtn: { backgroundColor: '#A1A1AA' },
   neutralBtn: { backgroundColor: '#F1F2EE' },
 
   recordingBar: {
@@ -326,17 +330,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E4E4E7',
-    borderRadius: 22,
+    borderRadius: 24,
     paddingHorizontal: 8,
-    paddingVertical: 6,
-    minHeight: 52,
+    paddingVertical: 7,
+    minHeight: 56,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
   },
-  recCancel: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#F1F2EE', alignItems: 'center', justifyContent: 'center' },
+  recCancel: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F1F2EE', alignItems: 'center', justifyContent: 'center' },
   recCenter: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
   waveRow: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 26, gap: 2 },
   waveBar: { width: 3, height: 14, backgroundColor: BRAND, borderRadius: 1.5 },
   recTimer: { fontFamily: FONT.semibold, fontSize: 13, color: '#EF4444', fontVariant: ['tabular-nums'] },
-  recDone: { width: 36, height: 36, borderRadius: 18, backgroundColor: BRAND, alignItems: 'center', justifyContent: 'center' },
+  recDone: { width: 40, height: 40, borderRadius: 20, backgroundColor: BRAND, alignItems: 'center', justifyContent: 'center' },
 });

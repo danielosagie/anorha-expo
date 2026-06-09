@@ -2,18 +2,21 @@ import React, { useMemo, useRef, useEffect, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
+import { ChevronLeft, Menu, Package, Trash2, AlertCircle, CheckCircle2, X } from 'lucide-react-native';
 import { ensureSupabaseJwt } from '../../lib/supabase';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { ConversationComposer } from '../features/liquidationConversation/components/ConversationComposer';
 import { ConversationList } from '../features/liquidationConversation/components/ConversationList';
@@ -51,6 +54,9 @@ const CampaignThreadScreen = () => {
 
   const controller = useLiquidationConversationController({ adapter, initialCampaignId: campaignId });
   const [menuOpen, setMenuOpen] = useState(false);
+  const insets = useSafeAreaInsets();
+  const [headerH, setHeaderH] = useState(104);
+  const [footerH, setFooterH] = useState(150);
 
   // Success haptic when the agent finishes streaming a turn (chat-template polish)
   const prevStreamingRef = useRef(false);
@@ -111,93 +117,64 @@ const CampaignThreadScreen = () => {
   const latestAsk = controller.campaignOverview?.needsInput?.[0];
 
   return (
-    <SafeAreaView style={s.container}>
+    <View style={s.root}>
       <StatusBar barStyle="dark-content" />
       <KeyboardAvoidingView
-        style={s.container}
+        style={s.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 72 : 0}
+        keyboardVerticalOffset={0}
       >
-        {/* ── Top bar ──────────────────────────────────────────────── */}
-        <View style={s.topBar}>
-          <TouchableOpacity
-            style={s.navCircle}
-            onPress={() => {
-              if (navigation.canGoBack()) navigation.goBack();
-              else navigation.navigate('SproutHomeScreen');
-            }}
-          >
-            <Icon name="chevron-left" size={22} color="#18181B" />
-          </TouchableOpacity>
+        {/* ── Feed scrolls under both glass bars ──────────────────── */}
+        <ConversationList
+          messages={controller.activeMessages}
+          loading={controller.isLoadingMessages}
+          onDecision={controller.submitDecision}
+          onRetry={controller.retryMessage}
+          contentTopInset={headerH + 8}
+          contentBottomInset={footerH + 8}
+        />
 
-          <View style={s.titlePill}>
-            <Text style={s.pillTitle} numberOfLines={1}>{campaignTitle}</Text>
-            <Text style={s.pillSub} numberOfLines={1}>
-              {soldCount}/{itemCount} sold · {daysLeftLabel}
-            </Text>
-          </View>
-
-          <TouchableOpacity style={s.chatPill} onPress={handleEllipsis}>
-            <Icon name="menu" size={16} color="#18181B" />
-            <Text style={s.chatPillText}>Chat</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* ── Progress strip ──────────────────────────────────────── */}
-        <View style={s.progStrip}>
-          <View style={[s.progFill, { width: undefined, flex: (soldCount / (itemCount || 1)) }]} />
-        </View>
-
-        {/* ── Ambient tray ────────────────────────────────────────── */}
-        {hasPendingAsks && latestAsk ? (
-          <View style={s.ambientTray}>
-            <View style={s.trayDot} />
-            <Text style={s.trayText} numberOfLines={1}>{latestAsk.title} — needs you</Text>
-            <TouchableOpacity onPress={() => {
-              if (latestAsk.threadId) controller.openThread(latestAsk.threadId);
-            }}>
-              <Text style={s.trayAction}>Review ↓</Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
-
-        {/* ── Main content (Feed) ─────────────────────────────────── */}
-        <View style={s.container}>
-          <ConversationList
-            messages={controller.activeMessages}
-            loading={controller.isLoadingMessages}
-            onDecision={controller.submitDecision}
-            onRetry={controller.retryMessage}
+        {/* ── Bottom: floating glass composer (no border, fades to white) ─ */}
+        <View
+          style={[s.footer, { paddingBottom: insets.bottom || 10 }]}
+          onLayout={e => setFooterH(e.nativeEvent.layout.height)}
+        >
+          <LinearGradient
+            colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.9)', '#FFFFFF']}
+            locations={[0, 0.55, 1]}
+            style={s.footerFade}
+            pointerEvents="none"
           />
-        </View>
-
-        {/* ── Footer (composer) ───────────────────────────────────── */}
-        <View style={s.footerStack}>
           {controller.error ? (
             <View style={s.errorBanner}>
-              <Icon name="alert-circle-outline" size={14} color="#EF4444" />
+              <AlertCircle size={14} color="#EF4444" />
               <Text style={s.errorText}>{controller.error}</Text>
               <TouchableOpacity onPress={controller.onRefresh}><Text style={s.errorRetry}>Retry</Text></TouchableOpacity>
             </View>
           ) : null}
           {controller.notice ? (
             <View style={s.noticeBanner}>
-              <Icon name="check-circle-outline" size={14} color="#5D7E16" />
+              <CheckCircle2 size={14} color="#5D7E16" />
               <Text style={s.noticeText}>{controller.notice}</Text>
               <TouchableOpacity onPress={() => controller.setNotice(null)}>
-                <Icon name="close" size={14} color="#5D7E16" />
+                <X size={14} color="#5D7E16" />
               </TouchableOpacity>
             </View>
           ) : null}
-          
-          <View style={s.chipsContent}>
+
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={s.chipsContent}
+          >
             {QUICK_CHIPS.map(chip => (
-              <TouchableOpacity key={chip.action} style={s.quickChip} onPress={() => handleQuickChip(chip.action)}>
+              <TouchableOpacity key={chip.action} style={s.quickChip} onPress={() => handleQuickChip(chip.action)} activeOpacity={0.7}>
                 <Text style={s.quickChipText}>{chip.label}</Text>
               </TouchableOpacity>
             ))}
-          </View>
-          
+          </ScrollView>
+
           <ConversationComposer
             value={controller.composerText}
             placeholder={composerPlaceholder}
@@ -208,74 +185,128 @@ const CampaignThreadScreen = () => {
             getAuthToken={ensureSupabaseJwt}
           />
         </View>
-
-        {/* ── Clean dropdown menu (not native) ────────────────────── */}
-        {menuOpen ? (
-          <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-            <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setMenuOpen(false)} />
-            <View style={s.dropdown}>
-              <TouchableOpacity style={s.dropItem} onPress={goToInventory} activeOpacity={0.7}>
-                <Icon name="package-variant-closed" size={18} color="#3F3F46" />
-                <Text style={s.dropText}>Inventory</Text>
-              </TouchableOpacity>
-              <View style={s.dropDivider} />
-              <TouchableOpacity style={s.dropItem} onPress={deleteCampaign} activeOpacity={0.7}>
-                <Icon name="trash-can-outline" size={18} color="#DC2626" />
-                <Text style={[s.dropText, { color: '#DC2626' }]}>Delete clearout</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : null}
       </KeyboardAvoidingView>
-    </SafeAreaView>
+
+      {/* ── Top: floating glass header (white at top → transparent, blur) ─ */}
+      <View
+        style={[s.header, { paddingTop: insets.top + 6 }]}
+        onLayout={e => setHeaderH(e.nativeEvent.layout.height)}
+      >
+        <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+          <BlurView intensity={Platform.OS === 'ios' ? 24 : 14} tint="light" style={StyleSheet.absoluteFill} />
+          <LinearGradient
+            colors={['#FFFFFF', 'rgba(255,255,255,0.85)', 'rgba(255,255,255,0)']}
+            locations={[0, 0.55, 1]}
+            style={StyleSheet.absoluteFill}
+          />
+        </View>
+        <View style={s.headerRow}>
+          <TouchableOpacity
+            style={s.navCircle}
+            onPress={() => {
+              if (navigation.canGoBack()) navigation.goBack();
+              else navigation.navigate('SproutHomeScreen');
+            }}
+            activeOpacity={0.85}
+          >
+            <ChevronLeft size={22} color="#18181B" />
+          </TouchableOpacity>
+
+          <View style={s.titlePill}>
+            <Text style={s.pillTitle} numberOfLines={1}>{campaignTitle}</Text>
+            <Text style={s.pillSub} numberOfLines={1}>
+              {soldCount}/{itemCount} sold · {daysLeftLabel}
+            </Text>
+          </View>
+
+          <TouchableOpacity style={s.chatPill} onPress={handleEllipsis} activeOpacity={0.85}>
+            <Menu size={16} color="#18181B" />
+            <Text style={s.chatPillText}>Chat</Text>
+          </TouchableOpacity>
+        </View>
+
+        {hasPendingAsks && latestAsk ? (
+          <TouchableOpacity
+            style={s.ambientTray}
+            activeOpacity={0.85}
+            onPress={() => { if (latestAsk.threadId) controller.openThread(latestAsk.threadId); }}
+          >
+            <View style={s.trayDot} />
+            <Text style={s.trayText} numberOfLines={1}>{latestAsk.title} needs you</Text>
+            <Text style={s.trayAction}>Review</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
+      {/* ── Clean dropdown menu (not native) ────────────────────── */}
+      {menuOpen ? (
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setMenuOpen(false)} />
+          <View style={[s.dropdown, { top: insets.top + 54 }]}>
+            <TouchableOpacity style={s.dropItem} onPress={goToInventory} activeOpacity={0.7}>
+              <Package size={18} color="#3F3F46" />
+              <Text style={s.dropText}>Inventory</Text>
+            </TouchableOpacity>
+            <View style={s.dropDivider} />
+            <TouchableOpacity style={s.dropItem} onPress={deleteCampaign} activeOpacity={0.7}>
+              <Trash2 size={18} color="#DC2626" />
+              <Text style={[s.dropText, { color: '#DC2626' }]}>Delete clearout</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
+    </View>
   );
 };
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  root: { flex: 1, backgroundColor: '#FFFFFF' },
+  flex: { flex: 1 },
 
-  // Top bar
-  topBar: { minHeight: 60, paddingHorizontal: 14, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  // Floating glass header — white at the top, fading to transparent, content scrolls under
+  header: { position: 'absolute', top: 0, left: 0, right: 0, paddingHorizontal: 14, paddingBottom: 10 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   navCircle: {
     width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2,
+    backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
   },
   titlePill: {
     flexShrink: 1, alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 22, paddingHorizontal: 18, paddingVertical: 8,
-    shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 2,
+    shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 12, shadowOffset: { width: 0, height: 3 }, elevation: 3,
   },
   pillTitle: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_700Bold' },
   pillSub: { fontSize: 12, color: '#71717A', marginTop: 1, fontFamily: 'Inter_500Medium' },
   chatPill: {
     flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FFFFFF', borderRadius: 22, paddingHorizontal: 14, paddingVertical: 9,
-    shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2,
+    shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
   },
   chatPillText: { fontSize: 14, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
 
-  // Progress strip
-  progStrip: { height: 2, backgroundColor: '#F3F4F6' },
-  progFill: { height: '100%', backgroundColor: '#639922' },
-
-  // Ambient tray
-  ambientTray: { backgroundColor: '#fafdf5', borderBottomWidth: 0.5, borderBottomColor: '#c0dd97', paddingHorizontal: 16, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  // Ambient "needs you" tray (floats under the pills)
+  ambientTray: {
+    marginTop: 8, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: 'rgba(250,253,245,0.97)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 8,
+    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
+  },
   trayDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#BA7517' },
-  trayText: { flex: 1, fontSize: 11, color: '#3B6D11', fontFamily: 'Inter_500Medium' },
-  trayAction: { fontSize: 11, color: '#BA7517', fontWeight: '500' },
+  trayText: { fontSize: 12, color: '#3B6D11', fontFamily: 'Inter_500Medium' },
+  trayAction: { fontSize: 12, color: '#BA7517', fontFamily: 'Inter_600SemiBold' },
 
-  // Footer
-  footerStack: { backgroundColor: '#FFFFFF', paddingTop: 4, borderTopWidth: 0.5, borderTopColor: '#E5E5E5' },
-  errorBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FEF2F2', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  // Floating glass footer — content fades to white, no border
+  footer: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingTop: 6, backgroundColor: '#FFFFFF' },
+  footerFade: { position: 'absolute', left: 0, right: 0, top: -30, height: 30 },
+  errorBanner: { marginHorizontal: 12, marginBottom: 6, borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FEF2F2', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
   errorText: { flex: 1, color: '#B91C1C', fontFamily: 'Inter_500Medium', fontSize: 12 },
   errorRetry: { color: '#DC2626', fontFamily: 'Inter_700Bold', fontSize: 12 },
-  noticeBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(147,200,34,0.3)', backgroundColor: 'rgba(147,200,34,0.12)', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  noticeBanner: { marginHorizontal: 12, marginBottom: 6, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(147,200,34,0.3)', backgroundColor: 'rgba(147,200,34,0.12)', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
   noticeText: { flex: 1, color: '#5D7E16', fontFamily: 'Inter_500Medium', fontSize: 12 },
-  chipsContent: { paddingHorizontal: 12, gap: 6, flexDirection: 'row', paddingBottom: 8, paddingTop: 4 },
-  quickChip: { paddingHorizontal: 11, paddingVertical: 5, borderRadius: 14, borderWidth: 0.5, borderColor: '#D1D5DB', backgroundColor: '#F9FAFB' },
-  quickChipText: { fontSize: 11, color: '#71717A', fontFamily: 'Inter_500Medium' },
+  chipsContent: { paddingHorizontal: 12, gap: 8, flexDirection: 'row', paddingBottom: 8, paddingTop: 2 },
+  quickChip: { paddingHorizontal: 13, paddingVertical: 7, borderRadius: 16, backgroundColor: '#F4F4F1' },
+  quickChipText: { fontSize: 12, color: '#52525B', fontFamily: 'Inter_500Medium' },
 
   // Clean dropdown menu
   dropdown: {
-    position: 'absolute', top: 58, right: 14, minWidth: 200,
+    position: 'absolute', right: 14, minWidth: 200,
     backgroundColor: '#FFFFFF', borderRadius: 16, paddingVertical: 6,
     shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 10,
   },

@@ -20,6 +20,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { LineChart } from 'react-native-chart-kit';
 import * as Haptics from 'expo-haptics';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { Moon, Sun } from 'lucide-react-native';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
 import type { CampaignSummary } from '../features/liquidationConversation/types';
@@ -282,14 +283,17 @@ const SproutHomeScreen: React.FC = () => {
       >
         {/* ── HERO (themed: green by day, dark by night) ─────────────── */}
         <View style={styles.hero}>
-          <Text style={[styles.greeting, { color: THEME.strong }]}>
-            {greeting}, 📖 {firstName}
-          </Text>
+          <View style={styles.greetingRow}>
+            <Text style={[styles.greeting, { color: THEME.strong }]} numberOfLines={1}>
+              {greeting}, {firstName}
+            </Text>
+            {isNight ? <Moon size={20} color={THEME.faint} /> : <Sun size={20} color={THEME.faint} />}
+          </View>
 
           {briefingRows.length > 0 ? (
             <>
               <Text style={[styles.briefingHeadline, { color: THEME.strong }]}>
-                {briefingRows.length} {briefingRows.length === 1 ? 'thing' : 'things'} happened {isNight ? 'while you slept' : 'today'}  {isNight ? '🌙' : '☀️'}
+                {briefingRows.length} {briefingRows.length === 1 ? 'thing' : 'things'} happened {isNight ? 'while you slept' : 'today'}
               </Text>
               <Text style={styles.briefingProse}>
                 {briefingSegments.map((seg, i) => (
@@ -643,7 +647,8 @@ const styles = StyleSheet.create({
 
   // Hero (themed)
   hero: { paddingHorizontal: 18, paddingTop: 4, paddingBottom: 8 },
-  greeting: { fontFamily: FONT.bold, fontSize: 25, marginBottom: 6 },
+  greetingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  greeting: { flexShrink: 1, fontFamily: FONT.bold, fontSize: 25 },
   briefingHeadline: { fontFamily: FONT.semibold, fontSize: 17, marginBottom: 10, lineHeight: 23 },
   briefingProse: { fontSize: 17, lineHeight: 27, marginTop: 1 },
 
