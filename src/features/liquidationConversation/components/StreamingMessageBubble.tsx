@@ -45,7 +45,7 @@ type Props = {
   onRetry: (clientMessageId: string) => void;
 };
 
-export const StreamingMessageBubble = ({ message, onDecision, onRetry }: Props) => {
+const StreamingMessageBubbleBase = ({ message, onDecision, onRetry }: Props) => {
   const [cursorVisible, setCursorVisible] = useState(true);
   const isUser = message.role === 'user';
   const isStreaming = message.deliveryState === 'streaming';
@@ -89,7 +89,7 @@ export const StreamingMessageBubble = ({ message, onDecision, onRetry }: Props) 
   const renderMarkdown = !isUser && !isStreaming;
 
   return (
-    <Animated.View entering={FadeIn.duration(180)} style={[styles.row, isUser ? styles.rowRight : styles.rowLeft, revealRowStyle]}>
+    <Animated.View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft, revealRowStyle]}>
       <Animated.Text style={[styles.revealTime, revealTimeStyle]} numberOfLines={1}>{message.time}</Animated.Text>
       <View style={[styles.card, message.kind === 'action' ? styles.actionCard : isUser ? styles.userCard : styles.assistantCard]}>
         {message.kind === 'action' ? (
@@ -157,6 +157,25 @@ export const StreamingMessageBubble = ({ message, onDecision, onRetry }: Props) 
     </Animated.View>
   );
 };
+
+// Memoized: activeMessages rebuilds every message object on each stream delta,
+// so we compare the display-relevant fields and skip re-rendering bubbles that
+// did not actually change. This is what stops the whole list from flickering
+// while the assistant streams.
+export const StreamingMessageBubble = React.memo(StreamingMessageBubbleBase, (prev, next) => {
+  const a = prev.message;
+  const b = next.message;
+  return (
+    a.id === b.id &&
+    a.content === b.content &&
+    a.deliveryState === b.deliveryState &&
+    a.time === b.time &&
+    a.kind === b.kind &&
+    a.actionMeta?.status === b.actionMeta?.status &&
+    a.actionMeta?.summary === b.actionMeta?.summary &&
+    a.decisionPrompt === b.decisionPrompt
+  );
+});
 
 const styles = StyleSheet.create({
   row: {

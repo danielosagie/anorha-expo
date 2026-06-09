@@ -52,10 +52,17 @@ export const ConversationList = ({
     [dragX],
   );
 
+  // Keep pinned to the bottom without flicker: stream deltas pin instantly
+  // (animated:false), only a brand-new message gets a gentle animated scroll.
+  const prevLenRef = useRef(0);
   useEffect(() => {
-    if (!showJumpToLatest) {
-      listRef.current?.scrollToEnd({ animated: true });
+    if (showJumpToLatest) {
+      prevLenRef.current = messages.length;
+      return;
     }
+    const grew = messages.length > prevLenRef.current;
+    prevLenRef.current = messages.length;
+    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: grew }));
   }, [messages, showJumpToLatest]);
 
   if (loading) {
