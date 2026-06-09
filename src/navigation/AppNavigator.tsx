@@ -39,6 +39,8 @@ import GlobalSearchScreen from '../screens/GlobalSearchScreen';
 import InventoryOrdersScreen from '../screens/InventoryOrdersScreen';
 import MarketplaceScreen from '../screens/MarketplaceScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import SettingsScreen from '../screens/SettingsScreen';
+import ConnectionsScreen from '../screens/ConnectionsScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
 import ProductDetailScreen from '../screens/ProductDetail';
 import PhoneAuthScreen from '../screens/PhoneAuthScreen';
@@ -150,6 +152,8 @@ export type AppStackParamList = {
   MappingReview: { connectionId: string; platformName: string; jobId?: string; importedProducts?: any[]; isCSVImport?: boolean; isScanning?: boolean; scanStartTime?: number; };
   SyncRules: { connectionId: string };
   Profile: { refresh?: number };
+  AccountSettings: { refresh?: number } | undefined;
+  Connections: undefined;
   DeleteAccountInfo: undefined;
   NotificationSettings: undefined;
   Team: undefined;
@@ -447,7 +451,7 @@ const TabNavigator = () => {
       />
       <Tab.Screen
         name="Profile"
-        component={ProfileScreen}
+        component={SettingsScreen}
         options={{
           tabBarLabel: 'Settings',
           tabBarIcon: ({ color, size }: { color: string; size: number }) => (
@@ -500,6 +504,8 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="MappingReview" component={MappingReviewScreen} />
     <AppStackNav.Screen name="SyncRules" component={SyncRulesScreen} />
     <AppStackNav.Screen name="Profile" component={ProfileScreen} />
+    <AppStackNav.Screen name="AccountSettings" component={ProfileScreen} />
+    <AppStackNav.Screen name="Connections" component={ConnectionsScreen} options={{ headerShown: false }} />
     <AppStackNav.Screen name="DeleteAccountInfo" component={DeleteAccountInfoScreen} />
     <AppStackNav.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
     <AppStackNav.Screen name="Team" component={TeamScreen} />
