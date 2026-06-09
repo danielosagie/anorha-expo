@@ -10,7 +10,7 @@ type Props = {
   value: string;
   placeholder: string;
   onChangeText: (value: string) => void;
-  onSend: () => void;
+  onSend: (photos?: string[]) => void;
   queuedCount: number;
   isStreaming: boolean;
   /** Returns a Supabase JWT for the transcription request. */
@@ -33,12 +33,13 @@ export const ConversationComposer = ({
   const [recording, setRecording] = useState(false);
   const [duration, setDuration] = useState(0);
   const [transcribing, setTranscribing] = useState(false);
-  const [imageUri, setImageUri] = useState<string | null>(null);
+  const [imageUris, setImageUris] = useState<string[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pulse = useRef(new Animated.Value(1)).current;
   const pulseLoop = useRef<Animated.CompositeAnimation | null>(null);
 
   const hasText = value.trim().length > 0;
+  const canSend = hasText || imageUris.length > 0;
 
   const tap = (s: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Light) =>
     Haptics.impactAsync(s).catch(() => undefined);
@@ -55,8 +56,12 @@ export const ConversationComposer = ({
       const res = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.7,
+        allowsMultipleSelection: true,
+        selectionLimit: 8,
       });
-      if (!res.canceled && res.assets?.[0]?.uri) setImageUri(res.assets[0].uri);
+      if (!res.canceled && res.assets?.length) {
+        setImageUris(prev => [...prev, ...res.assets.map(a => a.uri)].slice(0, 8));
+      }
     } catch {
       /* ignore */
     }
@@ -145,9 +150,10 @@ export const ConversationComposer = ({
 
   const send = useCallback(() => {
     tap();
-    setImageUri(null);
-    onSend();
-  }, [onSend]);
+    const photos = imageUris;
+    setImageUris([]);
+    onSend(photos.length ? photos : undefined);
+  }, [onSend, imageUris]);
 
   const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
@@ -201,12 +207,19 @@ export const ConversationComposer = ({
           </TouchableOpacity>
 
           <View style={styles.card}>
-            {imageUri ? (
+            {imageUris.length ? (
               <View style={styles.previewRow}>
-                <Image source={{ uri: imageUri }} style={styles.previewImg} />
-                <TouchableOpacity style={styles.previewRemove} onPress={() => setImageUri(null)}>
-                  <X size={13} color="#FFFFFF" />
-                </TouchableOpacity>
+                {imageUris.map((uri, i) => (
+                  <View key={`${uri}-${i}`} style={styles.previewItem}>
+                    <Image source={{ uri }} style={styles.previewImg} />
+                    <TouchableOpacity
+                      style={styles.previewRemove}
+                      onPress={() => setImageUris(prev => prev.filter((_, idx) => idx !== i))}
+                    >
+                      <X size={11} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
               </View>
             ) : null}
             <View style={styles.inputRow}>
@@ -223,7 +236,7 @@ export const ConversationComposer = ({
                 <View style={[styles.actionBtn, styles.neutralBtn]}>
                   <ActivityIndicator size="small" color="#71717A" />
                 </View>
-              ) : hasText ? (
+              ) : canSend ? (
                 <TouchableOpacity style={[styles.actionBtn, styles.sendBtn]} onPress={send} activeOpacity={0.85}>
                   <ArrowRight size={19} color="#FFFFFF" />
                 </TouchableOpacity>
@@ -288,15 +301,16 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
     elevation: 2,
   },
-  previewRow: { alignSelf: 'flex-start', marginBottom: 8, marginLeft: -8, marginTop: 2 },
-  previewImg: { width: 96, height: 96, borderRadius: 14, backgroundColor: '#F3F4F6' },
+  previewRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8, marginTop: 2, paddingLeft: 2 },
+  previewItem: { width: 64, height: 64 },
+  previewImg: { width: 64, height: 64, borderRadius: 12, backgroundColor: '#F3F4F6' },
   previewRemove: {
     position: 'absolute',
     top: -6,
     right: -6,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
     backgroundColor: '#18181B',
     alignItems: 'center',
     justifyContent: 'center',

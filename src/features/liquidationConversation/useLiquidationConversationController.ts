@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ConversationDataAdapter } from './ConversationDataAdapter';
 import { loadThreadState, persistThreadState } from './LocalConversationStore';
+import { ensureSupabaseJwt } from '../../lib/supabase';
+import { API_BASE_URL } from '../../config/env';
+import { uploadProductImage } from '../../utils/uploadProductImage';
 import {
   HOME_DRAFT_SCOPE,
   acknowledgeMessage,
@@ -571,11 +574,59 @@ export const useLiquidationConversationController = ({
     });
   }, [adapter]);
 
-  const sendComposer = useCallback(async () => {
+  // Dump photos into the chat: upload them, identify + draft each via the
+  // existing /api/products/analyze pipeline, add the new drafts to this clearout,
+  // then tell Sprout what landed so it can react (research / liquidate / hold).
+  const ingestPhotos = useCallback(async (photos: string[], text: string) => {
+    const campaignId = activeCampaignIdRef.current;
+    if (!campaignId || !photos.length) return;
+    setNotice(`Reviewing ${photos.length} photo${photos.length === 1 ? '' : 's'}…`);
+    try {
+      const token = await ensureSupabaseJwt();
+      const drafts: Array<{ id: string; title: string; price?: number }> = [];
+      await Promise.all(
+        photos.slice(0, 8).map(async uri => {
+          try {
+            const url = await uploadProductImage(uri, createClientId('photo'));
+            const resp = await fetch(`${API_BASE_URL}/api/products/analyze`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+              body: JSON.stringify({ imageUris: [url] }),
+            });
+            if (resp.ok) {
+              const json = await resp.json();
+              const v = json?.variant;
+              if (v?.Id) drafts.push({ id: v.Id, title: v.Title || 'Unidentified item', price: v.Price });
+            }
+          } catch {
+            /* skip this photo */
+          }
+        }),
+      );
+      if (!drafts.length) {
+        setNotice('Could not read those photos. Try clearer shots.');
+        return;
+      }
+      try { await (adapter as any).addCampaignItems?.(campaignId, drafts.map(d => d.id)); } catch { /* ignore add failure */ }
+      setNotice(null);
+      const list = drafts.map(d => (d.price ? `${d.title} (~$${Math.round(d.price)})` : d.title)).join(', ');
+      const summary = `${text ? text + ' — ' : ''}Dropped ${drafts.length} item${drafts.length === 1 ? '' : 's'} from photos and added ${drafts.length === 1 ? 'it' : 'them'} to this clearout: ${list}.`;
+      await queueTextMessage(summary);
+    } catch {
+      setNotice('Could not process photos. Please try again.');
+    }
+  }, [adapter, queueTextMessage]);
+
+  const sendComposer = useCallback(async (photos?: string[]) => {
     const content = composerText.trim();
+    if (photos && photos.length) {
+      setComposerValue('');
+      await ingestPhotos(photos, content);
+      return;
+    }
     if (!content) return;
     await queueTextMessage(content);
-  }, [composerText, queueTextMessage]);
+  }, [composerText, queueTextMessage, ingestPhotos, setComposerValue]);
 
   const submitDecision = useCallback(async (prompt: DecisionPrompt, action: 'approve' | 'revise' | 'follow_up') => {
     const campaignId = activeCampaignIdRef.current;

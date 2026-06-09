@@ -179,7 +179,7 @@ const CampaignThreadScreen = () => {
             value={controller.composerText}
             placeholder={composerPlaceholder}
             onChangeText={controller.setComposerText}
-            onSend={() => controller.sendComposer()}
+            onSend={(photos) => controller.sendComposer(photos)}
             queuedCount={controller.queuedCount}
             isStreaming={controller.isStreaming}
             getAuthToken={ensureSupabaseJwt}
