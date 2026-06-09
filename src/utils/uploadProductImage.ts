@@ -1,8 +1,7 @@
-import { Platform } from 'react-native';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode as base64Decode } from 'base64-arraybuffer';
-import { supabase } from '../../lib/supabase';
+import { supabase } from '../lib/supabase';
 
 /**
  * Compress a local image and upload it to the product-images bucket, returning a
@@ -19,16 +18,12 @@ export async function uploadProductImage(localUri: string, photoId: string): Pro
     { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
   );
 
-  let byteArray: Uint8Array;
-  if (Platform.OS === 'android') {
-    const base64 = await FileSystem.readAsStringAsync(compressed.uri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    byteArray = new Uint8Array(base64Decode(base64));
-  } else {
-    const resp = await fetch(compressed.uri);
-    byteArray = new Uint8Array(await resp.arrayBuffer());
-  }
+  // Read the compressed file via expo-file-system on both platforms — RN's
+  // fetch(file://) is unreliable for picked photo-library assets on iOS.
+  const base64 = await FileSystem.readAsStringAsync(compressed.uri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+  const byteArray = new Uint8Array(base64Decode(base64));
 
   const fileName = `${user.id}/${photoId}-${Date.now()}.jpg`;
   const { error } = await supabase.storage

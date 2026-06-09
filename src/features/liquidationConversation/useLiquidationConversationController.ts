@@ -583,7 +583,7 @@ export const useLiquidationConversationController = ({
     setNotice(`Reviewing ${photos.length} photo${photos.length === 1 ? '' : 's'}…`);
     try {
       const token = await ensureSupabaseJwt();
-      const drafts: Array<{ id: string; title: string; price?: number }> = [];
+      const drafts: Array<{ id: string; productId?: string; title: string; price?: number; imageUrl: string }> = [];
       await Promise.all(
         photos.slice(0, 8).map(async uri => {
           try {
@@ -591,12 +591,12 @@ export const useLiquidationConversationController = ({
             const resp = await fetch(`${API_BASE_URL}/api/products/analyze`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-              body: JSON.stringify({ imageUris: [url] }),
+              body: JSON.stringify({ imageUris: [url], selectedPlatforms: ['ebay'] }),
             });
             if (resp.ok) {
               const json = await resp.json();
               const v = json?.variant;
-              if (v?.Id) drafts.push({ id: v.Id, title: v.Title || 'Unidentified item', price: v.Price });
+              if (v?.Id) drafts.push({ id: v.Id, productId: json?.product?.Id, title: v.Title || 'Unidentified item', price: v.Price, imageUrl: url });
             }
           } catch {
             /* skip this photo */
@@ -607,10 +607,22 @@ export const useLiquidationConversationController = ({
         setNotice('Could not read those photos. Try clearer shots.');
         return;
       }
+      // Add the new drafts to this clearout
       try { await (adapter as any).addCampaignItems?.(campaignId, drafts.map(d => d.id)); } catch { /* ignore add failure */ }
+      // Kick off the full per-platform listing generation (async, same job the add-product flow uses)
+      try {
+        await fetch(`${API_BASE_URL}/api/products/generate/jobs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            products: drafts.map((d, i) => ({ productIndex: i, productId: d.productId, variantId: d.id, imageUrls: [d.imageUrl], coverImageIndex: 0 })),
+            selectedPlatforms: ['ebay'],
+          }),
+        });
+      } catch { /* generation is best-effort */ }
       setNotice(null);
       const list = drafts.map(d => (d.price ? `${d.title} (~$${Math.round(d.price)})` : d.title)).join(', ');
-      const summary = `${text ? text + ' — ' : ''}Dropped ${drafts.length} item${drafts.length === 1 ? '' : 's'} from photos and added ${drafts.length === 1 ? 'it' : 'them'} to this clearout: ${list}.`;
+      const summary = `${text ? text + '\n\n' : ''}I dropped ${drafts.length} item${drafts.length === 1 ? '' : 's'} from photos into this clearout and you're drafting the full listings: ${list}. What's the play — research pricing, push them aggressively, or hold?`;
       await queueTextMessage(summary);
     } catch {
       setNotice('Could not process photos. Please try again.');
@@ -632,6 +644,17 @@ export const useLiquidationConversationController = ({
     const campaignId = activeCampaignIdRef.current;
     const threadId = activeThreadIdRef.current;
     if (!campaignId || !threadId) return;
+    // Local photo-ingest decision card → send a follow-up instruction to Sprout.
+    if (prompt.id.startsWith('photo-')) {
+      const instr =
+        action === 'approve'
+          ? 'Research current resale pricing for the items I just added from photos and suggest a start and floor price for each.'
+          : action === 'revise'
+            ? 'List the items I just added from photos aggressively to move them fast — set competitive prices and a tight deadline.'
+            : 'Hold the items I just added from photos in this clearout for now; I will decide later.';
+      await queueTextMessage(instr);
+      return;
+    }
     try {
       await adapter.submitDecision(campaignId, threadId, {
         decisionId: prompt.id,
@@ -647,7 +670,7 @@ export const useLiquidationConversationController = ({
     } catch (decisionError: any) {
       setError(decisionError?.message || 'Failed to submit decision');
     }
-  }, [adapter, loadCampaignDetails, setThreadStateFor]);
+  }, [adapter, loadCampaignDetails, setThreadStateFor, queueTextMessage]);
 
   return {
     campaigns,
