@@ -19,6 +19,7 @@ import {
 import type {
   CampaignConfig,
   CampaignConfigUpdate,
+  CampaignItem,
   CampaignOverview,
   CampaignSummary,
   CampaignThreadSummary,
@@ -27,6 +28,7 @@ import type {
   CreateThreadInput,
   DecisionPrompt,
   DecisionSubmission,
+  ItemStatus,
   NegotiationDecisionInput,
   RunFlashCampaignInput,
   StreamTurnInput,
@@ -440,6 +442,40 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
       ...campaign,
       primaryThreadId,
     };
+  }
+
+  async getCampaignItems(campaignId: string): Promise<CampaignItem[]> {
+    const res = await this.requestNest<{
+      success: boolean;
+      items: Array<{
+        id: string;
+        productId: string;
+        name: string;
+        channels: string;
+        currentPrice: number;
+        floorPrice?: number;
+        status: string;
+        imageUrl?: string;
+      }>;
+    }>(`/api/agent/sessions/${campaignId}/items`);
+    return (res.items || []).map(it => ({
+      id: it.id,
+      productId: it.productId,
+      name: it.name,
+      channels: it.channels || '',
+      currentPrice: it.currentPrice,
+      floorPrice: it.floorPrice,
+      status: (it.status as ItemStatus) || 'listed',
+      imageUrl: it.imageUrl,
+    }));
+  }
+
+  async addCampaignItems(campaignId: string, variantIds: string[]): Promise<{ added: number; skipped: number }> {
+    const res = await this.requestNest<{ success: boolean; added: number; skipped: number }>(
+      `/api/agent/sessions/${campaignId}/items`,
+      { method: 'POST', body: JSON.stringify({ variantIds }) },
+    );
+    return { added: res.added || 0, skipped: res.skipped || 0 };
   }
 
   async createThread(campaignId: string, input: CreateThreadInput): Promise<CampaignThreadSummary> {

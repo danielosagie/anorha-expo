@@ -95,7 +95,7 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     color: '#71717A',
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     fontSize: 13,
   },
   emptyState: {
@@ -106,14 +106,14 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     color: '#111827',
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     fontSize: 15,
   },
   emptyText: {
     maxWidth: 260,
     textAlign: 'center',
     color: '#6B7280',
-    fontFamily: 'PlusJakartaSans_400Regular',
+    fontFamily: 'Inter_400Regular',
     fontSize: 13,
     lineHeight: 19,
   },
@@ -131,7 +131,7 @@ const styles = StyleSheet.create({
   },
   jumpButtonText: {
     color: '#FFFFFF',
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     fontSize: 12,
   },
 });

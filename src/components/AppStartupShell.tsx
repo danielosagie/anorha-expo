@@ -54,7 +54,7 @@ const AppStartupShell: React.FC<AppStartupShellProps> = ({
         </View>
         <Text
           style={{
-            fontFamily: 'PlusJakartaSans_700Bold',
+            fontFamily: 'Inter_700Bold',
             fontSize: 24,
             color: '#13201C',
             marginBottom: 10,
@@ -64,7 +64,7 @@ const AppStartupShell: React.FC<AppStartupShellProps> = ({
         </Text>
         <Text
           style={{
-            fontFamily: 'PlusJakartaSans_500Medium',
+            fontFamily: 'Inter_500Medium',
             fontSize: 15,
             lineHeight: 22,
             color: '#51615C',

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@clerk/clerk-expo": "^2.14.20",
+    "@expo-google-fonts/inter": "^0.4.2",
     "@expo-google-fonts/plus-jakarta-sans": "^0.3.0",
     "@expo/metro-runtime": "~55.0.6",
     "@johnn-e/react-mesh-gradient": "^1.1.1",

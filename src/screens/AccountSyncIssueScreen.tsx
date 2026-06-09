@@ -90,12 +90,12 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   title: {
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     fontSize: 24,
     marginBottom: 10,
   },
   message: {
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     fontSize: 15,
     lineHeight: 22,
     marginBottom: 24,
@@ -121,12 +121,12 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   primaryButtonText: {
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     fontSize: 16,
     color: '#FFFFFF',
   },
   secondaryButtonText: {
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     fontSize: 15,
   },
 });

@@ -357,7 +357,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     color: '#111',
     textAlign: 'center',
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
   },
   subtitle: {
     fontSize: 15,
@@ -365,7 +365,7 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     textAlign: 'center',
     lineHeight: 22,
-    fontFamily: 'PlusJakartaSans_400Regular',
+    fontFamily: 'Inter_400Regular',
   },
   row: {
     flexDirection: 'row',
@@ -413,7 +413,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginLeft: 8,
     flex: 1,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
   },
   button: {
     backgroundColor: '#294306',
@@ -434,7 +434,7 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 17,
     fontWeight: '600',
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
   },
   resendContainer: {
     flexDirection: 'row',
@@ -444,13 +444,13 @@ const styles = StyleSheet.create({
   resendText: {
     color: '#666',
     fontSize: 14,
-    fontFamily: 'PlusJakartaSans_400Regular',
+    fontFamily: 'Inter_400Regular',
   },
   resendLink: {
     color: '#294306',
     fontSize: 14,
     fontWeight: '600',
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
   },
   backButton: {
     // Basic hit slop area

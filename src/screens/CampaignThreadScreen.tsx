@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -50,11 +51,21 @@ const CampaignThreadScreen = () => {
 
   const controller = useLiquidationConversationController({ adapter, initialCampaignId: campaignId });
 
+  // Success haptic when the agent finishes streaming a turn (chat-template polish)
+  const prevStreamingRef = useRef(false);
+  useEffect(() => {
+    if (prevStreamingRef.current && !controller.isStreaming) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+    }
+    prevStreamingRef.current = controller.isStreaming;
+  }, [controller.isStreaming]);
+
   const sendAction = (actionType: string, title: string, payload?: Record<string, unknown>) => {
     controller.dispatchAction({ actionType, title, payload }).catch(() => controller.setNotice(null));
   };
 
   const handleQuickChip = (action: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     if (action === 'run_flash_campaign') {
       sendAction('run_flash_campaign', 'Run flash campaign', { discountPercent: 15, durationHours: 24, reason: 'manual_run' });
     } else {
@@ -201,10 +212,10 @@ const s = StyleSheet.create({
   topInfo: { flex: 1 },
   topTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   plantDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#639922' },
-  topTitle: { fontSize: 15, fontWeight: '500', color: '#111827', fontFamily: 'PlusJakartaSans_500Medium' },
-  topMeta: { fontSize: 11, color: '#71717A', marginTop: 1, fontFamily: 'PlusJakartaSans_500Medium' },
+  topTitle: { fontSize: 15, fontWeight: '500', color: '#111827', fontFamily: 'Inter_500Medium' },
+  topMeta: { fontSize: 11, color: '#71717A', marginTop: 1, fontFamily: 'Inter_500Medium' },
   itemsBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#F9FAFB' },
-  itemsBtnText: { fontSize: 16, color: '#374151', fontFamily: 'PlusJakartaSans_500Medium' },
+  itemsBtnText: { fontSize: 16, color: '#374151', fontFamily: 'Inter_500Medium' },
 
   // Progress strip
   progStrip: { height: 2, backgroundColor: '#F3F4F6' },
@@ -213,19 +224,19 @@ const s = StyleSheet.create({
   // Ambient tray
   ambientTray: { backgroundColor: '#fafdf5', borderBottomWidth: 0.5, borderBottomColor: '#c0dd97', paddingHorizontal: 16, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', gap: 8 },
   trayDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#BA7517' },
-  trayText: { flex: 1, fontSize: 11, color: '#3B6D11', fontFamily: 'PlusJakartaSans_500Medium' },
+  trayText: { flex: 1, fontSize: 11, color: '#3B6D11', fontFamily: 'Inter_500Medium' },
   trayAction: { fontSize: 11, color: '#BA7517', fontWeight: '500' },
 
   // Footer
   footerStack: { backgroundColor: '#FFFFFF', paddingTop: 4, borderTopWidth: 0.5, borderTopColor: '#E5E5E5' },
   errorBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FEF2F2', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  errorText: { flex: 1, color: '#B91C1C', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 12 },
-  errorRetry: { color: '#DC2626', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 12 },
+  errorText: { flex: 1, color: '#B91C1C', fontFamily: 'Inter_500Medium', fontSize: 12 },
+  errorRetry: { color: '#DC2626', fontFamily: 'Inter_700Bold', fontSize: 12 },
   noticeBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(147,200,34,0.3)', backgroundColor: 'rgba(147,200,34,0.12)', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  noticeText: { flex: 1, color: '#5D7E16', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 12 },
+  noticeText: { flex: 1, color: '#5D7E16', fontFamily: 'Inter_500Medium', fontSize: 12 },
   chipsContent: { paddingHorizontal: 12, gap: 6, flexDirection: 'row', paddingBottom: 8, paddingTop: 4 },
   quickChip: { paddingHorizontal: 11, paddingVertical: 5, borderRadius: 14, borderWidth: 0.5, borderColor: '#D1D5DB', backgroundColor: '#F9FAFB' },
-  quickChipText: { fontSize: 11, color: '#71717A', fontFamily: 'PlusJakartaSans_500Medium' },
+  quickChipText: { fontSize: 11, color: '#71717A', fontFamily: 'Inter_500Medium' },
 });
 
 export default CampaignThreadScreen;

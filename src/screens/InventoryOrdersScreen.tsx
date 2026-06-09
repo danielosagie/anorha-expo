@@ -37,6 +37,7 @@ import SearchBarWithScanner from '../components/SearchBarWithScanner';
 import PlatformFilterChips from '../components/PlatformFilterChips';
 import PoolLocationCombobox from '../components/PoolLocationCombobox';
 import InventoryListCard from '../components/InventoryListCard';
+import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import BaseModal from '../components/BaseModal';
 import { SmartCommandInput } from '../components/SmartCommandInput';
 import { VoiceRecorder } from '../components/VoiceRecorder';
@@ -178,6 +179,11 @@ const InventoryOrdersScreen = observer(() => {
       if (p.openLocationPicker) {
         setLocationPickerOpen(true);
       }
+
+      if ((p as any).selectForCampaign?.campaignId) {
+        setAddToCampaign((p as any).selectForCampaign);
+        setIsSelectionMode(true);
+      }
     }
   }, [route.params, closeScanner, openScanner]);
 
@@ -192,6 +198,26 @@ const InventoryOrdersScreen = observer(() => {
   // Bulk Selection State
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+  const [addToCampaign, setAddToCampaign] = useState<{ campaignId: string; title: string } | null>(null);
+  const [addingToCampaign, setAddingToCampaign] = useState(false);
+  const campaignAdapter = useMemo(() => new HybridConversationDataAdapter(), []);
+
+  const handleAddToClearout = useCallback(async () => {
+    if (!addToCampaign || selectedItems.size === 0 || addingToCampaign) return;
+    setAddingToCampaign(true);
+    try {
+      await campaignAdapter.addCampaignItems(addToCampaign.campaignId, Array.from(selectedItems));
+      const camp = addToCampaign;
+      setSelectedItems(new Set());
+      setIsSelectionMode(false);
+      setAddToCampaign(null);
+      (navigation as any).navigate('LiquidationCampaignScreen', { campaignId: camp.campaignId, entryPoint: 'detail' });
+    } catch (e: any) {
+      Alert.alert('Could not add items', e?.message || 'Please try again.');
+    } finally {
+      setAddingToCampaign(false);
+    }
+  }, [addToCampaign, selectedItems, addingToCampaign, campaignAdapter, navigation]);
 
   // Bulk action modal: filter by type/voice, review, then apply Delete/Archive/Liquidate
   const [bulkActionModalVisible, setBulkActionModalVisible] = useState(false);
@@ -1734,6 +1760,23 @@ const InventoryOrdersScreen = observer(() => {
                 contentContainerStyle={styles.actionsScrollContent}
                 style={styles.actionsScroll}
               >
+                {addToCampaign ? (
+                  <TouchableOpacity
+                    style={[styles.actionChip, styles.addToClearoutChip]}
+                    onPress={handleAddToClearout}
+                    disabled={addingToCampaign || selectedItems.size === 0}
+                  >
+                    {addingToCampaign ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Icon name="sprout-outline" size={18} color="#FFFFFF" />
+                    )}
+                    <Text style={[styles.actionChipText, { color: '#FFFFFF' }]}>
+                      Add {selectedItems.size || ''} to {addToCampaign.title}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+
                 <TouchableOpacity style={styles.actionChip} onPress={() => setBulkActionModalVisible(true)}>
                   <Icon name="filter-variant-plus" size={18} color="#374151" />
                   <Text style={styles.actionChipText}>Bulk action</Text>
@@ -2728,6 +2771,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 20,
     gap: 6,
+  },
+  addToClearoutChip: {
+    backgroundColor: '#93C822',
   },
   actionChipText: {
     fontSize: 13,

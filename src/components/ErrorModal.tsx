@@ -206,14 +206,14 @@ const styles = StyleSheet.create({
     },
     title: {
         fontSize: 20,
-        fontFamily: 'PlusJakartaSans_700Bold',
+        fontFamily: 'Inter_700Bold',
         color: '#1a1a1a',
         textAlign: 'center',
         marginBottom: 8,
     },
     message: {
         fontSize: 15,
-        fontFamily: 'PlusJakartaSans_400Regular',
+        fontFamily: 'Inter_400Regular',
         color: '#666',
         textAlign: 'center',
         lineHeight: 22,
@@ -240,7 +240,7 @@ const styles = StyleSheet.create({
     primaryButtonText: {
         color: '#fff',
         fontSize: 16,
-        fontFamily: 'PlusJakartaSans_600SemiBold',
+        fontFamily: 'Inter_600SemiBold',
     },
     secondaryButton: {
         flex: 1,
@@ -254,7 +254,7 @@ const styles = StyleSheet.create({
     secondaryButtonText: {
         color: '#666',
         fontSize: 16,
-        fontFamily: 'PlusJakartaSans_600SemiBold',
+        fontFamily: 'Inter_600SemiBold',
     },
 });
 

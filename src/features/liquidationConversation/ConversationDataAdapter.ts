@@ -1,6 +1,7 @@
 import type {
   CampaignConfig,
   CampaignConfigUpdate,
+  CampaignItem,
   CampaignOverview,
   CampaignSummary,
   CampaignThreadSummary,
@@ -33,6 +34,8 @@ export interface ConversationDataAdapter {
   updateCampaignConfig(campaignId: string, update: CampaignConfigUpdate): Promise<CampaignConfig>;
   getCampaignOverview(campaignId: string): Promise<CampaignOverview>;
   findSlowMovers(campaignId: string): Promise<{ count: number; items: Array<Record<string, unknown>> }>;
+  getCampaignItems(campaignId: string): Promise<CampaignItem[]>;
+  addCampaignItems(campaignId: string, variantIds: string[]): Promise<{ added: number; skipped: number }>;
   runFlashCampaign(campaignId: string, input: RunFlashCampaignInput): Promise<{ updated: number }>;
   submitNegotiationDecision(campaignId: string, input: NegotiationDecisionInput): Promise<{ status: string }>;
 }

@@ -222,13 +222,13 @@ const styles = StyleSheet.create({
     },
     headerTitle: {
         fontSize: 34,
-        fontFamily: 'PlusJakartaSans_700Bold',
+        fontFamily: 'Inter_700Bold',
         color: '#1a1a1a',
         marginBottom: 12,
     },
     headerSubtitle: {
         fontSize: 17,
-        fontFamily: 'PlusJakartaSans_400Regular',
+        fontFamily: 'Inter_400Regular',
         color: '#666',
         lineHeight: 24,
     },
@@ -271,7 +271,7 @@ const styles = StyleSheet.create({
     },
     badgeText: {
         fontSize: 13,
-        fontFamily: 'PlusJakartaSans_700Bold',
+        fontFamily: 'Inter_700Bold',
         color: '#1a1a1a',
     },
     cardContent: {
@@ -279,7 +279,7 @@ const styles = StyleSheet.create({
     },
     orgName: {
         fontSize: 24,
-        fontFamily: 'PlusJakartaSans_700Bold',
+        fontFamily: 'Inter_700Bold',
         color: '#1a1a1a',
         marginBottom: 16,
     },
@@ -291,7 +291,7 @@ const styles = StyleSheet.create({
     },
     detailText: {
         fontSize: 15,
-        fontFamily: 'PlusJakartaSans_400Regular',
+        fontFamily: 'Inter_400Regular',
         color: '#666',
     },
     actionRow: {
@@ -308,7 +308,7 @@ const styles = StyleSheet.create({
     primaryButtonText: {
         color: '#fff',
         fontSize: 17,
-        fontFamily: 'PlusJakartaSans_700Bold',
+        fontFamily: 'Inter_700Bold',
     },
     secondaryButton: {
         backgroundColor: 'transparent',
@@ -322,7 +322,7 @@ const styles = StyleSheet.create({
     secondaryButtonText: {
         color: '#1a1a1a',
         fontSize: 17,
-        fontFamily: 'PlusJakartaSans_600SemiBold',
+        fontFamily: 'Inter_600SemiBold',
     },
     emptyContainer: {
         flex: 1,
@@ -346,13 +346,13 @@ const styles = StyleSheet.create({
     },
     emptyTitle: {
         fontSize: 24,
-        fontFamily: 'PlusJakartaSans_700Bold',
+        fontFamily: 'Inter_700Bold',
         color: '#1a1a1a',
         marginBottom: 12,
     },
     emptySubtitle: {
         fontSize: 16,
-        fontFamily: 'PlusJakartaSans_400Regular',
+        fontFamily: 'Inter_400Regular',
         color: '#666',
         textAlign: 'center',
         marginBottom: 32,
@@ -367,7 +367,7 @@ const styles = StyleSheet.create({
     },
     textActionText: {
         fontSize: 15,
-        fontFamily: 'PlusJakartaSans_600SemiBold',
+        fontFamily: 'Inter_600SemiBold',
         color: '#666',
         textDecorationLine: 'underline',
     }

@@ -1,5 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 type Props = {
@@ -41,7 +42,10 @@ export const ConversationComposer = ({
         />
         <TouchableOpacity
           style={[styles.sendButton, !value.trim() && styles.sendButtonDisabled]}
-          onPress={onSend}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+            onSend();
+          }}
           disabled={!value.trim()}
         >
           <Icon name="arrow-up" size={18} color="#FFFFFF" />
@@ -74,7 +78,7 @@ const styles = StyleSheet.create({
   },
   queueText: {
     color: '#5D7E16',
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     fontSize: 12,
   },
   card: {
@@ -95,7 +99,7 @@ const styles = StyleSheet.create({
     minHeight: 40,
     maxHeight: 120,
     color: '#111827',
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     fontSize: 14,
     paddingTop: 2,
   },

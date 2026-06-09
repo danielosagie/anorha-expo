@@ -67,10 +67,10 @@ export function swatchFor(seed: string | number): string {
 }
 
 export const QFONT = {
-  x: 'PlusJakartaSans_800ExtraBold',
-  b: 'PlusJakartaSans_700Bold',
-  sb: 'PlusJakartaSans_600SemiBold',
-  m: 'PlusJakartaSans_500Medium',
+  x: 'Inter_800ExtraBold',
+  b: 'Inter_700Bold',
+  sb: 'Inter_600SemiBold',
+  m: 'Inter_500Medium',
 } as const;
 
 // Chunky "0 Npx 0" offset shadow (Duolingo-ish). iOS uses a hard shadow,

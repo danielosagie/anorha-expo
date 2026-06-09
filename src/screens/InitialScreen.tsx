@@ -2,9 +2,9 @@ import React, { useEffect } from 'react';
 import { View, Text, StyleSheet, Image } from 'react-native';
 import Button from '../components/Button';
 import AnimatedGradientBackground from '../components/AnimatedGradientBackground';
-import { PlusJakartaSans_500Medium } from '@expo-google-fonts/plus-jakarta-sans/500Medium';
-import { PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans/700Bold';
-import { PlusJakartaSans_800ExtraBold } from '@expo-google-fonts/plus-jakarta-sans/800ExtraBold';
+import { Inter_500Medium } from '@expo-google-fonts/inter/500Medium';
+import { Inter_700Bold } from '@expo-google-fonts/inter/700Bold';
+import { Inter_800ExtraBold } from '@expo-google-fonts/inter/800ExtraBold';
 import { useFonts } from 'expo-font';
 
 
@@ -14,9 +14,9 @@ type Props = {
 
 const InitialScreen = ({ navigation }: Props) => {
   const [fontsLoaded] = useFonts({
-    PlusJakartaSans_700Bold,
-    PlusJakartaSans_500Medium,
-    PlusJakartaSans_800ExtraBold,
+    Inter_700Bold,
+    Inter_500Medium,
+    Inter_800ExtraBold,
   });
 
   useEffect(() => {
@@ -116,7 +116,7 @@ const styles = StyleSheet.create({
   },
   logoText: {
     fontSize: 60,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: 'white',
   },
   textContainer: {
@@ -124,20 +124,20 @@ const styles = StyleSheet.create({
   },
   heading: {
     fontSize: 32,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: 'white',
     textAlign: 'center',
     marginBottom: 24,
   }, 
   title: {
     fontSize: 70,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: 'white',
     textAlign: 'center',
   },
   subheading: {
     fontSize: 24,
-    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    fontFamily: 'Inter_800ExtraBold',
     color: 'white',
     textAlign: 'center',
   },
@@ -160,7 +160,7 @@ const styles = StyleSheet.create({
     color: 'white',
     textAlign: 'center',
     fontSize: 12,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
   },
 });
 

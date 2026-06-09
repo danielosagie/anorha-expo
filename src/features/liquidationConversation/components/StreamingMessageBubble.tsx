@@ -1,8 +1,40 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import Animated, {
+  Easing,
+  FadeIn,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withRepeat,
+  withTiming,
+} from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Markdown from 'react-native-markdown-display';
 import type { ConversationMessage, DecisionPrompt } from '../types';
+
+const TypingDot = ({ delay }: { delay: number }) => {
+  const progress = useSharedValue(0.3);
+  useEffect(() => {
+    progress.value = withDelay(
+      delay,
+      withRepeat(withTiming(1, { duration: 520, easing: Easing.inOut(Easing.ease) }), -1, true),
+    );
+  }, [delay, progress]);
+  const style = useAnimatedStyle(() => ({
+    opacity: 0.35 + progress.value * 0.65,
+    transform: [{ scale: 0.85 + progress.value * 0.2 }],
+  }));
+  return <Animated.View style={[styles.typingDot, style]} />;
+};
+
+const TypingIndicator = () => (
+  <View style={styles.typingRow}>
+    <TypingDot delay={0} />
+    <TypingDot delay={140} />
+    <TypingDot delay={280} />
+  </View>
+);
 
 type MessageWithTime = ConversationMessage & { time: string };
 
@@ -48,7 +80,7 @@ export const StreamingMessageBubble = ({ message, onDecision, onRetry }: Props) 
   const renderMarkdown = !isUser && !isStreaming;
 
   return (
-    <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
+    <Animated.View entering={FadeIn.duration(180)} style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
       <View style={[styles.card, isUser ? styles.userCard : styles.assistantCard]}>
         {message.kind === 'action' ? (
           <View style={styles.actionMetaRow}>
@@ -59,7 +91,9 @@ export const StreamingMessageBubble = ({ message, onDecision, onRetry }: Props) 
           </View>
         ) : null}
 
-        {renderMarkdown ? (
+        {!isUser && isStreaming && !content ? (
+          <TypingIndicator />
+        ) : renderMarkdown ? (
           <Markdown style={styles.markdown}>{content}</Markdown>
         ) : (
           <Text style={[styles.messageText, isUser && styles.userMessageText]}>
@@ -115,7 +149,7 @@ export const StreamingMessageBubble = ({ message, onDecision, onRetry }: Props) 
           </TouchableOpacity>
         ) : null}
       </View>
-    </View>
+    </Animated.View>
   );
 };
 
@@ -153,7 +187,7 @@ const styles = StyleSheet.create({
   },
   actionMetaText: {
     color: '#5D7E16',
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     fontSize: 11,
     textTransform: 'capitalize',
   },
@@ -162,14 +196,14 @@ const styles = StyleSheet.create({
   },
   messageText: {
     color: '#111827',
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     fontSize: 14,
     lineHeight: 20,
   },
   markdown: {
     body: {
       color: '#111827',
-      fontFamily: 'PlusJakartaSans_500Medium',
+      fontFamily: 'Inter_500Medium',
       fontSize: 14,
       lineHeight: 20,
     },
@@ -178,25 +212,25 @@ const styles = StyleSheet.create({
       marginBottom: 8,
     },
     heading1: {
-      fontFamily: 'PlusJakartaSans_700Bold',
+      fontFamily: 'Inter_700Bold',
       fontSize: 18,
       marginBottom: 10,
     },
     heading2: {
-      fontFamily: 'PlusJakartaSans_700Bold',
+      fontFamily: 'Inter_700Bold',
       fontSize: 16,
       marginBottom: 8,
     },
     heading3: {
-      fontFamily: 'PlusJakartaSans_600SemiBold',
+      fontFamily: 'Inter_600SemiBold',
       fontSize: 15,
       marginBottom: 6,
     },
     strong: {
-      fontFamily: 'PlusJakartaSans_700Bold',
+      fontFamily: 'Inter_700Bold',
     },
     em: {
-      fontFamily: 'PlusJakartaSans_500Medium',
+      fontFamily: 'Inter_500Medium',
       fontStyle: 'italic',
     },
     bullet_list: {
@@ -282,12 +316,12 @@ const styles = StyleSheet.create({
       borderBottomColor: '#E5E7EB',
     },
     th_text: {
-      fontFamily: 'PlusJakartaSans_600SemiBold',
+      fontFamily: 'Inter_600SemiBold',
       fontSize: 12,
       color: '#111827',
     },
     td_text: {
-      fontFamily: 'PlusJakartaSans_500Medium',
+      fontFamily: 'Inter_500Medium',
       fontSize: 12,
       color: '#111827',
     },
@@ -298,7 +332,7 @@ const styles = StyleSheet.create({
   summaryText: {
     marginTop: 8,
     color: '#4B5563',
-    fontFamily: 'PlusJakartaSans_400Regular',
+    fontFamily: 'Inter_400Regular',
     fontSize: 12,
     lineHeight: 18,
   },
@@ -313,7 +347,7 @@ const styles = StyleSheet.create({
   },
   timeText: {
     color: '#9CA3AF',
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     fontSize: 11,
   },
   userTimeText: {
@@ -321,11 +355,23 @@ const styles = StyleSheet.create({
   },
   statusText: {
     color: '#71717A',
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     fontSize: 11,
   },
   cursor: {
     color: '#93C822',
+  },
+  typingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 4,
+  },
+  typingDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#93C822',
   },
   decisionCard: {
     marginTop: 12,
@@ -335,13 +381,13 @@ const styles = StyleSheet.create({
   },
   decisionTitle: {
     color: '#111827',
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     fontSize: 13,
   },
   decisionBody: {
     marginTop: 4,
     color: '#6B7280',
-    fontFamily: 'PlusJakartaSans_400Regular',
+    fontFamily: 'Inter_400Regular',
     fontSize: 12,
     lineHeight: 18,
   },
@@ -365,12 +411,12 @@ const styles = StyleSheet.create({
   },
   decisionPrimaryText: {
     color: '#5D7E16',
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     fontSize: 12,
   },
   decisionSecondaryText: {
     color: '#111827',
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     fontSize: 12,
   },
   retryButton: {
@@ -382,7 +428,7 @@ const styles = StyleSheet.create({
   },
   retryText: {
     color: '#EF4444',
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     fontSize: 12,
   },
 });

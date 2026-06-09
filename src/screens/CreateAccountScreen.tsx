@@ -1404,13 +1404,13 @@ const styles = StyleSheet.create({
   },
   logoTitle: {
     fontSize: 48,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: ONBOARDING.title,
     letterSpacing: -2,
   },
   bigTitle: {
     fontSize: 36,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: ONBOARDING.title,
     textAlign: 'center',
     marginBottom: 16,
@@ -1424,14 +1424,14 @@ const styles = StyleSheet.create({
   },
   stepTitle: {
     fontSize: 32,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: ONBOARDING.title,
     marginBottom: 16,
     textAlign: 'center',
   },
   subtitle: {
     fontSize: 18,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     color: ONBOARDING.subtitle,
     textAlign: 'center',
     lineHeight: 26,
@@ -1451,12 +1451,12 @@ const styles = StyleSheet.create({
   },
   useLocationText: {
     fontSize: 16,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     color: ONBOARDING.title,
   },
   label: {
     fontSize: 14,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     color: ONBOARDING.subtitle,
     marginBottom: 8,
     textTransform: 'uppercase',
@@ -1475,7 +1475,7 @@ const styles = StyleSheet.create({
   },
   primaryButtonText: {
     fontSize: 18,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
   },
   // Grid
@@ -1502,7 +1502,7 @@ const styles = StyleSheet.create({
   cardText: {
     marginTop: 8,
     fontSize: 14,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     color: ONBOARDING.title,
     textAlign: 'center',
   },
@@ -1515,7 +1515,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 2,
     borderBottomColor: ONBOARDING.border,
     fontSize: 24,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     color: ONBOARDING.title,
     paddingVertical: 12,
   },
@@ -1537,12 +1537,12 @@ const styles = StyleSheet.create({
   },
   listCardTitle: {
     fontSize: 18,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: ONBOARDING.title,
   },
   listCardDesc: {
     fontSize: 14,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     color: ONBOARDING.subtitle,
     marginTop: 4,
   },
@@ -1567,13 +1567,13 @@ const styles = StyleSheet.create({
   phoneInput: {
     color: ONBOARDING.title,
     fontSize: 20,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     height: 64,
   },
   phoneCode: {
     color: ONBOARDING.title,
     fontSize: 20,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
   },
   flagButton: {
     backgroundColor: 'rgba(255,255,255,0.2)',
@@ -1603,13 +1603,13 @@ const styles = StyleSheet.create({
   },
   permTitle: {
     fontSize: 16,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: ONBOARDING.title,
     marginBottom: 2,
   },
   permDesc: {
     fontSize: 13,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     color: ONBOARDING.subtitle,
   },
   // Legal Checkbox
@@ -1634,20 +1634,20 @@ const styles = StyleSheet.create({
   checkboxText: {
     flex: 1,
     fontSize: 15,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     color: ONBOARDING.title,
   },
 
   // Legal Links
   linkText: {
     fontSize: 18,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     color: ONBOARDING.title,
     textAlign: 'center',
   },
   legalLinkSmall: {
     fontSize: 13,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     color: ONBOARDING.title,
     textDecorationLine: 'underline',
   },
@@ -1664,7 +1664,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     color: ONBOARDING.title,
     fontSize: 16,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     height: 60,
     borderWidth: 1,
     borderColor: ONBOARDING.border,
@@ -1703,12 +1703,12 @@ const styles = StyleSheet.create({
   inviteInitials: {
     color: '#FFFFFF',
     fontSize: 14,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
   },
   inviteEmail: {
     color: ONBOARDING.title,
     fontSize: 16,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
   },
   emptyText: {
     color: ONBOARDING.subtitle,

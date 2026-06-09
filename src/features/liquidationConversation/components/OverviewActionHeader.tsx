@@ -103,7 +103,7 @@ const styles = StyleSheet.create({
   },
   eyebrow: {
     color: '#6B8A11',
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     fontSize: 12,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
@@ -111,31 +111,31 @@ const styles = StyleSheet.create({
   title: {
     marginTop: 6,
     color: '#111827',
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     fontSize: 16,
   },
   sectionTitle: {
     color: '#111827',
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     fontSize: 15,
     marginBottom: 8,
   },
   bullet: {
     color: '#374151',
-    fontFamily: 'PlusJakartaSans_400Regular',
+    fontFamily: 'Inter_400Regular',
     fontSize: 13,
     lineHeight: 21,
   },
   body: {
     color: '#111827',
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     fontSize: 13,
     lineHeight: 20,
   },
   subtle: {
     marginTop: 2,
     color: '#6B7280',
-    fontFamily: 'PlusJakartaSans_400Regular',
+    fontFamily: 'Inter_400Regular',
     fontSize: 13,
     lineHeight: 20,
   },
@@ -155,7 +155,7 @@ const styles = StyleSheet.create({
   },
   inlineButtonText: {
     color: '#111827',
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     fontSize: 13,
   },
   primaryInlineButton: {
@@ -170,7 +170,7 @@ const styles = StyleSheet.create({
   },
   primaryInlineButtonText: {
     color: '#5D7E16',
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     fontSize: 13,
   },
 });

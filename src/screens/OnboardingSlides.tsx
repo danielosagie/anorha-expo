@@ -131,7 +131,7 @@ const styles = StyleSheet.create({
   skipButton: {
     color: '#666',
     fontSize: 16,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
   },
   slide: {
     width,
@@ -163,7 +163,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 32,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: '#313131ff',
     textAlign: 'center',
     marginBottom: 16,
@@ -171,7 +171,7 @@ const styles = StyleSheet.create({
   },
   description: {
     fontSize: 17,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     color: '#666',
     textAlign: 'center',
     lineHeight: 26,
@@ -207,7 +207,7 @@ const styles = StyleSheet.create({
   buttonText: {
     color: '#fff',
     fontSize: 18,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
   }
 });
 

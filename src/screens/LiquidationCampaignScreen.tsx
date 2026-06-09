@@ -17,7 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
@@ -95,18 +95,25 @@ const LiquidationCampaignScreen = () => {
   const [items, setItems] = useState<any[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
 
-  useEffect(() => {
+  const loadItems = useCallback(async () => {
     if (!initialCampaignId) return;
     setLoadingItems(true);
-    // Ideally we'd have a `adapter.getCampaignItems(initialCampaignId)` here.
-    // We will simulate real data rendering from the adapter when it's available.
-    // Since we don't have the exact API exposed in the current type file, we create a
-    // fallback empty state that handles real data structure once wired by the user.
-    setTimeout(() => {
-       setItems([]); // Replace with actual API call to adapter
-       setLoadingItems(false);
-    }, 500);
-  }, [initialCampaignId]);
+    try {
+      const fetched = await adapter.getCampaignItems(initialCampaignId);
+      setItems(fetched);
+    } catch {
+      setItems([]);
+    } finally {
+      setLoadingItems(false);
+    }
+  }, [adapter, initialCampaignId]);
+
+  // Reload items whenever the screen regains focus (e.g. after picking items).
+  useFocusEffect(
+    useCallback(() => {
+      loadItems();
+    }, [loadItems]),
+  );
 
   const itemCount = items.length;
   const hasPendingAsks = (controller.campaignOverview?.needsInput?.length || 0) > 0;
@@ -123,6 +130,15 @@ const LiquidationCampaignScreen = () => {
 
   const sendAction = (actionType: string, title: string, payload?: Record<string, unknown>) => {
     controller.dispatchAction({ actionType, title, payload }).catch(() => controller.setNotice(null));
+  };
+
+  const handleAddItems = () => {
+    const cam = controller.activeCampaign;
+    const campaignId = initialCampaignId || cam?.id;
+    if (!campaignId) return;
+    navigation.navigate('Inventory', {
+      selectForCampaign: { campaignId, title: cam?.title || 'Clearout' },
+    });
   };
 
   const openCampaignConfig = async (campaignId: string, title: string) => {
@@ -311,7 +327,12 @@ const LiquidationCampaignScreen = () => {
               <View style={{ flex: 1 }} />
               {selectedItems.size > 0 ? (
                 <Text style={s.selCount}>{selectedItems.size} selected</Text>
-              ) : null}
+              ) : (
+                <TouchableOpacity style={s.addItemsBtn} onPress={handleAddItems}>
+                  <Icon name="plus" size={13} color="#3B6D11" />
+                  <Text style={s.addItemsBtnText}>Add items</Text>
+                </TouchableOpacity>
+              )}
             </View>
 
             <FlatList
@@ -320,7 +341,11 @@ const LiquidationCampaignScreen = () => {
               contentContainerStyle={{ paddingHorizontal: 10, paddingBottom: 100 }}
               ListEmptyComponent={
                 <View style={s.emptyState}>
-                  <Text style={s.emptyStateText}>No items found in this campaign.</Text>
+                  <Text style={s.emptyStateText}>No items in this clearout yet.</Text>
+                  <TouchableOpacity style={s.emptyAddBtn} onPress={handleAddItems}>
+                    <Icon name="plus" size={16} color="#FFFFFF" />
+                    <Text style={s.emptyAddBtnText}>Add items from inventory</Text>
+                  </TouchableOpacity>
                 </View>
               }
               renderItem={({ item }) => {
@@ -547,10 +572,10 @@ const s = StyleSheet.create({
   topInfo: { flex: 1 },
   topTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   plantDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#639922' },
-  topTitle: { fontSize: 15, fontWeight: '500', color: '#111827', fontFamily: 'PlusJakartaSans_500Medium' },
-  topMeta: { fontSize: 11, color: '#71717A', marginTop: 1, fontFamily: 'PlusJakartaSans_500Medium' },
+  topTitle: { fontSize: 15, fontWeight: '500', color: '#111827', fontFamily: 'Inter_500Medium' },
+  topMeta: { fontSize: 11, color: '#71717A', marginTop: 1, fontFamily: 'Inter_500Medium' },
   threadBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#F9FAFB' },
-  threadBtnText: { fontSize: 16, color: '#374151', fontFamily: 'PlusJakartaSans_500Medium' },
+  threadBtnText: { fontSize: 16, color: '#374151', fontFamily: 'Inter_500Medium' },
 
   // Progress strip
   progStrip: { height: 2, backgroundColor: '#F3F4F6' },
@@ -559,22 +584,26 @@ const s = StyleSheet.create({
   // Ambient tray
   ambientTray: { backgroundColor: '#fafdf5', borderBottomWidth: 0.5, borderBottomColor: '#c0dd97', paddingHorizontal: 16, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', gap: 8 },
   trayDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#BA7517' },
-  trayText: { flex: 1, fontSize: 11, color: '#3B6D11', fontFamily: 'PlusJakartaSans_500Medium' },
+  trayText: { flex: 1, fontSize: 11, color: '#3B6D11', fontFamily: 'Inter_500Medium' },
   trayAction: { fontSize: 11, color: '#BA7517', fontWeight: '500' },
 
   // Loading
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },
-  loadingText: { color: '#71717A', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 13 },
+  loadingText: { color: '#71717A', fontFamily: 'Inter_500Medium', fontSize: 13 },
 
   // Controls row
   controlsRow: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6, flexDirection: 'row', alignItems: 'center', gap: 8 },
   ctrlBtn: { paddingHorizontal: 11, paddingVertical: 5, borderRadius: 10, borderWidth: 0.5, borderColor: '#E5E5E5', backgroundColor: '#F9FAFB' },
-  ctrlBtnText: { fontSize: 11, color: '#71717A', fontFamily: 'PlusJakartaSans_500Medium' },
+  ctrlBtnText: { fontSize: 11, color: '#71717A', fontFamily: 'Inter_500Medium' },
   selCount: { fontSize: 11, color: '#3B6D11', fontWeight: '500' },
 
   // Items list
-  emptyState: { padding: 40, alignItems: 'center' },
-  emptyStateText: { color: '#9CA3AF', fontSize: 13, fontFamily: 'PlusJakartaSans_500Medium' },
+  emptyState: { padding: 40, alignItems: 'center', gap: 16 },
+  emptyStateText: { color: '#9CA3AF', fontSize: 13, fontFamily: 'Inter_500Medium' },
+  emptyAddBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#93C822', paddingHorizontal: 16, paddingVertical: 11, borderRadius: 12 },
+  emptyAddBtnText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 13 },
+  addItemsBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#eaf3de', borderWidth: 0.5, borderColor: '#97C459', paddingHorizontal: 11, paddingVertical: 5, borderRadius: 10 },
+  addItemsBtnText: { fontSize: 11, color: '#3B6D11', fontFamily: 'Inter_600SemiBold' },
   cb: { width: 18, height: 18, borderRadius: 4, borderWidth: 1, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center' },
   cbChecked: { backgroundColor: '#639922', borderColor: '#639922' },
 
@@ -590,31 +619,31 @@ const s = StyleSheet.create({
   footerStack: { backgroundColor: '#FFFFFF', paddingTop: 4 },
   footerStackLifted: { paddingBottom: 68 },
   errorBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FEF2F2', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  errorText: { flex: 1, color: '#B91C1C', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 12 },
-  errorRetry: { color: '#DC2626', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 12 },
+  errorText: { flex: 1, color: '#B91C1C', fontFamily: 'Inter_500Medium', fontSize: 12 },
+  errorRetry: { color: '#DC2626', fontFamily: 'Inter_700Bold', fontSize: 12 },
   noticeBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(147,200,34,0.3)', backgroundColor: 'rgba(147,200,34,0.12)', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  noticeText: { flex: 1, color: '#5D7E16', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 12 },
+  noticeText: { flex: 1, color: '#5D7E16', fontFamily: 'Inter_500Medium', fontSize: 12 },
 
   // Sheet common
   sheetBackdrop: { flex: 1, justifyContent: 'flex-end' },
   sheetBackdropTap: { flex: 1, backgroundColor: 'rgba(0,0,0,0.24)' },
   sheetPanel: { backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 18, paddingTop: 18, paddingBottom: 28, maxHeight: '78%' },
-  sheetTitle: { color: '#111827', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 22 },
-  sheetHint: { marginTop: 8, marginBottom: 12, color: '#71717A', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 13 },
+  sheetTitle: { color: '#111827', fontFamily: 'Inter_700Bold', fontSize: 22 },
+  sheetHint: { marginTop: 8, marginBottom: 12, color: '#71717A', fontFamily: 'Inter_500Medium', fontSize: 13 },
 
 
 
   // Buttons
   primaryBtn: { height: 48, borderRadius: 14, backgroundColor: '#93C822', alignItems: 'center', justifyContent: 'center', marginTop: 8 },
-  primaryBtnText: { color: '#1F2937', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 14 },
+  primaryBtnText: { color: '#1F2937', fontFamily: 'Inter_700Bold', fontSize: 14 },
   secondaryBtn: { height: 48, borderRadius: 14, borderWidth: 1, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center', marginTop: 8 },
-  secondaryBtnText: { color: '#111827', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 14 },
+  secondaryBtnText: { color: '#111827', fontFamily: 'Inter_700Bold', fontSize: 14 },
   rowActions: { flexDirection: 'row', gap: 12 },
 
   // Config
   configField: { marginBottom: 12 },
-  configLabel: { marginBottom: 6, color: '#374151', fontFamily: 'PlusJakartaSans_600SemiBold', fontSize: 12 },
-  configInput: { height: 46, borderRadius: 12, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#FFF', paddingHorizontal: 12, color: '#111827', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 14 },
+  configLabel: { marginBottom: 6, color: '#374151', fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  configInput: { height: 46, borderRadius: 12, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#FFF', paddingHorizontal: 12, color: '#111827', fontFamily: 'Inter_500Medium', fontSize: 14 },
 
   // Rename
   renameBackdrop: { flex: 1, justifyContent: 'center', paddingHorizontal: 20, backgroundColor: 'rgba(0,0,0,0.24)' },
