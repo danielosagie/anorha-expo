@@ -75,7 +75,8 @@ const CampaignThreadScreen = () => {
   };
 
   const handleEllipsis = () => {
-    Alert.alert(campaignTitle, 'Manage this campaign', [
+    Alert.alert(campaignTitle, undefined, [
+      { text: 'Campaign items', onPress: () => navigation.navigate('LiquidationCampaignScreen', { campaignId, entryPoint: 'detail' }) },
       { text: 'Rename', onPress: () => Alert.alert('Rename', 'Rename functionality requires deeper UI flow.') },
       { text: 'Delete', style: 'destructive', onPress: () => {
           Alert.alert('Campaign hidden/deleted.');
@@ -92,8 +93,18 @@ const CampaignThreadScreen = () => {
   // Using passed title instantly, fallback to loaded activeCampaign title
   const campaignTitle = passedTitle || controller.activeCampaign?.title || 'Campaign Thread';
   // Use progress from overview
-  const soldCount = controller.campaignOverview?.summary24h?.sold || 0;
-  const itemCount = controller.activeCampaign ? 34 : 0; // fallback hardcoded for now, waiting for real data to pass or loaded
+  const stats = controller.activeCampaign?.stats;
+  const soldCount = stats?.soldCount ?? controller.campaignOverview?.summary24h?.sold ?? 0;
+  const itemCount = stats?.totalCount ?? 0;
+  const daysLeftLabel = (() => {
+    const days = controller.campaignConfig?.timeframeDays;
+    const created = controller.activeCampaign?.createdAt;
+    if (days && created) {
+      const elapsed = (Date.now() - new Date(created).getTime()) / 86400000;
+      return `${Math.max(0, Math.ceil(days - elapsed))}d left`;
+    }
+    return controller.campaignConfig?.aggressiveness || 'balanced';
+  })();
   const hasPendingAsks = (controller.campaignOverview?.needsInput?.length || 0) > 0;
   const latestAsk = controller.campaignOverview?.needsInput?.[0];
 
@@ -107,32 +118,27 @@ const CampaignThreadScreen = () => {
       >
         {/* ── Top bar ──────────────────────────────────────────────── */}
         <View style={s.topBar}>
-          <TouchableOpacity style={s.backBtn} onPress={() => {
-            if (navigation.canGoBack()) navigation.goBack();
-            else navigation.navigate('SproutHomeScreen');
-          }}>
-            <Icon name="arrow-left" size={20} color="#111827" />
+          <TouchableOpacity
+            style={s.navCircle}
+            onPress={() => {
+              if (navigation.canGoBack()) navigation.goBack();
+              else navigation.navigate('SproutHomeScreen');
+            }}
+          >
+            <Icon name="chevron-left" size={22} color="#18181B" />
           </TouchableOpacity>
-          <View style={s.topInfo}>
-            <View style={s.topTitleRow}>
-              <View style={s.plantDot} />
-              <Text style={s.topTitle} numberOfLines={1}>{campaignTitle}</Text>
-            </View>
-            <Text style={s.topMeta} numberOfLines={1}>
-              {controller.campaignConfig?.aggressiveness || 'balanced'} · {soldCount} sold
+
+          <View style={s.titlePill}>
+            <Text style={s.pillTitle} numberOfLines={1}>{campaignTitle}</Text>
+            <Text style={s.pillSub} numberOfLines={1}>
+              {soldCount}/{itemCount} sold · {daysLeftLabel}
             </Text>
           </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <TouchableOpacity 
-              style={s.itemsBtn} 
-              onPress={() => navigation.navigate('LiquidationCampaignScreen', { campaignId: campaignId, entryPoint: 'detail' })}
-            >
-              <Text style={s.itemsBtnText}>items</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={{ padding: 4 }} onPress={handleEllipsis}>
-              <Icon name="dots-vertical" size={24} color="#9CA3AF" />
-            </TouchableOpacity>
-          </View>
+
+          <TouchableOpacity style={s.chatPill} onPress={handleEllipsis}>
+            <Icon name="menu" size={16} color="#18181B" />
+            <Text style={s.chatPillText}>Chat</Text>
+          </TouchableOpacity>
         </View>
 
         {/* ── Progress strip ──────────────────────────────────────── */}
@@ -209,15 +215,22 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
 
   // Top bar
-  topBar: { minHeight: 60, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderBottomWidth: 0.5, borderBottomColor: '#E5E5E5' },
-  backBtn: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 0.5, borderColor: '#E5E5E5', padding: 4 },
-  topInfo: { flex: 1 },
-  topTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  plantDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#639922' },
-  topTitle: { fontSize: 15, fontWeight: '500', color: '#111827', fontFamily: 'Inter_500Medium' },
-  topMeta: { fontSize: 11, color: '#71717A', marginTop: 1, fontFamily: 'Inter_500Medium' },
-  itemsBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#F9FAFB' },
-  itemsBtnText: { fontSize: 16, color: '#374151', fontFamily: 'Inter_500Medium' },
+  topBar: { minHeight: 60, paddingHorizontal: 14, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  navCircle: {
+    width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2,
+  },
+  titlePill: {
+    flexShrink: 1, alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 22, paddingHorizontal: 18, paddingVertical: 8,
+    shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 2,
+  },
+  pillTitle: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_700Bold' },
+  pillSub: { fontSize: 12, color: '#71717A', marginTop: 1, fontFamily: 'Inter_500Medium' },
+  chatPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FFFFFF', borderRadius: 22, paddingHorizontal: 14, paddingVertical: 9,
+    shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2,
+  },
+  chatPillText: { fontSize: 14, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
 
   // Progress strip
   progStrip: { height: 2, backgroundColor: '#F3F4F6' },

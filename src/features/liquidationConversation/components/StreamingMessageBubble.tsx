@@ -91,11 +91,11 @@ export const StreamingMessageBubble = ({ message, onDecision, onRetry }: Props) 
   return (
     <Animated.View entering={FadeIn.duration(180)} style={[styles.row, isUser ? styles.rowRight : styles.rowLeft, revealRowStyle]}>
       <Animated.Text style={[styles.revealTime, revealTimeStyle]} numberOfLines={1}>{message.time}</Animated.Text>
-      <View style={[styles.card, isUser ? styles.userCard : styles.assistantCard]}>
+      <View style={[styles.card, message.kind === 'action' ? styles.actionCard : isUser ? styles.userCard : styles.assistantCard]}>
         {message.kind === 'action' ? (
           <View style={styles.actionMetaRow}>
-            <Icon name="flash-outline" size={13} color={isUser ? '#E5E7EB' : '#5D7E16'} />
-            <Text style={[styles.actionMetaText, isUser && styles.userActionMetaText]}>
+            <Icon name="flash-outline" size={13} color="#5D7E16" />
+            <Text style={styles.actionMetaText}>
               {message.actionMeta?.actionType?.replace(/_/g, ' ') || 'Action'}
             </Text>
           </View>
@@ -113,15 +113,10 @@ export const StreamingMessageBubble = ({ message, onDecision, onRetry }: Props) 
         )}
 
         {message.actionMeta?.summary ? (
-          <Text style={[styles.summaryText, isUser && styles.userSummaryText]}>{message.actionMeta.summary}</Text>
+          <Text style={styles.summaryText}>{message.actionMeta.summary}</Text>
         ) : null}
 
-        <View style={styles.footerRow}>
-          <Text style={[styles.timeText, isUser && styles.userTimeText]}>{message.time}</Text>
-          {statusLabel ? (
-            <Text style={[styles.statusText, isUser && styles.userTimeText]}>{statusLabel}</Text>
-          ) : null}
-        </View>
+        {statusLabel ? <Text style={styles.statusText}>{statusLabel}</Text> : null}
 
         {!isUser && message.decisionPrompt ? (
           <View style={styles.decisionCard}>
@@ -175,19 +170,24 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   card: {
-    maxWidth: '88%',
-    borderRadius: 16,
+    maxWidth: '86%',
+    borderRadius: 20,
     paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderWidth: 1,
+    paddingVertical: 10,
   },
   assistantCard: {
-    backgroundColor: '#FFFFFF',
-    borderColor: '#E5E7EB',
+    maxWidth: '96%',
+    backgroundColor: 'transparent',
+    paddingHorizontal: 2,
+    paddingVertical: 2,
   },
   userCard: {
-    backgroundColor: '#111827',
-    borderColor: '#111827',
+    backgroundColor: '#F0F0F3',
+  },
+  actionCard: {
+    backgroundColor: '#FBFBFA',
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
   },
   actionMetaRow: {
     flexDirection: 'row',
@@ -337,7 +337,7 @@ const styles = StyleSheet.create({
     },
   } as any,
   userMessageText: {
-    color: '#FFFFFF',
+    color: '#18181B',
   },
   summaryText: {
     marginTop: 8,
@@ -364,9 +364,10 @@ const styles = StyleSheet.create({
     color: '#D1D5DB',
   },
   statusText: {
-    color: '#71717A',
+    color: '#A1A1AA',
     fontFamily: 'Inter_500Medium',
     fontSize: 11,
+    marginTop: 6,
   },
   cursor: {
     color: '#93C822',
