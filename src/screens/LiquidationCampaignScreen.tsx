@@ -23,12 +23,13 @@ import { useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ChevronLeft, Menu, Box, MessageSquare, Settings as SettingsIcon, Pencil, Trash2, Check } from 'lucide-react-native';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import {
+  ChevronLeft, Menu, Box, MessageSquare, Settings as SettingsIcon, Pencil, Trash2, Check,
+  Search, X, Plus, PlusCircle, ChevronRight, AlertCircle, CheckCircle2,
+} from 'lucide-react-native';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
 import type { CampaignItem, ItemStatus } from '../features/liquidationConversation/types';
-import SearchBarWithScanner from '../components/SearchBarWithScanner';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -82,6 +83,8 @@ const LiquidationCampaignScreen = () => {
   const [menuOpen, setMenuOpen] = useState(false);
   const insets = useSafeAreaInsets();
   const [headerH, setHeaderH] = useState(104);
+  const [platformFilter, setPlatformFilter] = useState('All');
+  const [showAddChooser, setShowAddChooser] = useState(false);
 
   // Items table
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
@@ -139,7 +142,10 @@ const LiquidationCampaignScreen = () => {
     controller.dispatchAction({ actionType, title, payload }).catch(() => controller.setNotice(null));
   };
 
-  const handleAddItems = () => {
+  const openAddChooser = () => setShowAddChooser(true);
+
+  const addFromInventory = () => {
+    setShowAddChooser(false);
     const cam = controller.activeCampaign;
     const campaignId = initialCampaignId || cam?.id;
     if (!campaignId) return;
@@ -147,6 +153,30 @@ const LiquidationCampaignScreen = () => {
       selectForCampaign: { campaignId, title: cam?.title || 'Clearout' },
     });
   };
+
+  const addNewProduct = () => {
+    setShowAddChooser(false);
+    navigation.navigate('AddProduct');
+  };
+
+  // Per-platform filter chips, derived from the items' channels
+  const platforms = useMemo(() => {
+    const set = new Set<string>();
+    for (const it of items) {
+      String(it.channels || '').split(/[·,]/).map(s => s.trim()).filter(Boolean).forEach(p => set.add(p));
+    }
+    return Array.from(set);
+  }, [items]);
+
+  const visibleItems = useMemo(() => {
+    let list = items;
+    if (platformFilter !== 'All') {
+      list = list.filter(it => String(it.channels || '').toLowerCase().includes(platformFilter.toLowerCase()));
+    }
+    const q = searchQuery.trim().toLowerCase();
+    if (q) list = list.filter(it => String(it.name || '').toLowerCase().includes(q));
+    return list;
+  }, [items, platformFilter, searchQuery]);
 
   const openCampaignConfig = async (campaignId: string, title: string) => {
     setConfigCampaignTarget({ id: campaignId, title });
@@ -255,56 +285,75 @@ const LiquidationCampaignScreen = () => {
           </View>
         ) : (
           <View style={s.container}>
-            {/* Search Bar */}
-            <View style={{ paddingHorizontal: 14, paddingTop: headerH + 4 }}>
-              <SearchBarWithScanner
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                onScan={() => {}}
-                onScannerOpen={() => {}}
-                placeholder="Search items..."
-              />
+            {/* Search + add row */}
+            <View style={[s.searchRow, { paddingTop: headerH + 4 }]}>
+              <View style={s.searchBox}>
+                <Search size={18} color="#9CA3AF" />
+                <TextInput
+                  style={s.searchInput}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  placeholder="Search items"
+                  placeholderTextColor="#9CA3AF"
+                  returnKeyType="search"
+                />
+                {searchQuery ? (
+                  <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <X size={16} color="#9CA3AF" />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              <TouchableOpacity style={s.addBtn} onPress={openAddChooser} activeOpacity={0.85}>
+                <Plus size={24} color="#FFFFFF" />
+              </TouchableOpacity>
             </View>
 
-            {/* Controls row */}
-            <View style={s.controlsRow}>
-              <TouchableOpacity style={s.ctrlBtn} onPress={toggleSelectAll}>
-                <Text style={s.ctrlBtnText}>☐ Select</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={s.ctrlBtn} onPress={() => Alert.alert('Filter', 'Status, channel, price range, floor hit')}>
-                <Text style={s.ctrlBtnText}>Filter</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={s.ctrlBtn} onPress={() => Alert.alert('Sort', 'Price, status, date added, views')}>
-                <Text style={s.ctrlBtnText}>Sort</Text>
-              </TouchableOpacity>
-              <View style={{ flex: 1 }} />
-              {selectedItems.size > 0 ? (
-                <Text style={s.selCount}>{selectedItems.size} selected</Text>
-              ) : (
-                <TouchableOpacity style={s.addItemsBtn} onPress={handleAddItems}>
-                  <Icon name="plus" size={13} color="#3B6D11" />
-                  <Text style={s.addItemsBtnText}>Add items</Text>
-                </TouchableOpacity>
-              )}
-            </View>
+            {/* Per-platform filter chips */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              style={s.filterScroll}
+              contentContainerStyle={s.filterRow}
+            >
+              {['All', ...platforms].map(p => {
+                const active = platformFilter === p;
+                const count = p === 'All'
+                  ? items.length
+                  : items.filter(it => String(it.channels || '').toLowerCase().includes(p.toLowerCase())).length;
+                return (
+                  <TouchableOpacity
+                    key={p}
+                    style={[s.filterChip, active && s.filterChipActive]}
+                    onPress={() => setPlatformFilter(p)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[s.filterChipText, active && s.filterChipTextActive]}>{p}</Text>
+                    <Text style={[s.filterCount, active && s.filterCountActive]}>{count}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
 
             <FlatList
-              data={items}
+              data={visibleItems}
               keyExtractor={item => item.id}
               contentContainerStyle={{ paddingHorizontal: 14, paddingTop: 4, paddingBottom: 100 }}
+              keyboardShouldPersistTaps="handled"
               ListEmptyComponent={
                 <View style={s.emptyState}>
-                  <Text style={s.emptyStateText}>No items in this clearout yet.</Text>
-                  <TouchableOpacity style={s.emptyAddBtn} onPress={handleAddItems}>
-                    <Icon name="plus" size={16} color="#FFFFFF" />
-                    <Text style={s.emptyAddBtnText}>Add items from inventory</Text>
+                  <Text style={s.emptyStateText}>
+                    {searchQuery || platformFilter !== 'All' ? 'No items match.' : 'No items in this clearout yet.'}
+                  </Text>
+                  <TouchableOpacity style={s.emptyAddBtn} onPress={openAddChooser}>
+                    <Plus size={16} color="#FFFFFF" />
+                    <Text style={s.emptyAddBtnText}>Add items</Text>
                   </TouchableOpacity>
                 </View>
               }
               ItemSeparatorComponent={() => <View style={s.itemSep} />}
               renderItem={({ item }) => {
                 const sel = selectedItems.has(item.id);
-                const status = (item.status in STATUS_STYLE ? item.status : undefined) as ItemStatus | undefined;
                 return (
                   <TouchableOpacity
                     style={[s.itemRow, sel && s.itemRowSel]}
@@ -315,7 +364,7 @@ const LiquidationCampaignScreen = () => {
                   >
                     {selectedItems.size > 0 ? (
                       <View style={[s.cb, sel && s.cbChecked, { marginRight: 12 }]}>
-                        {sel ? <Icon name="check" size={12} color="#FFF" /> : null}
+                        {sel ? <Check size={12} color="#FFF" /> : null}
                       </View>
                     ) : null}
                     <View style={s.itemThumb}>
@@ -324,7 +373,7 @@ const LiquidationCampaignScreen = () => {
                       ) : item.emoji ? (
                         <Text style={{ fontSize: 24 }}>{item.emoji}</Text>
                       ) : (
-                        <Icon name="cube-outline" size={22} color="#A1A1AA" />
+                        <Box size={22} color="#A1A1AA" />
                       )}
                     </View>
                     <View style={s.itemInfo}>
@@ -334,11 +383,7 @@ const LiquidationCampaignScreen = () => {
                         {item.channels ? `  ·  ${item.channels}` : ''}
                       </Text>
                     </View>
-                    {status ? (
-                      <View style={[s.itemChip, { backgroundColor: STATUS_STYLE[status].bg }]}>
-                        <Text style={[s.itemChipText, { color: STATUS_STYLE[status].fg }]}>{STATUS_LABEL[status]}</Text>
-                      </View>
-                    ) : null}
+                    <ChevronRight size={18} color="#D4D4D8" />
                   </TouchableOpacity>
                 );
               }}
@@ -371,17 +416,17 @@ const LiquidationCampaignScreen = () => {
         <View style={s.footerStack}>
           {controller.error ? (
             <View style={s.errorBanner}>
-              <Icon name="alert-circle-outline" size={14} color="#EF4444" />
+              <AlertCircle size={14} color="#EF4444" />
               <Text style={s.errorText}>{controller.error}</Text>
               <TouchableOpacity onPress={controller.onRefresh}><Text style={s.errorRetry}>Retry</Text></TouchableOpacity>
             </View>
           ) : null}
           {controller.notice ? (
             <View style={s.noticeBanner}>
-              <Icon name="check-circle-outline" size={14} color="#5D7E16" />
+              <CheckCircle2 size={14} color="#5D7E16" />
               <Text style={s.noticeText}>{controller.notice}</Text>
               <TouchableOpacity onPress={() => controller.setNotice(null)}>
-                <Icon name="close" size={14} color="#5D7E16" />
+                <X size={14} color="#5D7E16" />
               </TouchableOpacity>
             </View>
           ) : null}
@@ -473,7 +518,33 @@ const LiquidationCampaignScreen = () => {
 
       {/* ═══════════════ MODALS ═══════════════════════════════════════ */}
 
-
+      {/* Add-items chooser */}
+      <Modal visible={showAddChooser} transparent animationType="fade" onRequestClose={() => setShowAddChooser(false)}>
+        <View style={s.chooserRoot}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowAddChooser(false)} />
+          <View style={[s.chooserSheet, { paddingBottom: insets.bottom + 14 }]}>
+            <View style={s.chooserHandle} />
+            <Text style={s.chooserTitle}>Add items to this clearout</Text>
+            <TouchableOpacity style={s.chooserOption} onPress={addFromInventory} activeOpacity={0.8}>
+              <View style={s.chooserIcon}><Box size={22} color="#43631A" /></View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.chooserOptTitle}>Select from inventory</Text>
+                <Text style={s.chooserOptSub}>Pick from products you already have</Text>
+              </View>
+              <ChevronRight size={18} color="#A1A1AA" />
+            </TouchableOpacity>
+            <View style={s.chooserDivider} />
+            <TouchableOpacity style={s.chooserOption} onPress={addNewProduct} activeOpacity={0.8}>
+              <View style={s.chooserIcon}><PlusCircle size={22} color="#43631A" /></View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.chooserOptTitle}>Add a new product</Text>
+                <Text style={s.chooserOptSub}>Scan or create one, then add it here</Text>
+              </View>
+              <ChevronRight size={18} color="#A1A1AA" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Config sheet */}
       <Modal visible={isConfigSheetOpen} transparent animationType="fade"
@@ -658,6 +729,33 @@ const s = StyleSheet.create({
   ctrlBtn: { paddingHorizontal: 11, paddingVertical: 5, borderRadius: 10, borderWidth: 0.5, borderColor: '#E5E5E5', backgroundColor: '#F9FAFB' },
   ctrlBtnText: { fontSize: 11, color: '#71717A', fontFamily: 'Inter_500Medium' },
   selCount: { fontSize: 11, color: '#3B6D11', fontWeight: '500' },
+
+  // Search + add row
+  searchRow: { paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  searchBox: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F4F4F1', borderRadius: 24, paddingHorizontal: 16, height: 48 },
+  searchInput: { flex: 1, fontSize: 15, color: '#18181B', fontFamily: 'Inter_500Medium', paddingVertical: 0 },
+  addBtn: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#18181B', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
+
+  // Per-platform filter chips
+  filterScroll: { flexGrow: 0, flexShrink: 0 },
+  filterRow: { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 4, gap: 8, flexDirection: 'row', alignItems: 'center' },
+  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: '#F1F2EE' },
+  filterChipActive: { backgroundColor: '#18181B' },
+  filterChipText: { fontSize: 13, color: '#52525B', fontFamily: 'Inter_600SemiBold' },
+  filterChipTextActive: { color: '#FFFFFF' },
+  filterCount: { fontSize: 12, color: '#9CA3AF', fontFamily: 'Inter_600SemiBold' },
+  filterCountActive: { color: 'rgba(255,255,255,0.7)' },
+
+  // Add-items chooser
+  chooserRoot: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+  chooserSheet: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: 18, paddingTop: 10 },
+  chooserHandle: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: '#E4E4E7', marginBottom: 14 },
+  chooserTitle: { fontSize: 18, color: '#18181B', fontFamily: 'Inter_700Bold', marginBottom: 8, paddingHorizontal: 4 },
+  chooserOption: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, paddingHorizontal: 4 },
+  chooserDivider: { height: 1, backgroundColor: '#F1F1EE', marginLeft: 62 },
+  chooserIcon: { width: 44, height: 44, borderRadius: 14, backgroundColor: 'rgba(147,200,34,0.14)', alignItems: 'center', justifyContent: 'center' },
+  chooserOptTitle: { fontSize: 16, color: '#18181B', fontFamily: 'Inter_600SemiBold', marginBottom: 2 },
+  chooserOptSub: { fontSize: 13, color: '#71717A', fontFamily: 'Inter_400Regular' },
 
   // Items list
   emptyState: { padding: 40, alignItems: 'center', gap: 16 },
