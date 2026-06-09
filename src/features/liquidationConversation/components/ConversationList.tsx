@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { useSharedValue, withTiming } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { StreamingMessageBubble } from './StreamingMessageBubble';
+import { TimestampRevealContext } from './timestampReveal';
 import type { ConversationMessage, DecisionPrompt } from '../types';
 
 type MessageWithTime = ConversationMessage & { time: string };
@@ -26,6 +29,24 @@ export const ConversationList = ({
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const canJump = useMemo(() => messages.length > 2, [messages.length]);
 
+  // iMessage-style swipe-left to reveal timestamps on the right.
+  const dragX = useSharedValue(0);
+  const revealPan = useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetX([-14, 14])
+        .failOffsetY([-12, 12])
+        .onChange(e => {
+          'worklet';
+          dragX.value = Math.max(-64, Math.min(0, dragX.value + e.changeX));
+        })
+        .onFinalize(() => {
+          'worklet';
+          dragX.value = withTiming(0, { duration: 180 });
+        }),
+    [dragX],
+  );
+
   useEffect(() => {
     if (!showJumpToLatest) {
       listRef.current?.scrollToEnd({ animated: true });
@@ -43,6 +64,8 @@ export const ConversationList = ({
 
   return (
     <View style={styles.container}>
+      <TimestampRevealContext.Provider value={dragX}>
+      <GestureDetector gesture={revealPan}>
       <FlashList
         ref={listRef}
         data={messages}
@@ -67,6 +90,8 @@ export const ConversationList = ({
           setShowJumpToLatest(!nearBottom);
         }}
       />
+      </GestureDetector>
+      </TimestampRevealContext.Provider>
 
       {showJumpToLatest && canJump ? (
         <TouchableOpacity style={styles.jumpButton} onPress={() => listRef.current?.scrollToEnd({ animated: true })}>

@@ -13,6 +13,7 @@ import {
 import * as Haptics from 'expo-haptics';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
+import { ensureSupabaseJwt } from '../../lib/supabase';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { ConversationComposer } from '../features/liquidationConversation/components/ConversationComposer';
@@ -196,6 +197,7 @@ const CampaignThreadScreen = () => {
             onSend={() => controller.sendComposer()}
             queuedCount={controller.queuedCount}
             isStreaming={controller.isStreaming}
+            getAuthToken={ensureSupabaseJwt}
           />
         </View>
       </KeyboardAvoidingView>

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Animated, {
   Easing,
@@ -12,6 +12,7 @@ import Animated, {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Markdown from 'react-native-markdown-display';
 import type { ConversationMessage, DecisionPrompt } from '../types';
+import { TimestampRevealContext } from './timestampReveal';
 
 const TypingDot = ({ delay }: { delay: number }) => {
   const progress = useSharedValue(0.3);
@@ -50,6 +51,10 @@ export const StreamingMessageBubble = ({ message, onDecision, onRetry }: Props) 
   const isStreaming = message.deliveryState === 'streaming';
   const isFailed = message.deliveryState === 'failed';
 
+  const dragX = useContext(TimestampRevealContext);
+  const revealRowStyle = useAnimatedStyle(() => ({ transform: [{ translateX: dragX?.value ?? 0 }] }));
+  const revealTimeStyle = useAnimatedStyle(() => ({ opacity: dragX ? Math.min(1, -dragX.value / 46) : 0 }));
+
   useEffect(() => {
     if (!isStreaming) {
       setCursorVisible(false);
@@ -76,11 +81,16 @@ export const StreamingMessageBubble = ({ message, onDecision, onRetry }: Props) 
     return null;
   }, [message.actionMeta?.status, message.deliveryState, message.kind]);
 
-  const content = message.content;
+  // Safety net: the seller wants no em dashes in chat. Strip them from assistant
+  // text in case the model slips one in.
+  const content = isUser
+    ? message.content
+    : (message.content || '').replace(/\s*[—]\s*/g, ', ').replace(/[–]/g, '-');
   const renderMarkdown = !isUser && !isStreaming;
 
   return (
-    <Animated.View entering={FadeIn.duration(180)} style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
+    <Animated.View entering={FadeIn.duration(180)} style={[styles.row, isUser ? styles.rowRight : styles.rowLeft, revealRowStyle]}>
+      <Animated.Text style={[styles.revealTime, revealTimeStyle]} numberOfLines={1}>{message.time}</Animated.Text>
       <View style={[styles.card, isUser ? styles.userCard : styles.assistantCard]}>
         {message.kind === 'action' ? (
           <View style={styles.actionMetaRow}>
@@ -372,6 +382,15 @@ const styles = StyleSheet.create({
     height: 7,
     borderRadius: 4,
     backgroundColor: '#93C822',
+  },
+  revealTime: {
+    position: 'absolute',
+    right: -52,
+    top: 14,
+    width: 46,
+    fontFamily: 'Inter_500Medium',
+    fontSize: 11,
+    color: '#9CA3AF',
   },
   decisionCard: {
     marginTop: 12,
