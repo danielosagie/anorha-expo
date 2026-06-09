@@ -486,7 +486,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="CreateAccountScreen" component={CreateAccountScreen} />
     <AppStackNav.Screen name="AccountSyncIssueScreen" component={AccountSyncIssueScreen} />
     <AppStackNav.Screen name="Partners" component={PartnersScreen} />
-    <AppStackNav.Screen name="LiquidationCampaignScreen" component={LiquidationCampaignScreen} options={{ headerTitle: 'Campaign Items', animationEnabled: false }} />
+    <AppStackNav.Screen name="LiquidationCampaignScreen" component={LiquidationCampaignScreen} options={{ headerTitle: 'Inventory', animationEnabled: false }} />
     <AppStackNav.Screen name="SproutHomeScreen" component={SproutHomeScreen} options={{ headerTitle: 'Sprout' }} />
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />
     <AppStackNav.Screen name="ProductDetail" component={ProductDetailScreen} />

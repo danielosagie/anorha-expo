@@ -4,6 +4,7 @@ import {
   Alert,
   Animated,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -23,7 +24,6 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
 import type { CampaignItem, ItemStatus } from '../features/liquidationConversation/types';
-import InventoryListCard from '../components/InventoryListCard';
 import SearchBarWithScanner from '../components/SearchBarWithScanner';
 
 const CONVEX_TEMPLATE =
@@ -75,6 +75,7 @@ const LiquidationCampaignScreen = () => {
   const [configCampaignTarget, setConfigCampaignTarget] = useState<{ id: string; title: string } | null>(null);
   const [renameTarget, setRenameTarget] = useState<null | { kind: 'thread' | 'campaign'; id: string; title: string }>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // Items table
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
@@ -228,16 +229,7 @@ const LiquidationCampaignScreen = () => {
     else openItemDetail(item);
   };
 
-  const handleEllipsis = () => {
-    const cam = controller.activeCampaign;
-    if (!cam) return;
-    Alert.alert(cam.title, undefined, [
-      { text: 'Rename', onPress: () => openRename('campaign', cam.id, cam.title) },
-      { text: 'Settings', onPress: () => void openCampaignConfig(cam.id, cam.title) },
-      { text: 'Delete', style: 'destructive', onPress: () => deleteCampaign(cam.id, cam.title) },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
-  };
+  const handleEllipsis = () => setMenuOpen(open => !open);
 
   /* ── render ───────────────────────────────────────────────────────── */
 
@@ -338,7 +330,7 @@ const LiquidationCampaignScreen = () => {
             <FlatList
               data={items}
               keyExtractor={item => item.id}
-              contentContainerStyle={{ paddingHorizontal: 10, paddingBottom: 100 }}
+              contentContainerStyle={{ paddingHorizontal: 14, paddingTop: 4, paddingBottom: 100 }}
               ListEmptyComponent={
                 <View style={s.emptyState}>
                   <Text style={s.emptyStateText}>No items in this clearout yet.</Text>
@@ -348,28 +340,45 @@ const LiquidationCampaignScreen = () => {
                   </TouchableOpacity>
                 </View>
               }
+              ItemSeparatorComponent={() => <View style={s.itemSep} />}
               renderItem={({ item }) => {
                 const sel = selectedItems.has(item.id);
+                const status = (item.status in STATUS_STYLE ? item.status : undefined) as ItemStatus | undefined;
                 return (
-                  <View style={{ marginBottom: 8, flexDirection: 'row', alignItems: 'center' }}>
-                     {selectedItems.size > 0 && (
-                        <TouchableOpacity style={[s.cb, sel && s.cbChecked, { marginRight: 8 }]} onPress={() => toggleItem(item.id)}>
-                          {sel ? <Icon name="check" size={10} color="#FFF" /> : null}
-                        </TouchableOpacity>
-                     )}
-                     <View style={{ flex: 1 }}>
-                        <InventoryListCard
-                          id={item.id}
-                          title={item.name || item.title || 'Unknown Item'}
-                          price={item.currentPrice || item.price}
-                          imageUrl={item.imageUrl}
-                          platformNames={item.channels ? item.channels.split(' · ') : []}
-                          isSelected={sel}
-                          onPress={() => handleItemRowPress(item)}
-                          onLongPress={() => toggleItem(item.id)}
-                        />
-                     </View>
-                  </View>
+                  <TouchableOpacity
+                    style={[s.itemRow, sel && s.itemRowSel]}
+                    onPress={() => handleItemRowPress(item)}
+                    onLongPress={() => toggleItem(item.id)}
+                    delayLongPress={250}
+                    activeOpacity={0.7}
+                  >
+                    {selectedItems.size > 0 ? (
+                      <View style={[s.cb, sel && s.cbChecked, { marginRight: 12 }]}>
+                        {sel ? <Icon name="check" size={12} color="#FFF" /> : null}
+                      </View>
+                    ) : null}
+                    <View style={s.itemThumb}>
+                      {item.imageUrl ? (
+                        <Image source={{ uri: item.imageUrl }} style={s.itemThumbImg} resizeMode="cover" />
+                      ) : item.emoji ? (
+                        <Text style={{ fontSize: 24 }}>{item.emoji}</Text>
+                      ) : (
+                        <Icon name="cube-outline" size={22} color="#A1A1AA" />
+                      )}
+                    </View>
+                    <View style={s.itemInfo}>
+                      <Text style={s.itemTitle} numberOfLines={1}>{item.name || 'Unknown item'}</Text>
+                      <Text style={s.itemSub} numberOfLines={1}>
+                        ${Number(item.currentPrice ?? 0).toFixed(2)}
+                        {item.channels ? `  ·  ${item.channels}` : ''}
+                      </Text>
+                    </View>
+                    {status ? (
+                      <View style={[s.itemChip, { backgroundColor: STATUS_STYLE[status].bg }]}>
+                        <Text style={[s.itemChipText, { color: STATUS_STYLE[status].fg }]}>{STATUS_LABEL[status]}</Text>
+                      </View>
+                    ) : null}
+                  </TouchableOpacity>
                 );
               }}
             />
@@ -417,6 +426,32 @@ const LiquidationCampaignScreen = () => {
           ) : null}
         </View>
       </KeyboardAvoidingView>
+
+      {/* ── Clean dropdown menu (not native) ────────────────────────── */}
+      {menuOpen ? (
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setMenuOpen(false)} />
+          <View style={s.dropdown}>
+            <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
+              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); if (cam) openRename('campaign', cam.id, cam.title); }}>
+              <Icon name="pencil-outline" size={18} color="#3F3F46" />
+              <Text style={s.dropText}>Rename</Text>
+            </TouchableOpacity>
+            <View style={s.dropDivider} />
+            <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
+              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); if (cam) void openCampaignConfig(cam.id, cam.title); }}>
+              <Icon name="cog-outline" size={18} color="#3F3F46" />
+              <Text style={s.dropText}>Settings</Text>
+            </TouchableOpacity>
+            <View style={s.dropDivider} />
+            <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
+              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); if (cam) deleteCampaign(cam.id, cam.title); }}>
+              <Icon name="trash-can-outline" size={18} color="#DC2626" />
+              <Text style={[s.dropText, { color: '#DC2626' }]}>Delete</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
 
       {/* ═══════════════ MODALS ═══════════════════════════════════════ */}
 
@@ -606,6 +641,28 @@ const s = StyleSheet.create({
   addItemsBtnText: { fontSize: 11, color: '#3B6D11', fontFamily: 'Inter_600SemiBold' },
   cb: { width: 18, height: 18, borderRadius: 4, borderWidth: 1, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center' },
   cbChecked: { backgroundColor: '#639922', borderColor: '#639922' },
+
+  // Clean Shop-style item rows
+  itemSep: { height: 1, backgroundColor: '#F1F1EE', marginLeft: 76 },
+  itemRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 6 },
+  itemRowSel: { backgroundColor: 'rgba(132,204,22,0.08)', borderRadius: 14 },
+  itemThumb: { width: 56, height: 56, borderRadius: 14, backgroundColor: '#F4F4F1', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(0,0,0,0.05)', overflow: 'hidden' },
+  itemThumbImg: { width: '100%', height: '100%' },
+  itemInfo: { flex: 1, marginLeft: 14, marginRight: 8 },
+  itemTitle: { fontSize: 16, color: '#18181B', fontFamily: 'Inter_600SemiBold', marginBottom: 3 },
+  itemSub: { fontSize: 13, color: '#71717A', fontFamily: 'Inter_400Regular' },
+  itemChip: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4 },
+  itemChipText: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
+
+  // Clean dropdown menu
+  dropdown: {
+    position: 'absolute', top: 58, right: 12, minWidth: 190,
+    backgroundColor: '#FFFFFF', borderRadius: 16, paddingVertical: 6,
+    shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 10,
+  },
+  dropItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 13 },
+  dropText: { color: '#27272A', fontFamily: 'Inter_600SemiBold', fontSize: 15 },
+  dropDivider: { height: 1, backgroundColor: '#F1F2EE', marginHorizontal: 12 },
 
   // Bulk action bar
   bulkBar: { position: 'absolute', bottom: 12, left: 12, right: 12, backgroundColor: '#FFF', borderWidth: 0.5, borderColor: '#D1D5DB', borderRadius: 14, padding: 10, flexDirection: 'row', gap: 6, flexWrap: 'wrap', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 2 }, elevation: 4 },

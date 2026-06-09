@@ -1,6 +1,5 @@
-import React, { useMemo, useRef, useEffect } from 'react';
+import React, { useMemo, useRef, useEffect, useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
@@ -51,6 +50,7 @@ const CampaignThreadScreen = () => {
   );
 
   const controller = useLiquidationConversationController({ adapter, initialCampaignId: campaignId });
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // Success haptic when the agent finishes streaming a turn (chat-template polish)
   const prevStreamingRef = useRef(false);
@@ -75,15 +75,17 @@ const CampaignThreadScreen = () => {
   };
 
   const handleEllipsis = () => {
-    Alert.alert(campaignTitle, undefined, [
-      { text: 'Campaign items', onPress: () => navigation.navigate('LiquidationCampaignScreen', { campaignId, entryPoint: 'detail' }) },
-      { text: 'Rename', onPress: () => Alert.alert('Rename', 'Rename functionality requires deeper UI flow.') },
-      { text: 'Delete', style: 'destructive', onPress: () => {
-          Alert.alert('Campaign hidden/deleted.');
-          navigation.navigate('SproutHomeScreen');
-      }},
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    setMenuOpen(open => !open);
+  };
+
+  const goToInventory = () => {
+    setMenuOpen(false);
+    navigation.navigate('LiquidationCampaignScreen', { campaignId, entryPoint: 'detail' });
+  };
+  const deleteCampaign = () => {
+    setMenuOpen(false);
+    navigation.navigate('SproutHomeScreen');
   };
 
   const composerPlaceholder = controller.isStreaming
@@ -206,6 +208,24 @@ const CampaignThreadScreen = () => {
             getAuthToken={ensureSupabaseJwt}
           />
         </View>
+
+        {/* ── Clean dropdown menu (not native) ────────────────────── */}
+        {menuOpen ? (
+          <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+            <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setMenuOpen(false)} />
+            <View style={s.dropdown}>
+              <TouchableOpacity style={s.dropItem} onPress={goToInventory} activeOpacity={0.7}>
+                <Icon name="package-variant-closed" size={18} color="#3F3F46" />
+                <Text style={s.dropText}>Inventory</Text>
+              </TouchableOpacity>
+              <View style={s.dropDivider} />
+              <TouchableOpacity style={s.dropItem} onPress={deleteCampaign} activeOpacity={0.7}>
+                <Icon name="trash-can-outline" size={18} color="#DC2626" />
+                <Text style={[s.dropText, { color: '#DC2626' }]}>Delete clearout</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -252,6 +272,16 @@ const s = StyleSheet.create({
   chipsContent: { paddingHorizontal: 12, gap: 6, flexDirection: 'row', paddingBottom: 8, paddingTop: 4 },
   quickChip: { paddingHorizontal: 11, paddingVertical: 5, borderRadius: 14, borderWidth: 0.5, borderColor: '#D1D5DB', backgroundColor: '#F9FAFB' },
   quickChipText: { fontSize: 11, color: '#71717A', fontFamily: 'Inter_500Medium' },
+
+  // Clean dropdown menu
+  dropdown: {
+    position: 'absolute', top: 58, right: 14, minWidth: 200,
+    backgroundColor: '#FFFFFF', borderRadius: 16, paddingVertical: 6,
+    shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 10,
+  },
+  dropItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 13 },
+  dropText: { color: '#27272A', fontFamily: 'Inter_600SemiBold', fontSize: 15 },
+  dropDivider: { height: 1, backgroundColor: '#F1F2EE', marginHorizontal: 12 },
 });
 
 export default CampaignThreadScreen;
