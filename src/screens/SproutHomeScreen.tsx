@@ -69,6 +69,56 @@ const CHIP_STYLE: Record<BriefingChip, { bg: string; fg: string; text: string }>
   LISTED: { bg: '#E6F0FB', fg: '#2563A8', text: 'LISTED' },
 };
 
+// ── Adaptive home theme: green by day, dark by night ──────────────────────
+type Palette = {
+  bgFrom: string; bgTo: string;
+  strong: string; dim: string; faint: string;
+  pillBg: string; newBg: string;
+  chart: string; divider: string;
+  chipIdleBg: string; chipIdleText: string; chipActiveBg: string; chipActiveText: string;
+  blur: 'light' | 'dark';
+};
+
+const DAY_THEME: Palette = {
+  bgFrom: '#9AC53C', bgTo: '#6F9C26',
+  strong: '#FFFFFF', dim: 'rgba(255,255,255,0.6)', faint: 'rgba(255,255,255,0.78)',
+  pillBg: 'rgba(255,255,255,0.18)', newBg: 'rgba(20,30,8,0.30)',
+  chart: 'rgba(255,255,255,0.95)', divider: 'rgba(255,255,255,0.34)',
+  chipIdleBg: 'rgba(255,255,255,0.14)', chipIdleText: 'rgba(255,255,255,0.78)',
+  chipActiveBg: '#FFFFFF', chipActiveText: '#43631A', blur: 'light',
+};
+
+const NIGHT_THEME: Palette = {
+  bgFrom: '#272B20', bgTo: '#14160F',
+  strong: '#F4F4EE', dim: 'rgba(244,244,238,0.5)', faint: 'rgba(244,244,238,0.72)',
+  pillBg: 'rgba(255,255,255,0.10)', newBg: 'rgba(255,255,255,0.14)',
+  chart: 'rgba(255,255,255,0.92)', divider: 'rgba(255,255,255,0.16)',
+  chipIdleBg: 'rgba(255,255,255,0.08)', chipIdleText: 'rgba(244,244,238,0.6)',
+  chipActiveBg: '#F4F4EE', chipActiveText: '#1F2218', blur: 'dark',
+};
+
+// Connector/structure words rendered dim, so the facts pop (iMessage-summary look)
+const DIM_TOKENS = new Set([
+  'on','the','for','a','an','to','of','in','at','and','&','that','came','is','with','your',
+  'from','by','were','was','are','then','as','its','it',
+]);
+
+type Seg = { text: string; strong: boolean };
+
+const briefingToSegments = (rows: BriefingRowData[]): Seg[] => {
+  const out: Seg[] = [];
+  rows.forEach((row, i) => {
+    if (i > 0) out.push({ text: i === rows.length - 1 ? ', and ' : ', ', strong: false });
+    row.label.split(/(\s+)/).forEach(tok => {
+      if (/^\s*$/.test(tok)) { out.push({ text: tok, strong: false }); return; }
+      const clean = tok.replace(/[^A-Za-z&']/g, '').toLowerCase();
+      out.push({ text: tok, strong: !DIM_TOKENS.has(clean) });
+    });
+  });
+  if (out.length) out.push({ text: '.', strong: false });
+  return out;
+};
+
 const SproutHomeScreen: React.FC = () => {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
@@ -212,10 +262,17 @@ const SproutHomeScreen: React.FC = () => {
   }, [adapter, controller, navigation]);
 
   const chartWidth = Dimensions.get('window').width;
+  const isNight = useMemo(() => {
+    const h = new Date().getHours();
+    return h >= 22 || h < 5;
+  }, []);
+  const THEME = isNight ? NIGHT_THEME : DAY_THEME;
+  const briefingSegments = useMemo(() => briefingToSegments(briefingRows), [briefingRows]);
 
   return (
-    <View style={styles.screen}>
-      <StatusBar barStyle="dark-content" />
+    <View style={[styles.screen, { backgroundColor: THEME.bgTo }]}>
+      <StatusBar barStyle="light-content" />
+      <LinearGradient colors={[THEME.bgFrom, THEME.bgTo]} style={StyleSheet.absoluteFill} pointerEvents="none" />
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingTop: insets.top + 56, paddingBottom: insets.bottom + 120 }}
@@ -223,54 +280,49 @@ const SproutHomeScreen: React.FC = () => {
           <RefreshControl refreshing={controller.refreshing} onRefresh={controller.onRefresh} tintColor={BRAND} />
         }
       >
-        {/* ── HERO (light, content scrolls under the glass top bar) ──── */}
+        {/* ── HERO (themed: green by day, dark by night) ─────────────── */}
         <View style={styles.hero}>
-          <Text style={styles.greeting}>
-            {greeting}, {firstName}
+          <Text style={[styles.greeting, { color: THEME.strong }]}>
+            {greeting}, 📖 {firstName}
           </Text>
 
           {briefingRows.length > 0 ? (
             <>
-              <Text style={styles.briefingHeadline}>
-                {briefingRows.length} {briefingRows.length === 1 ? 'thing' : 'things'} happened while you slept
+              <Text style={[styles.briefingHeadline, { color: THEME.strong }]}>
+                {briefingRows.length} {briefingRows.length === 1 ? 'thing' : 'things'} happened {isNight ? 'while you slept' : 'today'}  {isNight ? '🌙' : '☀️'}
               </Text>
-              <View style={styles.briefingList}>
-                {briefingRows.map(row => {
-                  const chip = CHIP_STYLE[row.chip];
-                  return (
-                    <View key={row.id} style={styles.briefingRow}>
-                      <Text style={styles.briefingLabel} numberOfLines={1}>
-                        {row.label}
-                      </Text>
-                      <View style={[styles.briefingChip, { backgroundColor: chip.bg }]}>
-                        <Text style={[styles.briefingChipText, { color: chip.fg }]}>{chip.text}</Text>
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
+              <Text style={styles.briefingProse}>
+                {briefingSegments.map((seg, i) => (
+                  <Text
+                    key={i}
+                    style={{
+                      color: seg.strong ? THEME.strong : THEME.dim,
+                      fontFamily: seg.strong ? FONT.semibold : FONT.regular,
+                    }}
+                  >
+                    {seg.text}
+                  </Text>
+                ))}
+              </Text>
             </>
           ) : (
-            <Text style={styles.briefingHeadline}>
-              {controller.loading ? 'Catching you up…' : 'All quiet while you slept. Sprout is watching.'}
+            <Text style={[styles.briefingHeadline, { color: THEME.faint }]}>
+              {controller.loading
+                ? 'Catching you up…'
+                : isNight
+                  ? 'All quiet while you slept. Sprout is watching.'
+                  : 'All quiet so far. Sprout is watching.'}
             </Text>
           )}
 
-          <View style={styles.dashedDivider} />
+          <View style={[styles.dashedDivider, { borderColor: THEME.divider }]} />
 
-          {/* Hero stats */}
+          {/* Hero stats — sales today + revenue */}
           <View style={styles.statsRow}>
-            <View style={styles.statBlock}>
-              <Text style={styles.statLabel}>REVENUE · 24H</Text>
-              <Text style={styles.statValue}>
-                {currency(revenue24h)}
-                {soldToday > 0 ? <Text style={styles.statDelta}>  ▲ {soldToday} sold</Text> : null}
-              </Text>
-            </View>
-            <View style={[styles.statBlock, { alignItems: 'flex-end' }]}>
-              <Text style={styles.statLabel}>ITEMS</Text>
-              <Text style={styles.statValue}>{itemsLeft} Left</Text>
-            </View>
+            <Text style={[styles.salesToday, { color: THEME.strong }]}>
+              {soldToday} {soldToday === 1 ? 'sale' : 'sales'} today
+            </Text>
+            <Text style={[styles.salesDelta, { color: THEME.strong }]}>+{currency(revenue24h)}</Text>
           </View>
 
           {/* Sparkline */}
@@ -287,18 +339,18 @@ const SproutHomeScreen: React.FC = () => {
               withShadow={false}
               bezier
               chartConfig={{
-                backgroundGradientFrom: '#F6F7F4',
+                backgroundGradientFrom: THEME.bgTo,
                 backgroundGradientFromOpacity: 0,
-                backgroundGradientTo: '#F6F7F4',
+                backgroundGradientTo: THEME.bgTo,
                 backgroundGradientToOpacity: 0,
-                color: (opacity = 1) => `rgba(147,200,34,${opacity})`,
+                color: () => THEME.chart,
                 strokeWidth: 3,
                 decimalPlaces: 0,
                 propsForBackgroundLines: { strokeWidth: 0 },
               }}
               style={styles.chart}
             />
-            <View style={styles.chartBaseline} />
+            <View style={[styles.chartBaseline, { borderColor: THEME.divider }]} />
           </View>
 
           {/* Range chips */}
@@ -308,14 +360,14 @@ const SproutHomeScreen: React.FC = () => {
               return (
                 <TouchableOpacity
                   key={r}
-                  style={[styles.rangeChip, active && styles.rangeChipActive]}
+                  style={[styles.rangeChip, { backgroundColor: active ? THEME.chipActiveBg : 'transparent' }]}
                   onPress={() => {
                     tap();
                     setActiveRange(r);
                   }}
                   activeOpacity={0.8}
                 >
-                  <Text style={[styles.rangeChipText, active && styles.rangeChipTextActive]}>{r}</Text>
+                  <Text style={[styles.rangeChipText, { color: active ? THEME.chipActiveText : THEME.chipIdleText }]}>{r}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -330,14 +382,14 @@ const SproutHomeScreen: React.FC = () => {
               return (
                 <TouchableOpacity
                   key={f}
-                  style={[styles.filterChip, active && styles.filterChipActive]}
+                  style={[styles.filterChip, { backgroundColor: active ? THEME.chipActiveBg : THEME.chipIdleBg }]}
                   onPress={() => {
                     tap();
                     setActiveFilter(f);
                   }}
                   activeOpacity={0.8}
                 >
-                  <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>{f}</Text>
+                  <Text style={[styles.filterChipText, { color: active ? THEME.chipActiveText : THEME.chipIdleText }]}>{f}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -381,33 +433,42 @@ const SproutHomeScreen: React.FC = () => {
         </View>
       </ScrollView>
 
-      {/* ── Floating glass top bar (white at top, fades into content) ─ */}
+      {/* ── Floating top bar (pills float on the themed background) ──── */}
       <View pointerEvents="box-none" style={[styles.topBar, { height: insets.top + 54 }]}>
         <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-          <BlurView intensity={Platform.OS === 'ios' ? 16 : 10} tint="light" style={StyleSheet.absoluteFill} />
+          <BlurView intensity={Platform.OS === 'ios' ? 14 : 8} tint={THEME.blur} style={StyleSheet.absoluteFill} />
           <LinearGradient
-            colors={['rgba(255,255,255,1)', 'rgba(255,255,255,0.92)', 'rgba(255,255,255,0)']}
-            locations={[0, 0.5, 1]}
+            colors={[THEME.bgFrom, `${THEME.bgFrom}00`]}
+            locations={[0, 1]}
             style={StyleSheet.absoluteFill}
           />
         </View>
         <View style={[styles.topBarRow, { marginTop: insets.top + 2 }]}>
           <TouchableOpacity
-            style={styles.overviewPill}
+            style={[styles.overviewPill, { backgroundColor: THEME.pillBg }]}
             onPress={() => {
               tap();
               setMenuOpen(true);
             }}
             activeOpacity={0.85}
           >
-            <Icon name="menu" size={15} color="#3F3F46" />
-            <Text style={styles.overviewText}>Overview</Text>
-            <Icon name="chevron-down" size={15} color="#71717A" />
+            <Icon name="menu" size={15} color={THEME.strong} />
+            <Text style={[styles.overviewText, { color: THEME.strong }]}>Summary</Text>
+            <Icon name="chevron-down" size={15} color={THEME.faint} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.newBtn} onPress={openCreate} activeOpacity={0.85}>
-            <Icon name="plus" size={15} color="#FFFFFF" />
-            <Text style={styles.newBtnText}>New</Text>
-          </TouchableOpacity>
+          <View style={styles.topBarActions}>
+            <TouchableOpacity
+              style={[styles.iconPill, { backgroundColor: THEME.pillBg }]}
+              onPress={() => tap()}
+              activeOpacity={0.85}
+            >
+              <Icon name="calendar-blank-outline" size={17} color={THEME.strong} />
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.newBtn, { backgroundColor: THEME.newBg }]} onPress={openCreate} activeOpacity={0.85}>
+              <Icon name="plus" size={15} color="#FFFFFF" />
+              <Text style={styles.newBtnText}>New</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
@@ -577,16 +638,14 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   newBtnText: { color: '#FFFFFF', fontFamily: FONT.semibold, fontSize: 14 },
+  topBarActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  iconPill: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
 
-  // Hero (light)
+  // Hero (themed)
   hero: { paddingHorizontal: 18, paddingTop: 4, paddingBottom: 8 },
-  greeting: { color: '#18181B', fontFamily: FONT.bold, fontSize: 26, marginBottom: 8 },
-  briefingHeadline: { color: '#3F3F46', fontFamily: FONT.semibold, fontSize: 16, marginBottom: 10 },
-  briefingList: { gap: 8 },
-  briefingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  briefingLabel: { flex: 1, color: '#27272A', fontFamily: FONT.medium, fontSize: 15, marginRight: 10 },
-  briefingChip: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
-  briefingChipText: { fontFamily: FONT.bold, fontSize: 10, letterSpacing: 0.4 },
+  greeting: { fontFamily: FONT.bold, fontSize: 25, marginBottom: 6 },
+  briefingHeadline: { fontFamily: FONT.semibold, fontSize: 17, marginBottom: 10, lineHeight: 23 },
+  briefingProse: { fontSize: 17, lineHeight: 27, marginTop: 1 },
 
   dashedDivider: {
     marginTop: 18,
@@ -596,11 +655,9 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
   },
 
-  statsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  statBlock: { flex: 1 },
-  statLabel: { color: '#9CA3AF', fontFamily: FONT.semibold, fontSize: 11, letterSpacing: 0.6, marginBottom: 4 },
-  statValue: { color: '#18181B', fontFamily: FONT.bold, fontSize: 22 },
-  statDelta: { color: '#5D7E16', fontFamily: FONT.semibold, fontSize: 13 },
+  statsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  salesToday: { fontFamily: FONT.semibold, fontSize: 15 },
+  salesDelta: { fontFamily: FONT.bold, fontSize: 15 },
 
   chartWrap: { height: 110, marginTop: 8, marginHorizontal: -18, justifyContent: 'center' },
   chart: { paddingRight: 0 },
