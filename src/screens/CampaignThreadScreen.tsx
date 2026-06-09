@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useEffect, useState } from 'react';
 import {
+  Dimensions,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -10,12 +11,14 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, { interpolate, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
-import { ChevronLeft, Menu, Package, Trash2, AlertCircle, CheckCircle2, X } from 'lucide-react-native';
+import { ChevronLeft, Menu, Package, Trash2, AlertCircle, CheckCircle2, X, MessagesSquare, Plus } from 'lucide-react-native';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { ConversationComposer } from '../features/liquidationConversation/components/ConversationComposer';
@@ -34,6 +37,18 @@ const QUICK_CHIPS = [
   { label: 'Pause campaign', action: 'pause_campaign' },
   { label: '+ attach items', action: 'attach_items' },
 ];
+
+const relativeTime = (iso?: string) => {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return '';
+  const m = Math.floor((Date.now() - t) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+};
 
 const CampaignThreadScreen = () => {
   const navigation = useNavigation<any>();
@@ -57,6 +72,53 @@ const CampaignThreadScreen = () => {
   const insets = useSafeAreaInsets();
   const [headerH, setHeaderH] = useState(104);
   const [footerH, setFooterH] = useState(150);
+
+  // ── Threads drawer: swipe left→right (or tap) to open, like the chat template ──
+  const screenW = Dimensions.get('window').width;
+  const DRAWER_W = Math.min(330, screenW * 0.84);
+  const drawerProgress = useSharedValue(0);
+  const [drawerMounted, setDrawerMounted] = useState(false);
+
+  const openDrawer = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    setDrawerMounted(true);
+    drawerProgress.value = withTiming(1, { duration: 240 });
+  };
+  const closeDrawer = () => {
+    drawerProgress.value = withTiming(0, { duration: 220 }, finished => {
+      if (finished) runOnJS(setDrawerMounted)(false);
+    });
+  };
+
+  const edgePan = Gesture.Pan()
+    .activeOffsetX(14)
+    .failOffsetY([-16, 16])
+    .onBegin(() => runOnJS(setDrawerMounted)(true))
+    .onChange(e => {
+      'worklet';
+      drawerProgress.value = Math.max(0, Math.min(1, e.translationX / DRAWER_W));
+    })
+    .onEnd(e => {
+      'worklet';
+      const open = e.translationX > DRAWER_W * 0.4 || e.velocityX > 600;
+      drawerProgress.value = withTiming(open ? 1 : 0, { duration: 200 }, finished => {
+        if (finished && !open) runOnJS(setDrawerMounted)(false);
+      });
+    });
+
+  const overlayStyle = useAnimatedStyle(() => ({ opacity: drawerProgress.value * 0.45 }));
+  const panelStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: interpolate(drawerProgress.value, [0, 1], [-DRAWER_W, 0]) }],
+  }));
+
+  const switchThread = (threadId: string) => {
+    if (threadId !== controller.activeThreadId) controller.openThread(threadId);
+    closeDrawer();
+  };
+  const startThread = async () => {
+    closeDrawer();
+    try { await controller.createNewThread(); } catch { /* ignore */ }
+  };
 
   // Success haptic when the agent finishes streaming a turn (chat-template polish)
   const prevStreamingRef = useRef(false);
@@ -201,16 +263,21 @@ const CampaignThreadScreen = () => {
           />
         </View>
         <View style={s.headerRow}>
-          <TouchableOpacity
-            style={s.navCircle}
-            onPress={() => {
-              if (navigation.canGoBack()) navigation.goBack();
-              else navigation.navigate('SproutHomeScreen');
-            }}
-            activeOpacity={0.85}
-          >
-            <ChevronLeft size={22} color="#18181B" />
-          </TouchableOpacity>
+          <View style={s.headerLeft}>
+            <TouchableOpacity
+              style={s.navCircle}
+              onPress={() => {
+                if (navigation.canGoBack()) navigation.goBack();
+                else navigation.navigate('SproutHomeScreen');
+              }}
+              activeOpacity={0.85}
+            >
+              <ChevronLeft size={22} color="#18181B" />
+            </TouchableOpacity>
+            <TouchableOpacity style={s.navCircle} onPress={openDrawer} activeOpacity={0.85}>
+              <MessagesSquare size={19} color="#18181B" />
+            </TouchableOpacity>
+          </View>
 
           <View style={s.titlePill}>
             <Text style={s.pillTitle} numberOfLines={1}>{campaignTitle}</Text>
@@ -255,6 +322,50 @@ const CampaignThreadScreen = () => {
           </View>
         </View>
       ) : null}
+
+      {/* ── Threads drawer: left-edge swipe (or the header button) ──────── */}
+      <GestureDetector gesture={edgePan}>
+        <View style={[s.edgeSwipe, { top: insets.top + 50 }]} />
+      </GestureDetector>
+
+      <Animated.View style={[s.drawerOverlay, overlayStyle]} pointerEvents={drawerMounted ? 'auto' : 'none'}>
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={closeDrawer} />
+      </Animated.View>
+
+      <Animated.View
+        style={[s.drawerPanel, { width: DRAWER_W, paddingTop: insets.top + 14 }, panelStyle]}
+        pointerEvents={drawerMounted ? 'auto' : 'none'}
+      >
+        <View style={s.drawerHead}>
+          <Text style={s.drawerTitle}>Threads</Text>
+          <TouchableOpacity style={s.newThreadBtn} onPress={startThread} activeOpacity={0.85}>
+            <Plus size={16} color="#FFFFFF" />
+            <Text style={s.newThreadText}>New</Text>
+          </TouchableOpacity>
+        </View>
+        <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 20 }} showsVerticalScrollIndicator={false}>
+          {controller.threads.length === 0 ? (
+            <Text style={s.drawerEmpty}>No threads yet — start one above.</Text>
+          ) : (
+            controller.threads.map(t => {
+              const active = t.id === controller.activeThreadId;
+              return (
+                <TouchableOpacity key={t.id} style={[s.threadRow, active && s.threadRowActive]} onPress={() => switchThread(t.id)} activeOpacity={0.7}>
+                  <View style={[s.threadDot, { backgroundColor: active ? '#93C822' : '#D4D4D8' }]} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[s.threadTitle, active && { color: '#18181B' }]} numberOfLines={1}>
+                      {t.title || (t.isPrimary ? 'Main thread' : 'Thread')}
+                    </Text>
+                    <Text style={s.threadMeta} numberOfLines={1}>
+                      {t.isPrimary ? 'Primary · ' : ''}{relativeTime(t.lastMessageAt || t.updatedAt)}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          )}
+        </ScrollView>
+      </Animated.View>
     </View>
   );
 };
@@ -266,6 +377,7 @@ const s = StyleSheet.create({
   // Floating glass header — white at the top, fading to transparent, content scrolls under
   header: { position: 'absolute', top: 0, left: 0, right: 0, paddingHorizontal: 14, paddingBottom: 10 },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   navCircle: {
     width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
     backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
@@ -313,6 +425,25 @@ const s = StyleSheet.create({
   dropItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 13 },
   dropText: { color: '#27272A', fontFamily: 'Inter_600SemiBold', fontSize: 15 },
   dropDivider: { height: 1, backgroundColor: '#F1F2EE', marginHorizontal: 12 },
+
+  // Threads drawer
+  edgeSwipe: { position: 'absolute', left: 0, bottom: 0, width: 26 },
+  drawerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000' },
+  drawerPanel: {
+    position: 'absolute', top: 0, left: 0, bottom: 0,
+    backgroundColor: '#FFFFFF', paddingHorizontal: 14,
+    shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 24, shadowOffset: { width: 6, height: 0 }, elevation: 16,
+  },
+  drawerHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, marginBottom: 4 },
+  drawerTitle: { fontSize: 20, color: '#18181B', fontFamily: 'Inter_700Bold' },
+  newThreadBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#93C822', borderRadius: 999, paddingHorizontal: 13, paddingVertical: 8 },
+  newThreadText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 13 },
+  drawerEmpty: { color: '#9CA3AF', fontFamily: 'Inter_500Medium', fontSize: 13, paddingVertical: 20, textAlign: 'center' },
+  threadRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13, paddingHorizontal: 10, borderRadius: 14 },
+  threadRowActive: { backgroundColor: 'rgba(147,200,34,0.10)' },
+  threadDot: { width: 8, height: 8, borderRadius: 4 },
+  threadTitle: { fontSize: 15, color: '#3F3F46', fontFamily: 'Inter_600SemiBold' },
+  threadMeta: { fontSize: 12, color: '#9CA3AF', fontFamily: 'Inter_500Medium', marginTop: 2 },
 });
 
 export default CampaignThreadScreen;
