@@ -20,6 +20,10 @@ import {
 } from 'react-native';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
+import { ChevronLeft, ChevronDown, Menu, Box, Settings as SettingsIcon, Pencil, Trash2, Check } from 'lucide-react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
@@ -76,6 +80,8 @@ const LiquidationCampaignScreen = () => {
   const [renameTarget, setRenameTarget] = useState<null | { kind: 'thread' | 'campaign'; id: string; title: string }>(null);
   const [renameValue, setRenameValue] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
+  const insets = useSafeAreaInsets();
+  const [headerH, setHeaderH] = useState(104);
 
   // Items table
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
@@ -241,61 +247,16 @@ const LiquidationCampaignScreen = () => {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 72 : 0}
       >
-        {/* ── Top bar ──────────────────────────────────────────────── */}
-        <View style={s.topBar}>
-          <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
-            <Icon name="arrow-left" size={20} color="#111827" />
-          </TouchableOpacity>
-          <View style={s.topInfo}>
-            <View style={s.topTitleRow}>
-              <View style={s.plantDot} />
-              <Text style={s.topTitle} numberOfLines={1}>{controller.activeCampaign?.title || 'Campaign'}</Text>
-            </View>
-            <Text style={s.topMeta} numberOfLines={1}>
-              {controller.campaignConfig?.aggressiveness || 'balanced'} · {soldCount}/{totalCount} sold
-            </Text>
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <TouchableOpacity 
-              style={s.threadBtn} 
-              onPress={() => navigation.navigate('CampaignThreadScreen', { campaignId: controller.activeCampaign?.id, title: controller.activeCampaign?.title })}
-            >
-              <Text style={s.threadBtnText}>≡ chat</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={{ padding: 4 }} onPress={handleEllipsis}>
-              <Icon name="dots-vertical" size={24} color="#9CA3AF" />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* ── Progress strip ──────────────────────────────────────── */}
-        <View style={s.progStrip}>
-          <View style={[s.progFill, { width: `${progressPct}%` }]} />
-        </View>
-
-        {/* ── Ambient tray ────────────────────────────────────────── */}
-        {hasPendingAsks && latestAsk ? (
-          <View style={s.ambientTray}>
-            <View style={s.trayDot} />
-            <Text style={s.trayText} numberOfLines={1}>{latestAsk.title} — needs you</Text>
-            <TouchableOpacity onPress={() => {
-              if (latestAsk.threadId) controller.openThread(latestAsk.threadId);
-            }}>
-              <Text style={s.trayAction}>Review ↓</Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
-
-        {/* ── Main content ────────────────────────────────────────── */}
+        {/* ── Main content (scrolls under the floating glass header) ── */}
         {controller.loading ? (
-          <View style={s.loadingWrap}>
+          <View style={[s.loadingWrap, { paddingTop: headerH }]}>
             <ActivityIndicator size="large" color="#93C822" />
             <Text style={s.loadingText}>Loading...</Text>
           </View>
         ) : (
           <View style={s.container}>
             {/* Search Bar */}
-            <View style={{ paddingHorizontal: 14, paddingTop: 10 }}>
+            <View style={{ paddingHorizontal: 14, paddingTop: headerH + 4 }}>
               <SearchBarWithScanner
                 value={searchQuery}
                 onChangeText={setSearchQuery}
@@ -425,28 +386,86 @@ const LiquidationCampaignScreen = () => {
             </View>
           ) : null}
         </View>
+
+        {/* ── Floating glass header (matches the chat) ──────────────── */}
+        <View
+          style={[s.header, { paddingTop: 6 }]}
+          onLayout={e => setHeaderH(e.nativeEvent.layout.height)}
+        >
+          <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+            <BlurView intensity={Platform.OS === 'ios' ? 24 : 14} tint="light" style={StyleSheet.absoluteFill} />
+            <LinearGradient
+              colors={['#FFFFFF', 'rgba(255,255,255,0.85)', 'rgba(255,255,255,0)']}
+              locations={[0, 0.55, 1]}
+              style={StyleSheet.absoluteFill}
+            />
+          </View>
+          <View style={s.headerRow}>
+            <TouchableOpacity style={s.navCircle} onPress={() => navigation.goBack()} activeOpacity={0.85}>
+              <ChevronLeft size={22} color="#18181B" />
+            </TouchableOpacity>
+
+            <TouchableOpacity style={s.titlePill} onPress={handleEllipsis} activeOpacity={0.85}>
+              <View style={s.titlePillRow}>
+                <Text style={s.pillTitle} numberOfLines={1}>{controller.activeCampaign?.title || 'Campaign'}</Text>
+                <ChevronDown size={15} color="#71717A" />
+              </View>
+              <Text style={s.pillSub} numberOfLines={1}>
+                {soldCount}/{totalCount} sold · {controller.campaignConfig?.aggressiveness || 'balanced'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={s.chatPill}
+              onPress={() => navigation.navigate('CampaignThreadScreen', { campaignId: controller.activeCampaign?.id, title: controller.activeCampaign?.title })}
+              activeOpacity={0.85}
+            >
+              <Menu size={16} color="#18181B" />
+              <Text style={s.chatPillText}>Chat</Text>
+            </TouchableOpacity>
+          </View>
+
+          {hasPendingAsks && latestAsk ? (
+            <TouchableOpacity
+              style={s.ambientTray}
+              activeOpacity={0.85}
+              onPress={() => { if (latestAsk.threadId) controller.openThread(latestAsk.threadId); }}
+            >
+              <View style={s.trayDot} />
+              <Text style={s.trayText} numberOfLines={1}>{latestAsk.title} needs you</Text>
+              <Text style={s.trayAction}>Review</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
       </KeyboardAvoidingView>
 
-      {/* ── Clean dropdown menu (not native) ────────────────────────── */}
+      {/* ── Clean dropdown menu (Items / Settings / Rename / Delete) ── */}
       {menuOpen ? (
         <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
           <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setMenuOpen(false)} />
-          <View style={s.dropdown}>
-            <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
-              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); if (cam) openRename('campaign', cam.id, cam.title); }}>
-              <Icon name="pencil-outline" size={18} color="#3F3F46" />
-              <Text style={s.dropText}>Rename</Text>
-            </TouchableOpacity>
+          <View style={[s.dropdown, { top: insets.top + 64 }]}>
+            <View style={s.dropItem}>
+              <Box size={18} color="#43631A" />
+              <Text style={[s.dropText, { color: '#43631A' }]}>Items</Text>
+              <View style={{ flex: 1 }} />
+              <Check size={17} color="#43631A" />
+            </View>
             <View style={s.dropDivider} />
             <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
               onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); if (cam) void openCampaignConfig(cam.id, cam.title); }}>
-              <Icon name="cog-outline" size={18} color="#3F3F46" />
+              <SettingsIcon size={18} color="#3F3F46" />
               <Text style={s.dropText}>Settings</Text>
             </TouchableOpacity>
             <View style={s.dropDivider} />
             <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
+              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); if (cam) openRename('campaign', cam.id, cam.title); }}>
+              <Pencil size={18} color="#3F3F46" />
+              <Text style={s.dropText}>Rename</Text>
+            </TouchableOpacity>
+            <View style={s.dropDivider} />
+            <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
               onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); if (cam) deleteCampaign(cam.id, cam.title); }}>
-              <Icon name="trash-can-outline" size={18} color="#DC2626" />
+              <Trash2 size={18} color="#DC2626" />
               <Text style={[s.dropText, { color: '#DC2626' }]}>Delete</Text>
             </TouchableOpacity>
           </View>
@@ -601,26 +620,35 @@ const ConfigInput = ({ label, value, onChangeText }: { label: string; value: str
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
 
-  // Top bar
-  topBar: { minHeight: 60, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderBottomWidth: 0.5, borderBottomColor: '#E5E5E5' },
-  backBtn: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 0.5, borderColor: '#E5E5E5' },
-  topInfo: { flex: 1 },
-  topTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  plantDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#639922' },
-  topTitle: { fontSize: 15, fontWeight: '500', color: '#111827', fontFamily: 'Inter_500Medium' },
-  topMeta: { fontSize: 11, color: '#71717A', marginTop: 1, fontFamily: 'Inter_500Medium' },
-  threadBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#F9FAFB' },
-  threadBtnText: { fontSize: 16, color: '#374151', fontFamily: 'Inter_500Medium' },
+  // Floating glass header (matches the chat)
+  header: { position: 'absolute', top: 0, left: 0, right: 0, paddingHorizontal: 14, paddingBottom: 10 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  navCircle: {
+    width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
+  },
+  titlePill: {
+    flexShrink: 1, alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 22, paddingHorizontal: 16, paddingVertical: 8,
+    shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 12, shadowOffset: { width: 0, height: 3 }, elevation: 3,
+  },
+  titlePillRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  pillTitle: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_700Bold' },
+  pillSub: { fontSize: 12, color: '#71717A', marginTop: 1, fontFamily: 'Inter_500Medium' },
+  chatPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FFFFFF', borderRadius: 22, paddingHorizontal: 14, paddingVertical: 9,
+    shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
+  },
+  chatPillText: { fontSize: 14, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
 
-  // Progress strip
-  progStrip: { height: 2, backgroundColor: '#F3F4F6' },
-  progFill: { height: '100%', backgroundColor: '#97C459' },
-
-  // Ambient tray
-  ambientTray: { backgroundColor: '#fafdf5', borderBottomWidth: 0.5, borderBottomColor: '#c0dd97', paddingHorizontal: 16, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  // Ambient "needs you" tray (floats under the pills)
+  ambientTray: {
+    marginTop: 8, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: 'rgba(250,253,245,0.97)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 8,
+    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
+  },
   trayDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#BA7517' },
-  trayText: { flex: 1, fontSize: 11, color: '#3B6D11', fontFamily: 'Inter_500Medium' },
-  trayAction: { fontSize: 11, color: '#BA7517', fontWeight: '500' },
+  trayText: { fontSize: 12, color: '#3B6D11', fontFamily: 'Inter_500Medium' },
+  trayAction: { fontSize: 12, color: '#BA7517', fontFamily: 'Inter_600SemiBold' },
 
   // Loading
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },
@@ -654,9 +682,9 @@ const s = StyleSheet.create({
   itemChip: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4 },
   itemChipText: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
 
-  // Clean dropdown menu
+  // Clean dropdown menu (centered under the title pill)
   dropdown: {
-    position: 'absolute', top: 58, right: 12, minWidth: 190,
+    position: 'absolute', left: '50%', marginLeft: -110, width: 220,
     backgroundColor: '#FFFFFF', borderRadius: 16, paddingVertical: 6,
     shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 10,
   },
