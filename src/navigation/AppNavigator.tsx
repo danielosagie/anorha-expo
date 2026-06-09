@@ -64,6 +64,7 @@ import { CSVColumnMappingScreen } from '../screens/CSVColumnMappingScreen';
 import ImportOverviewScreen from '../screens/ImportOverviewScreen';
 import PendingOrgInvitesScreen from '../screens/PendingOrgInvitesScreen';
 import LiquidationCampaignScreen from '../screens/LiquidationCampaignScreen';
+import CampaignSettingsScreen from '../screens/CampaignSettingsScreen';
 import SproutHomeScreen from '../screens/SproutHomeScreen';
 import CampaignThreadScreen from '../screens/CampaignThreadScreen';
 import BackupsScreen from '../screens/BackupsScreen';
@@ -345,6 +346,7 @@ export type AppStackParamList = {
   };
   Backups: undefined;
   LiquidationCampaignScreen: { campaignId: string; entryPoint?: 'tab' | 'detail' } | undefined;
+  CampaignSettings: { campaignId: string; title?: string } | undefined;
   CampaignThreadScreen: { campaignId: string; title?: string } | undefined;
   SproutHomeScreen: undefined;
   Partners: undefined;
@@ -487,6 +489,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="AccountSyncIssueScreen" component={AccountSyncIssueScreen} />
     <AppStackNav.Screen name="Partners" component={PartnersScreen} />
     <AppStackNav.Screen name="LiquidationCampaignScreen" component={LiquidationCampaignScreen} options={{ headerTitle: 'Inventory', animationEnabled: false }} />
+    <AppStackNav.Screen name="CampaignSettings" component={CampaignSettingsScreen} options={{ headerShown: false }} />
     <AppStackNav.Screen name="SproutHomeScreen" component={SproutHomeScreen} options={{ headerTitle: 'Sprout' }} />
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />
     <AppStackNav.Screen name="ProductDetail" component={ProductDetailScreen} />

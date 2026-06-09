@@ -496,7 +496,7 @@ const LiquidationCampaignScreen = () => {
             </TouchableOpacity>
             <View style={s.dropDivider} />
             <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
-              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); if (cam) void openCampaignConfig(cam.id, cam.title); }}>
+              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); navigation.navigate('CampaignSettings', { campaignId: cam?.id, title: cam?.title }); }}>
               <SettingsIcon size={18} color="#3F3F46" />
               <Text style={s.dropText}>Settings</Text>
             </TouchableOpacity>
