@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { ActivityIndicator, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChevronLeft, ChevronRight, Plus, Slack, Mail } from 'lucide-react-native';
@@ -91,7 +91,11 @@ const ConnectionsScreen = () => {
                 <Text style={styles.rowTitle}>{a.label}</Text>
                 <Text style={styles.rowSub} numberOfLines={1}>{a.sub}</Text>
               </View>
-              <TouchableOpacity style={styles.connectPill} activeOpacity={0.8}>
+              <TouchableOpacity
+                style={styles.connectPill}
+                activeOpacity={0.8}
+                onPress={() => Alert.alert(a.label, `Connecting ${a.label} runs through Composio — it'll be available here once Composio is set up.`)}
+              >
                 <Text style={styles.connectPillText}>Connect</Text>
               </TouchableOpacity>
             </View>
