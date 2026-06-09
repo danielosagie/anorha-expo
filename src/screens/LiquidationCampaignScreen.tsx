@@ -147,11 +147,9 @@ const LiquidationCampaignScreen = () => {
   const addFromInventory = () => {
     setShowAddChooser(false);
     const cam = controller.activeCampaign;
-    const campaignId = initialCampaignId || cam?.id;
-    if (!campaignId) return;
-    navigation.navigate('Inventory', {
-      selectForCampaign: { campaignId, title: cam?.title || 'Clearout' },
-    });
+    const cid = initialCampaignId || cam?.id;
+    if (!cid) return;
+    navigation.navigate('CampaignInventorySelect', { campaignId: cid, title: cam?.title || 'Clearout' });
   };
 
   const addNewProduct = () => {
