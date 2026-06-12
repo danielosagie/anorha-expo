@@ -129,18 +129,36 @@ export async function initializeLegendState(
     };
     const customSynced = configureSynced(syncedSupabase, syncBaseOptions);
 
-    const productVariants$ = observable<Record<string, ProductVariant>>(
+    // Formalized single pattern for every synced collection (Track D): standard CRUD actions,
+    // persist (versioned per-user key) + retrySync, and explicit realtime scoping. Produces
+    // the SAME config the per-observable blocks used — this only removes the duplication so
+    // there is one place to evolve persistence/retry/realtime policy.
+    type SyncedCollectionOptions = {
+        collection: string;
+        select: (from: any) => any;
+        filter?: (query: any) => any;
+        actions?: Array<'read' | 'create' | 'update' | 'delete'>;
+        realtime?: boolean | { filter: string };
+        persistName: string;
+    };
+    const syncedCollection = (opts: SyncedCollectionOptions) =>
         customSynced({
+            collection: opts.collection,
+            select: opts.select,
+            ...(opts.filter ? { filter: opts.filter } : {}),
+            actions: opts.actions ?? ['read', 'create', 'update', 'delete'],
+            realtime: opts.realtime ?? false,
+            persist: { name: opts.persistName, retrySync: true },
+        });
+
+    const productVariants$ = observable<Record<string, ProductVariant>>(
+        syncedCollection({
             collection: 'ProductVariants',
             // OPTIMIZED: Only fetch columns we actually use in the UI
             select: (from: any) => from.select('Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, Tags, PrimaryImageUrl, CreatedAt, UpdatedAt'),
             filter: (query: any) => query.eq('UserId', currentUserId).not('Sku', 'like', 'DRAFT-%'),
-            actions: ['read', 'create', 'update', 'delete'],
             realtime: { filter: `UserId=eq.${currentUserId}` },
-            persist: {
-                name: `productVariants_user_${currentUserId}_v6`, // Bumped for column change
-                retrySync: true,
-            },
+            persistName: `productVariants_user_${currentUserId}_v6`,
         })
     );
     console.log(`[SupaLegend] productVariants$ observable configured for UserId: ${currentUserId}`);
@@ -165,65 +183,49 @@ export async function initializeLegendState(
 
     // OPTIMIZED: Reduced columns, relies on RLS to filter via ProductVariantId join
     const platformProductMappings$ = observable<Record<string, PlatformProductMapping>>(
-        customSynced({
+        syncedCollection({
             collection: 'PlatformProductMappings',
             // Only fetch essential columns
             select: (from: any) => from.select('Id, PlatformConnectionId, ProductVariantId, PlatformProductId, PlatformVariantId, PlatformSku, SyncStatus, IsEnabled, LastSyncedAt, UpdatedAt'),
-            actions: ['read', 'create', 'update', 'delete'],
-            realtime: true, // RLS filters via ProductVariantId->UserId join
-            persist: {
-                name: `platformProductMappings_user_${currentUserId}_v3`,
-                retrySync: true,
-            },
+            realtime: true, // RLS filters via ProductVariantId->UserId join. Track D: scope pending schema choice.
+            persistName: `platformProductMappings_user_${currentUserId}_v3`,
         })
     );
     console.log(`[SupaLegend] platformProductMappings$ configured (filtered by RLS)`);
 
     // OPTIMIZED: Only fetch essential image columns, disable realtime
     const productImages$ = observable<Record<string, ProductImage>>(
-        customSynced({
+        syncedCollection({
             collection: 'ProductImages',
             // Only fetch what's needed to display images
             select: (from: any) => from.select('Id, ProductVariantId, ImageUrl, Position'),
-            actions: ['read', 'create', 'update', 'delete'],
             realtime: false, // DISABLED: Images rarely change, reduces egress significantly
-            persist: {
-                name: `productImages_user_${currentUserId}_v3`, // Bumped for column change
-                retrySync: true,
-            },
+            persistName: `productImages_user_${currentUserId}_v3`,
         })
     );
     console.log(`[SupaLegend] productImages$ configured (realtime disabled to reduce egress)`);
 
     // OPTIMIZED: Essential columns only, relies on RLS to filter via ProductVariantId join
     const inventoryLevels$ = observable<Record<string, InventoryLevel>>(
-        customSynced({
+        syncedCollection({
             collection: 'InventoryLevels',
             // Only fetch essential columns for inventory tracking
             // IMPORTANT: PoolId and OrgId are needed for partner-shared inventory
             select: (from: any) => from.select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt'),
-            actions: ['read', 'create', 'update', 'delete'],
-            realtime: true, // Live updates essential for inventory
-            persist: {
-                name: `inventoryLevels_user_${currentUserId}_v6`, // Bumped to include PoolId
-                retrySync: true,
-            },
+            realtime: true, // Live updates essential for inventory. Track D: scope pending schema choice.
+            persistName: `inventoryLevels_user_${currentUserId}_v6`,
         })
     );
     console.log(`[SupaLegend] inventoryLevels$ configured with live updates (filtered by RLS)`);
 
     const marketplaceListings$ = observable<Record<string, MarketplaceListing>>(
-        customSynced({
+        syncedCollection({
             collection: 'MarketplaceListings',
             // OPTIMIZED: Only fetch essential columns
             select: (from: any) => from.select('Id, ProductVariantId, SellerUserId, Price, AvailableQuantity, IsEnabled, CreatedAt, UpdatedAt'),
             filter: (query: any) => query.eq('SellerUserId', currentUserId),
-            actions: ['read', 'create', 'update', 'delete'],
             realtime: { filter: `SellerUserId=eq.${currentUserId}` },
-            persist: {
-                name: `marketplaceListings_user_${currentUserId}_v3`, // Bumped for column change
-                retrySync: true,
-            },
+            persistName: `marketplaceListings_user_${currentUserId}_v3`,
         })
     );
     console.log(`[SupaLegend] marketplaceListings$ configured with user filter`);
