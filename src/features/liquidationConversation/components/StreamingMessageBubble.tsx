@@ -226,10 +226,13 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry }: Props) => 
           <ToolActivityCard steps={toolSteps} reasoning={reasoning} streaming={isStreaming} />
         ) : null}
 
-        {!isUser && isStreaming && !content ? (
-          <TypingIndicator />
-        ) : isUser ? (
+        {isUser ? (
           <Text style={[styles.messageText, styles.userMessageText]}>{content}</Text>
+        ) : isStreaming ? (
+          // Normal-chat feel: a typing bubble while the agent works (the activity
+          // card above shows its steps as they land), then the finished message
+          // appears — no token-by-token "streaming" text on the seller's side.
+          <TypingIndicator />
         ) : renderMarkdown ? (
           <MarkdownBoundary content={content}>
             <Markdown style={styles.markdown}>{content}</Markdown>

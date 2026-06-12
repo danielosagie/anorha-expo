@@ -24,6 +24,7 @@ import { ensureSupabaseJwt } from '../../lib/supabase';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { ConversationComposer } from '../features/liquidationConversation/components/ConversationComposer';
 import { ConversationList } from '../features/liquidationConversation/components/ConversationList';
+import { ConvexLiveMessages } from '../features/liquidationConversation/ConvexLiveMessages';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
 import type { CampaignThreadSummary } from '../features/liquidationConversation/types';
 
@@ -323,6 +324,10 @@ const CampaignThreadScreen = () => {
   return (
     <View style={s.root}>
       <StatusBar barStyle="dark-content" />
+      {/* Renders nothing — subscribes to live Convex messages for the open thread
+          and feeds agent-initiated posts (digests, proactive updates) into the feed. */}
+      <ConvexLiveMessages threadId={controller.activeThreadId} onMessages={controller.ingestLiveMessages} />
+
       <KeyboardAvoidingView
         style={s.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}

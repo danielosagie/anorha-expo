@@ -10,6 +10,7 @@ import {
   appendAssistantDelta,
   appendAssistantReasoning,
   appendAssistantToolStep,
+  appendMessage,
   completeActionMessage,
   completeAssistantMessage,
   createActionMessage,
@@ -719,6 +720,49 @@ export const useLiquidationConversationController = ({
     }
   }, [adapter, loadCampaignDetails, setThreadStateFor, queueTextMessage]);
 
+  // Live Convex messages (fed by the ConvexLiveMessages bridge). Agent-INITIATED
+  // posts (digests, proactive updates) appear in the open thread the moment the
+  // backend writes them — no tap, no poll. Append-by-id only, and skipped while
+  // the thread is mid-turn (the send flow + refetch own that). Convex carries no
+  // clientMessageId, so we never reconcile the seller's optimistic message here.
+  const ingestLiveMessages = useCallback((rawMessages: Array<{
+    id: string;
+    role: string;
+    content: string;
+    createdAt: string;
+    metadata?: Record<string, unknown>;
+  }>) => {
+    const campaignId = activeCampaignIdRef.current;
+    const threadId = activeThreadIdRef.current;
+    if (!campaignId || !threadId) return;
+    if (processingByThreadRef.current[threadId]) return;
+    setThreadStateFor(threadId, current => {
+      let next = current;
+      let changed = false;
+      for (const rm of rawMessages) {
+        const rmThread = rm.metadata?.threadId;
+        if (typeof rmThread === 'string' && rmThread && rmThread !== threadId) continue;
+        const role = rm.role === 'tool' ? 'assistant' : rm.role;
+        if (role !== 'user' && role !== 'assistant' && role !== 'system') continue;
+        if (next.messages.some(m => m.id === rm.id || m.serverMessageId === rm.id)) continue;
+        next = appendMessage(next, {
+          id: rm.id,
+          serverMessageId: rm.id,
+          campaignId,
+          threadId,
+          role: role as ConversationMessage['role'],
+          content: rm.content || '',
+          createdAt: rm.createdAt,
+          deliveryState: 'sent',
+          kind: (rm.metadata as any)?.type === 'action' ? 'action' : 'text',
+          metadata: rm.metadata || {},
+        });
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [setThreadStateFor]);
+
   return {
     campaigns,
     activeCampaign,
@@ -758,5 +802,6 @@ export const useLiquidationConversationController = ({
     loadThreads,
     queueTextMessage,
     submitDecision,
+    ingestLiveMessages,
   };
 };
