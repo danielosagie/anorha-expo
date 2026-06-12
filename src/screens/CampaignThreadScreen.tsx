@@ -14,8 +14,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { interpolate, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
+import { ProgressiveBlurView } from '../components/ProgressiveBlurView';
 import * as Haptics from 'expo-haptics';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
@@ -402,7 +402,9 @@ const CampaignThreadScreen = () => {
         onLayout={e => setHeaderH(e.nativeEvent.layout.height)}
       >
         <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-          <BlurView intensity={Platform.OS === 'ios' ? 24 : 14} tint="light" style={StyleSheet.absoluteFill} />
+          {/* Progressive blur: strongest under the status bar / title, fading to clear
+              as content scrolls out the bottom (rit3zh/expo-progressive-blur technique). */}
+          <ProgressiveBlurView intensity={Platform.OS === 'ios' ? 50 : 28} tint="light" direction="down" />
           <LinearGradient
             colors={['#FFFFFF', 'rgba(255,255,255,0.85)', 'rgba(255,255,255,0)']}
             locations={[0, 0.55, 1]}

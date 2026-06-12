@@ -19,6 +19,7 @@
     "@legendapp/state": "^3.0.0-beta.30",
     "@native-springs/shaders": "file:./vendor/native-springs-shaders",
     "@react-native-google-signin/google-signin": "^13.2.0",
+    "@react-native-masked-view/masked-view": "^0.3.2",
     "@react-native-picker/picker": "2.11.4",
     "@react-native/assets-registry": "^0.79.0",
     "@react-navigation/bottom-tabs": "^6.6.1",
