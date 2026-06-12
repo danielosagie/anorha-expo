@@ -144,9 +144,40 @@ async function refreshSupabaseToken(): Promise<boolean> {
   return exchangeInProgress;
 }
 
+// Read a JWT's `exp` (ms). Returns null if it can't be parsed. RN/Hermes has atob;
+// the try/catch falls back to "trust presence" so this never regresses behaviour.
+function jwtExpiryMs(token: string | null): number | null {
+  if (!token) return null;
+  try {
+    const part = token.split('.')[1];
+    if (!part) return null;
+    const base64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    const json = typeof atob === 'function'
+      ? atob(base64)
+      : (globalThis as any).Buffer?.from(base64, 'base64').toString('binary');
+    if (!json) return null;
+    const payload = JSON.parse(json);
+    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+// Refresh ~1 min before the token actually expires so long requests (e.g. the
+// import flow) never send a token that lapses mid-flight.
+const TOKEN_REFRESH_BUFFER_MS = 60_000;
+function isCurrentJwtFresh(): boolean {
+  const expMs = jwtExpiryMs(currentSupabaseJwt);
+  if (expMs == null) return !!currentSupabaseJwt; // no parseable exp → trust presence
+  return expMs > Date.now() + TOKEN_REFRESH_BUFFER_MS;
+}
+
 export async function ensureSupabaseJwt(): Promise<string | null> {
   const current = getSupabaseJwtState();
-  if (current.state === 'ready') return current.token;
+  // Previously returned the cached token whenever one existed, even if it had
+  // expired — that's what made the import flow 401 with "jwt expired". Now we also
+  // require it to be fresh, and proactively re-exchange when it isn't.
+  if (current.state === 'ready' && isCurrentJwtFresh()) return current.token;
 
   if (exchangeInProgress) {
     console.log('[supabase.ts] ensureSupabaseJwt: waiting for in-progress exchange...');
