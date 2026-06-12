@@ -269,11 +269,14 @@ export const ConversationComposer = ({
 
   return (
     <View style={styles.wrap}>
-      {isStreaming || queuedCount > 1 ? (
+      {/* Only surfaced when messages are actually queued behind the current one.
+          The old "Sprout is responding. 0 waiting." banner was noise — the typing
+          dots already show the agent is working. */}
+      {queuedCount > 1 ? (
         <View style={styles.queueBanner}>
           <Clock size={13} color="#5D7E16" />
           <Text style={styles.queueText}>
-            {isStreaming ? 'Sprout is responding.' : 'Messages queued.'} {Math.max(queuedCount - 1, 0)} waiting.
+            {queuedCount - 1} message{queuedCount - 1 === 1 ? '' : 's'} queued.
           </Text>
         </View>
       ) : null}

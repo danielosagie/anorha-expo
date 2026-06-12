@@ -98,7 +98,9 @@ const ToolActivityCard = ({
 }) => {
   const hasReasoning = !!(reasoning && reasoning.trim().length);
   const count = steps.length;
-  const [expanded, setExpanded] = useState(true);
+  // Collapsed by default — the header (Working · N / N steps · Xs) is enough at a
+  // glance; tap to open the step list. Keeps the chat feeling like a chat.
+  const [expanded, setExpanded] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
 
   if (!count && !hasReasoning) return null;
