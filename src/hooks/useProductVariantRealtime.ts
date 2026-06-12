@@ -35,20 +35,17 @@ export function useProductVariantRealtime() {
 
     // Batch updates to avoid rapid re-renders
     const flushUpdates = () => {
-      const observables = getLegendStateObservables();
-      if (!observables?.productVariants$) return;
-
-      const pv$ = observables.productVariants$;
       const updates = pendingUpdatesRef.current;
       if (updates.size === 0) return;
 
-      console.log(`[Real-time] Flushing ${updates.size} batched updates`);
-      updates.forEach((variant, id) => {
-        pv$[id].set(variant);
-      });
+      // ⚠️ Echo removed: do NOT write realtime payloads back into productVariants$.
+      // It's a Legend `customSynced` observable (realtime:true) that already receives
+      // these server changes. Calling .set() with a server payload made Legend echo the
+      // row back to Supabase (POST /ProductVariants?select=*), failing RLS with HTTP 400
+      // and retrying forever. We only bump a counter so consumers that depend on
+      // `updateCounter` re-render; Legend owns the actual data.
+      console.log(`[Real-time] ${updates.size} variant change(s) observed; Legend sync owns the data`);
       updates.clear();
-
-      // Increment counter to trigger re-renders in consuming components
       setUpdateCounter(c => c + 1);
     };
 
@@ -118,11 +115,11 @@ export function useProductVariantRealtime() {
             flushTimeoutRef.current = setTimeout(flushUpdates, 100);
 
           } else if (payload.eventType === 'DELETE') {
-            // Variant hard-deleted - remove from legend-state
-            // Note: We prefer soft deletes (IsArchived), so hard deletes should be rare
+            // Variant hard-deleted. We prefer soft deletes (IsArchived), so this is rare.
+            // ⚠️ Do NOT call .delete() on the synced observable — that echoes a DELETE
+            // back to Supabase. Legend's own realtime sync removes the row for us.
             const deletedVariant = payload.old as ProductVariant;
-            console.log('[Real-time] ⚠️ DELETE: Removing variant (hard delete)', deletedVariant.Id);
-            observables.productVariants$[deletedVariant.Id].delete();
+            console.log('[Real-time] ⚠️ DELETE observed (Legend sync will remove):', deletedVariant?.Id);
 
             // Trigger re-render for DELETE too
             setUpdateCounter(c => c + 1);
@@ -184,17 +181,12 @@ export function useProductVariantRealtimeForProduct(productId?: string) {
         (payload) => {
           console.log('[Real-time] Variant changed for product', productId, payload.eventType);
 
-          const observables = getLegendStateObservables();
-          if (!observables?.productVariants$) return;
-
-          if (payload.eventType === 'UPDATE') {
-            const updatedVariant = payload.new as ProductVariant;
-            console.log('[Real-time] ✅ Updating variant', updatedVariant.Id);
-            observables.productVariants$[updatedVariant.Id].set(updatedVariant);
-          } else if (payload.eventType === 'INSERT') {
-            const newVariant = payload.new as ProductVariant;
-            console.log('[Real-time] ✅ Adding new variant', newVariant.Id);
-            observables.productVariants$[newVariant.Id].set(newVariant);
+          // NOTE: This hook is currently unused. Do NOT write payloads back into
+          // productVariants$ (Legend customSynced + realtime:true) — that echoes the
+          // row back to Supabase and fails RLS with HTTP 400. Legend owns the data.
+          if (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT') {
+            const v = payload.new as ProductVariant;
+            console.log('[Real-time] variant change observed (Legend sync owns data):', v?.Id);
           }
         }
       )
@@ -244,12 +236,15 @@ export function useInventoryLevelsRealtime() {
               console.warn('[Real-time] Legend-state inventoryLevels$ not available');
               return;
             }            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-              const level = payload.new as any;
-              console.log('[Real-time] ✅ Updating inventory level', levelId, 'qty:', quantity);
-              observables.inventoryLevels$[levelId].set(level);
+              // ⚠️ Echo removed (this was the 214-req/400 storm). Do NOT write the
+              // realtime payload back into inventoryLevels$ — Legend's own realtime
+              // sync already streams these server changes in. Re-setting them made
+              // Legend upsert the row back to Supabase (POST /InventoryLevels?select=*),
+              // which fails RLS with HTTP 400 (the SELECT policy is broader than the
+              // INSERT policy for partner/pool inventory) and retried forever.
+              console.log('[Real-time] InventoryLevel change observed:', payload.eventType, levelId);
             } else if (payload.eventType === 'DELETE') {
-              console.log('[Real-time] ✅ Removing inventory level', levelId);
-              observables.inventoryLevels$[levelId].delete();
+              console.log('[Real-time] InventoryLevel DELETE observed (Legend sync will remove):', levelId);
             }            // Increment counter to trigger re-renders
             setUpdateCounter(c => c + 1);
           }

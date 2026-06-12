@@ -21,6 +21,7 @@ import {
   StyleProp,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 
@@ -106,7 +107,7 @@ export function Chip({
   label,
   tone = 'ok',
   dot = true,
-  size = 11,
+  size = 12,
 }: {
   label: string;
   tone?: Tone;
@@ -296,36 +297,6 @@ export function MiniProgress({ pct, left, right }: { pct: number; left?: string;
   );
 }
 
-// ── PrimaryBtn — the single footer decision ────────────────────────────────
-function PrimaryBtn({
-  label,
-  icon,
-  ready = true,
-  gate,
-  onPress,
-}: {
-  label: string;
-  icon?: IconName;
-  ready?: boolean;
-  gate?: string;
-  onPress?: () => void;
-}) {
-  return (
-    <View style={{ width: '100%', alignItems: 'center' }}>
-      {!ready && !!gate && <Text style={s.gate}>{gate}</Text>}
-      <TouchableOpacity
-        activeOpacity={ready ? 0.88 : 1}
-        disabled={!ready}
-        onPress={ready ? onPress : undefined}
-        style={[s.primaryBtn, !ready && s.primaryBtnDim]}
-      >
-        {!!icon && <MaterialCommunityIcons name={icon} size={18} color={ready ? '#fff' : RC.faint} />}
-        <Text style={[s.primaryText, !ready && { color: RC.faint }]}>{label}</Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
 // ── ResolveShell — progress · title · body · one footer decision ───────────
 export function ResolveShell({
   idx,
@@ -342,6 +313,7 @@ export function ResolveShell({
   alt,
   onPrimary,
   onAlt,
+  onIgnore,
   topInset = 0,
   scroll = true,
 }: {
@@ -359,10 +331,14 @@ export function ResolveShell({
   alt?: string;
   onPrimary?: () => void;
   onAlt?: () => void;
+  /** Per-item "don't import this" — a quiet corner chip (Duolingo's report
+   *  flag), NEVER a third footer button. The footer is always max two. */
+  onIgnore?: () => void;
   topInset?: number;
   scroll?: boolean;
 }) {
   const pct = total ? Math.round((idx / total) * 100) : 0;
+  const insets = useSafeAreaInsets();
   return (
     <View style={[s.shell, { paddingTop: topInset + 8 }]}>
       <View style={s.progRow}>
@@ -377,7 +353,12 @@ export function ResolveShell({
 
       <View style={s.titleRow}>
         <Text style={s.title} numberOfLines={1}>{title}</Text>
-        {!!kind && <Text style={s.kind}>{kind.toUpperCase()}</Text>}
+        {onIgnore ? (
+          <TouchableOpacity onPress={onIgnore} hitSlop={HIT} activeOpacity={0.7} style={s.ignoreChip}>
+            <MaterialCommunityIcons name="trash-can-outline" size={13} color={RC.muted} />
+            <Text style={s.ignoreChipText}>Skip</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
       {!!note && <Text style={s.note}>{note}</Text>}
 
@@ -389,12 +370,20 @@ export function ResolveShell({
         <View style={[s.body, { flex: 1 }]}>{children}</View>
       )}
 
-      <View style={s.footer}>
-        <View style={s.footDivider} />
-        <PrimaryBtn label={primary} icon={primaryIcon} ready={primaryReady} gate={primaryGate} onPress={onPrimary} />
+      <View style={[s.footer, { paddingBottom: insets.bottom + 14 }]}>
+        {!primaryReady && !!primaryGate && <Text style={s.gate}>{primaryGate}</Text>}
+        <TouchableOpacity
+          activeOpacity={primaryReady ? 0.88 : 1}
+          disabled={!primaryReady}
+          onPress={primaryReady ? onPrimary : undefined}
+          style={[s.primaryBtn, !primaryReady && s.primaryBtnDim]}
+        >
+          {!!primaryIcon && <MaterialCommunityIcons name={primaryIcon} size={20} color={primaryReady ? '#fff' : RC.faint} />}
+          <Text style={[s.primaryText, !primaryReady && { color: RC.faint }]}>{primary}</Text>
+        </TouchableOpacity>
         {!!alt && (
-          <TouchableOpacity onPress={onAlt} hitSlop={HIT} style={s.altHit}>
-            <Text style={s.altText}>{alt}</Text>
+          <TouchableOpacity onPress={onAlt} activeOpacity={0.85} style={s.secondaryBtn}>
+            <Text style={s.secondaryText} numberOfLines={1}>{alt}</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -413,22 +402,21 @@ const s = StyleSheet.create({
   progTrack: { flex: 1, height: 5, borderRadius: 3, backgroundColor: RC.line, overflow: 'hidden' },
   progTrackThick: { height: 8, borderRadius: 4, backgroundColor: RC.line, overflow: 'hidden' },
   progFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: RC.green, borderRadius: 4 },
-  progCount: { fontSize: 11, fontWeight: '600', color: RC.faint, fontVariant: ['tabular-nums'] },
+  progCount: { fontSize: 15, fontWeight: '700', color: RC.muted, fontVariant: ['tabular-nums'] },
   progLabelRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
-  progLabel: { fontSize: 12, fontWeight: '500', color: RC.muted },
+  progLabel: { fontSize: 13, fontWeight: '500', color: RC.muted },
 
-  // title
+  // title — app scale (add-product modal title is 20/700)
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  title: { flex: 1, fontSize: 24, fontWeight: '700', color: RC.ink, letterSpacing: -0.5 },
-  kind: { fontSize: 10, fontWeight: '700', letterSpacing: 0.8, color: RC.faint },
-  note: { fontSize: 13, fontWeight: '500', color: RC.muted, marginTop: 4 },
+  title: { flex: 1, fontSize: 20, fontWeight: '700', color: RC.ink, letterSpacing: -0.3 },
+  kind: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, color: RC.faint },
+  note: { fontSize: 15, fontWeight: '500', color: RC.muted, marginTop: 4 },
 
   // body
   body: { paddingTop: 16, paddingBottom: 12, gap: 9 },
 
-  // footer
-  footer: { paddingTop: 10, paddingBottom: 10 },
-  footDivider: { height: 1, backgroundColor: RC.line, marginBottom: 12 },
+  // footer — mirrors the shared BottomActionBar (green primary · grey alt)
+  footer: { paddingTop: 12, gap: 10 },
   primaryBtn: {
     width: '100%',
     flexDirection: 'row',
@@ -437,13 +425,42 @@ const s = StyleSheet.create({
     gap: 8,
     backgroundColor: RC.green,
     borderRadius: 12,
-    paddingVertical: 15,
+    paddingVertical: 14,
   },
   primaryBtnDim: { backgroundColor: RC.surface2 },
-  primaryText: { fontSize: 15, fontWeight: '800', color: '#fff' },
-  gate: { fontSize: 11, fontWeight: '600', color: RC.danger, marginBottom: 8 },
-  altHit: { paddingVertical: 12, alignItems: 'center' },
-  altText: { fontSize: 13, fontWeight: '700', color: RC.muted, textDecorationLine: 'underline' },
+  primaryText: { fontSize: 16, fontWeight: '600', color: '#fff' },
+  secondaryBtn: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#E5E5E5',
+    borderRadius: 12,
+    paddingVertical: 14,
+  },
+  secondaryText: { fontSize: 16, fontWeight: '600', color: '#71717A' },
+  gate: { fontSize: 13, fontWeight: '600', color: RC.danger, textAlign: 'center', marginBottom: 2 },
+
+  // skip pill — quiet per-item escape hatch, floating at the title row's right
+  // (the design's "skip floats top-right, out of the decision row")
+  ignoreChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderWidth: 1,
+    borderColor: RC.line,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  ignoreChipText: { fontSize: 12.5, fontWeight: '800', color: RC.muted },
 
   // thumb
   thumbEmpty: {
@@ -454,11 +471,11 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  thumbLabel: { fontSize: 10, fontWeight: '500', color: RC.faint, paddingHorizontal: 2, textAlign: 'center' },
+  thumbLabel: { fontSize: 11, fontWeight: '500', color: RC.faint, paddingHorizontal: 2, textAlign: 'center' },
 
   // plat tag
-  platTag: { backgroundColor: RC.surface2, borderWidth: 1, borderColor: RC.line, borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1.5 },
-  platTagText: { fontSize: 8.5, fontWeight: '700', letterSpacing: 0.4, color: RC.muted },
+  platTag: { backgroundColor: RC.surface2, borderWidth: 1, borderColor: RC.line, borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2 },
+  platTagText: { fontSize: 10, fontWeight: '700', letterSpacing: 0.4, color: RC.muted },
 
   // chip
   chip: { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, backgroundColor: '#fff', alignSelf: 'flex-start' },
@@ -469,27 +486,27 @@ const s = StyleSheet.create({
   check: { borderWidth: 1.5, borderRadius: 5, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   radio: { borderWidth: 1.5, borderRadius: 999, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
 
-  // row
-  row: { flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 9 },
-  rowTitle: { fontSize: 13.5, fontWeight: '700', color: RC.ink },
-  rowMeta: { fontSize: 11, fontWeight: '500', color: RC.muted, marginTop: 1 },
-  hint: { fontSize: 11, fontWeight: '700' },
+  // row — form-sized list row (ListingEditorForm scale)
+  row: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 56, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 12 },
+  rowTitle: { fontSize: 15, fontWeight: '600', color: RC.ink },
+  rowMeta: { fontSize: 13, fontWeight: '500', color: RC.muted, marginTop: 2 },
+  hint: { fontSize: 13, fontWeight: '700' },
 
-  // option
-  option: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1.5, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 11 },
-  optionTitle: { fontSize: 14, fontWeight: '700' },
-  optionSub: { fontSize: 11.5, fontWeight: '500', color: RC.muted, marginTop: 1 },
+  // option — form-sized radio option
+  option: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 56, borderWidth: 1.5, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  optionTitle: { fontSize: 15, fontWeight: '600' },
+  optionSub: { fontSize: 13, fontWeight: '500', color: RC.muted, marginTop: 2 },
 
-  // field
+  // field — ListingEditorForm input scale (12/600 label · 15px value · minHeight 48 · r12)
   fieldLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 5 },
-  fieldLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5, color: RC.muted },
-  fieldReq: { fontSize: 10, fontWeight: '700', color: RC.danger },
-  field: { borderWidth: 1.5, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 12 },
-  fieldValue: { fontSize: 14, fontWeight: '500' },
+  fieldLabel: { fontSize: 12, fontWeight: '600', letterSpacing: 0.5, color: RC.muted },
+  fieldReq: { fontSize: 11, fontWeight: '700', color: RC.danger },
+  field: { borderWidth: 1.5, borderRadius: 12, minHeight: 48, justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 12 },
+  fieldValue: { fontSize: 15, fontWeight: '500' },
 
   // banner
   banner: { flexDirection: 'row', alignItems: 'center', gap: 7, borderWidth: 1, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 9 },
-  bannerText: { flex: 1, fontSize: 12, fontWeight: '600' },
+  bannerText: { flex: 1, fontSize: 13, fontWeight: '600' },
 });
 
 export { s as resolveStyles };

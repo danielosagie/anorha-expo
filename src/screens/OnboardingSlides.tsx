@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, FlatList, Image, Dimensions, TouchableOpacity, 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import Button from '../components/Button';
-import ShadowSurface from '../components/ui/ShadowSurface';
 
 const { width, height } = Dimensions.get('window');
 
@@ -31,13 +30,13 @@ const slides = [
 const OnboardingSlide = memo(({ item }: { item: any }) => (
   <View style={styles.slide}>
     <Animated.View entering={FadeInUp.duration(1000).springify()}>
-      <ShadowSurface shadow="md" radius={32} style={styles.imageShadow} innerStyle={styles.imageContainer}>
+      <View style={styles.imageCard}>
         <Image
           source={item.image}
           style={styles.image}
           resizeMode="contain"
         />
-      </ShadowSurface>
+      </View>
     </Animated.View>
     <View style={styles.textContainer}>
       <Text style={styles.title}>{item.title}</Text>
@@ -71,7 +70,7 @@ const OnboardingSlides = ({ navigation }: { navigation: any }) => {
     <View style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={handleSkip}>
+          <TouchableOpacity onPress={handleSkip} style={styles.skipPill}>
             <Text style={styles.skipButton}>Skip</Text>
           </TouchableOpacity>
         </View>
@@ -118,19 +117,26 @@ const OnboardingSlides = ({ navigation }: { navigation: any }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FEF4DD', // Off-white/Creamy background
+    backgroundColor: '#F6F7F4',
   },
   safeArea: {
     flex: 1,
   },
   header: {
     width: '100%',
-    padding: 24,
+    paddingHorizontal: 24,
+    paddingVertical: 16,
     alignItems: 'flex-end',
   },
+  skipPill: {
+    backgroundColor: '#18181B',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
   skipButton: {
-    color: '#666',
-    fontSize: 16,
+    color: '#FFFFFF',
+    fontSize: 13,
     fontFamily: 'Inter_600SemiBold',
   },
   slide: {
@@ -138,20 +144,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  imageContainer: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 32,
-    overflow: 'hidden',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingBottom: 10,
-  },
-  imageShadow: {
+  imageCard: {
     width: width * 0.85,
     height: height * 0.35,
     maxHeight: height * 0.35,
-    marginBottom: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 12,
+    marginBottom: 24,
   },
   image: {
     width: '100%',
@@ -162,19 +167,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   title: {
-    fontSize: 32,
+    fontSize: 28,
     fontFamily: 'Inter_700Bold',
-    color: '#313131ff',
+    color: '#18181B',
     textAlign: 'center',
-    marginBottom: 16,
-    lineHeight: 40,
+    marginBottom: 12,
+    lineHeight: 36,
   },
   description: {
-    fontSize: 17,
-    fontFamily: 'Inter_500Medium',
-    color: '#666',
+    fontSize: 15,
+    fontFamily: 'Inter_400Regular',
+    color: '#71717A',
     textAlign: 'center',
-    lineHeight: 26,
+    lineHeight: 21,
   },
   footer: {
     width: '100%',
@@ -183,32 +188,34 @@ const styles = StyleSheet.create({
   },
   pagination: {
     flexDirection: 'row',
-    marginBottom: 32,
+    alignItems: 'center',
+    marginBottom: 28,
   },
   dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#E5E5E5',
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#D4D4D8',
     marginHorizontal: 5,
   },
   activeDot: {
-    backgroundColor: '#5c9c00',
-    width: 24,
+    backgroundColor: '#93C822',
+    width: 22,
+    borderRadius: 4,
   },
   button: {
-    backgroundColor: '#5c9c00',
+    backgroundColor: '#93C822',
     borderRadius: 16,
-    height: 60,
+    paddingVertical: 15,
     width: '100%',
     justifyContent: 'center',
     alignItems: 'center',
   },
   buttonText: {
-    color: '#fff',
-    fontSize: 18,
+    color: '#FFFFFF',
+    fontSize: 15,
     fontFamily: 'Inter_700Bold',
   }
 });
 
-export default OnboardingSlides; 
+export default OnboardingSlides;

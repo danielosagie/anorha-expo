@@ -1,6 +1,16 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { API_BASE_URL } from '../config/env';
-import type { UnicodeSpinnerDefinition, CameraMode } from './AddProduct/types';
+import type {
+  UnicodeSpinnerDefinition,
+  CameraMode,
+  MatchCandidate,
+  MatchResponse,
+  JobResponse,
+  QuickMatchSelection,
+  ItemLoadingState,
+} from './AddProduct/types';
+import type { MatchJobStatus } from '../contracts';
+import { readQuickScanClientState, writeQuickScanClientState } from '../contracts';
 import { cleanMatchText } from './AddProduct/utils';
 import { UnicodeSpinner } from './AddProduct/UnicodeSpinner';
 import { CenterOverlay } from './AddProduct/CenterOverlay';
@@ -9,6 +19,29 @@ import { ProgressBarOverlay } from './AddProduct/ProgressBarOverlay';
 import { NotificationBar } from './AddProduct/NotificationBar';
 import { MatchResultsSheet } from './AddProduct/MatchResultsSheet';
 import { BulkItemsSheet } from './AddProduct/BulkItemsSheet';
+import { useBulkItems } from './AddProduct/hooks/useBulkItems';
+import { MatchPreview, MatchPreviewData } from './AddProduct/MatchPreview';
+import { AddDetailsSheet } from './AddProduct/AddDetailsSheet';
+import { ShelfFolderSheet } from './AddProduct/ShelfFolderSheet';
+import type { CartTreeNode } from './AddProduct/hooks/useBulkItems';
+import { observable } from '@legendapp/state';
+import { use$ } from '@legendapp/state/react';
+import { setItemGenerate, selectItem, selectAllItems, addItemWithId, transitionItem } from '../features/cart/cartStore';
+import { buildGenerateDetailsLaunch } from '../features/cart/flowPayloads';
+
+// DEV: set true to force-render the pricing-research preview page for visual QA.
+// Normal flow restored when false; the page is still reachable via __ds === 'matchPreview'.
+const DEV_FORCE_MATCH_PREVIEW = false;
+// DEV: set true to seed a shelf folder + open its page for visual QA (remove after).
+const DEV_FORCE_FOLDER_PAGE = false;
+
+// One spring for the cart open/close + screen lift so every entry point feels identical
+// (settles quickly, slight give — "made by Shopify" smooth, no bounce-on-bounce).
+const CART_SPRING = { damping: 30, stiffness: 280, overshootClamping: true } as const;
+
+// Active generation jobs, module-level so they SURVIVE AddProductScreen unmount (navigate-away):
+// the in-place poller re-attaches and resumes on remount instead of orphaning in-flight jobs.
+const genQueue$ = observable<Array<{ jobId: string; processType: 'generate' | 'match'; itemIds: string[] }>>([]);
 import {
   View,
   Text,
@@ -61,7 +94,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { SvgXml } from 'react-native-svg';
-import PhotoStack, { CapturedPhoto } from '../components/camera/PhotoStack';
+import { CapturedPhoto } from '../components/camera/PhotoStack';
 import ViewPhotosModal from '../components/camera/ViewPhotosModal';
 import CameraControls from '../components/camera/CameraControls';
 import BusinessTemplateModal, { BusinessTemplate } from '../components/camera/BusinessTemplateModal';
@@ -70,7 +103,6 @@ import QuickProductDetailSheet from '../components/QuickProductDetailSheet';
 import ManifestReviewSheet from '../components/ManifestReviewSheet';
 import ReceiptReviewSheet from '../components/ReceiptReviewSheet';
 import TierSelectorModal from '../components/TierSelectorModal';
-import UsageCounter from '../components/UsageCounter';
 import BillingGateSheet from '../components/BillingGateSheet';
 import useFreemiumUsage from '../hooks/useFreemiumUsage';
 import useBillingGate from '../hooks/useBillingGate';
@@ -103,152 +135,44 @@ const MAX_BATCH_ITEMS = 100;
 const QUICK_SCAN_QUEUE_LIMIT = 100;
 const QUICK_MATCH_AUTO_SELECT_CONFIDENCE = 0.72;
 
-// Types
+// Shop-style capture chrome: the photo strip rides the top black bar and the camera
+// is a cropped, rounded viewfinder between it and the bottom controls.
+const TOP_PHOTO_BAR_HEIGHT = 92;
+// Lower edge of the camera card at REST: clears the shutter controls. As the cart
+// opens, the card slides DOWN by (GAP - 12) so its rounded bottom meets the rising
+// sheet's top edge (Shop-style bleed) while the controls fade out beneath it.
+const CAMERA_BOTTOM_GAP = 220;
 
-export interface Analysis {
-  jobId: string;
-  userId: string;
-  status: string;
-  currentStage: string;
-  progress: {
-    totalProducts: number;
-    completedProducts: number;
-    currentProductIndex: number;
-    failedProducts: number;
-    stagePercentage: number;
-  };
-  results: Array<{
-    productIndex: number;
-    productId: string;
-    variantId: string;
-    serpApiData: Array<{
-      position?: number;
-      title?: string;
-      link?: string;
-      source?: string;
-      source_icon?: string;
-      thumbnail?: string;
-      thumbnail_width?: number;
-      thumbnail_height?: number;
-      image?: string;
-      image_width?: number;
-      image_height?: number;
-      rating?: number;
-      reviews?: number;
-      price?: {
-        value?: string;
-        extracted_value?: number;
-        currency?: string;
-      };
-      condition?: string;
-      in_stock?: boolean;
-    }>;
-    rerankedResults: Array<{
-      position?: number;
-      title?: string;
-      link?: string;
-      source?: string;
-      source_icon?: string;
-      thumbnail?: string;
-      thumbnail_width?: number;
-      thumbnail_height?: number;
-      image?: string;
-      image_width?: number;
-      image_height?: number;
-      rank?: number;
-      score?: number;
-      rating?: number;
-      reviews?: number;
-      price?: {
-        value?: string;
-        extracted_value?: number;
-        currency?: string;
-      };
-      condition?: string;
-      in_stock?: boolean;
-    }>;
-    confidence: string; // Changed from number to string based on the JSON example
-    vectorSearchFoundResults: boolean;
-    originalTargetImage: string;
-    timing: {
-      quickScanMs: number;
-      serpApiMs: number;
-      embeddingMs: number;
-      vectorSearchMs: number;
-      rerankingMs: number;
-      totalMs: number;
-    };
-  }>;
-  startedAt: string;
-  updatedAt: string;
-  summary: {
-    highConfidenceCount: number;
-    mediumConfidenceCount: number;
-    lowConfidenceCount: number;
-    totalEmbeddingsStored: number | null;
-    averageProcessingTimeMs: number | null;
-  };
-  completedAt: string;
-}
+// Types — the match/job seam is typed by the shared backend contract (src/contracts);
+// client-side quick-scan shapes come from ./AddProduct/types.
 
-interface MatchCandidate {
-  id: string;
-  title: string;
-  description: string;
-  price: number;
-  imageUrl: string;
-  matchPercentage: number;
-  sourceUrl: string;
-  productId?: string;
-  variantId?: string;
-  productUrl?: string;
-  isLocalMatch?: boolean;
-  queryKey?: string;
-  estimatedShippingMin?: number;
-  estimatedShippingMax?: number;
-  estimatedShippingMidpoint?: number;
-  estimatedShippingLabel?: string;
-  pricingResearch?: any;
-}
-
-interface JobResponse {
-  jobId: string;
-  status: string;
-  estimatedTimeMinutes: number,
-  totalProducts: number,
-  message: string,
-}
-
-interface MatchResponse {
-  systemAction: 'show_single_match' | 'show_multiple_matches' | 'show_multiple_candidates' | 'fallback_to_manual';
-  confidence: 'high' | 'medium' | 'low';
-  rankedCandidates: MatchCandidate[];
-  totalMatches: number;
-  reranker?: {
-    type: 'llama4-groq' | 'jina-modal' | 'fast-text' | 'none';
-    rankingMethod?: 'exact_match' | 'semantic_similarity' | 'fuzzy_match' | 'vector_fallback';
-    confidence?: number;
-    reasoning?: string;
-    processingTimeMs?: number;
-    alternatives?: any[];
-  };
-}
-
-type QuickMatchSelection = {
-  serpApiData: any[];
-  preSelectedIndices: number[];
-  source?: 'quick_scan_auto' | 'quick_scan_confirmed';
-  confidence?: number;
-  reasoning?: string;
-};
-
-type ItemLoadingState = {
-  isLoading: boolean;
-  stage: string;
-  error?: string;
-};
+/** Match job status as served by GET /products/match/jobs/:jobId/status. */
+export type Analysis = MatchJobStatus;
 
 type ItemStage = 'submitted_for_match' | 'awaiting_user_input' | 'generating' | 'generated' | 'existing_inventory';
+
+/**
+ * Serialize a draft-session payload to what the backend actually accepts (the four
+ * UpsertQuickScanSession fields). Client flow state (itemStageById/processedItemIds)
+ * rides inside matchContext.clientState — the backend has no columns for it and used
+ * to silently drop it when sent top-level, which broke stage restore on draft resume.
+ */
+const toQuickScanSessionBody = (p: {
+  scannedItems: any[];
+  matchContext: Record<string, any>;
+  shelfPhotoUri?: string | null;
+  activeItemId?: string | null;
+  itemStageById?: Record<string, ItemStage>;
+  processedItemIds?: string[];
+}) => ({
+  scannedItems: p.scannedItems,
+  matchContext: writeQuickScanClientState(p.matchContext, {
+    itemStageById: p.itemStageById,
+    processedItemIds: p.processedItemIds,
+  }),
+  shelfPhotoUri: p.shelfPhotoUri ?? undefined,
+  activeItemId: p.activeItemId ?? undefined,
+});
 
 type AddProductScreenProps = StackScreenProps<AppStackParamList, 'AddProduct'>;
 
@@ -558,6 +482,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     (rawParams?.initialCameraMode as any) || 'camera'
   );
 
+  const screenInsets = useSafeAreaInsets();
+
   // Animation values - separate for each modal (declared early to avoid a TDZ crash on web)
   const sheetTranslateY = useSharedValue((__ds === 'shelfScanning' || __ds === 'shelfComplete') ? 0 : SCREEN_HEIGHT);
   const matchSheetTranslateY = useSharedValue(__ds === 'matchSheet' ? 0 : SCREEN_HEIGHT);
@@ -633,11 +559,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         if (!res.ok || cancelled) return;
         const session = await res.json();
         const items = session.ScannedItems ?? session.scannedItems ?? [];
-        const matchCtx = session.MatchContext ?? session.matchContext ?? {};
+        const rawMatchCtx = (session.MatchContext ?? session.matchContext ?? {}) as Record<string, any>;
+        // Client flow state rides inside MatchContext.clientState (see toQuickScanSessionBody);
+        // strip the envelope before the rest of matchContext becomes the quick-scan store.
+        const clientState = readQuickScanClientState(rawMatchCtx);
+        const { clientState: _cs, ...matchCtx } = rawMatchCtx;
         const shelfUri = session.ShelfPhotoUri ?? session.shelfPhotoUri ?? null;
         const activeId = session.ActiveItemId ?? session.activeItemId ?? null;
-        const stageById = session.ItemStageById ?? session.itemStageById ?? {};
-        const processedIds = session.ProcessedItemIds ?? session.processedItemIds ?? [];
+        const stageById = (clientState.itemStageById ?? session.ItemStageById ?? session.itemStageById ?? {}) as Record<string, ItemStage>;
+        const processedIds = clientState.processedItemIds ?? session.ProcessedItemIds ?? session.processedItemIds ?? [];
         if (items.length > 0 && !cancelled) {
           setBulkItems(items);
           setQuickScanStore(matchCtx);
@@ -647,8 +577,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           setProcessedItemIds(Array.isArray(processedIds) ? processedIds : []);
           setIsBulkMode(true);
           setCameraMode('shelf');
+          if (cartCloseTimerRef.current) { clearTimeout(cartCloseTimerRef.current); cartCloseTimerRef.current = null; }
           setShowDeepSearchSheet(true);
-          sheetTranslateY.value = withSpring(0);  // Fully visible, bottom aligned to screen
+          sheetTranslateY.value = withSpring(0, CART_SPRING);  // Fully visible, bottom aligned to screen
           sessionIdRef.current = session.Id ?? session.id ?? sessionIdParam;
           if (shelfUri) shelfPhotoUriForDraftRef.current = shelfUri;
         }
@@ -672,7 +603,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       const res = await fetch(`${API_BASE}/api/products/quick-scan-sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(toQuickScanSessionBody(payload)),
       });
       if (!res.ok) return null;
       const data = await res.json();
@@ -704,7 +635,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       await fetch(`${API_BASE}/api/products/quick-scan-sessions/${sid}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ ...payload }),
+        body: JSON.stringify(toQuickScanSessionBody(payload)),
       });
     } catch (e) {
       console.warn('[AddProduct] Save draft failed:', e);
@@ -720,28 +651,341 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [showDeepSearchSheet, setShowDeepSearchSheet] = useState(() => __ds === 'shelfScanning' || __ds === 'shelfComplete');
   const [hasSeenBulkModalFtux, setHasSeenBulkModalFtux] = useState<boolean | null>(null);
   const [matchData, setMatchData] = useState<MatchResponse | null>(() => __ds === 'matchSheet' ? DS_MATCH : null);
-  // Quick scan storage per item and current sheet context
-  const [quickScanStore, setQuickScanStore] = useState<Record<string, { matchData: MatchResponse; serpApiData: any[] }>>({});
+  // Quick scan / match sheet context
   const [currentMatchItemId, setCurrentMatchItemId] = useState<string | null>(null);
-  // Confirmed quick-match per item: when user taps "List Product" we store it so bulk Continue uses it instead of re-searching
-  const [confirmedQuickMatchByItemId, setConfirmedQuickMatchByItemId] = useState<Record<string, QuickMatchSelection>>({});
+  // Pricing-research preview: which cart item's preview is open (null = closed)
+  const [previewItemId, setPreviewItemId] = useState<string | null>(null);
+  // "Add details" page: which item we're collecting more context for (null = closed)
+  const [addDetailsItemId, setAddDetailsItemId] = useState<string | null>(null);
+  // Shelf folder page: which folder is open (null = closed)
+  const [openFolderId, setOpenFolderId] = useState<string | null>(null);
+  // In-place async generation queue: active jobs being polled (replaces LoadingScreen navigation)
+  const genJobs = use$(genQueue$); // durable across unmount; poller resumes on remount
 
-  // Loading state tracking per item
+  // Loading state tracking per item (transient UI; not part of cart$)
   const [itemLoadingStates, setItemLoadingStates] = useState<Record<string, ItemLoadingState>>({});
-  const [itemStageById, setItemStageById] = useState<Record<string, ItemStage>>(() => params?.itemStageById || {});
-  const [processedItemIds, setProcessedItemIds] = useState<string[]>(() => params?.processedItemIds || []);
 
   // Bulk mode state
   const [isBulkMode, setIsBulkMode] = useState(false);
-  const [bulkItems, setBulkItems] = useState<Array<{
-    id: string;
-    photos: CapturedPhoto[];
-    title?: string;
-    isActive?: boolean;
-    preSelectedSource?: any;
-    quantity?: number;
-  }>>(() => __dsHasItems ? (dsBuildItems() as any) : []);
-  const [activeItemId, setActiveItemId] = useState<string | null>(() => __dsHasItems ? 'ds-1' : null);
+
+  // Cart-backed bulk-items state — single source of truth is cart$ (src/features/cart).
+  // Replaces the former useState for bulkItems / quickScanStore /
+  // confirmedQuickMatchByItemId / itemStageById / processedItemIds / activeItemId.
+  const {
+    bulkItems, setBulkItems,
+    activeItemId, setActiveItemId,
+    quickScanStore, setQuickScanStore,
+    confirmedQuickMatchByItemId, setConfirmedQuickMatchByItemId,
+    itemStageById, setItemStageById,
+    processedItemIds, setProcessedItemIds,
+    cartTree, createShelfFolder, ungroupFolder,
+    savedForLaterIds, setItemSavedForLater,
+  } = useBulkItems(() => ({
+    bulkItems: __dsHasItems ? (dsBuildItems() as any) : [],
+    activeItemId: __dsHasItems ? 'ds-1' : null,
+    itemStageById: params?.itemStageById || {},
+    processedItemIds: params?.processedItemIds || [],
+  }));
+
+  // Map the previewed cart item (photo + confirmed/quick match + pricing) into the MatchPreview shape.
+  const previewData = useMemo<MatchPreviewData | undefined>(() => {
+    if (!previewItemId) return undefined;
+    const item = bulkItems.find((b) => b.id === previewItemId);
+    const photoUri = item?.photos?.find((p) => p.isCover)?.uri || item?.photos?.[0]?.uri;
+    const qs = quickScanStore[previewItemId];
+    const confirmed = confirmedQuickMatchByItemId[previewItemId];
+    const candidates = qs?.matchData?.rankedCandidates || [];
+    const chosenIdx = confirmed?.preSelectedIndices?.[0] ?? 0;
+    const chosen: any =
+      (confirmed?.serpApiData && confirmed.serpApiData[chosenIdx]) || candidates[chosenIdx] || candidates[0];
+    const pr: any = chosen?.pricingResearch;
+    return {
+      photoUri,
+      title: chosen?.title || item?.title || 'Item',
+      description: chosen?.description,
+      pricing: pr
+        ? {
+            low: pr.low,
+            high: pr.high,
+            median: pr.median,
+            average: pr.average,
+            samples: Array.isArray(pr.samples)
+              ? pr.samples.map((s: any) => ({
+                  title: s.title,
+                  price: s.price,
+                  marketplace: 'Ebay',
+                  condition: s.condition,
+                  imageUrl: s.imageUrl || s.thumbnail || s.image,
+                  url: s.url,
+                }))
+              : undefined,
+          }
+        : undefined,
+    };
+  }, [previewItemId, bulkItems, quickScanStore, confirmedQuickMatchByItemId]);
+
+  // The shelf folder currently open as a page (if any).
+  const openFolder = useMemo(
+    () =>
+      openFolderId
+        ? (cartTree.find((n) => n.kind === 'folder' && n.id === openFolderId) as Extract<CartTreeNode, { kind: 'folder' }> | undefined)
+        : undefined,
+    [openFolderId, cartTree],
+  );
+
+  // DEV: seed a shelf folder + open its page for visual QA.
+  const devFolderSeededRef = useRef(false);
+  useEffect(() => {
+    if (!DEV_FORCE_FOLDER_PAGE || devFolderSeededRef.current) return;
+    devFolderSeededRef.current = true;
+    // Single items — show the cart cards (match + the new "add a detail / snap the tag" chip).
+    addItemWithId('dev-single-1', [{ id: 'p1', uri: 'https://picsum.photos/seed/sony/400/400', isCover: true } as any], { title: 'Sony WH-1000XM5 Headphones' });
+    addItemWithId('dev-single-2', [{ id: 'p2', uri: 'https://picsum.photos/seed/switch/400/400', isCover: true } as any], { title: 'Nintendo Switch OLED' });
+    // A shelf folder too (folder card sits alongside the single cards).
+    createShelfFolder({
+      sourcePhotoUri: 'https://picsum.photos/seed/shelfscan/900/520',
+      label: 'Shelf',
+      items: [
+        { id: 'dev-s1', title: 'Logitech Lift Vertical Ergonomic Mouse', quantity: 1 },
+        { id: 'dev-s2', title: 'Samsung French Door Refrigerator', quantity: 1 },
+      ],
+    });
+    setQuickScanStore((prev) => ({
+      ...prev,
+      'dev-single-1': { matchData: { systemAction: 'show_single_match', confidence: 'high', totalMatches: 1, rankedCandidates: [{ id: 'h1', title: 'Sony WH-1000XM5 Wireless Headphones', price: 248, imageUrl: 'https://picsum.photos/seed/sonym/120' } as any] }, serpApiData: [] },
+      'dev-single-2': { matchData: { systemAction: 'show_single_match', confidence: 'high', totalMatches: 1, rankedCandidates: [{ id: 'sw1', title: 'Nintendo Switch OLED', price: 299, imageUrl: 'https://picsum.photos/seed/switchm/120' } as any] }, serpApiData: [] },
+    }));
+    setIsBulkMode(true);
+    if (cartCloseTimerRef.current) { clearTimeout(cartCloseTimerRef.current); cartCloseTimerRef.current = null; }
+    setShowDeepSearchSheet(true);
+    sheetTranslateY.value = withSpring(0, CART_SPRING); // slide the sheet up (open position)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Queue items for in-place async generation (replaces navigating to LoadingScreen).
+  const handleQueueGeneration = useCallback(
+    (itemJobs: Array<{ itemId: string; jobId: string; processType: 'generate' | 'match' }>) => {
+      if (!itemJobs.length) return;
+      setItemLoadingStates((prev) => {
+        const next = { ...prev };
+        itemJobs.forEach(({ itemId }) => { next[itemId] = { isLoading: true, stage: 'Queued…' }; });
+        return next;
+      });
+      const byJob = new Map<string, { jobId: string; processType: 'generate' | 'match'; itemIds: string[] }>();
+      for (const { itemId, jobId, processType } of itemJobs) {
+        const key = `${processType}:${jobId}`;
+        if (!byJob.has(key)) byJob.set(key, { jobId, processType, itemIds: [] });
+        byJob.get(key)!.itemIds.push(itemId);
+        // Durable per-item job id for the click → GenerateDetailsScreen handoff (match items get the generate id on chain).
+        setItemGenerate(itemId, processType === 'generate' ? { generateJobId: jobId } : { generateMatchJobId: jobId });
+      }
+      genQueue$.set([...genQueue$.get(), ...Array.from(byJob.values())]);
+    },
+    [setItemLoadingStates],
+  );
+
+  // Poll active generation jobs and reflect progress in place — no navigation. Mirrors the
+  // LoadingScreen poll loop (GET .../jobs/:id/status @1.5s) but writes into AddProductScreen state.
+  useEffect(() => {
+    if (genJobs.length === 0) return;
+    let cancelled = false;
+    const poll = async () => {
+      const token = await ensureSupabaseJwt();
+      if (!token || cancelled) return;
+      for (const job of genJobs) {
+        try {
+          const base = job.processType === 'generate'
+            ? `${API_BASE_URL}/api/products/generate/jobs/`
+            : `${API_BASE_URL}/api/products/match/jobs/`;
+          const res = await fetch(`${base}${encodeURIComponent(job.jobId)}/status`, {
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          });
+          if (!res.ok || cancelled) continue;
+          const snap: any = await res.json();
+          const status = snap?.status;
+          if (status === 'completed') {
+            const results = Array.isArray(snap?.results) ? snap.results : [];
+            const autoGenId =
+              job.processType === 'match'
+                ? (results.find((r: any) => r?.autoGenerateJobId)?.autoGenerateJobId as string | undefined)
+                : undefined;
+            if (autoGenId) {
+              // match → auto-generate: chain to the generate job and keep tracking in place.
+              job.itemIds.forEach((id) => {
+                setItemGenerate(id, { generateJobId: autoGenId, generateMatchJobId: job.jobId });
+                // Drive the explicit state machine: auto-matched, now generating.
+                transitionItem(id, 'matched');
+                transitionItem(id, 'generating');
+              });
+              setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: true, stage: 'Generating…' }; }); return n; });
+              genQueue$.set(genQueue$.get().map((j) =>
+                j.jobId === job.jobId && j.processType === 'match'
+                  ? { jobId: autoGenId, processType: 'generate' as const, itemIds: job.itemIds }
+                  : j));
+            } else {
+              setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => delete n[id]); return n; });
+              setItemStageById((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = 'generated'; }); return n; });
+              // State machine: draft generated → awaiting per-item finalize.
+              job.itemIds.forEach((id) => transitionItem(id, 'ready_to_list'));
+              genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
+            }
+          } else if (status === 'failed') {
+            setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Failed', error: snap?.error || 'Generation failed' }; }); return n; });
+            job.itemIds.forEach((id) => transitionItem(id, 'error', { error: snap?.error || 'Generation failed' }));
+            genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
+          } else {
+            const stage = snap?.currentStage || 'Generating…';
+            setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: true, stage }; }); return n; });
+          }
+        } catch {
+          /* transient — keep polling */
+        }
+      }
+    };
+    void poll();
+    const interval = setInterval(() => { void poll(); }, 1500);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [genJobs, setItemStageById]);
+
+  // Click → GenerateDetailsScreen for a queued/generated item: per-item finalize + the built-in
+  // item/jobs switcher. ID-BASED handoff: the typed builder passes itemIds and the
+  // screen resolves items from cart$ — the legacy index fields it also emits are fallback only.
+  const openItemDetails = useCallback((itemId: string) => {
+    const launch = buildGenerateDetailsLaunch(itemId);
+    if (!launch) return;
+    (navigation as any).navigate('GenerateDetailsScreen', launch);
+  }, [navigation]);
+
+  // Route an item tap: ALWAYS the item overview/pricing page first. Generated items
+  // continue to the listing editor from the preview's CTA — a card tap must never
+  // jump straight into the job/match screens.
+  const handleOpenItem = useCallback((itemId: string) => {
+    setPreviewItemId(itemId);
+  }, []);
+
+  // --- Shared-cart surface renderers ---
+  // Rendered as opaque overlays INSIDE the cart sheet Modal (iOS can't stack Modals), so the
+  // cart list ↔ folder page ↔ item preview swap in place. Everything is AddProductScreen state.
+  const renderMatchPreview = () => (
+    <MatchPreview
+      data={previewData}
+      onBack={() => setPreviewItemId(null)}
+      onWrongItem={() => setAddDetailsItemId(previewItemId)}
+      onResearch={({ text }) => {
+        const id = previewItemId;
+        setPreviewItemId(null);
+        if (id && text) void runQuickScanTextSearch(id, text);
+      }}
+      onAddPhoto={() => {
+        const id = previewItemId;
+        setPreviewItemId(null);
+        if (id) setActiveItemId(id);
+        handleImageUpload();
+      }}
+      sellLabel={previewItemId && itemStageById[previewItemId] === 'generated' ? 'Review listing' : undefined}
+      onSell={() => {
+        const id = previewItemId;
+        setPreviewItemId(null);
+        if (!id) return;
+        if (itemStageById[id] === 'generated') {
+          // Generated item: continue to the per-item listing editor. The cart Modal
+          // must finish dismissing before the pushed screen can show (and before
+          // navigation animates — overlapping the two hits the Fabric unmount assert).
+          closeBulkItemsSheetRef.current();
+          setTimeout(() => openItemDetails(id), 400);
+          return;
+        }
+        const qs = quickScanStore[id];
+        if (qs?.matchData?.rankedCandidates?.length && !confirmedQuickMatchByItemId[id]) {
+          const candidates = rankedCandidatesToQuickMatchHintCandidates(qs.matchData.rankedCandidates);
+          setConfirmedQuickMatchByItemId((prev) => ({
+            ...prev,
+            [id]: { serpApiData: candidates, preSelectedIndices: [0], source: 'quick_scan_confirmed' },
+          }));
+        }
+        showNotificationMessage('Added to cart');
+      }}
+    />
+  );
+
+  // "Add details" page — collect text + a tag photo for an item we couldn't confidently
+  // match (or the user flagged as the wrong item), then re-run the search.
+  const renderAddDetails = () => {
+    const id = addDetailsItemId;
+    if (!id) return null;
+    const item = bulkItems.find((b) => b.id === id);
+    const baseTitle = item?.title && !/^Item \d+$/.test(item.title) ? item.title : '';
+    return (
+      <AddDetailsSheet
+        itemTitle={item?.title}
+        photoUri={item?.photos?.find((p) => p.isCover)?.uri || item?.photos?.[0]?.uri}
+        photos={(item?.photos || []).map((p: any) => ({ id: String(p.id ?? p.uri), uri: p.uri }))}
+        onRemovePhoto={(photoId) => removeBulkItemPhoto(id, photoId)}
+        onBack={() => setAddDetailsItemId(null)}
+        onCaptureTag={() => {
+          // Target this item and drop back to the live camera for the tag shot.
+          // The overlay unmount must commit BEFORE the cart Modal starts closing —
+          // overlapping the two transactions hits the Fabric unmount assert.
+          setAddDetailsItemId(null);
+          setPreviewItemId(null);
+          setActiveItemId(id);
+          setTimeout(closeBulkItemsSheet, 80);
+        }}
+        onImportTag={() => {
+          setActiveItemId(id);
+          handleImageUpload();
+        }}
+        onContinue={(detail) => {
+          setAddDetailsItemId(null);
+          if (detail) {
+            const newQuery = [baseTitle, detail].filter(Boolean).join(' ');
+            setBulkItems((prev) => prev.map((b) => (b.id === id ? { ...b, title: newQuery } : b)));
+            setPreviewItemId(null); // back to the cart row so they watch the re-search land
+            void runQuickScanTextSearch(id, newQuery);
+          }
+        }}
+      />
+    );
+  };
+
+  const renderShelfFolderPage = () =>
+    openFolder ? (
+      <ShelfFolderSheet
+        label={openFolder.label}
+        sourcePhotoUri={openFolder.sourcePhotoUri}
+        items={openFolder.children}
+        quickScanStore={quickScanStore}
+        confirmedQuickMatchByItemId={confirmedQuickMatchByItemId}
+        itemLoadingStates={itemLoadingStates}
+        onBack={() => setOpenFolderId(null)}
+        onUngroup={() => {
+          if (openFolderId) ungroupFolder(openFolderId);
+          setOpenFolderId(null);
+        }}
+        onOpenItemPreview={handleOpenItem}
+        onAddAllToCart={() => {
+          const folder = openFolder;
+          setOpenFolderId(null);
+          setConfirmedQuickMatchByItemId((prev) => {
+            const next = { ...prev };
+            for (const child of folder.children) {
+              if (next[child.id]) continue;
+              const qs = quickScanStore[child.id];
+              if (qs?.matchData?.rankedCandidates?.length) {
+                next[child.id] = {
+                  serpApiData: rankedCandidatesToQuickMatchHintCandidates(qs.matchData.rankedCandidates),
+                  preSelectedIndices: [0],
+                  source: 'quick_scan_confirmed',
+                };
+              }
+            }
+            return next;
+          });
+          if (openFolderId) ungroupFolder(openFolderId); // dissolve the folder → items become top-level cart singles
+          showNotificationMessage('Added shelf items to cart');
+        }}
+      />
+    ) : null;
 
   // Debounced auto-save when scan state changes (so drafts appear in Scan Drafts)
   useEffect(() => {
@@ -774,6 +1018,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const quickScanQueueRef = useRef<Array<{ photo: CapturedPhoto; itemId: string }>>([]);
   const shelfQueryToItemIdRef = useRef<Record<string, string>>({});
   const hasTriggeredBulkModalFtuxRef = useRef(false);
+  // Deferred cart-Modal unmount after the close spring settles (cleared on reopen).
+  const cartCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Always-fresh handle for callbacks declared above closeBulkItemsSheet (avoids
+  // stale closures over its isProcessingShelfScan guard).
+  const closeBulkItemsSheetRef = useRef<() => void>(() => {});
+  // Same late-binding pattern for OPENING: handleCapture (declared earlier) opens
+  // the cart when the free tier is exhausted — the cart is the upgrade surface.
+  const openBulkItemsSheetRef = useRef<() => void>(() => {});
+  // Pending deferred cart-present (the dismiss-then-present staggers). MUST be cleared
+  // on blur: the tab keeps this screen mounted, so a stray reopen after navigating away
+  // presents the transparent cart Modal over the other tab and eats every touch.
+  const cartReopenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFocusedRef = useRef(true);
 
   const closeShelfScanStream = useCallback(() => {
     shelfScanStreamRef.current?.close();
@@ -814,13 +1071,26 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const clearShelfScanForRetake = useCallback(() => {
     closeShelfScanStream();
     setIsProcessingShelfScan(false);
-    setShowDeepSearchSheet(false);
-    setShelfPhotoUri(null);
-    shelfPhotoUriForDraftRef.current = null;
-    resetShelfScanResults();
-    resetShelfProgress();
     setCurrentInstruction('ready');
-    sheetTranslateY.value = SCREEN_HEIGHT;
+    // Standard cart-close handshake (can't call closeBulkItemsSheet here — its
+    // isProcessingShelfScan guard still reads true this tick), then clear the
+    // shelf/bulk state in a commit AFTER the Modal unmount: tearing the children
+    // down in the same commit as the visible flip is the Fabric unmount race.
+    cancelAnimation(sheetTranslateY);
+    sheetTranslateY.value = withSpring(SCREEN_HEIGHT, CART_SPRING);
+    if (cartCloseTimerRef.current) clearTimeout(cartCloseTimerRef.current);
+    cartCloseTimerRef.current = setTimeout(() => {
+      cartCloseTimerRef.current = null;
+      cancelAnimation(sheetTranslateY);
+      sheetTranslateY.value = SCREEN_HEIGHT;
+      setShowDeepSearchSheet(false);
+      setTimeout(() => {
+        setShelfPhotoUri(null);
+        shelfPhotoUriForDraftRef.current = null;
+        resetShelfScanResults();
+        resetShelfProgress();
+      }, 80);
+    }, 420);
   }, [closeShelfScanStream, resetShelfProgress, resetShelfScanResults, sheetTranslateY]);
 
   useEffect(() => {
@@ -932,6 +1202,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Camera ref
   const cameraRef = useRef<CameraView>(null);
   const isFocused = useIsFocused();
+  isFocusedRef.current = isFocused;
 
   // Stable item ID generator to prevent key collisions
   const itemIdCounterRef = useRef(0);
@@ -940,30 +1211,22 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     return `item-${Date.now()}-${itemIdCounterRef.current}`;
   }, []);
 
-  // Debug useEffects to track state changes
-  useEffect(() => {
-    console.log('[EFFECT] bulkItems changed! New value:', {
-      length: bulkItems.length,
-      items: bulkItems.map(item => ({
-        id: item.id,
-        photosCount: item.photos.length,
-        isActive: item.isActive
-      }))
-    });
-  }, [bulkItems]);
-
-  useEffect(() => {
-    console.log('[EFFECT] activeItemId changed! New value:', activeItemId);
-  }, [activeItemId]);
-
 
   // Guard against inconsistent modal state that can leave camera paused with no visible sheet.
   useEffect(() => {
     if (showMatchSheet && !matchData) {
       setShowMatchSheet(false);
       if (bulkItems.length > 0 || cameraMode === 'shelf') {
-        setShowDeepSearchSheet(true);
-        sheetTranslateY.value = withSpring(0);
+        // Dismiss first, present second — never flip two sibling Modals in one commit.
+        const timer = setTimeout(() => {
+          if (cartCloseTimerRef.current) {
+            clearTimeout(cartCloseTimerRef.current);
+            cartCloseTimerRef.current = null;
+          }
+          setShowDeepSearchSheet(true);
+          sheetTranslateY.value = withSpring(0, CART_SPRING);
+        }, 280);
+        return () => clearTimeout(timer);
       }
     }
   }, [showMatchSheet, matchData, bulkItems.length, cameraMode, sheetTranslateY]);
@@ -1199,6 +1462,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return;
     }
 
+    // Out of free scans → no blocking modal; the cart sheet opens and presents
+    // the usage limit with the upgrade stepper / add-credits options.
+    if (freemiumStatus && !freemiumStatus.hasSubscription && freemiumStatus.isFreeTierExhausted) {
+      openBulkItemsSheetRef.current?.();
+      return;
+    }
+
     if (!cameraRef.current || isCapturing) return;
 
     try {
@@ -1325,7 +1595,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     } finally {
       setIsCapturing(false);
     }
-  }, [isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity, canAddAnotherItem]);
+  }, [isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity, canAddAnotherItem, freemiumStatus]);
 
   // Handle barcode scan - with debouncing to prevent duplicates
   const barcodeLastScannedRef = useRef<string | null>(null);
@@ -1434,8 +1704,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         progress: 0.08,
       });
       // Open sheet when user takes/uploads shelf photo so they see loading
+      if (cartCloseTimerRef.current) { clearTimeout(cartCloseTimerRef.current); cartCloseTimerRef.current = null; }
       setShowDeepSearchSheet(true);
-      sheetTranslateY.value = withSpring(0);
+      sheetTranslateY.value = withSpring(0, CART_SPRING);
       resetShelfScanResults();
 
       // Compress image before converting to base64
@@ -1498,8 +1769,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
           if (parsed.type === 'START_ANALYSIS') {
             setCurrentInstruction(presentation.instruction);
+            if (cartCloseTimerRef.current) { clearTimeout(cartCloseTimerRef.current); cartCloseTimerRef.current = null; }
             setShowDeepSearchSheet(true);
-            sheetTranslateY.value = withSpring(0);
+            sheetTranslateY.value = withSpring(0, CART_SPRING);
             setShelfProgress((prev) => ({
               ...prev,
               phase: parsed.phase || 'inspecting_shelf',
@@ -1517,34 +1789,34 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
           if (parsed.type === 'EXTRACTED_ITEMS') {
             const items = (parsed.items || []) as Array<string | { query: string; quantity?: number }>;
-            const newBulkItems = items.map((item, idx) => {
+            const ts = Date.now();
+            const folderItems = items.map((item, idx) => {
               const query = typeof item === 'string' ? item : item.query;
               const quantity = typeof item === 'object' && item.quantity != null ? item.quantity : 1;
-              return {
-                id: `shelf-${Date.now()}-${idx}`,
-                photos: [],
-                title: query,
-                quantity,
-                isActive: idx === 0,
-              };
+              return { id: `shelf-${ts}-${idx}`, title: query, quantity };
             });
 
             shelfQueryToItemIdRef.current = {};
             items.forEach((item, idx) => {
               const query = typeof item === 'string' ? item : item.query;
-              shelfQueryToItemIdRef.current[query] = newBulkItems[idx].id;
+              shelfQueryToItemIdRef.current[query] = folderItems[idx].id;
             });
 
-            setBulkItems(newBulkItems);
+            // Shelf items become a folder in the SHARED cart (alongside singles), not a separate flow.
+            createShelfFolder({
+              sourcePhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri || undefined,
+              label: 'Shelf',
+              items: folderItems,
+            });
             setIsBulkMode(true);
-            setActiveItemId(newBulkItems[0]?.id || null);
+            setActiveItemId(folderItems[0]?.id || null);
             setCurrentInstruction('extracting');
             setShelfProgress((prev) => ({
               ...prev,
               phase: parsed.phase || 'separating_items',
               progress: typeof parsed.progress === 'number' ? parsed.progress : prev.progress,
               elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : prev.elapsedMs,
-              totalItems: typeof parsed.totalItems === 'number' ? parsed.totalItems : newBulkItems.length,
+              totalItems: typeof parsed.totalItems === 'number' ? parsed.totalItems : folderItems.length,
               completedItems: 0,
               stalled: false,
               status: 'streaming',
@@ -1639,7 +1911,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined,
               completedItems: parsed.data?.results?.length || shelfProgress.completedItems,
             });
-            sheetTranslateY.value = withSpring(0);
+            sheetTranslateY.value = withSpring(0, CART_SPRING);
             return;
           }
 
@@ -1824,6 +2096,34 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       hasBarcodeResult: !!barcodeSearchResult
     });
 
+    // Present the cart. When the match-sheet Modal is mounted, dismiss it FIRST and
+    // present the cart after its dismissal settles — flipping two sibling Modals in
+    // one commit races UIKit present/dismiss and asserts in Fabric
+    // (RCTViewComponentView unmountChildComponentView crash).
+    const openCart = () => {
+      if (cartCloseTimerRef.current) {
+        clearTimeout(cartCloseTimerRef.current);
+        cartCloseTimerRef.current = null;
+      }
+      cancelAnimation(sheetTranslateY);
+      setShowDeepSearchSheet(true);
+      sheetTranslateY.value = SCREEN_HEIGHT;
+      sheetTranslateY.value = withSpring(0, CART_SPRING);
+    };
+    const dismissMatchSheetThenOpenCart = () => {
+      if (showMatchSheet) {
+        setShowMatchSheet(false);
+        matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
+        if (cartReopenTimerRef.current) clearTimeout(cartReopenTimerRef.current);
+        cartReopenTimerRef.current = setTimeout(() => {
+          cartReopenTimerRef.current = null;
+          if (isFocusedRef.current) openCart();
+        }, 280);
+      } else {
+        openCart();
+      }
+    };
+
     // SHELF MODE: identification first, then explicit one-tap transition to listing flow.
     if (cameraMode === 'shelf') {
       if (bulkItems.length === 0) {
@@ -1836,10 +2136,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
       setCameraMode('camera');
       setCurrentInstruction('capturing');
-      setShowMatchSheet(false);
-      matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
-      setShowDeepSearchSheet(true);
-      sheetTranslateY.value = withSpring(0);
+      dismissMatchSheetThenOpenCart();
       showNotificationMessage('Moved to listing flow', 1800);
       return;
     }
@@ -2008,11 +2305,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
 
     // Always open sheet - it will show empty state if no photos
-    setShowMatchSheet(false);
-    matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
-    setShowDeepSearchSheet(true);
-    sheetTranslateY.value = withSpring(0);  // Fully visible, bottom aligned to screen
-  }, [sheetTranslateY, matchSheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems, activeItemId, cameraMode, barcodeSearchResult, showNotificationMessage]);
+    dismissMatchSheetThenOpenCart();
+  }, [sheetTranslateY, matchSheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems, activeItemId, cameraMode, barcodeSearchResult, showNotificationMessage, showMatchSheet]);
 
   // Handle image picker - SIMPLIFIED: Always add to bulkItems
   const handleImageUpload = useCallback(async () => {
@@ -2666,8 +2960,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       && store.matchData.rankedCandidates.length > 0;
     if (!hasRenderableMatchData) {
       showNotificationMessage('Quick matches are still loading for this item.', 2000);
+      if (cartCloseTimerRef.current) { clearTimeout(cartCloseTimerRef.current); cartCloseTimerRef.current = null; }
       setShowDeepSearchSheet(true);
-      sheetTranslateY.value = withSpring(0);
+      sheetTranslateY.value = withSpring(0, CART_SPRING);
       return;
     }
     setMatchData(store.matchData);
@@ -2712,10 +3007,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         ? [{ ImageUrl: localMatch.imageUrl }]
         : undefined,
     } as any);
-    setShowBarcodeResultModal(true);
-    setShowDeepSearchSheet(false);
+    // Sequence the modal handoff: dismiss the cart Modal first, then present the
+    // barcode-result Modal and unmount the cart row in later commits — batching a
+    // sibling present + dismiss + child teardown into one commit races UIKit/Fabric.
     setCurrentInstruction('ready');
-    markItemsProcessed([{ id: itemId }], 'existing_inventory');
+    closeBulkItemsSheetRef.current?.();
+    setTimeout(() => {
+      setShowBarcodeResultModal(true);
+      markItemsProcessed([{ id: itemId }], 'existing_inventory');
+    }, 520);
   }, [confirmedQuickMatchByItemId, markItemsProcessed, quickScanStore, showNotificationMessage]);
 
   // Send payload of first photos for analysis/matching
@@ -3091,19 +3391,50 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     if (isProcessingShelfScan) {
       return;
     }
-    cancelAnimation(sheetTranslateY);
-    setShowDeepSearchSheet(false);
-    sheetTranslateY.value = SCREEN_HEIGHT;
+    // Idempotent: a close is already in flight — let its timer finish. Re-arming the
+    // spring + timer mid-close is what produced a Fabric unmount crash
+    // (RCTViewComponentView unmountChildComponentView assert).
+    if (cartCloseTimerRef.current) return;
     setCurrentInstruction('ready');
+    // Spring the cart down; the capture-screen lift unwinds in lockstep
+    // (cameraLiftStyle is derived from sheetTranslateY). The Modal unmount is deferred
+    // until the spring has visually settled, and the value is pinned (no animation
+    // running) before unmounting so Fabric tears the tree down from a quiescent state.
+    sheetTranslateY.value = withSpring(SCREEN_HEIGHT, CART_SPRING);
+    cartCloseTimerRef.current = setTimeout(() => {
+      cartCloseTimerRef.current = null;
+      cancelAnimation(sheetTranslateY);
+      sheetTranslateY.value = SCREEN_HEIGHT;
+      setShowDeepSearchSheet(false);
+    }, 420);
   }, [sheetTranslateY, isProcessingShelfScan]);
+  closeBulkItemsSheetRef.current = closeBulkItemsSheet;
 
   // Open bulk items sheet deterministically
   const openBulkItemsSheet = useCallback(() => {
+    // Never present the (transparent, touch-eating) cart Modal while another tab is
+    // focused — a deferred reopen can fire after the user navigates away.
+    if (!isFocusedRef.current) return;
+    if (cartCloseTimerRef.current) {
+      clearTimeout(cartCloseTimerRef.current);
+      cartCloseTimerRef.current = null;
+    }
     cancelAnimation(sheetTranslateY);
     setShowDeepSearchSheet(true);
     sheetTranslateY.value = SCREEN_HEIGHT;
-    sheetTranslateY.value = withSpring(0);
+    sheetTranslateY.value = withSpring(0, CART_SPRING);
   }, [sheetTranslateY]);
+  openBulkItemsSheetRef.current = openBulkItemsSheet;
+
+  // Swipe DOWN anywhere on the capture screen → open the cart with the reachability
+  // lift. The wrapping PanGestureHandler is configured (activeOffsetY) to ONLY claim
+  // downward drags past threshold, so taps to capture and other gestures pass through
+  // untouched; by the time this fires the gesture is already a deliberate down-swipe.
+  const onCameraSwipeDown = useCallback((event: PanGestureHandlerGestureEvent) => {
+    if ((event.nativeEvent as any).state !== State.ACTIVE) return;
+    if (showDeepSearchSheet || isProcessingShelfScan) return;
+    openBulkItemsSheet();
+  }, [showDeepSearchSheet, isProcessingShelfScan, openBulkItemsSheet]);
 
   // First-time walkthrough: briefly show bulk modal so users discover multi-item flow.
   useEffect(() => {
@@ -3162,10 +3493,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Close quick matches and return to bulk items sheet
   const closeMatchSheetToBulk = useCallback(() => {
     matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 250 }, () => {
+      // Dismiss only — both runOnJS calls land in one JS task, so adding
+      // openBulkItemsSheet here would batch a sibling-Modal present into the same
+      // React commit as this dismissal (the Fabric unmountChildComponentView crash).
       runOnJS(setShowMatchSheet)(false);
-      runOnJS(openBulkItemsSheet)();
       runOnJS(setCurrentInstruction)('ready');
     });
+    // Present the cart after the match Modal's dismissal commit has gone through.
+    if (cartReopenTimerRef.current) clearTimeout(cartReopenTimerRef.current);
+    cartReopenTimerRef.current = setTimeout(() => {
+      cartReopenTimerRef.current = null;
+      openBulkItemsSheet();
+    }, 400);
   }, [matchSheetTranslateY, openBulkItemsSheet]);
 
   // Close barcode sheet
@@ -3224,9 +3563,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   useFocusEffect(
     useCallback(() => {
       return () => {
-        quickScanQueueRef.current = [];
-        setShowMatchSheet(false);
-        setShowBarcodeResultModal(false);
+        // NOTE: this cleanup also fires every time the deps below change while the
+        // screen stays focused — Modal/timer teardown lives in the stable-callback
+        // focus effect right after this one, which only fires on real blur.
         // Persist scan draft when navigating away so it appears in Scan Drafts
         if (
           (bulkItems.length > 0 || Object.keys(itemStageById).length > 0 || processedItemIds.length > 0) &&
@@ -3245,6 +3584,32 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }, [activeItemId, bulkItems, itemStageById, processedItemIds, quickScanStore, shelfPhotoUri, saveDraftToBackend])
   );
 
+  // Real-blur-only cleanup (stable callback → fires only on blur/unmount, never on
+  // state churn): cancel deferred cart present/unmount timers and drop EVERY Modal.
+  // This tab stays mounted on blur, and a transparent overFullScreen Modal left (or
+  // later re-presented by a stray timer) over another tab silently eats all touches.
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        quickScanQueueRef.current = [];
+        if (cartReopenTimerRef.current) {
+          clearTimeout(cartReopenTimerRef.current);
+          cartReopenTimerRef.current = null;
+        }
+        if (cartCloseTimerRef.current) {
+          clearTimeout(cartCloseTimerRef.current);
+          cartCloseTimerRef.current = null;
+        }
+        setShowMatchSheet(false);
+        setShowBarcodeResultModal(false);
+        setShowDeepSearchSheet(false);
+        cancelAnimation(sheetTranslateY);
+        sheetTranslateY.value = SCREEN_HEIGHT;
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+  );
+
   // Animated styles
   const captureButtonAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: captureButtonScale.value }],
@@ -3257,6 +3622,39 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const sheetAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: sheetTranslateY.value }],
   }));
+
+  // Reachability-style cart reveal: the whole capture screen lifts UP as the cart
+  // opens (sheetTranslateY 0 → lift -SCREEN_HEIGHT) and sits at rest when the cart is
+  // closed (sheetTranslateY SCREEN_HEIGHT → lift 0). Because both this lift and the
+  // cart pane's own translate are driven by the SAME sheetTranslateY, the camera and
+  // the rising full-screen cart move as one connected piece — the camera slides off
+  // the top exactly as the cart rises from below (visible through the transparent cart
+  // Modal). min(0, …) clamps so the screen never droops downward on overshoot.
+  const cameraLiftStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: Math.min(0, sheetTranslateY.value - SCREEN_HEIGHT) }],
+  }));
+
+  // The lift keeps the card's bottom exactly CAMERA_BOTTOM_GAP above the sheet's
+  // top edge at every position (both ride sheetTranslateY). These two styles close
+  // that strip as the cart engages: the camera card slides down to meet the sheet
+  // (rounded bottom bleeding into the cart) while the shutter controls fade away.
+  // Progress saturates at half-travel so partial snap points still read as "open".
+  const cameraCardSlideStyle = useAnimatedStyle(() => {
+    const p = Math.min(1, Math.max(0, (SCREEN_HEIGHT - sheetTranslateY.value) / (SCREEN_HEIGHT * 0.5)));
+    return { transform: [{ translateY: p * (CAMERA_BOTTOM_GAP + 12) }] };
+  });
+  const controlsFadeStyle = useAnimatedStyle(() => {
+    const p = Math.min(1, Math.max(0, (SCREEN_HEIGHT - sheetTranslateY.value) / (SCREEN_HEIGHT * 0.5)));
+    return { opacity: 1 - p };
+  });
+
+  // Swipe the match card left/right to hop between cart items without opening the cart.
+  const stepActiveItem = useCallback((dir: 1 | -1) => {
+    if (bulkItems.length < 2) return;
+    const idx = bulkItems.findIndex((b) => b.id === activeItemId);
+    const next = bulkItems[(idx + dir + bulkItems.length) % bulkItems.length];
+    if (next) setActiveItemId(next.id);
+  }, [bulkItems, activeItemId]);
 
   const matchSheetAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: matchSheetTranslateY.value }],
@@ -3317,6 +3715,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const activeMatchCount = activeQuickMatchStore?.matchData?.totalMatches || 0;
   const centerOverlayMatchPreview = activeSelectedMatch ? {
     imageUrl: activeSelectedMatch?.imageUrl || activeSelectedMatch?.image || activeSelectedMatch?.thumbnail || null,
+    price: typeof activeSelectedMatch?.price === 'number'
+      ? activeSelectedMatch.price
+      : typeof activeSelectedMatch?.price?.extracted_value === 'number'
+        ? activeSelectedMatch.price.extracted_value
+        : null,
     title: cleanMatchText(activeSelectedMatch?.title || 'Selected match'),
     label: activeMatchIsConfirmed
       ? (activeQuickMatchInfo?.source === 'quick_scan_auto' ? 'Auto-selected match' : 'Selected match')
@@ -3329,38 +3732,95 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     <GestureHandlerRootView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="black" />
 
-      {/* Freemium usage counter */}
-      {freemiumStatus && !freemiumStatus.hasSubscription && (
-        <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 50 : 10, left: 0, right: 0, zIndex: 100 }}>
-          <UsageCounter
-            usageCount={freemiumStatus.usageCount}
-            freeLimit={freemiumStatus.freeLimit}
-            onUpgradePress={() => {
-              if (freemiumStatus.isFreeTierExhausted) {
-                setBillingGate(buildFreemiumBlockedGate());
-                setBillingGateVisible(true);
-                return;
-              }
-              setShowTierSelector(true);
-            }}
-            isSubscriber={freemiumStatus.hasSubscription}
-          />
-        </View>
+      {/* DEV/design-export preview Modal only. Real flows render the preview + folder page as
+          opaque overlays INSIDE the cart sheet Modal (below) — iOS can't stack Modals. */}
+      {(DEV_FORCE_MATCH_PREVIEW || __ds === 'matchPreview') && (
+        <Modal visible animationType="slide" onRequestClose={() => setPreviewItemId(null)}>
+          {renderMatchPreview()}
+        </Modal>
       )}
 
-      {/* Camera View - key forces remount when returning to screen so camera feed resumes */}
-      <CameraView
-        key={`camera-${isFocused}`}
-        ref={cameraRef}
-        style={styles.camera}
-        facing={facing}
-        flash={flash}
-        active={isFocused && !isAnySheetVisible} // Disable camera when sheets are open
-        onBarcodeScanned={handleBarCodeScanned}
-        barcodeScannerSettings={{
-          barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
-        }}
+      {/* Capture screen — lifts UP (reachability) as the cart opens, revealing the
+          full-screen cart rising from below. Drag UP (or down) anywhere here to open
+          the cart — up matches the "cart rises from below" metaphor users reach for. */}
+      <PanGestureHandler
+        activeOffsetY={[-28, 28]}
+        failOffsetX={[-28, 28]}
+        onHandlerStateChange={onCameraSwipeDown}
       >
+        <Animated.View style={[StyleSheet.absoluteFill, cameraLiftStyle]}>
+
+      {/* Freemium usage counter */}
+      {/* No always-on upgrade banner: free users scan in peace. When they run
+          out, the shutter routes into the cart sheet, which presents the usage
+          limit + upgrade stepper / credits (see handleCapture + BulkItemsSheet). */}
+
+      {/* Top photo bar — horizontal strip in the black bar above the cropped viewfinder.
+          “+” imports from the library; tap a photo to manage it; “−” removes; long-press
+          sets the cover. */}
+      <View style={[styles.topPhotoBar, { height: screenInsets.top + TOP_PHOTO_BAR_HEIGHT }]}>
+        {(() => {
+          const activeItem = activeItemId ? bulkItems.find(item => item.id === activeItemId) : null;
+          const displayPhotos = activeItem?.photos || [];
+          return (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              // Keep the photo stack clear of the iOS status bar: the ScrollView
+              // stretches over the whole bar (implicit flexGrow) and centers its
+              // tiles, so without this the "+" tile drifts up under the clock.
+              style={{ marginTop: screenInsets.top + 8 }}
+              contentContainerStyle={styles.topPhotoBarContent}
+              keyboardShouldPersistTaps="handled"
+            >
+              <TouchableOpacity style={styles.addPhotoTile} onPress={handleImageUpload} activeOpacity={0.8}>
+                <MaterialIcons name="add" size={26} color="rgba(255,255,255,0.85)" />
+              </TouchableOpacity>
+              {displayPhotos.map((photo) => (
+                <View key={photo.id} style={styles.photoTileWrap}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => setShowViewPhotosModal(true)}
+                    onLongPress={() => activeItemId && setBulkItemCoverPhoto(activeItemId, photo.id)}
+                    delayLongPress={220}
+                  >
+                    <Image source={{ uri: photo.uri }} style={[styles.photoTile, photo.isCover && styles.photoTileCover]} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.photoTileRemove}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    onPress={() => activeItemId && removeBulkItemPhoto(activeItemId, photo.id)}
+                  >
+                    <MaterialIcons name="remove" size={13} color="#FFF" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </ScrollView>
+          );
+        })()}
+      </View>
+
+      {/* Camera View - key forces remount when returning to screen so camera feed resumes.
+          Cropped, rounded viewfinder (Shop-style) between the photo bar and the controls.
+          CRASH FIX: CameraView must have NO React children. expo-camera attaches/detaches
+          its native preview subview behind Fabric's back, shifting child indices; the next
+          unmount of a conditional JSX child then trips the RCTViewComponentView
+          unmountChildComponentView index assert (root cause of every Anorha-*.ips since
+          06-08 — the assert names ExpoCamera.CameraView as parent and the rgba(0,0,0,0.7)
+          paused overlay as the child). Overlays now live in a sibling wrapper View. */}
+      <Animated.View style={[styles.cameraViewfinder, { top: screenInsets.top + TOP_PHOTO_BAR_HEIGHT, bottom: CAMERA_BOTTOM_GAP }, cameraCardSlideStyle]}>
+        <CameraView
+          key={`camera-${isFocused}`}
+          ref={cameraRef}
+          style={StyleSheet.absoluteFill}
+          facing={facing}
+          flash={flash}
+          active={isFocused && !isAnySheetVisible} // Disable camera when sheets are open
+          onBarcodeScanned={handleBarCodeScanned}
+          barcodeScannerSettings={{
+            barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
+          }}
+        />
         {/* Flash overlay */}
         <Animated.View style={[styles.flashOverlay, flashAnimatedStyle]} />
 
@@ -3394,39 +3854,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           }}
         />
 
-        {/* Photo stack (top left) - vertical, stacks after 3, tap opens modal */}
-        {(() => {
-          const activeItem = activeItemId ? bulkItems.find(item => item.id === activeItemId) : null;
-          const displayPhotos = activeItem?.photos || [];
-          const itemIndex = activeItem ? bulkItems.findIndex(item => item.id === activeItemId) + 1 : 0;
-
-          return (
-            <View style={[styles.photoStackContainer, { zIndex: 25 }]} key={`photo-stack-${activeItemId || 'none'}`}>
-              <View style={styles.photoStackRow}>
-                {activeItemId && itemIndex > 0 && (
-                  <View style={styles.activeItemIndicator}>
-                    <Text style={styles.activeItemIndicatorText}>Item {itemIndex}</Text>
-                  </View>
-                )}
-                {displayPhotos.length >= 1 && (
-                  <PhotoStack
-                    key={`photos-${activeItemId}`}
-                    photos={displayPhotos}
-                    onSetCover={activeItemId ? (photoId: string) => setBulkItemCoverPhoto(activeItemId, photoId) : () => { }}
-                    onRemovePhoto={activeItemId ? (photoId: string) => removeBulkItemPhoto(activeItemId, photoId) : () => { }}
-                    onDoubleTap={activeItemId ? (photoId: string) => setBulkItemCoverPhoto(activeItemId, photoId) : undefined}
-                    onDragStart={handleDragStart}
-                    onDragEnd={handleDragEnd}
-                    onReorder={reorderPhotos}
-                    draggedPhotoId={draggedPhotoId}
-                    onPress={() => setShowViewPhotosModal(true)}
-                    onLongPress={handleImageUpload}
-                  />
-                )}
-              </View>
-            </View>
-          );
-        })()}
+        {/* Back button — sits where the old photo stack lived (top-left over the camera) */}
+        <TouchableOpacity
+          style={styles.cameraBackButton}
+          activeOpacity={0.8}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          onPress={() => {
+            const nav = navigation as any;
+            if (nav.canGoBack?.()) nav.goBack();
+            else nav.navigate('Inventory');
+          }}
+        >
+          <MaterialIcons name="arrow-back" size={24} color="#FFF" />
+        </TouchableOpacity>
 
         {/* Camera controls (top right) */}
         <CameraControls
@@ -3435,43 +3875,45 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           onPastScans={() => navigation.navigate('PastScans' as never)}
         />
 
-      </CameraView>
-
-      {/* Overlays & Controls (Outside CameraView to avoid touch issues) */}
-      <CenterOverlay
-        instruction={getInstructionText(currentInstruction)}
-        isProcessing={['processing', 'analyzing', 'extracting', 'optimizing', 'searching', 'recognizing'].includes(currentInstruction)}
-        cameraMode={cameraMode}
-        scannedBarcode={scannedBarcode}
-        onCopyBarcode={copyBarcodeToClipboard}
-        matchPreview={centerOverlayMatchPreview}
-        onPress={
-          cameraMode === 'shelf' && !showDeepSearchSheet && (isProcessingShelfScan || bulkItems.length > 0 || shelfPhotoUri)
-            ? openBulkItemsSheet
-            : handleMatchIndicatorPress
-        }
-        totalPhotos={bulkItems.reduce((sum, sumItem) => sum + sumItem.photos.length, 0)}
-      />
-
-      {cameraMode === 'camera' && (
-        <View style={styles.photoFrameOverlay} />
-      )}
-
-      {cameraMode === 'barcode' && (
-        <View style={styles.photoFrameOverlay}>
-          <View style={styles.scanLineContainer}>
-            <View style={styles.scanLine} />
+        {/* Framing guides — sized relative to the viewfinder, so they live inside it.
+            Camera + shelf modes show no frame: the preview gets the full area. */}
+        {cameraMode === 'barcode' && (
+          <View style={styles.photoFrameOverlay}>
+            <View style={styles.scanLineContainer}>
+              <View style={styles.scanLine} />
+            </View>
           </View>
-        </View>
-      )}
+        )}
+        {ENABLE_DOC_MODES && cameraMode === 'manifest' && (
+          <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
+        )}
+        {ENABLE_DOC_MODES && cameraMode === 'receipt' && (
+          <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
+        )}
 
-      {ENABLE_DOC_MODES && cameraMode === 'manifest' && (
-        <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
-      )}
+      </Animated.View>
 
-      {ENABLE_DOC_MODES && cameraMode === 'receipt' && (
-        <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
-      )}
+      {/* Overlays & Controls (Outside CameraView to avoid touch issues).
+          The wrapper rides the same slide as the camera card so the match card
+          stays pinned to the card's bottom edge while the cart opens. */}
+      <Animated.View style={[StyleSheet.absoluteFill, cameraCardSlideStyle]} pointerEvents="box-none">
+        <CenterOverlay
+          instruction={getInstructionText(currentInstruction)}
+          isProcessing={['processing', 'analyzing', 'extracting', 'optimizing', 'searching', 'recognizing'].includes(currentInstruction)}
+          cameraMode={cameraMode}
+          scannedBarcode={scannedBarcode}
+          onCopyBarcode={copyBarcodeToClipboard}
+          matchPreview={centerOverlayMatchPreview}
+          cardBottomOffset={CAMERA_BOTTOM_GAP + 44}
+          onSwipeItem={stepActiveItem}
+          onPress={
+            cameraMode === 'shelf' && !showDeepSearchSheet && (isProcessingShelfScan || bulkItems.length > 0 || shelfPhotoUri)
+              ? openBulkItemsSheet
+              : handleMatchIndicatorPress
+          }
+          totalPhotos={bulkItems.reduce((sum, sumItem) => sum + sumItem.photos.length, 0)}
+        />
+      </Animated.View>
 
       {/* Progress Bar */}
       {showProgressBar && (
@@ -3491,7 +3933,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         />
       )}
 
-      {/* Bottom controls */}
+      {/* Bottom controls — fade out as the cart rises so the strip between the
+          camera card and the sheet reads as clean black, not stranded buttons.
+          (When the cart Modal is up it owns all touches, so opacity alone is safe.)
+          absoluteFill is load-bearing: BottomControls positions itself absolutely,
+          so a collapsed (auto-height) wrapper would strand it off-screen. */}
+      <Animated.View style={[StyleSheet.absoluteFill, controlsFadeStyle]} pointerEvents="box-none">
       <BottomControls
         onCapture={handleCapture}
         isCapturing={isCapturing}
@@ -3529,6 +3976,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             : undefined
         }
       />
+      </Animated.View>
+        </Animated.View>
+      </PanGestureHandler>
 
       {/* Match results sheet (rendered above TabBar via Modal) */}
       <Modal
@@ -3539,7 +3989,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onRequestClose={closeMatchSheetToBulk}
         presentationStyle="overFullScreen"
       >
-        {showMatchSheet && matchData ? (
+        {/* Keep mounted while `visible` toggles — see the cart Modal note (Fabric unmount assert). */}
+        {matchData ? (
           <MatchResultsSheet
             matchData={matchData}
             onClose={closeMatchSheetToBulk}
@@ -3592,32 +4043,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onRequestClose={closeBulkItemsSheet}
         presentationStyle="overFullScreen"
       >
-        {showDeepSearchSheet && (
+        {/* Children stay mounted while `visible` toggles — unmounting Modal children in
+            the same commit as the visible flip asserts in Fabric
+            (RCTViewComponentView unmountChildComponentView; long-standing crash class
+            in this app's reports). The Modal's own dismissal tears down the native tree. */}
+        {(
           <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+            {/* Transparent — no dim. The capture screen lifting away behind this
+                transparent Modal IS the reveal. Tapping the exposed gap closes the cart. */}
+            <Pressable style={StyleSheet.absoluteFill} onPress={closeBulkItemsSheet} />
             {(() => {
-              console.log('[SHEET CONDITIONAL] Sheet IS showing - showDeepSearchSheet is true');
-              console.log('[SHEET PROPS] ==================');
-              console.log('[SHEET PROPS] Passing to BulkItemsSheet:');
-              console.log('[SHEET PROPS] - photos (capturedPhotos):', capturedPhotos.length, 'items');
-              capturedPhotos.forEach((photo, index) => {
-                console.log(`[SHEET PROPS]   Photo ${index + 1}:`, {
-                  id: photo.id,
-                  uri: photo.uri.substring(0, 30) + '...',
-                  isCover: photo.isCover
-                });
-              });
-              console.log('[SHEET PROPS] - isBulkMode:', isBulkMode);
-              console.log('[SHEET PROPS] - bulkItems:', bulkItems.length, 'items');
-              bulkItems.forEach((item, index) => {
-                console.log(`[SHEET PROPS]   BulkItem ${index + 1}:`, {
-                  id: item.id,
-                  photosCount: item.photos.length,
-                  isActive: item.isActive
-                });
-              });
-              console.log('[SHEET PROPS] - activeItemId:', activeItemId);
-              console.log('[SHEET PROPS] ==================');
-
               return (
                 <BulkItemsSheet
                   onClose={closeBulkItemsSheet}
@@ -3641,6 +4076,21 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   setJobResponse={setJobResponse}
                   quickScanStore={quickScanStore}
                   onOpenQuickMatches={openQuickMatchesForItem}
+                  onOpenItemPreview={handleOpenItem}
+                  cartTree={cartTree}
+                  onOpenFolder={(id) => setOpenFolderId(id)}
+                  onQueueGeneration={handleQueueGeneration}
+                  savedForLaterIds={savedForLaterIds}
+                  onToggleSavedForLater={setItemSavedForLater}
+                  onOpenAddDetails={(id) => setAddDetailsItemId(id)}
+                  freemium={freemiumStatus && !freemiumStatus.hasSubscription
+                    ? { usageCount: freemiumStatus.usageCount, freeLimit: freemiumStatus.freeLimit, exhausted: freemiumStatus.isFreeTierExhausted }
+                    : null}
+                  onUpgrade={() => setShowTierSelector(true)}
+                  onAddCredits={() => {
+                    setBillingGate(buildFreemiumBlockedGate());
+                    setBillingGateVisible(true);
+                  }}
                   onRetryItemScan={(itemId) => {
                     const targetItem = bulkItems.find(item => item.id === itemId);
                     const firstPhoto = targetItem?.photos?.[0];
@@ -3653,6 +4103,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   }}
                   itemLoadingStates={itemLoadingStates}
                   setItemLoadingStates={setItemLoadingStates}
+                  itemStageById={itemStageById}
                   confirmedQuickMatchByItemId={confirmedQuickMatchByItemId}
                   connectedPlatformKeys={connectedPlatformKeys}
                   currentInstruction={currentInstruction}
@@ -3695,6 +4146,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 />
               );
             })()}
+            {/* Add-details / folder page / item preview as opaque overlays in THIS Modal (no nested Modals) */}
+            {addDetailsItemId ? (
+              <View style={StyleSheet.absoluteFill}>{renderAddDetails()}</View>
+            ) : previewItemId ? (
+              <View style={StyleSheet.absoluteFill}>{renderMatchPreview()}</View>
+            ) : openFolder ? (
+              <View style={StyleSheet.absoluteFill}>{renderShelfFolderPage()}</View>
+            ) : null}
           </View>
         )}
       </Modal>
@@ -3743,7 +4202,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onRequestClose={closeBarcodeSheet}
         presentationStyle="overFullScreen"
       >
-        {showBarcodeResultModal && barcodeSearchResult ? (
+        {/* Keep mounted while `visible` toggles — see the cart Modal note (Fabric unmount assert). */}
+        {barcodeSearchResult ? (
           <Animated.View style={[styles.matchSheet, matchSheetAnimatedStyle]}>
             <QuickProductDetailSheet
               product={barcodeSearchResult}
@@ -3936,7 +4396,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+
     backgroundColor: 'black',
+  
   },
   camera: {
     flex: 1,
@@ -3967,6 +4429,83 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     alignItems: 'center',
     gap: 8,
+  },
+  // Shop-style capture chrome
+  topPhotoBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 30,
+    backgroundColor: '#000',
+    justifyContent: 'flex-end',
+    paddingBottom: 10,
+  },
+  topPhotoBarContent: {
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    gap: 10,
+    flexDirection: 'row',
+  },
+  addPhotoTile: {
+    width: 64,
+    height: 64,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(255,255,255,0.35)',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoTileWrap: {
+    width: 64,
+    height: 64,
+  },
+  photoTile: {
+    width: 64,
+    height: 64,
+    borderRadius: 14,
+    backgroundColor: '#1C1C1E',
+  },
+  photoTileCover: {
+    borderWidth: 2,
+    borderColor: '#93C822',
+  },
+  photoTileRemove: {
+    position: 'absolute',
+    top: -6,
+    left: -6,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#FF6B4A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#000',
+  },
+  cameraViewfinder: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    borderRadius: 28,
+    overflow: 'hidden',
+    backgroundColor: '#101012',
+  },
+  cameraBackButton: {
+    position: 'absolute',
+    top: 16,
+    left: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 25,
   },
   activeItemIndicator: {
     width: 72,

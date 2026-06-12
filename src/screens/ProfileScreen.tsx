@@ -45,6 +45,7 @@ import { Zap, ShieldCheck, CheckCircle as LucideCheckCircle, Bell as LucideBell 
 import LocationsManagerV2 from '../components/LocationsManagerV2';
 import ConnectedPlatformList from '../components/ConnectedPlatformList';
 import BaseModal from '../components/BaseModal';
+import ConnectDisclosureModal from '../components/ConnectDisclosureModal';
 import { AppDropdown } from '../components/ui/AppDropdown';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useProfileProductCount } from '../hooks/useProfileProductCount';
@@ -475,6 +476,11 @@ const ProfileScreen = () => {
   const [csvConnectionName, setCsvConnectionName] = useState('');
   const [isCsvPicking, setIsCsvPicking] = useState(false);
 
+  // Disclosure modal (Whatnot, Depop, and future platforms)
+  const [disclosureTarget, setDisclosureTarget] = useState<{ platform: string } | null>(null);
+  const [disclosureBusy, setDisclosureBusy] = useState(false);
+  const [disclosureError, setDisclosureError] = useState<string | null>(null);
+
 
 
 
@@ -631,8 +637,13 @@ const ProfileScreen = () => {
       const data = await response.json();
       let list = Array.isArray(data) ? data : [];
 
-      // If not admin, restrict to assigned pools
-      if (currentOrg.role !== 'org:admin' && Array.isArray(currentOrg.assignedPoolIds)) {
+      // Non-admins with EXPLICIT pool assignments only see those. An empty list
+      // means unrestricted — filtering on it hid every pool (even self-created ones).
+      if (
+        currentOrg.role !== 'org:admin' &&
+        Array.isArray(currentOrg.assignedPoolIds) &&
+        currentOrg.assignedPoolIds.length > 0
+      ) {
         const allowed = new Set(currentOrg.assignedPoolIds);
         list = list.filter((p) => allowed.has(p.id));
       }
@@ -697,6 +708,9 @@ const ProfileScreen = () => {
           refreshConnections(); // Refresh connections on success
         }
       })();
+    } else if (platform === 'depop' || platform === 'whatnot') {
+      setDisclosureError(null);
+      setDisclosureTarget({ platform });
     } else {
       Alert.alert('Connect', `Connect logic for ${platform} not implemented yet.`);
     }
@@ -1189,6 +1203,68 @@ const ProfileScreen = () => {
     })();
   };
   // --- END Function to start platform scan ---
+
+  // --- Disclosure modal continue handler (Whatnot OAuth + Depop API key) ---
+  const handleDisclosureContinue = useCallback(async (apiKey?: string) => {
+    if (!disclosureTarget) return;
+    const { platform } = disclosureTarget;
+    setDisclosureError(null);
+
+    const { data: { user: sbUser } } = await supabase.auth.getUser();
+    if (!sbUser) {
+      setDisclosureError('Not signed in. Please restart the app.');
+      return;
+    }
+
+    if (platform === 'depop') {
+      if (!apiKey) {
+        setDisclosureError('API key is required.');
+        return;
+      }
+      setDisclosureBusy(true);
+      try {
+        const token = await ensureSupabaseJwt();
+        const res = await fetch(`${SSSYNC_API_BASE_URL}/api/auth/depop/connect`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            apiKey,
+            ...(currentOrg?.id ? { orgId: currentOrg.id } : {}),
+          }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.message ?? `Connect failed (${res.status})`);
+        }
+        setDisclosureTarget(null);
+        refreshConnections();
+      } catch (e: any) {
+        setDisclosureError(e?.message ?? 'Connection failed. Check your API key and try again.');
+      } finally {
+        setDisclosureBusy(false);
+      }
+      return;
+    }
+
+    // OAuth platforms (Whatnot, and future additions)
+    const finalRedirectUri = `anorhaapp://auth-callback?platform=${platform}`;
+    const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
+    const url = `${SSSYNC_API_BASE_URL}/api/auth/${platform}/login?userId=${sbUser.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}${orgIdParam}`;
+
+    setDisclosureTarget(null);
+
+    const result = await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
+    const parsed = parseOAuthResult(result, platform);
+    if (!parsed.success && parsed.errorMessage) {
+      showAlert({ title: 'Connection Failed', message: parsed.errorMessage, type: 'error' });
+    } else if (parsed.success) {
+      refreshConnections();
+    }
+  }, [disclosureTarget, currentOrg?.id, refreshConnections, showAlert]);
+  // --- END Disclosure modal handler ---
 
   // --- NEW: Clover Connection Logic ---
   const handleCloverConnect = async () => {
@@ -2060,6 +2136,16 @@ const ProfileScreen = () => {
         </View>
       </BaseModal>
 
+      {/* --- Disclosure modal for Whatnot, Depop, etc. --- */}
+      <ConnectDisclosureModal
+        visible={!!disclosureTarget}
+        platform={disclosureTarget?.platform ?? ''}
+        busy={disclosureBusy}
+        error={disclosureError}
+        onContinue={handleDisclosureContinue}
+        onCancel={() => { setDisclosureTarget(null); setDisclosureError(null); }}
+      />
+
       {/* --- Platform Picker Bottom Bar Overlay (no modal) --- */}
       {isAddConnectionModalVisible && (
         <View style={styles.overlayContainer}>
@@ -2114,6 +2200,9 @@ const ProfileScreen = () => {
                       refreshConnections(); // Refresh connections on success
                     }
                   })();
+                } else if (platform === 'depop' || platform === 'whatnot') {
+                  setDisclosureError(null);
+                  setDisclosureTarget({ platform });
                 } else {
                   Alert.alert('Connect', `Connect logic for ${platform} not implemented yet.`);
                 }

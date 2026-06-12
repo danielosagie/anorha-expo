@@ -45,13 +45,8 @@ export interface MatchResponse {
   };
 }
 
-export interface JobResponse {
-  jobId: string;
-  status: string;
-  estimatedTimeMinutes: number;
-  totalProducts: number;
-  message: string;
-}
+// Submit-match response comes straight from the shared backend contract.
+export type { SubmitMatchJobResponse as JobResponse } from '../../contracts';
 
 export type QuickMatchSelection = {
   serpApiData: any[];

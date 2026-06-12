@@ -4,12 +4,21 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 
 import { OptimizerBatchGenerateView } from '../components/optimizer/OptimizerBatchGenerateView';
 import { OptimizerPhotoModeView } from '../components/optimizer/OptimizerPhotoModeView';
 import { useOptimizerQueues, ClassifiedProduct } from '../hooks/useOptimizerQueues';
 import { RC, MiniProgress } from '../components/resolve/ResolveKit';
 import { OptimizeResolver, OptimizeCase, Decision } from '../components/resolve/optimizeResolvers';
+import {
+  LobbyHeader,
+  HeaderPill,
+  IssueLane,
+  LaneIssue,
+  IconName,
+} from '../components/quest/LobbyKit';
+import BottomActionBar from '../components/BottomActionBar';
 
 // Optimize v2 — one lobby of grouped gaps (photos · details · manual), each
 // routing to the fix it needs. Photo + details keep the real camera / AI views;
@@ -25,15 +34,32 @@ type ScreenView =
   | { kind: 'datamanual'; i: number }
   | { kind: 'done'; n: number; label: string };
 
-const BUCKETS: Record<
-  Bucket,
-  { icon: any; tone: 'urgent' | 'warn'; title: string; reason: string; action: string }
-> = {
-  photo: { icon: 'camera', tone: 'urgent', title: 'need photos', reason: '0–1 image · won’t list on most', action: 'Shoot' },
-  data: { icon: 'text-box-outline', tone: 'warn', title: 'need details', reason: 'weak title or description', action: 'Generate' },
-  manual: { icon: 'pencil-box-outline', tone: 'warn', title: 'need a fix', reason: 'missing SKU, price or stock', action: 'Fill' },
-};
 const BUCKET_ORDER: Bucket[] = ['photo', 'data', 'manual'];
+
+const plural = (n: number) => (n === 1 ? '' : 's');
+
+// Lane presentation for the optimize lobby — mirrors the match lobby's
+// IssueLane so the Match/Optimize Lobby layout is shared.
+const OPT_META: Record<Bucket, { icon: IconName; title: string; action: string; sub: (n: number) => string }> = {
+  photo: {
+    icon: 'camera',
+    title: 'Need photos',
+    action: 'Shoot',
+    sub: (n) => `${n} listing${plural(n)}`,
+  },
+  data: {
+    icon: 'text-box-outline',
+    title: 'Need details',
+    action: 'Generate',
+    sub: (n) => `${n} item${plural(n)}`,
+  },
+  manual: {
+    icon: 'pencil-box-outline',
+    title: 'Need SKU · price · stock',
+    action: 'Fill',
+    sub: (n) => `${n} item${plural(n)}`,
+  },
+};
 
 function firstImage(p: ClassifiedProduct): string | null {
   const imgs = (p.ProductImages as any[]) || [];
@@ -123,6 +149,23 @@ export function BackfillOptimizerScreen() {
   const attention = photoQueue.length + dataQueue.length + manualQueue.length;
   const readyPct = counts.total ? Math.round((polishedCount / counts.total) * 100) : 100;
   const firstBucket = BUCKET_ORDER.find((b) => remainingFor(b) > 0) || null;
+
+  // One lobby "issue" row per non-empty bucket, first = active step.
+  const optimizeIssues: LaneIssue[] = BUCKET_ORDER.map((b) => ({ b, n: remainingFor(b) }))
+    .filter(({ n }) => n > 0)
+    .map(({ b, n }, i) => {
+      const meta = OPT_META[b];
+      return {
+        id: b,
+        icon: meta.icon,
+        title: meta.title,
+        sub: meta.sub(n),
+        count: n,
+        state: i === 0 ? 'active' : 'locked',
+        ctaLabel: `${meta.action} ${n}`,
+        onFix: () => enterBucket(b),
+      };
+    });
 
   const dataChooseCase: OptimizeCase = useMemo(
     () => ({
@@ -249,6 +292,7 @@ export function BackfillOptimizerScreen() {
     if (cur) {
       return (
         <OptimizeResolver
+          key={cur.id}
           c={cur}
           idx={di + 1}
           total={total}
@@ -272,6 +316,7 @@ export function BackfillOptimizerScreen() {
     if (cur) {
       return (
         <OptimizeResolver
+          key={cur.id}
           c={cur}
           idx={di + 1}
           total={total}
@@ -306,16 +351,15 @@ export function BackfillOptimizerScreen() {
     );
   }
 
-  // ── Lobby ─────────────────────────────────────────────────────────────────
+  // ── Lobby (shares the Match/Optimize Lobby layout) ────────────────────────
   return (
-    <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
-      <View style={styles.head}>
-        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={HIT} style={{ marginLeft: -6 }}>
-          <MaterialCommunityIcons name="chevron-left" size={24} color={RC.muted} />
-        </TouchableOpacity>
-        <Text style={styles.headTitle}>Optimize</Text>
-        <Text style={styles.headTag}>AFTER MATCH</Text>
-      </View>
+    <View style={[styles.screen, { paddingTop: insets.top + 6 }]}>
+      <LobbyHeader
+        title="Optimize"
+        countSuffix={`${counts.total} Items`}
+        onBack={() => navigation.goBack()}
+        right={<HeaderPill label={`${readyPct}% ready`} icon="star-four-points" iconColor={RC.green} />}
+      />
 
       {loading ? (
         <View style={styles.center}>
@@ -323,122 +367,66 @@ export function BackfillOptimizerScreen() {
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-          <MiniProgress
-            pct={readyPct}
-            left={`${polishedCount} of ${counts.total} listing-ready`}
-            right={`${readyPct}%`}
-          />
+          <View style={styles.progressWrap}>
+            <MiniProgress
+              pct={readyPct}
+              left={`${polishedCount} of ${counts.total} ready`}
+              right={`${readyPct}%`}
+            />
+          </View>
 
-          <Text style={styles.attn}>
-            {attention > 0 ? `${attention} NEED ATTENTION` : 'ALL CLEAR'}
-          </Text>
-
-          {BUCKET_ORDER.map((b) => {
-            const n = remainingFor(b);
-            if (n === 0) return null;
-            const meta = BUCKETS[b];
-            return <BucketCard key={b} meta={meta} count={n} onPress={() => enterBucket(b)} />;
-          })}
-
-          {attention === 0 && (
+          {optimizeIssues.length === 0 ? (
             <View style={styles.empty}>
               <MaterialCommunityIcons name="check-decagram" size={40} color={RC.green} />
               <Text style={styles.emptyTitle}>Inbox zero</Text>
               <Text style={styles.emptySub}>Every listing has photos, details & data.</Text>
             </View>
+          ) : (
+            <IssueLane issues={optimizeIssues} />
           )}
         </ScrollView>
       )}
 
-      <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
-        <View style={styles.footDivider} />
-        <TouchableOpacity
-          activeOpacity={firstBucket ? 0.88 : 1}
-          disabled={!firstBucket}
-          onPress={() => firstBucket && enterBucket(firstBucket)}
-          style={[styles.primaryBtn, !firstBucket && { backgroundColor: RC.surface2 }]}
-        >
-          <MaterialCommunityIcons
-            name={firstBucket ? BUCKETS[firstBucket].icon : 'check'}
-            size={18}
-            color={firstBucket ? '#fff' : RC.faint}
-          />
-          <Text style={[styles.primaryText, !firstBucket && { color: RC.faint }]}>
-            {firstBucket ? `Start — ${BUCKETS[firstBucket].action.toLowerCase()} ${remainingFor(firstBucket)}` : 'All polished'}
-          </Text>
-        </TouchableOpacity>
-        {polishedCount > 0 && (
-          <TouchableOpacity hitSlop={HIT} style={styles.altHit} onPress={() => navigation.goBack()}>
-            <Text style={styles.altText}>Publish {polishedCount} ready now</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+      <LinearGradient
+        colors={['rgba(255,255,255,0)', '#FFFFFF']}
+        style={styles.fade}
+        pointerEvents="none"
+      />
+      {attention === 0 ? (
+        <BottomActionBar
+          primaryLabel={`Publish ${polishedCount} ready`}
+          primaryIcon={<MaterialCommunityIcons name="check" size={20} color="#fff" />}
+          onPrimary={() => navigation.goBack()}
+        />
+      ) : (
+        <BottomActionBar
+          primaryLabel={optimizeIssues[0]?.ctaLabel || `${attention} need attention`}
+          primaryIcon={<MaterialCommunityIcons name="wrench" size={20} color="#fff" />}
+          primaryButtonStyle={{ backgroundColor: RC.orange }}
+          onPrimary={() => firstBucket && enterBucket(firstBucket)}
+          secondaryLabel={polishedCount > 0 ? `Publish ${polishedCount} ready now` : undefined}
+          secondaryIcon={<MaterialCommunityIcons name="cloud-upload-outline" size={20} color="#71717A" />}
+          onSecondary={polishedCount > 0 ? () => navigation.goBack() : undefined}
+        />
+      )}
     </View>
-  );
-}
-
-function BucketCard({
-  meta,
-  count,
-  onPress,
-}: {
-  meta: { icon: any; tone: 'urgent' | 'warn'; title: string; reason: string; action: string };
-  count: number;
-  onPress: () => void;
-}) {
-  const c = meta.tone === 'urgent' ? RC.danger : RC.warnInk;
-  const bg = meta.tone === 'urgent' ? RC.dangerSoft : RC.warnSoft;
-  return (
-    <TouchableOpacity activeOpacity={0.85} onPress={onPress} style={styles.bucket}>
-      <View style={[styles.bucketIcon, { backgroundColor: bg }]}>
-        <MaterialCommunityIcons name={meta.icon} size={20} color={c} />
-      </View>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={styles.bucketTitle} numberOfLines={1}>
-          <Text style={styles.bucketCount}>{count} </Text>
-          {meta.title}
-        </Text>
-        <Text style={styles.bucketReason} numberOfLines={1}>{meta.reason}</Text>
-      </View>
-      <View style={styles.bucketAction}>
-        <Text style={[styles.bucketActionText, { color: c }]}>{meta.action}</Text>
-        <MaterialCommunityIcons name="chevron-right" size={16} color={c} />
-      </View>
-    </TouchableOpacity>
   );
 }
 
 const HIT = { top: 10, bottom: 10, left: 10, right: 10 };
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: RC.bg, paddingHorizontal: 16 },
+  screen: { flex: 1, backgroundColor: RC.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
-  head: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 },
-  headTitle: { fontSize: 24, fontWeight: '700', color: RC.ink, letterSpacing: -0.5 },
-  headTag: { marginLeft: 'auto', fontSize: 10, fontWeight: '700', letterSpacing: 0.8, color: RC.faint },
-
-  scroll: { paddingTop: 2, paddingBottom: 24, gap: 9 },
-  attn: { fontSize: 10, fontWeight: '700', letterSpacing: 0.6, color: RC.faint, marginTop: 14, marginBottom: 2 },
-
-  bucket: { flexDirection: 'row', alignItems: 'center', gap: 11, borderWidth: 1, borderColor: RC.line, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 12, backgroundColor: '#fff' },
-  bucketIcon: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  bucketTitle: { fontSize: 14, fontWeight: '600', color: RC.ink },
-  bucketCount: { fontSize: 16, fontWeight: '800', color: RC.ink },
-  bucketReason: { fontSize: 11.5, fontWeight: '500', color: RC.muted, marginTop: 1 },
-  bucketAction: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  bucketActionText: { fontSize: 12, fontWeight: '700' },
+  scroll: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 150 },
+  progressWrap: { marginBottom: 16 },
 
   empty: { alignItems: 'center', paddingTop: 50, paddingHorizontal: 30 },
   emptyTitle: { fontSize: 16, fontWeight: '700', color: RC.ink, marginTop: 12 },
   emptySub: { fontSize: 13, fontWeight: '500', color: RC.muted, marginTop: 6, textAlign: 'center', lineHeight: 18 },
 
-  footer: { paddingTop: 10 },
-  footDivider: { height: 1, backgroundColor: RC.line, marginBottom: 12 },
-  primaryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: RC.green, borderRadius: 12, paddingVertical: 15 },
-  primaryText: { fontSize: 15, fontWeight: '800', color: '#fff' },
-  altHit: { paddingVertical: 12, alignItems: 'center' },
-  altText: { fontSize: 13, fontWeight: '700', color: RC.muted, textDecorationLine: 'underline' },
+  fade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 150 },
 
   doneWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30, gap: 4 },
   doneBadge: { width: 84, height: 84, borderRadius: 42, backgroundColor: RC.green, alignItems: 'center', justifyContent: 'center', marginBottom: 18 },

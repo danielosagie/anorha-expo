@@ -4,7 +4,9 @@ export type PlatformKey =
   | 'ebay'
   | 'clover'
   | 'square'
-  | 'facebook';
+  | 'facebook'
+  | 'whatnot'
+  | 'depop';
 
 const DEFAULT_PLATFORM_KEYS: PlatformKey[] = [
   'shopify',
@@ -13,6 +15,8 @@ const DEFAULT_PLATFORM_KEYS: PlatformKey[] = [
   'clover',
   'square',
   'facebook',
+  'whatnot',
+  'depop',
 ];
 
 export const PLATFORM_CONFIG: Record<
@@ -25,6 +29,8 @@ export const PLATFORM_CONFIG: Record<
   clover: { label: 'Clover', icon: 'leaf' },
   square: { label: 'Square', icon: 'square-outline' },
   facebook: { label: 'Facebook', icon: 'facebook' },
+  whatnot: { label: 'Whatnot', icon: 'television-play' },
+  depop: { label: 'Depop', icon: 'alpha-d-circle' },
 };
 
 const parseEnabledPlatforms = (): PlatformKey[] => {

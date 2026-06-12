@@ -11,6 +11,8 @@ import FacebookSvg from '../assets/facebook.svg';
 import EbaySvg from '../assets/ebay.svg';
 import CloverSvg from '../assets/clover.svg';
 import SquareSvg from '../assets/square.svg';
+import WhatnotSvg from '../assets/whatnot.svg';
+import DepopSvg from '../assets/depop-icon.svg';
 
 interface PlatformAvatarProps {
   platformType: string;
@@ -37,6 +39,8 @@ const PlatformAvatar: React.FC<PlatformAvatarProps> = ({
     amazon: AmazonSvg,
     ebay: EbaySvg,
     facebook: FacebookSvg,
+    whatnot: WhatnotSvg,
+    depop: DepopSvg,
   };
 
   // Find the SVG component that matches

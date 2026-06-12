@@ -1826,7 +1826,7 @@ const ProductDetailScreen = observer(
               {
                 text: 'Add Platform',
                 style: 'default',
-                onPress: () => navigation.navigate('Profile')
+                onPress: () => navigation.navigate('AccountSettings')
               }
             ]
           );

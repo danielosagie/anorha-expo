@@ -11,13 +11,31 @@ import {
     TextInput,
     KeyboardAvoidingView,
     Platform,
-    Switch
+    Switch,
+    StatusBar
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import Button from '../components/Button';
-import Card from '../components/Card';
+import {
+    AlertCircle,
+    AlertTriangle,
+    Check,
+    CheckCircle2,
+    ChevronRight,
+    Folder,
+    Handshake,
+    Inbox,
+    Info,
+    Package,
+    Pause,
+    Play,
+    Send,
+    Store,
+    Tag,
+    Unlink,
+    UserPlus,
+    X
+} from 'lucide-react-native';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { showMessage } from 'react-native-flash-message';
 import { capture, AnalyticsEvents } from '../lib/analytics';
@@ -27,6 +45,7 @@ import { PartnerAcceptModal } from '../components/PartnerAcceptModal';
 import { API_BASE_URL } from '../config/env';
 import BaseModal from '../components/BaseModal';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PageHeader } from '../components/ui/PageHeader';
 
 const SSSYNC_API_BASE_URL = API_BASE_URL;
 
@@ -66,7 +85,6 @@ export default function PartnersScreen() {
     const navigation = useNavigation<any>();
     const { currentOrg } = useOrg();
     const insets = useSafeAreaInsets();
-    const bottomSafePadding = 48 + insets.bottom;
 
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -440,16 +458,14 @@ export default function PartnersScreen() {
     // --- Renderers ---
 
     const renderPartnership = (p: Partnership) => (
-        <Card key={p.id} style={styles.card} onPress={() => handlePressPartnership(p)}>
+        <TouchableOpacity key={p.id} style={styles.card} activeOpacity={0.7} onPress={() => handlePressPartnership(p)}>
             <View style={styles.cardHeader}>
-                {/* Changed background to match requests style */}
-                <View style={[styles.iconCircle, { backgroundColor: theme.colors.primary + '20' }]}>
-                    <Icon name="storefront-outline" size={24} color={theme.colors.primary} />
+                <View style={styles.iconCircleGreen}>
+                    <Store size={20} color="#43631A" />
                 </View>
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Text style={styles.partnerName}>{p.partnerOrgName || p.partnerEmail}</Text>
-                    {/* Simplified subtitle */}
-                    <Text style={styles.poolName}>
+                <View style={styles.rowInfo}>
+                    <Text style={styles.rowTitle} numberOfLines={1}>{p.partnerOrgName || p.partnerEmail}</Text>
+                    <Text style={styles.rowSub} numberOfLines={1}>
                         {p.direction === 'sent' ? 'Sent to Partner' : 'Received From Partner'}
                     </Text>
                 </View>
@@ -458,55 +474,56 @@ export default function PartnersScreen() {
                         <Text style={styles.pausedText}>Paused</Text>
                     </View>
                 ) : (
-                    <Icon name="chevron-right" size={24} color="#D1D5DB" />
+                    <ChevronRight size={20} color="#D4D4D8" />
                 )}
             </View>
 
-            {/* Changed from old statsRow to chipContainer for consistency */}
             <View style={styles.chipContainer}>
                 <View style={styles.chip}>
-                    <Icon name="cube-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                    <Package size={13} color="#71717A" />
                     <Text style={styles.chipText}>{p.productCount} Products</Text>
                 </View>
                 <View style={styles.chip}>
-                    <Icon name="tag-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                    <Tag size={13} color="#71717A" />
                     <Text style={[styles.chipText, { textTransform: 'capitalize' }]}>{p.shareType || 'Consignment'}</Text>
                 </View>
                 <View style={styles.chip}>
-                    <Icon name="folder-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                    <Folder size={13} color="#71717A" />
                     <Text style={styles.chipText}>{p.poolName}</Text>
                 </View>
             </View>
 
             <View style={styles.actionsRow}>
                 <TouchableOpacity
-                    style={[styles.actionBtn, styles.secondaryBtn]}
+                    style={styles.secondaryBtn}
+                    activeOpacity={0.8}
                     onPress={() => handlePauseResume(p)}
                 >
-                    <Icon name={p.isPaused ? "play" : "pause"} size={18} color="#555" />
-                    <Text style={styles.btnText}>{p.isPaused ? "Resume" : "Pause"}</Text>
+                    {p.isPaused ? <Play size={16} color="#18181B" /> : <Pause size={16} color="#18181B" />}
+                    <Text style={styles.secondaryBtnText}>{p.isPaused ? "Resume" : "Pause"}</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                    style={[styles.actionBtn, styles.dangerBtn]}
+                    style={styles.dangerBtn}
+                    activeOpacity={0.8}
                     onPress={() => handleTerminate(p)}
                 >
-                    <Icon name="link-off" size={18} color="#EF4444" />
-                    <Text style={[styles.btnText, { color: '#EF4444' }]}>End</Text>
+                    <Unlink size={16} color="#DC2626" />
+                    <Text style={styles.dangerBtnText}>End</Text>
                 </TouchableOpacity>
             </View>
-        </Card>
+        </TouchableOpacity>
     );
 
     const renderReceivedInvite = (inv: ReceivedInvite) => (
-        <Card key={inv.id} style={[styles.card, { borderColor: theme.colors.primary + '40', borderWidth: 1 }]}>
+        <View key={inv.id} style={[styles.card, styles.cardHighlight]}>
             <View style={styles.cardHeader}>
-                <View style={[styles.iconCircle, { backgroundColor: theme.colors.primary + '20' }]}>
-                    <Icon name="handshake-outline" size={24} color={theme.colors.primary} />
+                <View style={styles.iconCirclePartner}>
+                    <Handshake size={20} color="#A2611A" />
                 </View>
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Text style={styles.partnerName}>{inv.sourceOrgName}</Text>
-                    <Text style={styles.poolName}>Received Request</Text>
+                <View style={styles.rowInfo}>
+                    <Text style={styles.rowTitle} numberOfLines={1}>{inv.sourceOrgName}</Text>
+                    <Text style={styles.rowSub} numberOfLines={1}>Received Request</Text>
                 </View>
                 <View style={styles.dateBadge}>
                     <Text style={styles.dateText}>{new Date(inv.expiresAt).toLocaleDateString()}</Text>
@@ -515,50 +532,52 @@ export default function PartnersScreen() {
 
             <View style={styles.chipContainer}>
                 <View style={styles.chip}>
-                    <Icon name="tag-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
-                    <Text style={styles.chipText}>{inv.shareType}</Text>
+                    <Tag size={13} color="#71717A" />
+                    <Text style={[styles.chipText, { textTransform: 'capitalize' }]}>{inv.shareType}</Text>
                 </View>
                 <View style={styles.chip}>
-                    <Icon name="cube-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                    <Package size={13} color="#71717A" />
                     <Text style={styles.chipText}>{inv.productCount} Products</Text>
                 </View>
                 <View style={styles.chip}>
-                    <Icon name="folder-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                    <Folder size={13} color="#71717A" />
                     <Text style={styles.chipText}>{inv.sourcePoolName}</Text>
                 </View>
             </View>
 
             <View style={styles.inviteActions}>
                 <TouchableOpacity
-                    style={[styles.inviteBtn, styles.declineBtn]}
+                    style={styles.declineBtn}
+                    activeOpacity={0.8}
                     onPress={() => handleDeclineInvite(inv)}
                 >
-                    <Icon name="close" size={18} color="#6B7280" />
+                    <X size={16} color="#18181B" />
                     <Text style={styles.declineBtnText}>Decline</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                    style={[styles.inviteBtn, styles.acceptBtn, { backgroundColor: theme.colors.primary }]}
+                    style={styles.acceptBtn}
+                    activeOpacity={0.8}
                     onPress={() => handleAcceptPress(inv)}
                 >
-                    <Icon name="check" size={18} color="#FFF" />
+                    <Check size={16} color="#FFFFFF" />
                     <Text style={styles.acceptBtnText}>Accept</Text>
                 </TouchableOpacity>
             </View>
-        </Card>
+        </View>
     );
 
     const renderSentInvite = (inv: PendingInvite) => (
-        <Card key={inv.id} style={styles.card}>
+        <View key={inv.id} style={styles.card}>
             <View style={styles.cardHeader}>
-                <View style={[styles.iconCircle, { backgroundColor: '#FEF3C7' }]}>
-                    <Icon name="email-fast-outline" size={24} color="#D97706" />
+                <View style={styles.iconCirclePartner}>
+                    <Send size={20} color="#A2611A" />
                 </View>
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Text style={styles.partnerName}>{inv.email}</Text>
-                    <Text style={styles.poolName}>Invited to {inv.poolName}</Text>
+                <View style={styles.rowInfo}>
+                    <Text style={styles.rowTitle} numberOfLines={1}>{inv.email}</Text>
+                    <Text style={styles.rowSub} numberOfLines={1}>Invited to {inv.poolName}</Text>
                 </View>
-                <TouchableOpacity onPress={() => handleRevokeInvite(inv.id)} style={styles.revokeBtn}>
-                    <Icon name="close" size={18} color="#9CA3AF" />
+                <TouchableOpacity onPress={() => handleRevokeInvite(inv.id)} style={styles.revokeBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <X size={16} color="#9CA3AF" />
                 </TouchableOpacity>
             </View>
             <View style={styles.sentInviteFooter}>
@@ -567,62 +586,68 @@ export default function PartnersScreen() {
                     <Text style={styles.copyLinkText}>Copy Link</Text>
                 </TouchableOpacity>
             </View>
-        </Card>
+        </View>
     );
 
     return (
-        <View style={styles.container}>
-            {/* Header */}
-            <View style={styles.header}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-                    <Icon name="arrow-left" size={24} color="#111827" />
-                </TouchableOpacity>
-                <Text style={styles.headerTitle}>Partners</Text>
-                <TouchableOpacity onPress={() => setInviteModalVisible(true)} style={[styles.addBtn, { backgroundColor: theme.colors.primary }]}>
-                    <Icon name="plus" size={24} color="#FFF" />
-                </TouchableOpacity>
-            </View>
-
-            {/* Tabs */}
-            <View style={styles.tabsContainer}>
-                <TouchableOpacity
-                    style={[styles.tab, activeTab === 'active' && { borderBottomColor: theme.colors.primary }]}
-                    onPress={() => setActiveTab('active')}
-                >
-                    <Text style={[styles.tabText, activeTab === 'active' && { color: theme.colors.primary, fontWeight: '600' }]}>Active ({partnerships.length})</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.tab, activeTab === 'requests' && { borderBottomColor: theme.colors.primary }]}
-                    onPress={() => setActiveTab('requests')}
-                >
-                    <Text style={[styles.tabText, activeTab === 'requests' && { color: theme.colors.primary, fontWeight: '600' }]}>
-                        Requests ({receivedInvites.length + pendingInvites.length})
-                    </Text>
-                    {receivedInvites.length > 0 && (
-                        <View style={styles.requestsBadge}>
-                            <Text style={styles.requestsBadgeText}>{receivedInvites.length}</Text>
-                        </View>
-                    )}
-                </TouchableOpacity>
-            </View>
-
-            <View style={styles.divider} />
+        <View style={styles.root}>
+            <StatusBar barStyle="dark-content" />
 
             {/* Content */}
             <ScrollView
-                contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomSafePadding }]}
+                contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
+                showsVerticalScrollIndicator={false}
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#93C822" />}
             >
+                <PageHeader
+                    title="Partners"
+                    onBack={() => navigation.goBack()}
+                    right={
+                        <TouchableOpacity style={styles.invitePill} activeOpacity={0.8} onPress={() => setInviteModalVisible(true)}>
+                            <UserPlus size={14} color="#FFFFFF" />
+                            <Text style={styles.invitePillText}>Invite</Text>
+                        </TouchableOpacity>
+                    }
+                />
+
+                {/* Tabs */}
+                <View style={styles.tabsTrack}>
+                    <TouchableOpacity
+                        style={[styles.tabBtn, activeTab === 'active' && styles.tabBtnActive]}
+                        activeOpacity={0.8}
+                        onPress={() => setActiveTab('active')}
+                    >
+                        <Text style={[styles.tabText, activeTab === 'active' && styles.tabTextActive]}>Active ({partnerships.length})</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.tabBtn, activeTab === 'requests' && styles.tabBtnActive]}
+                        activeOpacity={0.8}
+                        onPress={() => setActiveTab('requests')}
+                    >
+                        <Text style={[styles.tabText, activeTab === 'requests' && styles.tabTextActive]}>
+                            Requests ({receivedInvites.length + pendingInvites.length})
+                        </Text>
+                        {receivedInvites.length > 0 && (
+                            <View style={styles.requestsBadge}>
+                                <Text style={styles.requestsBadgeText}>{receivedInvites.length}</Text>
+                            </View>
+                        )}
+                    </TouchableOpacity>
+                </View>
+
                 {activeTab === 'active' ? (
                     <>
                         {partnerships.length === 0 && !loading ? (
                             <View style={styles.emptyState}>
-                                <View style={[styles.iconCircle, styles.emptyIcon]}>
-                                    <Icon name="store-search-outline" size={40} color="#65A30D" />
+                                <View style={styles.emptyIconGreen}>
+                                    <Store size={32} color="#43631A" />
                                 </View>
                                 <Text style={styles.emptyText}>No active partnerships</Text>
                                 <Text style={styles.emptySubtext}>Invite a partner to start sharing inventory</Text>
-                                <Button title="Invite Partner" onPress={() => setInviteModalVisible(true)} style={styles.emptyBtn} />
+                                <TouchableOpacity style={styles.primaryBtn} activeOpacity={0.85} onPress={() => setInviteModalVisible(true)}>
+                                    <UserPlus size={18} color="#FFFFFF" />
+                                    <Text style={styles.primaryBtnText}>Invite Partner</Text>
+                                </TouchableOpacity>
                             </View>
                         ) : (
                             partnerships.map(renderPartnership)
@@ -631,23 +656,23 @@ export default function PartnersScreen() {
                 ) : (
                     <>
                         {receivedInvites.length > 0 && (
-                            <View style={styles.section}>
-                                <Text style={styles.sectionTitle}>Incoming Requests</Text>
+                            <View style={styles.sectionBlock}>
+                                <Text style={styles.section}>Incoming Requests</Text>
                                 {receivedInvites.map(renderReceivedInvite)}
                             </View>
                         )}
 
                         {pendingInvites.length > 0 && (
-                            <View style={styles.section}>
-                                <Text style={styles.sectionTitle}>Sent Invites</Text>
+                            <View style={styles.sectionBlock}>
+                                <Text style={styles.section}>Sent Invites</Text>
                                 {pendingInvites.map(renderSentInvite)}
                             </View>
                         )}
 
                         {pendingInvites.length === 0 && receivedInvites.length === 0 && !loading && (
                             <View style={styles.emptyState}>
-                                <View style={[styles.iconCircle, styles.emptyIcon]}>
-                                    <Icon name="email-off-outline" size={40} color="#9CA3AF" />
+                                <View style={styles.emptyIconMuted}>
+                                    <Inbox size={32} color="#9CA3AF" />
                                 </View>
                                 <Text style={styles.emptyText}>No pending requests</Text>
                             </View>
@@ -663,15 +688,19 @@ export default function PartnersScreen() {
             <Modal
                 visible={inviteModalVisible}
                 transparent
-                animationType="slide"
+                animationType="fade"
                 onRequestClose={() => setInviteModalVisible(false)}
             >
-                <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
+                <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalBackdrop}>
+                    <View style={styles.modalCard}>
                         <View style={styles.modalHeader}>
                             <Text style={styles.modalTitle}>Invite Partner</Text>
-                            <TouchableOpacity onPress={() => setInviteModalVisible(false)}>
-                                <Icon name="close" size={24} color="#333" />
+                            <TouchableOpacity
+                                style={styles.modalCloseBtn}
+                                onPress={() => setInviteModalVisible(false)}
+                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            >
+                                <X size={16} color="#71717A" />
                             </TouchableOpacity>
                         </View>
 
@@ -683,7 +712,7 @@ export default function PartnersScreen() {
                             onChangeText={setInviteEmail}
                             autoCapitalize="none"
                             keyboardType="email-address"
-                            placeholderTextColor="#9CA3AF"
+                            placeholderTextColor="#C7C7CC"
                         />
 
                         <Text style={styles.modalLabel}>Shared Pool</Text>
@@ -699,7 +728,7 @@ export default function PartnersScreen() {
                             ))}
                         </ScrollView>
 
-                        <Text style={[styles.modalLabel, { marginTop: 16 }]}>Share type</Text>
+                        <Text style={styles.modalLabel}>Share type</Text>
                         <View style={styles.consignmentRow}>
                             <View style={{ flex: 1 }}>
                                 <Text style={styles.consignmentLabel}>{inviteCanRevoke ? 'Consignment' : 'Partnership'}</Text>
@@ -710,17 +739,21 @@ export default function PartnersScreen() {
                             <Switch
                                 value={inviteCanRevoke}
                                 onValueChange={setInviteCanRevoke}
-                                trackColor={{ false: '#d1d5db', true: theme.colors.primary + '80' }}
-                                thumbColor={inviteCanRevoke ? theme.colors.primary : '#f4f4f4'}
+                                trackColor={{ false: '#D4D4D8', true: 'rgba(147,200,34,0.5)' }}
+                                thumbColor={inviteCanRevoke ? '#93C822' : '#F4F4F5'}
                             />
                         </View>
 
-                        <Button
-                            title={sendingInvite ? "Sending..." : "Send Invite"}
+                        <TouchableOpacity
+                            style={[styles.confirmBtn, sendingInvite && { opacity: 0.6 }]}
                             onPress={handleSendInvite}
-                            loading={sendingInvite}
-                            style={{ marginTop: 24 }}
-                        />
+                            disabled={sendingInvite}
+                            activeOpacity={0.8}
+                        >
+                            {sendingInvite
+                                ? <ActivityIndicator color="#FFFFFF" size="small" />
+                                : <Text style={styles.confirmText}>Send Invite</Text>}
+                        </TouchableOpacity>
                     </View>
                 </KeyboardAvoidingView>
             </Modal>
@@ -739,21 +772,22 @@ export default function PartnersScreen() {
             {/* Alert Modal (simple info/error messages) */}
             <BaseModal
                 visible={alertModal.visible}
+                containerStyle={styles.baseModalCard}
                 onClose={() => {
                     setAlertModal(prev => ({ ...prev, visible: false }));
                     alertModal.onDismiss?.();
                 }}
             >
-                <Icon
-                    name={alertModal.type === 'error' ? 'alert-circle' : alertModal.type === 'success' ? 'check-circle' : 'information'}
-                    size={48}
-                    color={alertModal.type === 'error' ? '#EF4444' : theme.colors.primary}
-                    style={{ marginBottom: 16 }}
-                />
+                {alertModal.type === 'error'
+                    ? <AlertCircle size={44} color="#DC2626" style={styles.modalIcon} />
+                    : alertModal.type === 'success'
+                        ? <CheckCircle2 size={44} color="#93C822" style={styles.modalIcon} />
+                        : <Info size={44} color="#93C822" style={styles.modalIcon} />}
                 <Text style={styles.modalAlertTitle}>{alertModal.title}</Text>
                 <Text style={styles.modalAlertMessage}>{alertModal.message}</Text>
                 <TouchableOpacity
-                    style={[styles.modalButton, { backgroundColor: alertModal.type === 'error' ? '#EF4444' : theme.colors.primary }]}
+                    style={[styles.modalButton, styles.modalButtonSolo, alertModal.type === 'error' ? styles.modalButtonDanger : styles.modalButtonPrimary]}
+                    activeOpacity={0.8}
                     onPress={() => {
                         setAlertModal(prev => ({ ...prev, visible: false }));
                         alertModal.onDismiss?.();
@@ -766,25 +800,27 @@ export default function PartnersScreen() {
             {/* Confirm Modal (destructive actions) */}
             <BaseModal
                 visible={confirmModal.visible}
+                containerStyle={styles.baseModalCard}
                 onClose={() => setConfirmModal(prev => ({ ...prev, visible: false }))}
             >
-                <Icon
-                    name="alert-outline"
-                    size={48}
-                    color={confirmModal.confirmStyle === 'destructive' ? '#EF4444' : theme.colors.primary}
-                    style={{ marginBottom: 16 }}
+                <AlertTriangle
+                    size={44}
+                    color={confirmModal.confirmStyle === 'destructive' ? '#DC2626' : '#93C822'}
+                    style={styles.modalIcon}
                 />
                 <Text style={styles.modalAlertTitle}>{confirmModal.title}</Text>
                 <Text style={styles.modalAlertMessage}>{confirmModal.message}</Text>
                 <View style={styles.modalButtonRow}>
                     <TouchableOpacity
                         style={[styles.modalButton, styles.modalCancelButton]}
+                        activeOpacity={0.8}
                         onPress={() => setConfirmModal(prev => ({ ...prev, visible: false }))}
                     >
                         <Text style={styles.modalCancelText}>Cancel</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
-                        style={[styles.modalButton, { backgroundColor: confirmModal.confirmStyle === 'destructive' ? '#EF4444' : theme.colors.primary }]}
+                        style={[styles.modalButton, confirmModal.confirmStyle === 'destructive' ? styles.modalButtonDanger : styles.modalButtonPrimary]}
+                        activeOpacity={0.8}
                         onPress={confirmModal.onConfirm}
                     >
                         <Text style={styles.modalButtonText}>{confirmModal.confirmText}</Text>
@@ -795,21 +831,24 @@ export default function PartnersScreen() {
             {/* Invite Sent Modal */}
             <BaseModal
                 visible={inviteSentModal.visible}
+                containerStyle={styles.baseModalCard}
                 onClose={() => setInviteSentModal({ visible: false, inviteLink: '' })}
             >
-                <Icon name="check-circle" size={48} color={theme.colors.primary} style={{ marginBottom: 16 }} />
+                <CheckCircle2 size={44} color="#93C822" style={styles.modalIcon} />
                 <Text style={styles.modalAlertTitle}>Invite Sent!</Text>
                 <Text style={styles.modalAlertMessage}>Invite link created. Share this with your partner:</Text>
                 <Text style={styles.inviteLinkText} selectable numberOfLines={3}>{inviteSentModal.inviteLink}</Text>
                 <View style={styles.modalButtonRow}>
                     <TouchableOpacity
                         style={[styles.modalButton, styles.modalCancelButton]}
+                        activeOpacity={0.8}
                         onPress={() => setInviteSentModal({ visible: false, inviteLink: '' })}
                     >
                         <Text style={styles.modalCancelText}>OK</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
-                        style={[styles.modalButton, { backgroundColor: theme.colors.primary }]}
+                        style={[styles.modalButton, styles.modalButtonPrimary]}
+                        activeOpacity={0.8}
                         onPress={() => {
                             Clipboard.setStringAsync(inviteSentModal.inviteLink);
                             showMessage({ message: 'Link Copied!', type: 'success', backgroundColor: theme.colors.primary });
@@ -824,17 +863,19 @@ export default function PartnersScreen() {
             {/* Onboarding Modal (Connect Platform) */}
             <BaseModal
                 visible={onboardingModal.visible}
+                containerStyle={styles.baseModalCard}
                 onClose={() => {
                     setOnboardingModal({ visible: false, message: '' });
                     refreshData();
                 }}
             >
-                <Icon name="check-circle" size={48} color={theme.colors.primary} style={{ marginBottom: 16 }} />
+                <CheckCircle2 size={44} color="#93C822" style={styles.modalIcon} />
                 <Text style={styles.modalAlertTitle}>Partnership Connected!</Text>
                 <Text style={styles.modalAlertMessage}>{onboardingModal.message}</Text>
                 <View style={styles.modalButtonRow}>
                     <TouchableOpacity
                         style={[styles.modalButton, styles.modalCancelButton]}
+                        activeOpacity={0.8}
                         onPress={() => {
                             setOnboardingModal({ visible: false, message: '' });
                             refreshData();
@@ -843,11 +884,12 @@ export default function PartnersScreen() {
                         <Text style={styles.modalCancelText}>Later</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
-                        style={[styles.modalButton, { backgroundColor: theme.colors.primary }]}
+                        style={[styles.modalButton, styles.modalButtonPrimary]}
+                        activeOpacity={0.8}
                         onPress={() => {
                             setOnboardingModal({ visible: false, message: '' });
                             refreshData();
-                            navigation.navigate('Profile');
+                            navigation.navigate('AccountSettings');
                         }}
                     >
                         <Text style={styles.modalButtonText}>Connect Now</Text>
@@ -860,451 +902,112 @@ export default function PartnersScreen() {
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#F8F9FB',
-    },
-    header: {
-        paddingTop: 60,
-        paddingHorizontal: 16,
-        paddingBottom: 16,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        backgroundColor: '#FFF',
-        borderBottomWidth: 1,
-        borderBottomColor: '#F3F4F6',
-    },
-    backBtn: {
-        padding: 8,
-        marginLeft: -8,
-    },
-    headerTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: '#111827',
-    },
-    addBtn: {
-        padding: 8,
-        backgroundColor: '#93C822',
-        borderRadius: 8,
-        marginRight: -4,
-    },
-    tabsContainer: {
-        flexDirection: 'row',
-        paddingHorizontal: 16,
-        paddingTop: 16,
-        backgroundColor: '#FFF',
-    },
-    tab: {
-        flex: 1,
-        paddingVertical: 12,
-        alignItems: 'center',
-        flexDirection: 'row',
-        justifyContent: 'center',
-        borderBottomWidth: 2,
-        borderBottomColor: 'transparent',
-        gap: 8,
-    },
-    activeTab: {
-        borderBottomColor: '#93C822',
-    },
-    tabText: {
-        color: '#6B7280',
-        fontWeight: '500',
-        fontSize: 15,
-    },
-    activeTabText: {
-        color: '#93C822',
-        fontWeight: '600',
-    },
-    requestsBadge: {
-        backgroundColor: '#EF4444',
-        borderRadius: 10,
-        paddingHorizontal: 6,
-        paddingVertical: 2,
-        minWidth: 20,
-        alignItems: 'center',
-    },
-    requestsBadgeText: {
-        color: '#FFF',
-        fontSize: 11,
-        fontWeight: '700',
-    },
-    divider: {
-        height: 1,
-        backgroundColor: '#E5E7EB',
-    },
-    scrollContent: {
-        padding: 16,
-    },
-    card: {
-        marginBottom: 16,
-        padding: 16,
-        backgroundColor: '#FFF',
-        borderRadius: 12,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
-        elevation: 2,
-        borderWidth: 1,
-        borderColor: '#F3F4F6',
-    },
-    cardHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    iconCircle: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    partnerName: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#1F2937',
-    },
-    poolName: {
-        fontSize: 13,
-        color: '#6B7280',
-        marginTop: 2,
-    },
-    pausedBadge: {
-        backgroundColor: '#FEF3C7',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 6,
-    },
-    pausedText: {
-        color: '#D97706',
-        fontSize: 11,
-        fontWeight: '600',
-    },
-    statsRow: {
-        flexDirection: 'row',
-        marginTop: 16,
-        paddingTop: 16,
-        borderTopWidth: 1,
-        borderTopColor: '#F3F4F6',
-    },
-    stat: {
-        marginRight: 24,
-    },
-    statValue: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: '#111827',
-    },
-    statLabel: {
-        fontSize: 12,
-        color: '#6B7280',
-        marginTop: 2,
-    },
-    actionsRow: {
-        flexDirection: 'row',
-        marginTop: 16,
-        gap: 12,
-    },
-    actionBtn: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 10,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-    },
-    secondaryBtn: {
-        backgroundColor: '#F9FAFB',
-    },
-    dangerBtn: {
-        borderColor: '#FEE2E2',
-        backgroundColor: '#FEF2F2',
-    },
-    btnText: {
-        marginLeft: 6,
-        fontWeight: '500',
-        color: '#374151',
-        fontSize: 13,
-    },
-    section: {
-        marginBottom: 24,
-    },
-    sectionTitle: {
-        color: '#374151',
-        fontSize: 14,
-        fontWeight: '600',
-        marginBottom: 12,
-        marginLeft: 4,
-        textTransform: 'uppercase',
-        letterSpacing: 0.5,
-    },
-    inviteDetails: {
-        marginTop: 16,
-        paddingTop: 16,
-        borderTopWidth: 1,
-        borderTopColor: '#F3F4F6',
-    },
-    inviteDetailRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 8,
-    },
-    inviteDetailLabel: {
-        fontSize: 13,
-        color: '#6B7280',
-    },
-    inviteDetailValue: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: '#111827',
-    },
-    inviteActions: {
-        flexDirection: 'row',
-        marginTop: 16,
-        gap: 12,
-    },
-    inviteBtn: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 10,
-        borderRadius: 8,
-    },
-    declineBtn: {
-        backgroundColor: '#F3F4F6',
-    },
-    declineBtnText: {
-        color: '#6B7280',
-        fontWeight: '600',
-        fontSize: 14,
-    },
-    acceptBtn: {
-        backgroundColor: '#16A34A',
-    },
-    acceptBtnText: {
-        color: '#FFF',
-        fontWeight: '600',
-        fontSize: 14,
-    },
-    revokeBtn: {
-        padding: 8,
-    },
-    sentInviteFooter: {
-        marginTop: 12,
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    expiresText: {
-        fontSize: 12,
-        color: '#9CA3AF',
-    },
-    copyLinkText: {
-        color: '#93C822',
-        fontWeight: '600',
-        fontSize: 13,
-    },
-    emptyState: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 60,
-    },
-    emptyIcon: {
-        width: 80,
-        height: 80,
-        borderRadius: 40,
-        backgroundColor: '#ECFCCB',
-        marginBottom: 16,
-    },
-    emptyText: {
-        color: '#111827',
-        fontSize: 18,
-        fontWeight: '600',
-    },
-    emptySubtext: {
-        color: '#6B7280',
-        fontSize: 14,
-        marginTop: 8,
-        textAlign: 'center',
-    },
-    emptyBtn: {
-        marginTop: 24,
-        width: 200,
-    },
-    modalOverlay: {
-        flex: 1,
-        justifyContent: 'flex-end',
-        backgroundColor: 'rgba(0,0,0,0.5)',
-    },
-    modalContent: {
-        backgroundColor: '#FFF',
-        borderTopLeftRadius: 24,
-        borderTopRightRadius: 24,
-        padding: 24,
-        paddingBottom: 48,
-    },
-    modalHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 24,
-    },
-    modalTitle: {
-        fontSize: 20,
-        fontWeight: '700',
-        color: '#111827',
-    },
-    modalLabel: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: '#374151',
-        marginBottom: 8,
-        marginTop: 16,
-    },
+    root: { flex: 1, backgroundColor: '#F6F7F4' },
+
+    // Header action pill
+    invitePill: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#18181B', borderRadius: 999, paddingHorizontal: 13, paddingVertical: 7 },
+    invitePillText: { color: '#FFFFFF', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+
+    // Tabs (segmented control)
+    tabsTrack: { flexDirection: 'row', backgroundColor: '#FFFFFF', borderRadius: 999, borderWidth: 1, borderColor: '#ECEBE6', padding: 4, marginBottom: 22 },
+    tabBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8, borderRadius: 999 },
+    tabBtnActive: { backgroundColor: '#18181B' },
+    tabText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: '#71717A' },
+    tabTextActive: { color: '#FFFFFF' },
+    requestsBadge: { backgroundColor: '#DC2626', borderRadius: 999, minWidth: 18, height: 18, paddingHorizontal: 5, alignItems: 'center', justifyContent: 'center' },
+    requestsBadgeText: { color: '#FFFFFF', fontSize: 11, fontFamily: 'Inter_700Bold' },
+
+    // Sections
+    section: { fontSize: 13, color: '#71717A', fontFamily: 'Inter_600SemiBold', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10, marginLeft: 4 },
+    sectionBlock: { marginBottom: 24 },
+
+    // Cards
+    card: { backgroundColor: '#FFFFFF', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 14, borderWidth: 1, borderColor: '#ECEBE6', marginBottom: 12 },
+    cardHighlight: { borderColor: 'rgba(147,200,34,0.55)' },
+    cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+    iconCircleGreen: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(147,200,34,0.14)' },
+    iconCirclePartner: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(162,97,26,0.12)' },
+    rowInfo: { flex: 1 },
+    rowTitle: { fontSize: 16, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
+    rowSub: { fontSize: 13, color: '#71717A', fontFamily: 'Inter_400Regular', marginTop: 2 },
+    pausedBadge: { backgroundColor: 'rgba(162,97,26,0.10)', paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999 },
+    pausedText: { color: '#A2611A', fontSize: 11, fontFamily: 'Inter_600SemiBold' },
+    dateBadge: { backgroundColor: '#F1F1EE', paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999 },
+    dateText: { fontSize: 11, color: '#71717A', fontFamily: 'Inter_500Medium' },
+
+    // Meta chips
+    chipContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: '#F1F1EE' },
+    chip: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#FAFAF8', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: '#ECEBE6' },
+    chipText: { fontSize: 12, color: '#71717A', fontFamily: 'Inter_500Medium' },
+
+    // Card actions
+    actionsRow: { flexDirection: 'row', marginTop: 14, gap: 10 },
+    secondaryBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 11, borderRadius: 14, backgroundColor: '#F1F1EE' },
+    secondaryBtnText: { color: '#18181B', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+    dangerBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 11, borderRadius: 14, backgroundColor: 'rgba(220,38,38,0.08)' },
+    dangerBtnText: { color: '#DC2626', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+
+    inviteActions: { flexDirection: 'row', marginTop: 14, gap: 10 },
+    declineBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: 14, backgroundColor: '#F1F1EE' },
+    declineBtnText: { color: '#18181B', fontFamily: 'Inter_600SemiBold', fontSize: 14 },
+    acceptBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: 14, backgroundColor: '#93C822' },
+    acceptBtnText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 14 },
+
+    revokeBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#F1F1EE', alignItems: 'center', justifyContent: 'center' },
+    sentInviteFooter: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#F1F1EE', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    expiresText: { fontSize: 12, color: '#9CA3AF', fontFamily: 'Inter_400Regular' },
+    copyLinkText: { color: '#43631A', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+
+    // Empty states
+    emptyState: { alignItems: 'center', justifyContent: 'center', paddingVertical: 56 },
+    emptyIconGreen: { width: 72, height: 72, borderRadius: 24, backgroundColor: 'rgba(147,200,34,0.14)', alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+    emptyIconMuted: { width: 72, height: 72, borderRadius: 24, backgroundColor: '#F1F1EE', alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+    emptyText: { color: '#18181B', fontSize: 16, fontFamily: 'Inter_600SemiBold' },
+    emptySubtext: { color: '#71717A', fontSize: 13, fontFamily: 'Inter_400Regular', marginTop: 6, textAlign: 'center' },
+    primaryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: '#93C822', borderRadius: 16, paddingVertical: 15, paddingHorizontal: 28, marginTop: 22 },
+    primaryBtnText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 15 },
+
+    // Invite modal
+    modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 },
+    modalCard: { backgroundColor: '#FFFFFF', borderRadius: 22, padding: 20 },
+    modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+    modalTitle: { fontSize: 20, color: '#18181B', fontFamily: 'Inter_700Bold' },
+    modalCloseBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#F1F1EE', alignItems: 'center', justifyContent: 'center' },
+    modalLabel: { fontSize: 13, color: '#71717A', fontFamily: 'Inter_600SemiBold', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 16, marginBottom: 8 },
     input: {
-        backgroundColor: '#F3F4F6',
-        borderRadius: 12,
-        paddingHorizontal: 16,
-        paddingVertical: 14,
-        fontSize: 16,
-        color: '#111827',
+        borderWidth: 1, borderColor: '#ECEBE6', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 11,
+        fontSize: 15, color: '#18181B', fontFamily: 'Inter_400Regular', backgroundColor: '#FAFAF8',
     },
-    poolSelector: {
-        flexDirection: 'row',
-    },
-    poolChip: {
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-        borderRadius: 20,
-        backgroundColor: '#F9FAFB',
-        marginRight: 10,
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-    },
-    activePoolChip: {
-        backgroundColor: '#ECFCCB',
-        borderColor: '#93C822',
-    },
-    poolChipText: {
-        color: '#4B5563',
-        fontWeight: '600',
-    },
-    activePoolChipText: {
-        color: '#365E09',
-    },
+    poolSelector: { flexDirection: 'row', flexGrow: 0 },
+    poolChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999, backgroundColor: '#FAFAF8', marginRight: 8, borderWidth: 1, borderColor: '#ECEBE6' },
+    activePoolChip: { backgroundColor: 'rgba(147,200,34,0.14)', borderColor: '#93C822' },
+    poolChipText: { color: '#71717A', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+    activePoolChipText: { color: '#43631A' },
     consignmentRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginTop: 8,
-        paddingVertical: 12,
-        paddingHorizontal: 12,
-        backgroundColor: '#F9FAFB',
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+        paddingVertical: 12, paddingHorizontal: 14, backgroundColor: '#FAFAF8', borderRadius: 14, borderWidth: 1, borderColor: '#ECEBE6',
     },
-    consignmentLabel: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: '#111827',
-    },
-    consignmentHint: {
-        fontSize: 12,
-        color: '#6B7280',
-        marginTop: 2,
-    },
-    // New Styles (Consolidated)
-    dateBadge: {
-        backgroundColor: '#F3F4F6',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 6,
-    },
-    dateText: {
-        fontSize: 11,
-        color: '#6B7280',
-        fontWeight: '500',
-    },
-    chipContainer: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8,
-        marginTop: 12,
-        paddingTop: 12,
-        borderTopWidth: 1,
-        borderTopColor: '#F3F4F6',
-        marginBottom: 4,
-    },
-    chip: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#F9FAFB',
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-    },
-    chipText: {
-        fontSize: 12,
-        color: '#4B5563',
-        fontWeight: '500',
-    },
-    // Modal Alert Styles
-    modalAlertTitle: {
-        fontSize: 20,
-        fontWeight: '700',
-        color: '#111827',
-        marginBottom: 8,
-        textAlign: 'center',
-    },
-    modalAlertMessage: {
-        fontSize: 15,
-        color: '#6B7280',
-        textAlign: 'center',
-        marginBottom: 24,
-        lineHeight: 22,
-    },
-    modalButton: {
-        flex: 1,
-        paddingVertical: 14,
-        paddingHorizontal: 24,
-        borderRadius: 12,
-        alignItems: 'center',
-        justifyContent: 'center',
-        minWidth: 100,
-    },
-    modalButtonText: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#FFFFFF',
-    },
-    modalButtonRow: {
-        flexDirection: 'row',
-        gap: 12,
-        width: '100%',
-    },
-    modalCancelButton: {
-        backgroundColor: '#F3F4F6',
-    },
-    modalCancelText: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#6B7280',
-    },
+    consignmentLabel: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
+    consignmentHint: { fontSize: 12, color: '#71717A', fontFamily: 'Inter_400Regular', marginTop: 2 },
+    confirmBtn: { borderRadius: 16, paddingVertical: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#93C822', marginTop: 22 },
+    confirmText: { fontSize: 15, color: '#FFFFFF', fontFamily: 'Inter_700Bold' },
+
+    // BaseModal (alerts/confirms) children
+    baseModalCard: { borderRadius: 22, padding: 20, width: '100%' },
+    modalIcon: { marginBottom: 14 },
+    modalAlertTitle: { fontSize: 20, color: '#18181B', fontFamily: 'Inter_700Bold', marginBottom: 8, textAlign: 'center' },
+    modalAlertMessage: { fontSize: 14, color: '#71717A', fontFamily: 'Inter_400Regular', textAlign: 'center', marginBottom: 20, lineHeight: 21 },
+    modalButton: { flex: 1, paddingVertical: 14, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+    modalButtonSolo: { flex: 0, alignSelf: 'stretch' },
+    modalButtonPrimary: { backgroundColor: '#93C822' },
+    modalButtonDanger: { backgroundColor: '#DC2626' },
+    modalButtonText: { fontSize: 15, fontFamily: 'Inter_700Bold', color: '#FFFFFF' },
+    modalButtonRow: { flexDirection: 'row', gap: 10, width: '100%' },
+    modalCancelButton: { backgroundColor: '#F1F1EE' },
+    modalCancelText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: '#18181B' },
     inviteLinkText: {
-        fontSize: 13,
-        color: '#3B82F6',
-        textAlign: 'center',
-        marginBottom: 20,
-        paddingHorizontal: 16,
-        lineHeight: 20,
+        fontSize: 13, color: '#43631A', fontFamily: 'Inter_500Medium', textAlign: 'center', lineHeight: 19,
+        borderWidth: 1, borderColor: '#ECEBE6', backgroundColor: '#FAFAF8', borderRadius: 14,
+        paddingHorizontal: 14, paddingVertical: 12, marginBottom: 18, width: '100%',
     },
 });

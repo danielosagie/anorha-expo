@@ -8,12 +8,15 @@ import {
   ConnectionLocation,
   ImportSessionCounts,
 } from '../types/importSession';
+import type { MappingSuggestion as BackendMappingSuggestion } from '../contracts';
 
 const SSSYNC_API_BASE_URL = API_BASE_URL;
 
 /** Pull the v2 matching signals off a raw backend suggestion item so the
- *  resolver classifier can route precisely (these were being dropped before). */
-function extractV2Signals(item: any): Partial<MappingSuggestion> {
+ *  resolver classifier can route precisely (these were being dropped before).
+ *  Input is contract-typed: if the backend renames a signal, this stops compiling
+ *  instead of silently dropping it again. */
+function extractV2Signals(item: Partial<BackendMappingSuggestion> & Record<string, any>): Partial<MappingSuggestion> {
   const out: Partial<MappingSuggestion> = {};
   if (item.productShape) out.productShape = item.productShape;
   if (item.requiresFamilyDecision === true) out.requiresFamilyDecision = true;
@@ -37,6 +40,27 @@ function extractV2Signals(item: any): Partial<MappingSuggestion> {
       imageUrl: c.ImageUrl ?? c.imageUrl ?? null,
     }));
   }
+  // Composition + lifecycle signals (bundle/kit, stale links, idempotency).
+  if (item.compositionType === 'bundle' || item.compositionType === 'kit') out.compositionType = item.compositionType;
+  if (Array.isArray(item.bundleParts) && item.bundleParts.length) {
+    out.bundleParts = item.bundleParts.map((p: any) => ({ sku: p.sku ?? null, title: p.title ?? null, quantity: p.quantity }));
+  }
+  if (Array.isArray(item.kitComponents) && item.kitComponents.length) {
+    out.kitComponents = item.kitComponents.map((c: any) => ({
+      id: c.id,
+      sku: c.sku ?? null,
+      title: c.title ?? null,
+      price: c.price ?? null,
+      imageUrl: c.imageUrl ?? null,
+    }));
+  }
+  if (item.isStaleLink === true) {
+    out.isStaleLink = true;
+    if (item.staleReason) out.staleReason = item.staleReason;
+  }
+  if (item.alreadyMapped === true) out.alreadyMapped = true;
+  if (item.priorResolution) out.priorResolution = item.priorResolution;
+  if (typeof item.sourceHash === 'string') out.sourceHash = item.sourceHash;
   return out;
 }
 

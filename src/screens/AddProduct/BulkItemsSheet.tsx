@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Image, TextInput, StyleSheet, Dimensions, Modal, Pressable, ActivityIndicator, Platform, Alert, KeyboardAvoidingView } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, FadeIn } from 'react-native-reanimated';
-import { PanGestureHandler, TapGestureHandler, State } from 'react-native-gesture-handler';
+import { PanGestureHandler, TapGestureHandler, State, Swipeable } from 'react-native-gesture-handler';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Camera as CameraIcon, RotateCcw } from 'lucide-react-native';
 import spinners from 'unicode-animations';
@@ -14,6 +14,7 @@ import { ShelfScanPlaceholderRow, ShelfScanProgressCard } from '../../components
 import { UnicodeSpinner } from './UnicodeSpinner';
 import { getShelfProgressPresentation } from './utils';
 import { MatchResponse, JobResponse, QuickMatchSelection, ItemLoadingState, ShelfProgressState, UnicodeSpinnerDefinition } from './types';
+import type { CartTreeNode } from './hooks/useBulkItems';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const MAX_BATCH_ITEMS = 100;
@@ -44,10 +45,17 @@ export const BulkItemsSheet: React.FC<{
   navigation: any;
   quickScanStore?: Record<string, { matchData: MatchResponse; serpApiData: any[] }>;
   onOpenQuickMatches?: (itemId: string) => void;
+  onOpenItemPreview?: (itemId: string) => void;
+  cartTree?: CartTreeNode[];
+  onOpenFolder?: (folderId: string) => void;
+  /** Queue items for in-place async generation instead of navigating to LoadingScreen. */
+  onQueueGeneration?: (itemJobs: Array<{ itemId: string; jobId: string; processType: 'generate' | 'match' }>) => void;
   onRetryItemScan?: (itemId: string) => void;
   onOpenPhotoModal?: (itemId: string) => void;
   itemLoadingStates: Record<string, ItemLoadingState>;
   setItemLoadingStates: React.Dispatch<React.SetStateAction<Record<string, ItemLoadingState>>>;
+  /** Flow stage per item (from AddProductScreen's state machine) — 'generated' marks done rows. */
+  itemStageById?: Record<string, string>;
   confirmedQuickMatchByItemId?: Record<string, QuickMatchSelection>;
   connectedPlatformKeys?: string[];
   currentInstruction?: string | null;
@@ -62,40 +70,81 @@ export const BulkItemsSheet: React.FC<{
   onSubmitItemsForProcessing?: (items: Array<{ id: string }>) => void;
   onSaveDraft?: () => void;
   cameraMode?: 'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf';
-}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onRetryItemScan, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, confirmedQuickMatchByItemId = {}, connectedPlatformKeys = [], currentInstruction, onOpenLocalMatch, shelfPhotoUri, shelfProgress, onRetryShelfScan, onRetakeShelfScan, onUpdateItemQuery, onUpdateItemTitle, onUpdateItemQuantity, onSubmitItemsForProcessing, onSaveDraft, cameraMode = 'camera' }) => {
+  /** Item ids set aside via "Save for later" (excluded from list/subtotal/checkout). */
+  savedForLaterIds?: string[];
+  onToggleSavedForLater?: (itemId: string, saved: boolean) => void;
+  /** Open the Add-details page for an item that needs more context. */
+  onOpenAddDetails?: (itemId: string) => void;
+  /** Free-tier usage; when exhausted the cart doubles as the upgrade surface. */
+  freemium?: { usageCount: number; freeLimit: number; exhausted: boolean } | null;
+  onUpgrade?: () => void;
+  onAddCredits?: () => void;
+}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onOpenItemPreview, cartTree, onOpenFolder, onQueueGeneration, onRetryItemScan, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, itemStageById, confirmedQuickMatchByItemId = {}, connectedPlatformKeys = [], currentInstruction, onOpenLocalMatch, shelfPhotoUri, shelfProgress, onRetryShelfScan, onRetakeShelfScan, onUpdateItemQuery, onUpdateItemTitle, onUpdateItemQuantity, onSubmitItemsForProcessing, onSaveDraft, cameraMode = 'camera', savedForLaterIds, onToggleSavedForLater, onOpenAddDetails, freemium, onUpgrade, onAddCredits }) => {
 
-  console.log('[SHEET RENDER] ==================');
-  console.log('[SHEET RENDER] BulkItemsSheet RE-RENDERED at:', new Date().toISOString());
-  console.log('[SHEET RENDER] Props received:');
-  console.log('[SHEET RENDER] - photos.length:', photos.length);
-  console.log('[SHEET RENDER] - bulkItems.length:', bulkItems.length);
-  console.log('[SHEET RENDER] - bulkItems array:', JSON.stringify(bulkItems, null, 2));
-  console.log('[SHEET RENDER] - activeItemId:', activeItemId);
-  console.log('[SHEET RENDER] ==================');
 
   // SIMPLIFIED: Always use bulkItems (no more virtual items)
   let displayItems: Array<{ id: string; photos: CapturedPhoto[]; title?: string; isActive?: boolean; quantity?: number; }>;
 
-  console.log('[DISPLAY LOGIC] ==================');
-  console.log('[DISPLAY LOGIC] Using simplified logic - always show bulkItems');
-  console.log('[DISPLAY LOGIC] bulkItems.length:', bulkItems.length);
-  console.log('[DISPLAY LOGIC] photos (capturedPhotos) length:', photos.length, '(legacy - should be same as total photos in bulkItems)');
 
-  // Always use bulkItems - much simpler!
-  displayItems = bulkItems;
+  // Active cart = bulkItems minus the "Save for later" pile. Saved items render in
+  // their own section and are excluded from counts, subtotal, select-all, and checkout
+  // (everything downstream reads displayItems).
+  const savedSet = new Set(savedForLaterIds ?? []);
+  const savedItems = bulkItems.filter((i) => savedSet.has(i.id));
+  displayItems = bulkItems.filter((i) => !savedSet.has(i.id));
 
-  console.log('[DISPLAY LOGIC] Final displayItems (same as bulkItems):');
-  displayItems.forEach((item, index) => {
-    console.log(`[DISPLAY LOGIC] Item ${index + 1}:`, {
-      id: item.id,
-      photosCount: item.photos.length,
-      photoIds: item.photos.map(p => p.id),
-      isActive: item.isActive
+  // One close per pull gesture on the items list.
+  const pullCloseRef = useRef(false);
+
+  // Multi-select: list "a few" vs "the whole cart". Empty set = list everything.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const selectionActive = selectedIds.size > 0;
+  const toggleSelect = (id: string) =>
+    setSelectedIds((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
     });
-  });
-  console.log('[DISPLAY LOGIC] ==================');
+  const toggleMany = (ids: string[], select: boolean) =>
+    setSelectedIds((prev) => {
+      const n = new Set(prev);
+      ids.forEach((id) => (select ? n.add(id) : n.delete(id)));
+      return n;
+    });
+
+  // Render list: a shelf folder shows as a single card (tap → opens the folder page),
+  // interleaved with single items. Falls back to the flat list when there are no folders.
+  type RenderEntry =
+    | { kind: 'folderCard'; id: string; label?: string; childCount: number; sourcePhotoUri?: string; childIds: string[] }
+    | { kind: 'item'; item: { id: string; photos: CapturedPhoto[]; title?: string; isActive?: boolean; quantity?: number }; index: number };
+  const renderList: RenderEntry[] = [];
+  if (cartTree && cartTree.length > 0) {
+    let idx = 0;
+    for (const node of cartTree) {
+      if (node.kind === 'folder') {
+        renderList.push({ kind: 'folderCard', id: node.id, label: node.label, childCount: node.childCount, sourcePhotoUri: node.sourcePhotoUri, childIds: node.children.map((c) => c.id) });
+      } else if (!savedSet.has(node.item.id)) {
+        renderList.push({ kind: 'item', item: node.item, index: idx++ });
+      }
+    }
+  } else {
+    displayItems.forEach((item, i) => renderList.push({ kind: 'item', item, index: i }));
+  }
 
   const totalItems = displayItems.length;
+  // Subtotal = sum of matched prices × qty (for the Ruggable-style subtotal row).
+  // Candidate price arrives as a number (ranked candidates) OR a serpApi object
+  // ({ value, extracted_value, currency }) once a match is confirmed — accept both.
+  const extractPrice = (p: any): number | undefined =>
+    typeof p === 'number' ? p : typeof p?.extracted_value === 'number' ? p.extracted_value : undefined;
+  const cartSubtotal = displayItems.reduce((sum, it) => {
+    const conf = confirmedQuickMatchByItemId?.[it.id];
+    const qs = quickScanStore?.[it.id];
+    const cand: any = (conf?.serpApiData && conf.preSelectedIndices?.length)
+      ? conf.serpApiData[conf.preSelectedIndices[0]]
+      : qs?.matchData?.rankedCandidates?.[0];
+    return sum + (extractPrice(cand?.price) ?? 0) * ((it as any).quantity ?? 1);
+  }, 0);
   const [editingItemId, setEditingItemId] = React.useState<string | null>(null);
   const [editQueryText, setEditQueryText] = React.useState("");
   const [countDraftByItemId, setCountDraftByItemId] = React.useState<Record<string, string>>({});
@@ -139,15 +188,6 @@ export const BulkItemsSheet: React.FC<{
     onUpdateItemQuantity?.(itemId, quantity);
   }, [countDraftByItemId, onUpdateItemQuantity]);
 
-  console.log('[SHEET DEBUG] ==================');
-  console.log('[SHEET DEBUG] isBulkMode:', isBulkMode);
-  console.log('[SHEET DEBUG] bulkItems length:', bulkItems.length);
-  console.log('[SHEET DEBUG] photos length:', photos.length);
-  console.log('[SHEET DEBUG] photos array:', photos.map(p => ({ id: p.id, uri: p.uri.substring(0, 30) + '...' })));
-  console.log('[SHEET DEBUG] displayItems COUNT:', displayItems.length);
-  console.log('[SHEET DEBUG] totalItems:', totalItems);
-  console.log('[SHEET DEBUG] Sheet State:', totalItems === 0 ? 'EMPTY' : 'HAS_ITEMS');
-  console.log('[SHEET DEBUG] ==================');
 
   // Keep a tall, consistent sheet so actions never get clipped on smaller devices.
   const sheetMaxHeight = SCREEN_HEIGHT * 0.88;
@@ -158,7 +198,10 @@ export const BulkItemsSheet: React.FC<{
   });
   const dynamicSheetStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: sheetTranslateY.value }],
-    height: sheetMaxHeight,
+    // Full-screen cart that rises from below: translateY 0 = fully covering, = open;
+    // SCREEN_HEIGHT = off the bottom, = closed. Paired with the capture screen's
+    // reachability lift in AddProductScreen so the two move as one connected piece.
+    height: SCREEN_HEIGHT,
   }));
 
   const bottomMargin = Math.max(insets.bottom, 20);
@@ -171,6 +214,30 @@ export const BulkItemsSheet: React.FC<{
     const loadingState = state as ItemLoadingState;
     return loadingState.isLoading && activeBulkItemIds.has(id);
   });
+
+  // "Scanned earlier this session": two cart rows whose best match resolves to
+  // the same listing (same listing URL, else same normalized title). The LATER
+  // row gets flagged so the user merges instead of silently listing a duplicate.
+  // Cheap O(n) over the cart; recomputed per render on purpose.
+  const sessionDupOwnerByItemId: Record<string, string> = {};
+  {
+    const firstByKey = new Map<string, string>();
+    for (const it of displayItems) {
+      const mi = confirmedQuickMatchByItemId?.[it.id];
+      const confirmed = (mi && mi.serpApiData && mi.preSelectedIndices && mi.preSelectedIndices.length > 0)
+        ? mi.serpApiData[mi.preSelectedIndices[0]]
+        : null;
+      const m: any = confirmed || quickScanStore?.[it.id]?.matchData?.rankedCandidates?.[0];
+      if (!m) continue;
+      const url = String(m.productUrl || m.link || m.sourceUrl || '').trim().toLowerCase();
+      const title = String(m.title || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      const key = url || (title.length >= 12 ? title : '');
+      if (!key) continue;
+      const owner = firstByKey.get(key);
+      if (owner && owner !== it.id) sessionDupOwnerByItemId[it.id] = owner;
+      else if (!owner) firstByKey.set(key, it.id);
+    }
+  }
   const hasAnyPhotos = displayItems.some(item => item.photos.length > 0);
   const hasAnyItems = totalItems > 0;
   const isAnalyzeInFlightRef = React.useRef(false);
@@ -229,15 +296,21 @@ export const BulkItemsSheet: React.FC<{
     return parsed as JobResponse | null;
   }, [connectedPlatformKeys]);
 
-  // Shared handler: analyze and navigate to match/generate flow (accounts for quick scan selections)
-  const handleAnalyzeAndNavigate = React.useCallback(async () => {
+  // Shared handler: analyze and navigate to match/generate flow (accounts for quick scan selections).
+  // keepSheetOpen: swipe-to-generate fires this per-card and the cart stays up so the
+  // row's in-place spinner is visible (in-place async; nothing navigates away).
+  const handleAnalyzeAndNavigate = React.useCallback(async (itemsOverride?: typeof bulkItems, opts?: { keepSheetOpen?: boolean }) => {
     if (isAnalyzeInFlightRef.current) {
       return;
     }
     isAnalyzeInFlightRef.current = true;
     onSaveDraft?.();
-    onClose();
-    const firstPhotos = bulkItems.map(item => item.photos[0]).filter(Boolean);
+    if (!opts?.keepSheetOpen) {
+      onClose();
+    }
+    // Multi-select: when a subset is passed, only those items are listed; otherwise the whole cart.
+    const targetItems = itemsOverride && itemsOverride.length > 0 ? itemsOverride : bulkItems;
+    const firstPhotos = targetItems.map(item => item.photos[0]).filter(Boolean);
     if (firstPhotos.length === 0) {
       Alert.alert('No Photos', 'Please take some photos first before searching.');
       isAnalyzeInFlightRef.current = false;
@@ -247,7 +320,7 @@ export const BulkItemsSheet: React.FC<{
     onStartBroadSearch();
 
     const loadingStates: Record<string, ItemLoadingState> = {};
-    bulkItems.forEach(item => {
+    targetItems.forEach(item => {
       if (item.photos.length > 0) {
         loadingStates[item.id] = { isLoading: true, stage: 'Processing...' };
       }
@@ -256,7 +329,7 @@ export const BulkItemsSheet: React.FC<{
 
     try {
       const mergedConfirmedQuickMatch = { ...confirmedQuickMatchByItemId };
-      bulkItems.forEach(item => {
+      targetItems.forEach(item => {
         if (item.preSelectedSource) {
           mergedConfirmedQuickMatch[item.id] = {
             serpApiData: [item.preSelectedSource],
@@ -266,7 +339,7 @@ export const BulkItemsSheet: React.FC<{
         }
       });
 
-      const queueEntries = bulkItems.map((item, index) => {
+      const queueEntries = targetItems.map((item, index) => {
         const confirmedMatch = mergedConfirmedQuickMatch[item.id];
         const selectedIndex = typeof confirmedMatch?.preSelectedIndices?.[0] === 'number'
           ? confirmedMatch.preSelectedIndices[0]
@@ -329,36 +402,11 @@ export const BulkItemsSheet: React.FC<{
           throw new Error('Generate job response missing jobId');
         }
 
-        onSubmitItemsForProcessing?.(bulkItems.map((item) => ({ id: item.id })));
-        const itemsForGenerate = bulkItems.map((item, index) => {
-          const selectedCandidate = queueEntries[index]?.selectedCandidate;
-          return {
-            index,
-            title: item.title || selectedCandidate?.title || `Item ${index + 1}`,
-            thumb: item.photos?.[0]?.uri || selectedCandidate?.image || selectedCandidate?.thumbnail || '',
-            matchesCount: 1,
-            matchJobId: undefined,
-          };
-        });
-
-        navigation.navigate('LoadingScreen', {
-          processType: 'generate',
-          payload: {
-            jobId: directJobId,
-            firstPhotos,
-            bulkItems,
-          },
-          onCompleteRoute: {
-            screen: 'GenerateDetailsScreen',
-            params: {
-              jobId: directJobId,
-              matchJobId: '',
-              items: itemsForGenerate,
-              jobMap: {},
-              userImagesByIndex,
-            },
-          },
-        });
+        // In-place: queue the generate job; items stay in the cart and process async.
+        // Only the items actually in this job (directGenerateEntries) — not all bulkItems.
+        onQueueGeneration?.(
+          directGenerateEntries.map((entry) => ({ itemId: entry.item.id, jobId: directJobId, processType: 'generate' as const })),
+        );
         return;
       }
 
@@ -390,31 +438,10 @@ export const BulkItemsSheet: React.FC<{
       );
 
       if (analyzeFirstPhotos.length === 0 && directJobId) {
-        onSubmitItemsForProcessing?.(bulkItems.map((item) => ({ id: item.id })));
-        navigation.navigate('LoadingScreen', {
-          processType: 'generate',
-          payload: {
-            jobId: directJobId,
-            firstPhotos,
-            bulkItems,
-          },
-          onCompleteRoute: {
-            screen: 'GenerateDetailsScreen',
-            params: {
-              jobId: directJobId,
-              matchJobId: '',
-              items: bulkItems.map((item, index) => ({
-                index,
-                title: item.title || queueEntries[index]?.selectedCandidate?.title || `Item ${index + 1}`,
-                thumb: item.photos?.[0]?.uri || queueEntries[index]?.selectedCandidate?.image || queueEntries[index]?.selectedCandidate?.thumbnail || '',
-                matchesCount: 1,
-                matchJobId: undefined,
-              })),
-              jobMap: {},
-              userImagesByIndex,
-            },
-          },
-        });
+        // Only the direct-generate items are in this job — photo-less non-direct items must not be queued.
+        onQueueGeneration?.(
+          directGenerateEntries.map((entry) => ({ itemId: entry.item.id, jobId: directJobId as string, processType: 'generate' as const })),
+        );
         return;
       }
 
@@ -423,57 +450,17 @@ export const BulkItemsSheet: React.FC<{
         analyzeQuickMatchHints,
         analyzeItems,
       );
-      console.log('[ANALYZE] Job Response:', jobResponseData);
       setJobResponse(jobResponseData);
       const jobId = jobResponseData?.jobId;
 
       if (jobId) {
-        onSubmitItemsForProcessing?.(bulkItems.map((item) => ({ id: item.id })));
-        const itemsForGenerate = bulkItems.map((item, index) => ({
-          index,
-          title: item.title || queueEntries[index]?.selectedCandidate?.title || `Item ${index + 1}`,
-          thumb: item.photos?.[0]?.uri || queueEntries[index]?.selectedCandidate?.image || queueEntries[index]?.selectedCandidate?.thumbnail || '',
-          matchesCount: directGenerateEntries.some((entry) => entry.originalIndex === index) ? 1 : 0,
-          matchJobId: analyzeEntries.some((entry) => entry.originalIndex === index) ? jobId : undefined,
-        }));
-        const jobMap = directJobId
-          ? Object.fromEntries(
-              directGenerateEntries.map((entry) => [
-                entry.originalIndex,
-                { jobId: directJobId as string, status: directJobResponse?.status },
-              ])
-            )
-          : {};
-        const resultIndexMap = Object.fromEntries(
-          analyzeEntries.map((entry, analyzeIndex) => [analyzeIndex, entry.originalIndex])
-        );
-
-        navigation.navigate('LoadingScreen', {
-          processType: 'match',
-          payload: {
-            jobId,
-            bulkItems: analyzeEntries.map((entry) => entry.item),
-            firstPhotos: analyzeFirstPhotos,
-            confirmedQuickMatchByItemId: analyzeQuickMatchHints,
-            skipMatchSelection: true,
-            autoGenerateAllPlatforms: true,
-            resultIndexMap,
-          },
-          onCompleteRoute: {
-            screen: 'GenerateDetailsScreen',
-            params: {
-              jobId: '',
-              status: 'processing',
-              results: [],
-              summary: [],
-              completedAt: '',
-              matchJobId: jobId,
-              items: itemsForGenerate,
-              jobMap,
-              userImagesByIndex,
-            },
-          },
-        });
+        // In-place: direct items generate, analyze items match (auto-generates) — all async in the cart.
+        onQueueGeneration?.([
+          ...(directJobId
+            ? directGenerateEntries.map((entry) => ({ itemId: entry.item.id, jobId: directJobId as string, processType: 'generate' as const }))
+            : []),
+          ...analyzeEntries.map((entry) => ({ itemId: entry.item.id, jobId, processType: 'match' as const })),
+        ]);
       } else {
         Alert.alert('Error', 'Failed to start analysis. Please try again.');
       }
@@ -499,99 +486,92 @@ export const BulkItemsSheet: React.FC<{
   ]);
 
   return (
-    <Animated.View style={[styles.bulkItemsSheet, dynamicSheetStyle]}>
+    <Animated.View style={[styles.bulkItemsSheet, dynamicSheetStyle, { marginTop: insets.top + 6, paddingTop: 12 }]}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 84 : 0}
       >
-        {/* Drag Handle */}
+        {/* Drag handle + header share one pan: drag DOWN anywhere on this top zone
+            (not just the handle) closes the cart. activeOffsetY keeps the header
+            buttons tappable; the list below closes via pull-down overscroll. */}
         <PanGestureHandler
+          activeOffsetY={[-18, 18]}
+          failOffsetX={[-24, 24]}
           onGestureEvent={(event) => {
             const { translationY } = event.nativeEvent;
-            const minY = 0; // Fully visible
-            const maxY = SCREEN_HEIGHT * 0.5; // Drag down before close
-            const currentY = sheetTranslateY.value;
-
-            // Calculate new position based on drag
-            const newY = Math.max(minY, Math.min(maxY, currentY + translationY * 0.5));
+            // Open position is 0; dragging DOWN raises translateY toward closed,
+            // lowering the cart and bringing the capture screen back down in lockstep.
+            const newY = Math.max(0, Math.min(SCREEN_HEIGHT, translationY));
             sheetTranslateY.value = newY;
           }}
           onHandlerStateChange={(event) => {
             if (event.nativeEvent.state === State.END) {
-              const { velocityY } = event.nativeEvent;
-
-              // Snap to positions based on velocity
-              if (velocityY > 500) {
-                // Prevent accidental auto-close from gesture noise; explicit Exit handles closing.
-                sheetTranslateY.value = withSpring(0);
-              } else if (velocityY < -500) {
-                // Fast upward swipe - expand to fully visible
-                sheetTranslateY.value = withSpring(0);
+              const { translationY, velocityY } = event.nativeEvent;
+              // Dragged / flung down far enough → close; otherwise spring back open.
+              if (translationY > SCREEN_HEIGHT * 0.18 || velocityY > 800) {
+                onClose();
               } else {
-                // Snap to nearest position
-                const currentY = sheetTranslateY.value;
-                const midPoint = SCREEN_HEIGHT * 0.25;
-
-                if (currentY < midPoint) {
-                  // Closer to top - stay fully visible
-                  sheetTranslateY.value = withSpring(0);
-                } else {
-                  // Closer to bottom - default open
-                  sheetTranslateY.value = withSpring(0);
-                }
+                sheetTranslateY.value = withSpring(0);
               }
             }
           }}
         >
-          <Animated.View style={styles.dragHandle}>
-            <TouchableOpacity onPress={onClose} style={styles.dragHandleButton}>
-              <View style={styles.dragHandleBar} />
-            </TouchableOpacity>
+          <Animated.View>
+            <View style={styles.dragHandle}>
+              <TouchableOpacity onPress={onClose} style={styles.dragHandleButton}>
+                <View style={styles.dragHandleBar} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Header: [✕] [Cart · count] [+ New] */}
+            <View style={styles.sheetHeader}>
+              <View style={{minWidth: 75}}>
+                <TouchableOpacity
+                onPress={onClose}
+                style={styles.headerBackButton}
+                activeOpacity={0.8}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Icon name="close" size={20} color="#18181B" />
+                </TouchableOpacity>
+              </View>
+              
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <Text style={styles.sheetTitle}>
+                  {totalItems === 0 ? (cameraMode === 'shelf' ? 'Scan a shelf' : 'Cart') : 'Cart'}
+                </Text>
+                <Text style={{ marginTop: 2, fontSize: 12, color: '#71717A', fontWeight: '600' }}>
+                  {totalItems} item{totalItems === 1 ? '' : 's'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => {
+                  // + New → start another item and drop back to the live camera.
+                  onAddNewItem();
+                  onClose();
+                }}
+                style={styles.headerNewButton}
+                activeOpacity={0.8}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                disabled={totalItems >= MAX_BATCH_ITEMS}
+              >
+                <Icon name="plus" size={16} color={totalItems >= MAX_BATCH_ITEMS ? '#C7C7CC' : '#18181B'} />
+                <Text style={[styles.headerNewButtonText, totalItems >= MAX_BATCH_ITEMS && { color: '#C7C7CC' }]}>New</Text>
+              </TouchableOpacity>
+            </View>
           </Animated.View>
         </PanGestureHandler>
 
-        <View style={styles.sheetHeader}>
-        <View style={styles.sheetHeaderSpacer} />
-        <View style={{ flex: 1, alignItems: 'center' }}>
-          <Text style={styles.sheetTitle}>
-            {totalItems === 0
-              ? (cameraMode === 'shelf' ? 'Scan a shelf' : 'Ready to Create Items')
-              : `Analyze & List ${totalItems} New Item${totalItems > 1 ? 's' : ''}`
-            }
-          </Text>
-          <Text style={{ marginTop: 2, fontSize: 12, color: '#64748B', fontWeight: '600' }}>
-            {totalItems}/{MAX_BATCH_ITEMS}
-          </Text>
-        </View>
-        <TouchableOpacity
-          onPress={onClose}
-          style={styles.exitButton}
-          activeOpacity={0.8}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Icon name="close" size={18} color="#64748B" />
-          <Text style={styles.exitButtonText}>Exit</Text>
-        </TouchableOpacity>
-
-        {/* New Item button
-        <TouchableOpacity style={styles.headerNewItemButton} onPress={onAddNewItem}>
-          <Icon name="plus" size={20} color="#93C822" />
-        </TouchableOpacity>
-         */}
-        </View>
+        {/* Selection toolbar removed (Shop-style): the cart checks out as one; swipe a
+            card right to generate just that item. */}
 
 
         {/* Main Camera View */}
         <View style={styles.sheetContent}>
 
 
-        <Text style={styles.sheetSubtitle}>
-          {totalItems === 0
-            ? (cameraMode === 'shelf' ? 'One photo, we detect all items' : 'Take a photo to automatically create your first item')
-            : ''
-          }
-        </Text>
+        {/* (No subtitle line — the empty-state card below carries the prompt.) */}
 
         {/* Scrollable Items Container */}
         <ScrollView
@@ -600,6 +580,18 @@ export const BulkItemsSheet: React.FC<{
           ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={true}
+          scrollEventThrottle={16}
+          // Pull the list down past its top → close the cart (so "drag down
+          // anywhere" works, not just the handle/header zone).
+          onScroll={(e) => {
+            if (e.nativeEvent.contentOffset.y < -55 && !pullCloseRef.current) {
+              pullCloseRef.current = true;
+              onClose();
+            }
+          }}
+          onScrollEndDrag={() => {
+            pullCloseRef.current = false;
+          }}
           contentContainerStyle={[
             styles.scrollContent,
             {
@@ -608,6 +600,21 @@ export const BulkItemsSheet: React.FC<{
             }
           ]}
         >
+          {/* Out of free scans → the cart IS the upgrade surface: the limit and
+              the two ways forward (plan stepper / credits) live here. No nag
+              banner anywhere else; this appears only once they've actually run out. */}
+          {freemium?.exhausted ? (
+            <View style={styles.usageLimitCard}>
+              <Text style={styles.usageLimitTitle}>You're out of free scans</Text>
+              <Text style={styles.usageLimitSub}>{freemium.usageCount} of {freemium.freeLimit} used</Text>
+              <TouchableOpacity style={styles.usageLimitPrimary} onPress={onUpgrade} activeOpacity={0.85}>
+                <Text style={styles.usageLimitPrimaryText}>See plans</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.usageLimitSecondary} onPress={onAddCredits} activeOpacity={0.7}>
+                <Text style={styles.usageLimitSecondaryText}>Add credits instead</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
           {displayItems.length === 0 ? (
             (() => {
               if (cameraMode === 'shelf' && shelfPhotoUri && shelfProgress && shelfProgress.status !== 'idle') {
@@ -671,29 +678,59 @@ export const BulkItemsSheet: React.FC<{
                 );
               }
 
-              console.log('[RENDER] Showing EMPTY STATE (no items to display)');
+              // Empty cart: one quiet card. Tap → back to the camera (the
+              // headline's promise); the library path is a small link below.
               return (
-                <TouchableOpacity
-                  style={{ padding: 20, alignItems: 'center' }}
-                  onPress={onImageUpload}
-                  activeOpacity={0.8}
-                >
-                  <Icon name="camera-plus-outline" size={48} color="#ccc" />
-                  <Text style={{ marginTop: 12, fontSize: 16, color: '#666', textAlign: 'center' }}>
-                    {cameraMode === 'shelf' ? 'Scan multiple items' : 'Take your first photo to get started'}
-                  </Text>
-                  <Text style={{ marginTop: 4, fontSize: 14, color: '#999', textAlign: 'center' }}>
-                    {cameraMode === 'shelf' ? 'Tap to capture' : 'Tap to take or upload a photo'}
-                  </Text>
-                </TouchableOpacity>
+                <View style={styles.emptyState}>
+                  <TouchableOpacity style={styles.emptyStateCard} onPress={onClose} activeOpacity={0.85}>
+                    <View style={styles.emptyStateIconCircle}>
+                      <Icon name="camera-outline" size={24} color="#18181B" />
+                    </View>
+                    <Text style={styles.emptyStateTitle}>
+                      {cameraMode === 'shelf' ? 'Scan a shelf' : 'Scan your first item'}
+                    </Text>
+                    <Text style={styles.emptyStateSub}>
+                      {cameraMode === 'shelf' ? 'One photo, we find every item' : 'Snap a photo and we build the listing'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={onImageUpload} hitSlop={{ top: 10, bottom: 10, left: 16, right: 16 }}>
+                    <Text style={styles.emptyStateUploadLink}>or upload from your library</Text>
+                  </TouchableOpacity>
+                </View>
               );
             })()
           ) : (
             (() => {
-              console.log('[RENDER] Showing', displayItems.length, 'ITEMS');
               return (
                 <>
-                  {displayItems.map((item, id) => {
+                  {renderList.map((entry) => {
+                    if (entry.kind === 'folderCard') {
+                      return (
+                        <TouchableOpacity
+                          key={`folder-${entry.id}`}
+                          style={styles.folderCard}
+                          activeOpacity={0.85}
+                          onPress={() => onOpenFolder?.(entry.id)}
+                        >
+                          {entry.sourcePhotoUri ? (
+                            <Image source={{ uri: entry.sourcePhotoUri }} style={styles.folderCardThumb} />
+                          ) : (
+                            <View style={[styles.folderCardThumb, styles.folderCardThumbEmpty]}>
+                              <Icon name="folder-image" size={26} color="#93C822" />
+                            </View>
+                          )}
+                          <View style={{ flex: 1, marginLeft: 12 }}>
+                            <Text style={styles.folderCardTitle} numberOfLines={1}>{entry.label || 'Shelf'}</Text>
+                            <Text style={styles.folderCardSub}>
+                              {entry.childCount} item{entry.childCount === 1 ? '' : 's'} · Tap to review
+                            </Text>
+                          </View>
+                          <Icon name="chevron-right" size={24} color="#94A3B8" />
+                        </TouchableOpacity>
+                      );
+                    }
+                    const item = entry.item;
+                    const id = entry.index;
                     const loadingState = itemLoadingStates[item.id];
                     const matchInfo = confirmedQuickMatchByItemId?.[item.id];
                     const hasQuickScanData = quickScanStore?.[item.id];
@@ -706,12 +743,34 @@ export const BulkItemsSheet: React.FC<{
                     const selectedMatchImage = selectedMatch?.imageUrl || selectedMatch?.image || null;
                     const selectedMatchTitle = selectedMatch?.title || 'Selected match';
                     const isLocalInventoryMatch = Boolean(selectedMatch?.isLocalMatch);
+                    const scannedEarlierThisSession = !isLocalInventoryMatch && Boolean(sessionDupOwnerByItemId[item.id]);
                     const selectedMatchLabel = isLocalInventoryMatch
                       ? 'Already in Inventory'
-                      : confirmedMatch
-                        ? (matchInfo?.source === 'quick_scan_auto' ? 'Auto-selected Match' : 'Selected Match')
-                        : `${matchCount} Match${matchCount > 1 ? 'es' : ''} Found`;
+                      : scannedEarlierThisSession
+                        ? 'Already scanned'
+                        : confirmedMatch
+                          ? (matchInfo?.source === 'quick_scan_auto' ? 'Auto-selected Match' : 'Selected Match')
+                          : `${matchCount} Match${matchCount > 1 ? 'es' : ''} Found`;
                     const countDraft = countDraftByItemId[item.id] ?? String(item.quantity ?? 1);
+                    const thumbUri = selectedMatchImage || item.photos.find((p: CapturedPhoto) => p.isCover)?.uri || item.photos[0]?.uri;
+                    const matchPrice = extractPrice(selectedMatch?.price);
+                    const rowTitle = (selectedMatch && selectedMatchTitle) ? selectedMatchTitle : (item.title && !/^Item \d+$/.test(item.title) ? item.title : `Item ${id + 1}`);
+                    const isGenerated = itemStageById?.[item.id] === 'generated';
+                    const statusSubtitle = loadingState?.isLoading
+                      ? (loadingState.stage || 'Working…')
+                      : loadingState?.error
+                        ? 'Match failed · tap retry'
+                        : isGenerated
+                          ? 'Details ready · tap to review'
+                          : isLocalInventoryMatch
+                            ? 'Already in inventory'
+                            : scannedEarlierThisSession
+                              ? 'Already scanned this session'
+                              : confirmedMatch
+                                ? 'Match confirmed'
+                                : selectedMatch
+                                  ? `${matchCount} match${matchCount === 1 ? '' : 'es'} found`
+                                  : null; // no-match: the detail chip below is the ONE ask
 
                     if (currentInstruction === 'extracting' || currentInstruction === 'optimizing') {
                       return (
@@ -734,216 +793,168 @@ export const BulkItemsSheet: React.FC<{
                     }
 
                     return (
-                      <TouchableOpacity
+                      <Swipeable
                         key={`bulk-item-${item.id}`}
-                        style={[
-                          styles.bulkItemContainer,
-                          item.isActive && styles.activeItemContainer,
-                          { backgroundColor: item.isActive ? '#e8f5e8' : '#ffffff' }
-                        ]}
-                        onPress={() => onSelectItem(item.id)}
-                      >
-                        <View style={styles.itemHeader}>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                            <Text style={[styles.itemLabel, item.isActive && styles.activeItemLabel]} numberOfLines={1}>
-                              Item {id + 1}
-                            </Text>
-                            {item.quantity != null && item.quantity > 1 && (
-                              <View style={{ backgroundColor: '#93C822', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 }}>
-                                <Text style={{ fontSize: 11, color: 'white', fontWeight: '600' }}>x{item.quantity}</Text>
-                              </View>
-                            )}
-                            {item.isActive && (
-                              <View style={styles.activeItemBadge}>
-                                <Text style={styles.activeItemBadgeText}>ACTIVE</Text>
-                              </View>
-                            )}
+                        overshootLeft={false}
+                        leftThreshold={56}
+                        renderLeftActions={() => (
+                          <View style={styles.swipeGenerateAction}>
+                            <Icon name="auto-fix" size={20} color="#0A0A0B" />
+                            <Text style={styles.swipeGenerateText}>Generate</Text>
                           </View>
-                          {loadingState?.isLoading ? (
-                            <View style={styles.loadingBadge}>
-                              <UnicodeSpinner
-                                spinner={(spinners.braillewave || spinners.dots) as UnicodeSpinnerDefinition}
-                                color="#93C822"
-                                size={12}
-                              />
-                              <Text style={styles.loadingBadgeText}>{loadingState.stage}</Text>
-                            </View>
+                        )}
+                        onSwipeableOpen={(direction, swipeable) => {
+                          if (direction !== 'left') return;
+                          swipeable.close();
+                          if (loadingState?.isLoading) return;
+                          // One item, in place: the row spins while it matches/generates.
+                          handleAnalyzeAndNavigate([item], { keepSheetOpen: true });
+                        }}
+                      >
+                      <TouchableOpacity
+                        style={[styles.cartRow, item.isActive && styles.cartRowActive]}
+                        activeOpacity={0.85}
+                        onPress={() => {
+                          if (isLocalInventoryMatch) { onOpenLocalMatch?.(item.id); return; }
+                          (onOpenItemPreview || onSelectItem)?.(item.id);
+                        }}
+                      >
+                        <View style={styles.cartRowTop}>
+                          <TouchableOpacity
+                            style={styles.cartThumbWrap}
+                            activeOpacity={0.8}
+                            onPress={(e) => { e.stopPropagation?.(); onOpenPhotoModal?.(item.id); }}
+                          >
+                            {thumbUri ? (
+                              <Image source={{ uri: thumbUri }} style={styles.cartThumb} />
+                            ) : (
+                              <View style={[styles.cartThumb, styles.cartThumbEmpty]}>
+                                <Icon name="camera-plus-outline" size={20} color="#9CA3AF" />
+                              </View>
+                            )}
+                            {item.photos.length > 1 ? (
+                              <View style={styles.cartThumbBadge}><Text style={styles.cartThumbBadgeText}>{item.photos.length}</Text></View>
+                            ) : null}
+                          </TouchableOpacity>
+                          <View style={styles.cartRowMid}>
+                            <Text style={styles.cartTitle} numberOfLines={2}>{rowTitle}</Text>
+                            {statusSubtitle ? (
+                              <View style={styles.cartSubRow}>
+                                {loadingState?.isLoading ? (
+                                  <UnicodeSpinner spinner={(spinners.braillewave || spinners.dots) as UnicodeSpinnerDefinition} color="#93C822" size={11} />
+                                ) : (
+                                  <View style={[styles.cartStatusDot, { backgroundColor: loadingState?.error ? '#F87171' : isGenerated ? '#93C822' : isLocalInventoryMatch ? '#60A5FA' : confirmedMatch ? '#93C822' : '#94A3B8' }]} />
+                                )}
+                                <Text style={styles.cartSub} numberOfLines={1}>{statusSubtitle}</Text>
+                              </View>
+                            ) : null}
+                          </View>
+                          {matchPrice != null ? (
+                            <Text style={styles.cartPrice}>${Math.round(matchPrice)}</Text>
+                          ) : (
+                            <Icon name="chevron-right" size={20} color="#C7C7CC" />
+                          )}
+                        </View>
+
+                        {/* Needs-detail tag — only when the item still NEEDS it (no match yet);
+                            matched rows stay Shop-clean. Opens the camera-area
+                            Add-details sheet; no inline editing on the card. */}
+                        {!selectedMatch && !loadingState?.isLoading && !isGenerated ? (
+                          <TouchableOpacity
+                            style={styles.detailChip}
+                            activeOpacity={0.7}
+                            onPress={(e) => { e.stopPropagation?.(); onOpenAddDetails?.(item.id); }}
+                          >
+                            <Icon name="tag-plus-outline" size={15} color="#64748B" />
+                            <Text style={styles.detailChipText}>No match yet · add a detail</Text>
+                          </TouchableOpacity>
+                        ) : null}
+
+                        <View style={styles.cartActions}>
+                          <View style={styles.qtyStepper}>
+                            <TouchableOpacity
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              onPress={(e) => {
+                                e.stopPropagation?.();
+                                const q = item.quantity ?? 1;
+                                if (q <= 1) onDeleteItem(item.id);
+                                else onUpdateItemQuantity?.(item.id, q - 1);
+                              }}
+                            >
+                              <Icon name={(item.quantity ?? 1) <= 1 ? 'trash-can-outline' : 'minus'} size={16} color="#52525B" />
+                            </TouchableOpacity>
+                            <Text style={styles.qtyText}>{item.quantity ?? 1}</Text>
+                            <TouchableOpacity
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              onPress={(e) => { e.stopPropagation?.(); onUpdateItemQuantity?.(item.id, (item.quantity ?? 1) + 1); }}
+                            >
+                              <Icon name="plus" size={16} color="#52525B" />
+                            </TouchableOpacity>
+                          </View>
+                          {onToggleSavedForLater ? (
+                            <TouchableOpacity
+                              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                              onPress={(e) => { e.stopPropagation?.(); onToggleSavedForLater(item.id, true); }}
+                            >
+                              <Text style={styles.saveForLaterText}>Save for later</Text>
+                            </TouchableOpacity>
+                          ) : <View style={{ flex: 1 }} />}
+                          {/* Per-card pills stripped (Shop-style): tap the row to review,
+                              swipe right to generate. Error recovery keeps its pill. */}
+                          {loadingState?.error ? (
+                            <TouchableOpacity style={styles.cartReviewPill} onPress={(e) => { e.stopPropagation?.(); onRetryItemScan?.(item.id); }}>
+                              <Text style={styles.cartReviewPillText}>Retry</Text>
+                            </TouchableOpacity>
                           ) : null}
                         </View>
-
-                        <View style={styles.photoSlotsContainer}>
-                          {item.photos.map((photo: CapturedPhoto, photoIndex: number) => (
-                            <View key={`photo-${item.id}-${photo.id}`} style={styles.photoSlotWrapper}>
-                              <TapGestureHandler
-                                numberOfTaps={2}
-                                onHandlerStateChange={(event) => {
-                                  if (event.nativeEvent.state === State.ACTIVE) {
-                                    onSetCoverPhoto(item.id, photo.id);
-                                  }
-                                }}
-                              >
-                                <Animated.View style={[styles.photoSlot, photo.isCover && styles.coverPhotoSlot]}>
-                                  <TouchableOpacity
-                                    style={StyleSheet.absoluteFill}
-                                    onPress={() => onOpenPhotoModal?.(item.id)}
-                                    onLongPress={() => {
-                                      Alert.alert(
-                                        'Photo Options',
-                                        `Photo ${photoIndex + 1}${photo.isCover ? ' (Cover)' : ''}`,
-                                        [
-                                          { text: 'Set as Cover', onPress: () => onSetCoverPhoto(item.id, photo.id) },
-                                          { text: 'Remove from Item', onPress: () => onRemovePhoto(item.id, photo.id) },
-                                          { text: 'Cancel', style: 'cancel' },
-                                        ]
-                                      );
-                                    }}
-                                  >
-                                    <Image source={{ uri: photo.uri }} style={styles.photoSlotImage} />
-                                    <View style={styles.photoSlotNumberBadge}>
-                                      <Text style={styles.photoSlotNumberBadgeText}>{photoIndex + 1}</Text>
-                                    </View>
-                                    {photo.isCover && (
-                                      <View style={[styles.photoSlotLabel, styles.coverPhotoLabel]}>
-                                        <Text style={styles.photoSlotLabelText}>COVER</Text>
-                                      </View>
-                                    )}
-                                  </TouchableOpacity>
-                                </Animated.View>
-                              </TapGestureHandler>
-                              <TouchableOpacity
-                                style={styles.bulkPhotoDeleteButton}
-                                onPress={() => onRemovePhoto(item.id, photo.id)}
-                                hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
-                                activeOpacity={1}
-                              >
-                                <Icon name="close-circle" size={18} color="#ff4444" />
-                              </TouchableOpacity>
-                            </View>
-                          ))}
-
-                          {item.photos.length < 12 && (
-                            <TouchableOpacity style={styles.addPhotoButton} onPress={onImageUpload}>
-                              <Icon name="camera-plus-outline" size={20} color="#999" />
-                              <Text style={styles.addPhotoText}>Add Photo</Text>
-                            </TouchableOpacity>
-                          )}
-                        </View>
-
-                        {item.photos.length >= 12 && (
-                          <Text style={styles.maxPhotosText}>Maximum 12 photos per item</Text>
-                        )}
-
-                        {loadingState?.isLoading ? (
-                          <View style={styles.matchSkeletonCard}>
-                            <View style={styles.matchSkeletonThumb} />
-                            <View style={{ flex: 1 }}>
-                              <View style={styles.matchSkeletonLineShort} />
-                              <View style={styles.matchSkeletonLineLong} />
-                            </View>
-                          </View>
-                        ) : loadingState?.error ? (
-                          <View style={styles.matchErrorCard}>
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.matchErrorTitle}>Match failed</Text>
-                              <Text style={styles.matchErrorText} numberOfLines={2}>{loadingState.error}</Text>
-                            </View>
-                            <TouchableOpacity
-                              style={styles.matchActionPillDanger}
-                              onPress={(e) => {
-                                e.stopPropagation?.();
-                                onRetryItemScan?.(item.id);
-                              }}
-                            >
-                              <Text style={styles.matchActionPillDangerText}>Retry</Text>
-                            </TouchableOpacity>
-                          </View>
-                        ) : selectedMatch ? (
-                          <TouchableOpacity
-                            style={[
-                              styles.selectedMatchCard,
-                              isLocalInventoryMatch && styles.selectedMatchCardLocalInventory,
-                            ]}
-                            onPress={(e) => {
-                              e.stopPropagation?.();
-                              if (isLocalInventoryMatch) {
-                                onOpenLocalMatch?.(item.id);
-                                return;
-                              }
-                              onOpenQuickMatches?.(item.id);
-                            }}
-                          >
-                            {selectedMatchImage ? (
-                              <Image source={{ uri: selectedMatchImage }} style={styles.selectedMatchImage} />
-                            ) : (
-                              <View style={[styles.selectedMatchImage, { backgroundColor: '#E2E8F0' }]} />
-                            )}
-                            <View style={{ flex: 1, marginRight: 8 }}>
-                              <Text style={[
-                                styles.selectedMatchLabel,
-                                isLocalInventoryMatch && styles.selectedMatchLabelLocalInventory,
-                              ]}>
-                                {selectedMatchLabel}
-                              </Text>
-                              <Text style={styles.selectedMatchTitle} numberOfLines={1}>{selectedMatchTitle}</Text>
-                              {isLocalInventoryMatch ? (
-                                <Text style={styles.selectedMatchSubtitle} numberOfLines={1}>
-                                  Open stock details and clear it from this queue.
-                                </Text>
-                              ) : null}
-                            </View>
-                            <View style={[styles.matchActionPill, isLocalInventoryMatch && styles.matchActionPillLocalInventory]}>
-                              <Text style={[styles.matchActionPillText, isLocalInventoryMatch && styles.matchActionPillLocalInventoryText]}>
-                                {isLocalInventoryMatch ? 'View' : (confirmedMatch ? 'Manage' : 'Review')}
-                              </Text>
-                            </View>
-                          </TouchableOpacity>
-                        ) : (
-                          <View style={styles.noMatchCard}>
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.noMatchTitle}>No quick match yet.</Text>
-                              <Text style={styles.noMatchHint}>Deep analysis will keep searching, or retake cover photo.</Text>
-                            </View>
-                            <TouchableOpacity style={[styles.matchActionPill, styles.matchActionPillDisabled]} disabled={true}>
-                              <Text style={[styles.matchActionPillText, styles.matchActionPillDisabledText]}>Find Match</Text>
-                            </TouchableOpacity>
-                          </View>
-                        )}
-
-                        <View style={styles.itemFooterRow}>
-                          {bulkItems.length > 0 && (
-                            <TouchableOpacity
-                              style={styles.itemFooterRemoveButton}
-                              onPress={(e) => {
-                                e.stopPropagation?.();
-                                onDeleteItem(item.id);
-                              }}
-                            >
-                              <Icon name="trash-can-outline" size={16} color="#991B1B" />
-                              <Text style={styles.itemFooterRemoveText}>Remove</Text>
-                            </TouchableOpacity>
-                          )}
-                          <View style={styles.itemFooterCountBlock}>
-                            <Text style={styles.itemFooterCountLabel}>Count: </Text>
-                            <TextInput
-                              value={countDraft}
-                              onChangeText={(text) => handleCountDraftChange(item.id, text)}
-                              onBlur={() => commitCountDraft(item.id)}
-                              onEndEditing={() => commitCountDraft(item.id)}
-                              style={styles.itemFooterCountInput}
-                              keyboardType={Platform.OS === 'ios' ? 'decimal-pad' : 'numeric'}
-                              inputMode="decimal"
-                              returnKeyType="done"
-                              placeholder="1"
-                              placeholderTextColor="#94A3B8"
-                            />
-                          </View>
-                        </View>
                       </TouchableOpacity>
+                      </Swipeable>
                     );
                   })}
                 </>
               );
             })()
+          )}
+
+          {/* Saved for later — set aside, one tap back into the cart */}
+          {savedItems.length > 0 && (
+            <View style={styles.savedSection}>
+              <Text style={styles.savedSectionTitle}>Saved for later</Text>
+              {savedItems.map((sItem) => {
+                const sConf = confirmedQuickMatchByItemId?.[sItem.id];
+                const sQs = quickScanStore?.[sItem.id];
+                const sCand: any = (sConf?.serpApiData && sConf.preSelectedIndices?.length)
+                  ? sConf.serpApiData[sConf.preSelectedIndices[0]]
+                  : sQs?.matchData?.rankedCandidates?.[0];
+                const sThumb = sCand?.imageUrl || sCand?.image || sItem.photos.find((p: CapturedPhoto) => p.isCover)?.uri || sItem.photos[0]?.uri;
+                const sTitle = sCand?.title || sItem.title || 'Saved item';
+                const sPrice = extractPrice(sCand?.price);
+                return (
+                  <View key={`saved-${sItem.id}`} style={styles.savedRow}>
+                    {sThumb ? (
+                      <Image source={{ uri: sThumb }} style={styles.savedThumb} />
+                    ) : (
+                      <View style={[styles.savedThumb, styles.cartThumbEmpty]}>
+                        <Icon name="image-outline" size={16} color="#5A5A5E" />
+                      </View>
+                    )}
+                    <View style={{ flex: 1, marginHorizontal: 10 }}>
+                      <Text style={styles.savedTitle} numberOfLines={1}>{sTitle}</Text>
+                      <Text style={styles.savedSub} numberOfLines={1}>
+                        {sPrice != null ? `$${Math.round(sPrice)} · ` : ''}Qty {sItem.quantity ?? 1}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.savedMovePill}
+                      activeOpacity={0.8}
+                      onPress={() => onToggleSavedForLater?.(sItem.id, false)}
+                    >
+                      <Text style={styles.savedMovePillText}>Move to cart</Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </View>
           )}
         </ScrollView>
 
@@ -966,19 +977,13 @@ export const BulkItemsSheet: React.FC<{
 
         {/* Fixed Bottom Actions */}
         {shouldShowBottomActions && (
-          <View style={[styles.bottomActions, { paddingBottom: bottomMargin, flexDirection: 'column', gap: 6 }]}>
-            {totalItems >= 1 && (cameraMode === 'shelf' || cameraMode === 'camera') && (
-              <TouchableOpacity
-                style={[styles.newItemButton, totalItems >= MAX_BATCH_ITEMS && { opacity: 0.45 }]}
-                onPress={onAddNewItem}
-                disabled={totalItems >= MAX_BATCH_ITEMS}
-              >
-                <Icon name="plus" size={18} color="#666" />
-                <Text style={styles.newItemButtonText}>
-                  {totalItems >= MAX_BATCH_ITEMS ? 'Item Limit Reached' : 'Add Item'}
-                </Text>
-              </TouchableOpacity>
-            )}
+          <View style={[styles.bottomActions, { paddingBottom: bottomMargin + 40, flexDirection: 'column', gap: 8 }]}>
+            {cartSubtotal > 0 ? (
+              <View style={styles.subtotalRow}>
+                <Text style={styles.subtotalLabel}>Subtotal</Text>
+                <Text style={styles.subtotalValue}>${Math.round(cartSubtotal)}</Text>
+              </View>
+            ) : null}
             <TouchableOpacity
               style={[
                 styles.searchForProductButton,
@@ -990,32 +995,29 @@ export const BulkItemsSheet: React.FC<{
                   // Direct transition from shelf to camera mode
                   onStartBroadSearch(); // We'll hijack this prop or close modal
                 } else {
-                  handleAnalyzeAndNavigate();
+                  // Checkout the selection, or the whole active cart — never saved-for-later items.
+                  handleAnalyzeAndNavigate(
+                    bulkItems.filter((i) => !savedSet.has(i.id) && (!selectionActive || selectedIds.has(i.id))),
+                  );
                 }
               }}
             >
-              {hasLoadingItems ? (
+              {hasLoadingItems && (
                 <UnicodeSpinner
-                  spinner={{ frames: ['■□■', '□■□', '▪□▪', '□▪□'], interval: 180 }}
+                  spinner={(spinners.braillewave || spinners.dots) as UnicodeSpinnerDefinition}
                   color="#FFFFFF"
-                  size={12}
+                  size={13}
                   style={{ marginRight: 8 }}
                 />
-              ) : (
-                <Icon
-                  name="rocket-launch-outline"
-                  size={20}
-                  color="white"
-                />
               )}
-              <Text style={[styles.searchForProductButtonText, { marginLeft: 8 }]}>
+              <Text style={styles.searchForProductButtonText}>
                 {cameraMode === 'shelf' && totalItems > 0
                     ? `Take Photos for ${totalItems} Item${totalItems > 1 ? 's' : ''}`
                     : cameraMode !== 'shelf' && totalItems === 0
                       ? 'Take a photo to continue'
                       : hasLoadingItems
                         ? 'Analyzing...'
-                        : `Analyze & List ${totalItems} Items`}
+                        : `Checkout ${selectionActive ? selectedIds.size : totalItems} Item${(selectionActive ? selectedIds.size : totalItems) === 1 ? '' : 's'}`}
               </Text>
             </TouchableOpacity>
           </View>
@@ -1031,15 +1033,35 @@ export const BulkItemsSheet: React.FC<{
 const styles = StyleSheet.create({
   bulkItemsSheet: {
     position: 'absolute',
-    top: SCREEN_HEIGHT * 0.12,
+    top: 0, // full-screen cart; rises from below as the capture screen lifts away (reachability)
+    bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: 'white',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 20,
+    backgroundColor: '#F6F7F4',
+    paddingTop: 12, // overridden inline (marginTop carries the top peek gap)
     paddingBottom: 20,
-    marginBottom: 0,
+    // Full-width cart. The capture screen peeks above it (transparent Modal) and
+    // the camera card's own rounded bottom (28) bleeds down into this rounded top
+    // — that's the "rounded up toward the camera" peek. Tapping the exposed peek
+    // springs the cart back down (go back up). marginTop (inline) sizes the peek.
+    marginHorizontal: 0,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+  },
+  swipeGenerateAction: {
+    width: 104,
+    borderRadius: 18,
+    backgroundColor: '#93C822',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    marginRight: 10,
+    marginVertical: 4,
+  },
+  swipeGenerateText: {
+    color: '#0A0A0B',
+    fontSize: 12,
+    fontWeight: '700',
   },
   sheetHeader: {
     flexDirection: 'row',
@@ -1049,9 +1071,9 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   sheetTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#18181B',
   },
   headerNewItemButton: {
     width: 32,
@@ -1080,6 +1102,153 @@ const styles = StyleSheet.create({
     borderColor: '#D9D9D9',
     minHeight: 100,
   },
+  folderCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
+  },
+  folderCardThumb: { width: 56, height: 56, borderRadius: 12, backgroundColor: '#F1F1EE' },
+  folderCardThumbEmpty: { alignItems: 'center', justifyContent: 'center' },
+  folderCardTitle: { fontSize: 16, fontWeight: '700', color: '#18181B' },
+  folderCardSub: { fontSize: 13, color: '#71717A', marginTop: 3 },
+  detailChip: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginTop: 12, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, backgroundColor: 'rgba(245,158,11,0.12)' },
+  detailChipText: { fontSize: 13, color: '#A2611A', fontWeight: '600' },
+  detailEditor: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
+  detailInput: { flex: 1, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#ECEBE6', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, fontSize: 14, color: '#18181B' },
+  detailIconBtn: { width: 40, height: 40, borderRadius: 10, backgroundColor: '#F1F1EE', alignItems: 'center', justifyContent: 'center' },
+  // Dark Ruggable-style cart row
+  cartRow: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: '#ECEBE6' },
+  cartRowActive: { borderWidth: 1, borderColor: 'rgba(147,200,34,0.5)' },
+  cartRowTop: { flexDirection: 'row', alignItems: 'center' },
+  cartThumbWrap: { marginLeft: 10, position: 'relative' },
+  cartThumb: { width: 56, height: 56, borderRadius: 12, backgroundColor: '#F1F1EE' },
+  cartThumbEmpty: { alignItems: 'center', justifyContent: 'center' },
+  cartThumbBadge: { position: 'absolute', top: -6, right: -6, minWidth: 20, height: 20, borderRadius: 10, backgroundColor: '#93C822', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5 },
+  cartThumbBadgeText: { fontSize: 11, fontWeight: '700', color: '#0A0A0B' },
+  cartRowMid: { flex: 1, marginHorizontal: 12 },
+  cartTitle: { fontSize: 15, fontWeight: '600', color: '#18181B', lineHeight: 20 },
+  cartSubRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 5 },
+  cartStatusDot: { width: 7, height: 7, borderRadius: 4 },
+  cartSub: { fontSize: 13, color: '#71717A', flex: 1 },
+  cartPrice: { fontSize: 16, fontWeight: '700', color: '#18181B', marginLeft: 6 },
+  cartActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 },
+  qtyStepper: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: '#F1F1EE', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 7 },
+  qtyText: { fontSize: 15, fontWeight: '700', color: '#18181B', minWidth: 16, textAlign: 'center' },
+  cartReviewPill: { backgroundColor: '#18181B', borderRadius: 999, paddingHorizontal: 16, paddingVertical: 8 },
+  cartReviewPillText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  cartAddDetailsPill: { backgroundColor: '#93C822' },
+  saveForLaterText: { fontSize: 13, fontWeight: '600', color: '#71717A', textDecorationLine: 'underline' },
+  // Wireframe header buttons + select toolbar
+  headerBackButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  // Matches the ✕ exit button: white pill, black text, same soft shadow.
+  headerNewButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  headerNewButtonText: { fontSize: 14, fontWeight: '700', color: '#18181B' },
+  // Out-of-free-scans panel — the cart's one upgrade surface.
+  usageLimitCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    marginHorizontal: 20,
+    marginBottom: 16,
+    padding: 18,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
+  },
+  usageLimitTitle: { fontSize: 17, fontWeight: '700', color: '#18181B' },
+  usageLimitSub: { fontSize: 13, fontWeight: '600', color: '#71717A', marginTop: 4, marginBottom: 14 },
+  usageLimitPrimary: {
+    alignSelf: 'stretch',
+    backgroundColor: '#93C822',
+    borderRadius: 22,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  usageLimitPrimaryText: { fontSize: 15, fontWeight: '700', color: '#0A0A0B' },
+  usageLimitSecondary: { marginTop: 10, paddingVertical: 6, paddingHorizontal: 12 },
+  usageLimitSecondaryText: { fontSize: 14, fontWeight: '600', color: '#5A8F12' },
+  // Empty cart
+  emptyState: { alignItems: 'center', paddingTop: 28 },
+  emptyStateCard: { alignItems: 'center', paddingVertical: 8, paddingHorizontal: 24 },
+  emptyStateIconCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  emptyStateTitle: { fontSize: 17, fontWeight: '700', color: '#18181B', marginTop: 14 },
+  emptyStateSub: { fontSize: 13, color: '#71717A', marginTop: 4, textAlign: 'center' },
+  emptyStateUploadLink: { fontSize: 14, fontWeight: '600', color: '#5A8F12', marginTop: 14 },
+  listToolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    marginBottom: 8,
+  },
+  listToolbarCount: { fontSize: 13, fontWeight: '600', color: '#71717A' },
+  // Saved for later
+  savedSection: { marginTop: 20 },
+  savedSectionTitle: { fontSize: 15, fontWeight: '700', color: '#18181B', marginBottom: 10 },
+  savedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
+  },
+  savedThumb: { width: 40, height: 40, borderRadius: 10, backgroundColor: '#F1F1EE' },
+  savedTitle: { fontSize: 14, fontWeight: '600', color: '#18181B' },
+  savedSub: { fontSize: 12, color: '#71717A', marginTop: 1 },
+  savedMovePill: {
+    backgroundColor: 'rgba(147, 200, 34, 0.15)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  savedMovePillText: { fontSize: 13, fontWeight: '700', color: '#5A8F12' },
   photoSlotsContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1152,32 +1321,42 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#f5f5f5',
-    borderRadius: 12,
-    paddingVertical: 16,
-    marginBottom: 10,
+    backgroundColor: '#1F1F22',
+    borderRadius: 14,
+    paddingVertical: 15,
+    marginBottom: 4,
     gap: 8,
   },
   newItemButtonText: {
     fontSize: 16,
-    color: '#666',
-    fontWeight: '500',
+    color: '#C7C7CC',
+    fontWeight: '600',
   },
   searchForProductButton: {
     backgroundColor: '#93C822',
-    borderRadius: 12,
-    paddingVertical: 16,
-    marginBottom: 10,
+    borderRadius: 16,
+    paddingVertical: 17,
+    marginBottom: 4,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     gap: 8,
   },
   searchForProductButtonText: {
-    color: 'white',
-    fontSize: 16,
+    color: '#FFFFFF',
+    fontSize: 17,
     fontWeight: '600',
   },
+  subtotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+    paddingVertical: 6,
+    marginBottom: 2,
+  },
+  subtotalLabel: { fontSize: 15, color: '#71717A', fontWeight: '600' },
+  subtotalValue: { fontSize: 20, color: '#18181B', fontWeight: '800' },
   dragHandle: {
     alignItems: 'center',
     marginBottom: 10,
@@ -1486,7 +1665,7 @@ const styles = StyleSheet.create({
   },
   bottomActions: {
     borderTopWidth: 1,
-    borderTopColor: '#eee',
+    borderTopColor: '#ECEBE6',
     paddingTop: 10,
     marginTop: 10,
     marginBottom: 10,
@@ -1498,13 +1677,13 @@ const styles = StyleSheet.create({
     maxHeight: 34,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
-    backgroundColor: '#F2F2F7',
+    borderColor: '#2C2C2E',
+    backgroundColor: '#1F1F22',
     flexDirection: 'row',
     alignItems: 'center',
   },
   exitButtonText: {
-    color: '#64748B',
+    color: '#C7C7CC',
     fontWeight: '600',
     marginLeft: 6,
     fontSize: 15,
@@ -1512,5 +1691,23 @@ const styles = StyleSheet.create({
   sheetHeaderSpacer: {
     minWidth: 72,
     minHeight: 34,
+  },
+  selectAllButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    minHeight: 34,
+    maxHeight: 34,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
+    backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  selectAllText: {
+    color: '#52525B',
+    fontWeight: '600',
+    marginLeft: 6,
+    fontSize: 15,
   },
 });

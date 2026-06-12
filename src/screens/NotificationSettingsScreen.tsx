@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Switch, ScrollView, Alert, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Switch, ScrollView, Alert, TouchableOpacity, ActivityIndicator, StatusBar } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { useTheme } from '../context/ThemeContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { CheckCircle2, Package, Sprout, AlertTriangle, Megaphone } from 'lucide-react-native';
 import { useAuth } from '@clerk/clerk-expo';
 import { API_BASE_URL } from '../config/env';
+import PageHeader from '../components/ui/PageHeader';
 
 export default function NotificationSettingsScreen() {
-    const { colors } = useTheme();
     const navigation = useNavigation();
+    const insets = useSafeAreaInsets();
     const { getToken } = useAuth();
 
     const [loading, setLoading] = useState(true);
@@ -112,186 +113,176 @@ export default function NotificationSettingsScreen() {
         }
     };
 
-    const Option = ({ label, description, value, onValueChange, icon }: any) => (
-        <View style={[styles.optionContainer, { backgroundColor: colors.surface, borderColor: 'rgba(0,0,0,0.05)' }]}>
-            <View style={styles.optionHeader}>
-                <View style={styles.optionIconContainer}>
-                    <Icon name={icon} size={24} color={colors.primary} />
-                </View>
-                <View style={styles.optionTextContainer}>
-                    <Text style={[styles.optionLabel, { color: colors.text }]}>{label}</Text>
-                    <Text style={[styles.optionDescription, { color: colors.textSecondary }]}>{description}</Text>
-                </View>
-                <Switch
-                    value={value}
-                    onValueChange={onValueChange}
-                    trackColor={{ false: '#767577', true: colors.primary }}
-                    thumbColor={value ? '#fff' : '#f4f3f4'}
-                />
+    const Option = ({ label, description, value, onValueChange, icon, first }: any) => (
+        <View style={[styles.row, !first && styles.rowDivider]}>
+            <View style={styles.rowIcon}>{icon}</View>
+            <View style={styles.rowText}>
+                <Text style={styles.rowTitle}>{label}</Text>
+                <Text style={styles.rowDescription}>{description}</Text>
             </View>
+            <Switch
+                value={value}
+                onValueChange={onValueChange}
+                trackColor={{ false: '#D4D4D8', true: '#93C822' }}
+                thumbColor="#FFFFFF"
+            />
         </View>
     );
 
     return (
-        <View style={[styles.container, { backgroundColor: colors.background }]}>
-            <View style={[styles.header, { borderBottomColor: 'rgba(0,0,0,0.05)' }]}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-                    <Icon name="arrow-left" size={24} color={colors.text} />
-                </TouchableOpacity>
-                <Text style={[styles.headerTitle, { color: colors.text }]}>Notifications</Text>
-            </View>
+        <View style={styles.root}>
+            <StatusBar barStyle="dark-content" />
+            <ScrollView
+                contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
+                showsVerticalScrollIndicator={false}
+            >
+                <PageHeader title="Notifications" onBack={() => navigation.goBack()} />
 
-            {loading ? (
-                <View style={styles.center}>
-                    <ActivityIndicator size="large" color={colors.primary} />
-                </View>
-            ) : (
-                <ScrollView contentContainerStyle={styles.content}>
-                    <Option
-                        label="Job Completions"
-                        description="Get notified when AI generation, matching, or scanning finishes."
-                        value={preferences.JobCompletions}
-                        onValueChange={() => togglePreference('JobCompletions')}
-                        icon="check-circle-outline"
-                    />
-
-                    <Option
-                        label="Shared Inventory"
-                        description="When partners share new inventory with you."
-                        value={preferences.InventorySharing}
-                        onValueChange={() => togglePreference('InventorySharing')}
-                        icon="package-variant"
-                    />
-
-                    <Option
-                        label="Sprout Insights"
-                        description="AI-driven insights and opportunities."
-                        value={preferences.SproutInsights}
-                        onValueChange={() => togglePreference('SproutInsights')}
-                        icon="sprout-outline"
-                    />
-
-                    <Option
-                        label="Sync Alerts"
-                        description="Critical issues with platform connections."
-                        value={preferences.SyncAlerts}
-                        onValueChange={() => togglePreference('SyncAlerts')}
-                        icon="alert-circle-outline"
-                    />
-
-                    <Option
-                        label="Marketing Updates"
-                        description="News and updates about Anorha."
-                        value={preferences.MarketingUpdates}
-                        onValueChange={() => togglePreference('MarketingUpdates')}
-                        icon="bullhorn-outline"
-                    />
-
-                    <View style={[styles.testSection, { backgroundColor: colors.surface, borderColor: 'rgba(0,0,0,0.05)' }]}>
-                        <Text style={[styles.testLabel, { color: colors.text }]}>Test push</Text>
-                        <Text style={[styles.testDescription, { color: colors.textSecondary }]}>
-                            Send a test notification to this device to verify push is working.
-                        </Text>
-                        <TouchableOpacity
-                            style={[styles.testButton, { backgroundColor: colors.primary }]}
-                            onPress={sendTestNotification}
-                            disabled={testSending}
-                        >
-                            {testSending ? (
-                                <ActivityIndicator size="small" color="#fff" />
-                            ) : (
-                                <Text style={styles.testButtonText}>Send test notification</Text>
-                            )}
-                        </TouchableOpacity>
+                {loading ? (
+                    <View style={styles.center}>
+                        <ActivityIndicator size="large" color="#93C822" />
                     </View>
+                ) : (
+                    <>
+                        <Text style={styles.sectionLabel}>Push notifications</Text>
+                        <View style={styles.listCard}>
+                            <Option
+                                first
+                                label="Job Completions"
+                                description="Get notified when AI generation, matching, or scanning finishes."
+                                value={preferences.JobCompletions}
+                                onValueChange={() => togglePreference('JobCompletions')}
+                                icon={<CheckCircle2 size={22} color="#18181B" />}
+                            />
+                            <Option
+                                label="Shared Inventory"
+                                description="When partners share new inventory with you."
+                                value={preferences.InventorySharing}
+                                onValueChange={() => togglePreference('InventorySharing')}
+                                icon={<Package size={22} color="#18181B" />}
+                            />
+                            <Option
+                                label="Sprout Insights"
+                                description="AI-driven insights and opportunities."
+                                value={preferences.SproutInsights}
+                                onValueChange={() => togglePreference('SproutInsights')}
+                                icon={<Sprout size={22} color="#18181B" />}
+                            />
+                            <Option
+                                label="Sync Alerts"
+                                description="Critical issues with platform connections."
+                                value={preferences.SyncAlerts}
+                                onValueChange={() => togglePreference('SyncAlerts')}
+                                icon={<AlertTriangle size={22} color="#18181B" />}
+                            />
+                            <Option
+                                label="Marketing Updates"
+                                description="News and updates about Anorha."
+                                value={preferences.MarketingUpdates}
+                                onValueChange={() => togglePreference('MarketingUpdates')}
+                                icon={<Megaphone size={22} color="#18181B" />}
+                            />
+                        </View>
 
-                </ScrollView>
-            )}
+                        <Text style={styles.sectionLabel}>Test push</Text>
+                        <View style={styles.testCard}>
+                            <Text style={styles.rowTitle}>Verify push delivery</Text>
+                            <Text style={styles.rowDescription}>
+                                Send a test notification to this device to verify push is working.
+                            </Text>
+                            <TouchableOpacity
+                                style={styles.testButton}
+                                onPress={sendTestNotification}
+                                disabled={testSending}
+                                activeOpacity={0.85}
+                            >
+                                {testSending ? (
+                                    <ActivityIndicator size="small" color="#fff" />
+                                ) : (
+                                    <Text style={styles.testButtonText}>Send test notification</Text>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    </>
+                )}
+            </ScrollView>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
+    root: {
         flex: 1,
-    },
-    header: {
-        paddingTop: 60,
-        paddingBottom: 16,
-        paddingHorizontal: 20,
-        flexDirection: 'row',
-        alignItems: 'center',
-        borderBottomWidth: 1,
-    },
-    backButton: {
-        marginRight: 16,
-    },
-    headerTitle: {
-        fontSize: 20,
-        fontWeight: 'bold',
+        backgroundColor: '#F6F7F4',
     },
     center: {
-        flex: 1,
-        justifyContent: 'center',
+        paddingVertical: 80,
         alignItems: 'center',
+        justifyContent: 'center',
     },
-    content: {
-        padding: 20,
+    sectionLabel: {
+        fontSize: 13,
+        fontFamily: 'Inter_600SemiBold',
+        color: '#71717A',
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
+        marginBottom: 10,
+        marginLeft: 4,
     },
-    optionContainer: {
-        borderRadius: 12,
-        marginBottom: 16,
+    listCard: {
+        backgroundColor: '#FFFFFF',
+        borderRadius: 20,
+        paddingHorizontal: 16,
         borderWidth: 1,
-        padding: 16,
+        borderColor: '#ECEBE6',
+        marginBottom: 24,
     },
-    optionHeader: {
+    row: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
+        gap: 14,
+        paddingVertical: 14,
     },
-    optionIconContainer: {
-        width: 40,
+    rowDivider: {
+        borderTopWidth: 1,
+        borderTopColor: '#F1F1EE',
+    },
+    rowIcon: {
+        width: 28,
         alignItems: 'center',
     },
-    optionTextContainer: {
+    rowText: {
         flex: 1,
-        paddingHorizontal: 12,
     },
-    optionLabel: {
+    rowTitle: {
         fontSize: 16,
-        fontWeight: '600',
-        marginBottom: 4,
+        fontFamily: 'Inter_600SemiBold',
+        color: '#18181B',
     },
-    optionDescription: {
+    rowDescription: {
         fontSize: 13,
-        lineHeight: 18,
+        fontFamily: 'Inter_400Regular',
+        color: '#71717A',
+        marginTop: 2,
     },
-    testSection: {
-        borderRadius: 12,
-        marginTop: 8,
-        marginBottom: 24,
-        borderWidth: 1,
+    testCard: {
+        backgroundColor: '#FFFFFF',
+        borderRadius: 20,
         padding: 16,
-    },
-    testLabel: {
-        fontSize: 16,
-        fontWeight: '600',
-        marginBottom: 4,
-    },
-    testDescription: {
-        fontSize: 13,
-        lineHeight: 18,
-        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#ECEBE6',
     },
     testButton: {
-        paddingVertical: 12,
-        paddingHorizontal: 16,
-        borderRadius: 8,
+        backgroundColor: '#93C822',
+        borderRadius: 16,
+        paddingVertical: 15,
         alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: 14,
     },
     testButtonText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '600',
+        color: '#FFFFFF',
+        fontSize: 15,
+        fontFamily: 'Inter_700Bold',
     },
 });

@@ -38,14 +38,16 @@ import {
 } from '../components/quest/QuestKit';
 import {
   LobbyHeader,
-  HeaderIconBtn,
-  IssueCard,
+  HeaderIconGroup,
+  IssueLane,
+  LaneIssue,
+  IconName,
   InventoryRow,
   InventoryItemData,
-  RaisedBtn,
 } from '../components/quest/LobbyKit';
-import { RC } from '../components/resolve/ResolveKit';
-import { MatchResolver, MatchCase, Decision } from '../components/resolve/matchResolvers';
+import BottomActionBar from '../components/BottomActionBar';
+import { RC, MiniProgress } from '../components/resolve/ResolveKit';
+import { MatchResolver, MatchCase, Decision, ResolveMeta, CandidateItem } from '../components/resolve/matchResolvers';
 import { classifyMatch, applyMatchDecision } from '../components/resolve/classifyMatch';
 
 // ---------------------------------------------------------------------------
@@ -164,6 +166,133 @@ const QUEST_META: Record<QuestId, { title: string; sub: string; unit: string; ac
   },
 };
 
+// ── Issue grouping — fold the v2 resolver cases into lobby "issue" rows ──────
+// Every MatchCase kind the backend can emit maps to one user-facing group, so
+// the lobby surfaces ALL of them (variant families, consolidate, compare,
+// collision, bundle/split, kit, stale, orphan, find) instead of three
+// hardcoded buckets. The first non-empty group is the active step.
+type IssueCategory =
+  | 'fuzzy'
+  | 'variants'
+  | 'duplicates'
+  | 'conflicts'
+  | 'collisions'
+  | 'bundles'
+  | 'kits'
+  | 'stale'
+  | 'orphan'
+  | 'find';
+
+// Fuzzy first — the biggest pile with the easiest answer is the Duolingo
+// opening move: one screen, one tap, huge visible progress.
+const ISSUE_ORDER: IssueCategory[] = [
+  'fuzzy',
+  'variants',
+  'duplicates',
+  'conflicts',
+  'collisions',
+  'bundles',
+  'kits',
+  'stale',
+  'orphan',
+  'find',
+];
+
+function caseCategory(kind: MatchCase['kind']): IssueCategory {
+  switch (kind) {
+    case 'fuzzy':
+      return 'fuzzy';
+    case 'variants':
+    case 'align':
+    case 'onesided':
+      return 'variants';
+    case 'consolidate':
+      return 'duplicates';
+    case 'compare':
+      return 'conflicts';
+    case 'collision':
+      return 'collisions';
+    case 'split':
+      return 'bundles';
+    case 'kit':
+      return 'kits';
+    case 'stale':
+      return 'stale';
+    case 'orphan':
+    case 'orphans':
+      return 'orphan';
+    case 'find':
+    default:
+      return 'find';
+  }
+}
+
+const plural = (n: number) => (n === 1 ? '' : 's');
+
+// Dead-simple groups — the title is the question, the sub is just a count.
+const CAT_META: Record<IssueCategory, { icon: IconName; title: string; unit: string; sub: (n: number) => string }> = {
+  fuzzy: {
+    icon: 'check-decagram',
+    title: 'Confirm matches',
+    unit: 'items',
+    sub: (n) => `${n} yes-or-no${n === 1 ? '' : 's'}`,
+  },
+  variants: {
+    icon: 'puzzle',
+    title: 'Group lookalikes',
+    unit: 'products',
+    sub: (n) => `${n} listing${plural(n)}`,
+  },
+  duplicates: {
+    icon: 'content-copy',
+    title: 'Combine duplicates',
+    unit: 'items',
+    sub: (n) => `${n} item${plural(n)}`,
+  },
+  conflicts: {
+    icon: 'compare',
+    title: 'Pick the right details',
+    unit: 'items',
+    sub: (n) => `${n} item${plural(n)}`,
+  },
+  collisions: {
+    icon: 'swap-horizontal',
+    title: 'Same SKU, different product?',
+    unit: 'items',
+    sub: (n) => `${n} SKU${plural(n)}`,
+  },
+  bundles: {
+    icon: 'package-variant-closed',
+    title: 'Split bundles',
+    unit: 'bundles',
+    sub: (n) => `${n} bundle${plural(n)}`,
+  },
+  kits: {
+    icon: 'shape-outline',
+    title: 'Link kits to pieces',
+    unit: 'sets',
+    sub: (n) => `${n} set${plural(n)}`,
+  },
+  stale: {
+    icon: 'link-variant-off',
+    title: 'Fix broken links',
+    unit: 'links',
+    sub: (n) => `${n} link${plural(n)}`,
+  },
+  orphan: {
+    icon: 'tray-arrow-down',
+    title: 'Keep or remove?',
+    unit: 'items',
+    sub: (n) => `${n} item${plural(n)}`,
+  },
+  find: {
+    icon: 'magnify',
+    title: 'Find a match',
+    unit: 'items',
+    sub: (n) => `${n} item${plural(n)}`,
+  },
+};
+
 type RouteType = RouteProp<AppStackParamList, 'MappingReview'>;
 type NavType = StackNavigationProp<AppStackParamList, 'MappingReview'>;
 
@@ -213,13 +342,40 @@ const MappingReviewScreen: React.FC = () => {
   const [lessonStart, setLessonStart] = useState(0);
   // Match-lobby sub-view: the queue of issues, the full inventory, or ignored.
   const [lobbyTab, setLobbyTab] = useState<'issues' | 'inventory' | 'ignored'>('issues');
+  // "N matched themselves" receipt banner — collapsed by default, expands to a peek.
+  const [autoOpen, setAutoOpen] = useState(false);
   // Resolver deck — frozen at entry so resolving cards doesn't reshuffle indices.
   const [deck, setDeck] = useState<MatchCase[]>([]);
+  // Inventory / Ignored tab state: search, tap-for-detail, long-press multi-select.
+  const [invSearch, setInvSearch] = useState('');
+  const [selMode, setSelMode] = useState(false);
+  const [selIds, setSelIds] = useState<Set<string>>(new Set());
+  const [detail, setDetail] = useState<AnnotatedSuggestion | null>(null);
 
   const annotated = useMemo<AnnotatedSuggestion[]>(
     () => annotateSuggestions(suggestions || []),
     [suggestions],
   );
+
+  // Classify the draft into v2 resolver cases once — the lobby groups these
+  // into issue rows, and the resolver deck steps through them in the same order.
+  // autoResolved = matches identical on every field; they link without a card.
+  const { cases, autoResolved } = useMemo(
+    () => classifyMatch(annotated, platformName),
+    [annotated, platformName],
+  );
+
+  useEffect(() => {
+    if (!autoResolved.length) return;
+    const ids = new Set(autoResolved);
+    setSuggestions((prev) =>
+      (prev || []).map((s) =>
+        ids.has(s.platformProduct.id)
+          ? { ...s, action: 'LINK_EXISTING', isSelected: true, resolved: true }
+          : s,
+      ),
+    );
+  }, [autoResolved, setSuggestions]);
 
   const matchedItems = useMemo(
     () => annotated.filter((s) => s.resolved && (s.action === 'LINK_EXISTING' || s.action === 'CREATE_NEW')),
@@ -279,21 +435,31 @@ const MappingReviewScreen: React.FC = () => {
   );
 
   const itemsLeft = newItems.length + fuzzyItems.length + variantFamilies.reduce((n, f) => n + f.items.length, 0);
-  const allClear = !activeQuest;
+
+  // Items still needing a decision across the v2 cases (the receipt math).
+  const itemsLeftCount = useMemo(
+    () => cases.reduce((n, c) => n + (c.itemIds?.length || 1), 0),
+    [cases],
+  );
 
   // ── Match-lobby derivations (issues queue · inventory · ignored) ──────────
   const ignoredItems = useMemo(
     () => annotated.filter((s) => s.action === 'IGNORE'),
     [annotated],
   );
-  const variantItemCount = useMemo(
-    () => variantFamilies.reduce((n, f) => n + f.items.length, 0),
-    [variantFamilies],
-  );
-  const issueCount =
-    (variantItemCount > 0 ? 1 : 0) + (fuzzyItems.length > 0 ? 1 : 0) + (newItems.length > 0 ? 1 : 0);
-  const firstIssueQuest: QuestId | null =
-    variantItemCount > 0 ? 'variants' : fuzzyItems.length > 0 ? 'fuzzy' : newItems.length > 0 ? 'new' : null;
+
+  // The list behind the Inventory/Ignored tabs, filtered by the search box.
+  const invFiltered = useMemo(() => {
+    const base = lobbyTab === 'ignored' ? ignoredItems : annotated;
+    const q = invSearch.trim().toLowerCase();
+    if (!q) return base;
+    return base.filter(
+      (s) =>
+        (s.platformProduct.title || '').toLowerCase().includes(q) ||
+        (s.platformProduct.sku || '').toLowerCase().includes(q) ||
+        (s.suggestedCanonicalProduct?.title || '').toLowerCase().includes(q),
+    );
+  }, [lobbyTab, ignoredItems, annotated, invSearch]);
 
   const toInvItem = useCallback(
     (s: AnnotatedSuggestion): InventoryItemData => {
@@ -303,8 +469,7 @@ const MappingReviewScreen: React.FC = () => {
       let statusLabel = 'New';
       if (s.action === 'IGNORE') statusLabel = 'Ignored';
       else if (s.resolved && (s.action === 'LINK_EXISTING' || s.action === 'CREATE_NEW')) statusLabel = 'Matched';
-      else if (s.reviewReason === 'variant_mismatch') statusLabel = 'Variant';
-      else if (s.reviewReason) statusLabel = 'Review';
+      else if (s.reviewReason) statusLabel = 'Needs answer';
       return {
         id: p.id,
         title: p.title || 'Untitled',
@@ -318,23 +483,164 @@ const MappingReviewScreen: React.FC = () => {
     [platformName],
   );
 
-  // Enter the v2 resolver deck — classify the draft once, step through cards.
-  const enterResolve = useCallback(() => {
-    const cases = classifyMatch(annotated);
-    if (cases.length === 0) return;
-    setDeck(cases);
+  // Enter the v2 resolver deck. The deck is FILTERED to the tapped group, so
+  // the progress bar reads "3/46" (this group), never "48/343" (everything) —
+  // and finishing the group drops you back in the lobby with it cleared.
+  const enterResolve = useCallback(
+    (cat?: IssueCategory) => {
+      const filtered = cat ? cases.filter((c) => caseCategory(c.kind) === cat) : cases;
+      if (filtered.length === 0) return;
+      setDeck(filtered);
+      setView({ kind: 'resolve', i: 0 });
+    },
+    [cases],
+  );
+
+  // Jump straight to ONE item's card (from the item detail sheet's "Fix now").
+  const enterResolveCase = useCallback((mc: MatchCase) => {
+    setDeck([mc]);
     setView({ kind: 'resolve', i: 0 });
-  }, [annotated]);
+  }, []);
+
+  // One lobby "issue" row per non-empty category, ordered, first = active step.
+  // The pill + CTA count CARDS (questions to answer = real effort); the sub
+  // describes ITEMS (what those questions cover) — they differ when cards
+  // batch many items (variant families, the orphans list).
+  const issues = useMemo<LaneIssue[]>(() => {
+    const byCat = new Map<IssueCategory, { cards: number; items: number; thumbs: string[] }>();
+    cases.forEach((c) => {
+      const cat = caseCategory(c.kind);
+      const e = byCat.get(cat) || { cards: 0, items: 0, thumbs: [] };
+      e.cards += 1;
+      e.items += c.itemIds?.length || 1;
+      // Real product art for the row's stack — what the group is ABOUT.
+      if (e.thumbs.length < 3) {
+        const pool = [
+          c.itemImage,
+          c.bImage,
+          c.aImage,
+          ...(c.candidates || []).map((x) => x.uri),
+        ].filter((u): u is string => !!u);
+        for (const u of pool) {
+          if (e.thumbs.length >= 3) break;
+          if (!e.thumbs.includes(u)) e.thumbs.push(u);
+        }
+      }
+      byCat.set(cat, e);
+    });
+    const present = ISSUE_ORDER.filter((cat) => byCat.has(cat));
+    return present.map((cat, i) => {
+      const meta = CAT_META[cat];
+      const e = byCat.get(cat)!;
+      return {
+        id: cat,
+        icon: meta.icon,
+        title: meta.title,
+        sub: meta.sub(e.items),
+        count: e.cards,
+        state: i === 0 ? 'active' : 'locked',
+        ctaLabel: `Answer ${e.cards} question${e.cards === 1 ? '' : 's'}`,
+        onFix: () => enterResolve(cat),
+        thumbs: e.thumbs.length ? e.thumbs : undefined,
+        extra: e.thumbs.length ? Math.max(0, e.items - e.thumbs.length) : undefined,
+      };
+    });
+  }, [cases, enterResolve]);
 
   // Write a card's decision back onto the draft so the lobby reflects progress.
+  // meta.selectedIds: rows the user kept ticked — unticked rows get the alt
+  // treatment instead of silently riding along with the primary action.
+  // meta.unlink: break the link (stale/orphan delist) → IGNORE.
   const applyDecision = useCallback(
-    (c: MatchCase, d: Decision) => {
+    (c: MatchCase, d: Decision, meta?: ResolveMeta) => {
       const ids = new Set(c.itemIds || []);
+      const selected = meta?.selectedIds ? new Set(meta.selectedIds) : null;
       setSuggestions((prev) =>
-        (prev || []).map((s) => (ids.has(s.platformProduct.id) ? applyMatchDecision(s, c.kind, d) : s)),
+        (prev || []).map((s) => {
+          if (!ids.has(s.platformProduct.id)) return s;
+          if (meta?.unlink || meta?.ignore) {
+            return { ...s, prevAction: s.action, action: 'IGNORE', isSelected: false, resolved: false };
+          }
+          if (d === 'primary' && meta?.linkTo) {
+            // Link to the exact item the user picked (search may have replaced
+            // the backend's original candidate).
+            return {
+              ...s,
+              action: 'LINK_EXISTING',
+              isSelected: true,
+              resolved: true,
+              suggestedCanonicalProduct: {
+                id: meta.linkTo.id,
+                title: meta.linkTo.title,
+                sku: meta.linkTo.sku || '',
+                price: meta.linkTo.price ?? undefined,
+                imageUrl: meta.linkTo.uri ?? null,
+              },
+            };
+          }
+          if (d === 'primary' && c.kind === 'find' && !meta?.linkTo) {
+            // Find with nothing picked = "Add as new product", even when the
+            // draft still carries a (rejected) backend candidate.
+            return applyMatchDecision(s, 'find', 'alt');
+          }
+          if (d === 'primary' && selected && !selected.has(s.platformProduct.id)) {
+            // Batched orphans: un-ticked = "it's gone" → delist (ignorable, restorable).
+            if (c.kind === 'orphans') {
+              return { ...s, prevAction: s.action, action: 'IGNORE', isSelected: false, resolved: false };
+            }
+            // Fuzzy batch: un-checked = a doubt — leave it untouched so it
+            // falls to the one-by-one deck instead of silently deciding.
+            if (c.kind === 'fuzzy') {
+              return s;
+            }
+            return applyMatchDecision(s, c.kind, 'alt');
+          }
+          return applyMatchDecision(s, c.kind, d);
+        }),
       );
     },
     [setSuggestions],
+  );
+
+  // Live catalog search for the find/relink cards — same in-memory pool the
+  // old SearchSheet used (canonical products + anorha variants on the draft).
+  const searchCatalog = useCallback(
+    (q: string): CandidateItem[] => {
+      const query = q.trim().toLowerCase();
+      if (!query) return [];
+      const seen = new Set<string>();
+      const out: CandidateItem[] = [];
+      const consider = (
+        id?: string | null,
+        title?: string | null,
+        sku?: string | null,
+        price?: number | null,
+        imageUrl?: string | null,
+      ) => {
+        if (!id || seen.has(id)) return;
+        const t = (title || '').toLowerCase();
+        const k = (sku || '').toLowerCase();
+        if (!t.includes(query) && !k.includes(query)) return;
+        seen.add(id);
+        out.push({
+          id,
+          title: title || 'Untitled',
+          sub: `${sku || 'no sku'}${typeof price === 'number' && price > 0 ? ` · $${price.toFixed(2)}` : ''}`,
+          uri: imageUrl ?? null,
+          sku: sku ?? null,
+          price: price ?? null,
+        });
+      };
+      for (const s of annotated) {
+        const c = s.suggestedCanonicalProduct;
+        if (c) consider(c.id, c.title, c.sku, c.price ?? null, c.imageUrl ?? null);
+        const v = s.anorhaVariant;
+        if (v) consider(v.id, v.title, v.sku, v.price ?? null, v.imageUrl ?? null);
+        if (out.length >= 8) break;
+      }
+      return out;
+    },
+    [annotated],
   );
 
   // ---------------------------------------------------------------------------
@@ -455,6 +761,71 @@ const MappingReviewScreen: React.FC = () => {
     setSearchQuery('');
   }, []);
 
+  // ── Inventory / Ignored tab actions ────────────────────────────────────────
+  const ignoreIds = useCallback(
+    (ids: string[]) => {
+      const set = new Set(ids);
+      setSuggestions((prev) =>
+        (prev || []).map((s) =>
+          set.has(s.platformProduct.id)
+            ? { ...s, prevAction: s.action, action: 'IGNORE', isSelected: false, resolved: false }
+            : s,
+        ),
+      );
+    },
+    [setSuggestions],
+  );
+
+  const restoreIds = useCallback(
+    (ids: string[]) => {
+      const set = new Set(ids);
+      setSuggestions((prev) =>
+        (prev || []).map((s) =>
+          set.has(s.platformProduct.id)
+            ? {
+                ...s,
+                action: s.prevAction && s.prevAction !== 'IGNORE' ? s.prevAction : 'UNMATCHED',
+                prevAction: undefined,
+                isSelected: true,
+                resolved: false,
+              }
+            : s,
+        ),
+      );
+    },
+    [setSuggestions],
+  );
+
+  const exitSelection = useCallback(() => {
+    setSelMode(false);
+    setSelIds(new Set());
+  }, []);
+
+  const toggleSel = useCallback((id: string) => {
+    setSelIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // Tab switches reset search + selection so state never leaks across lists.
+  const switchTab = useCallback(
+    (tab: 'issues' | 'inventory' | 'ignored') => {
+      setLobbyTab(tab);
+      setInvSearch('');
+      exitSelection();
+    },
+    [exitSelection],
+  );
+
+  // The open resolver card for an item, if it still needs a decision.
+  const caseForItem = useCallback(
+    (id: string) => cases.find((mc) => (mc.itemIds || []).includes(id)) || null,
+    [cases],
+  );
+
   const handleSearchSelect = useCallback(
     (result: SearchResult) => {
       if (!searchSheet.targetId) return;
@@ -539,14 +910,11 @@ const MappingReviewScreen: React.FC = () => {
   if (loading || isScanningEarly) {
     return (
       <View style={[styles.screen, { paddingTop: insets.top + 6 }]}>
-        <QuestBar segments={segmentsFor(null)} activeIdx={0} close="back" onClose={() => navigation.goBack()} />
+        <LobbyHeader title="Match" onBack={() => navigation.goBack()} />
         <View style={styles.centerBlock}>
           <ActivityIndicator size="large" color={QUEST.green} />
           <Text style={styles.centerTitle}>Analyzing {platformName}…</Text>
           {!!syncProgress?.description && <Text style={styles.centerSub}>{syncProgress.description}</Text>}
-          {syncProgress?.progress != null && (
-            <Text style={styles.centerSub}>{Math.round(syncProgress.progress || 0)}%</Text>
-          )}
         </View>
       </View>
     );
@@ -555,7 +923,7 @@ const MappingReviewScreen: React.FC = () => {
   if (error) {
     return (
       <View style={[styles.screen, { paddingTop: insets.top + 6 }]}>
-        <QuestBar segments={segmentsFor(null)} activeIdx={0} close="back" onClose={() => navigation.goBack()} />
+        <LobbyHeader title="Match" onBack={() => navigation.goBack()} />
         <View style={styles.centerBlock}>
           <Icon name="alert-circle-outline" size={32} color={QUEST.orange} />
           <Text style={styles.centerTitle}>{error}</Text>
@@ -847,13 +1215,21 @@ const MappingReviewScreen: React.FC = () => {
     }
     return (
       <MatchResolver
+        // Keyed by case id so each card mounts fresh — without this, React
+        // reuses the previous card's local state (stale picks, wrong counts,
+        // negative "still unplaced" gates) whenever two cards share a kind.
+        key={cur.id}
         c={cur}
         idx={di + 1}
         total={total}
         topInset={insets.top}
-        onBack={() => (di > 0 ? setView({ kind: 'resolve', i: di - 1 }) : setView({ kind: 'lobby' }))}
-        onResolve={(d) => {
-          applyDecision(cur, d);
+        // Back = exit to the lobby (Duolingo's X). Cards auto-advance and
+        // decisions are already written back, so stepping backwards through
+        // answered cards only ever confused people.
+        onBack={() => setView({ kind: 'lobby' })}
+        onSearch={searchCatalog}
+        onResolve={(d, meta) => {
+          applyDecision(cur, d, meta);
           if (di + 1 < total) setView({ kind: 'resolve', i: di + 1 });
           else setView({ kind: 'lobby' });
         }}
@@ -882,13 +1258,15 @@ const MappingReviewScreen: React.FC = () => {
       <LobbyHeader
         title={lobbyTab === 'inventory' ? 'Inventory' : lobbyTab === 'ignored' ? 'Ignored Items' : 'Match'}
         countSuffix={lobbyTab === 'issues' ? `${annotated.length} Items` : undefined}
-        onBack={() => (lobbyTab === 'issues' ? navigation.goBack() : setLobbyTab('issues'))}
+        onBack={() => (lobbyTab === 'issues' ? navigation.goBack() : switchTab('issues'))}
         right={
           lobbyTab === 'issues' ? (
-            <>
-              <HeaderIconBtn icon="package-variant-closed" onPress={() => setLobbyTab('inventory')} />
-              <HeaderIconBtn icon="trash-can-outline" onPress={() => setLobbyTab('ignored')} />
-            </>
+            <HeaderIconGroup
+              items={[
+                { icon: 'package-variant-closed', onPress: () => switchTab('inventory') },
+                { icon: 'trash-can-outline', onPress: () => switchTab('ignored') },
+              ]}
+            />
           ) : undefined
         }
       />
@@ -896,17 +1274,42 @@ const MappingReviewScreen: React.FC = () => {
       {lobbyTab === 'issues' && (
         <ScrollView contentContainerStyle={styles.lobbyScroll} showsVerticalScrollIndicator={false}>
           {matchedItems.length > 0 && (
-            <View style={styles.mlClearBanner}>
-              <View style={styles.mlClearIcon}>
-                <Icon name="check-bold" size={15} color={RC.greenDark} />
+            <TouchableOpacity activeOpacity={0.85} onPress={() => setAutoOpen((v) => !v)} style={styles.mlClearBanner}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <View style={styles.mlClearIcon}>
+                  <Icon name="check-bold" size={15} color={RC.greenDark} />
+                </View>
+                <Text style={styles.mlClearText} numberOfLines={1}>
+                  {matchedItems.length} matched themselves
+                </Text>
+                <Icon name={autoOpen ? 'chevron-down' : 'chevron-right'} size={18} color={RC.greenDark} />
               </View>
-              <Text style={styles.mlClearText} numberOfLines={1}>
-                {matchedItems.length} matched · {autoMatched.length} auto-linked
-              </Text>
-            </View>
+              {autoOpen && (
+                <View style={{ paddingTop: 10, gap: 7 }}>
+                  {matchedItems.slice(0, 3).map((s) => (
+                    <View key={s.platformProduct.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: 0.85 }}>
+                      {s.platformProduct.imageUrl ? (
+                        <Image source={{ uri: s.platformProduct.imageUrl }} style={styles.mlPeekThumb} />
+                      ) : (
+                        <View style={[styles.mlPeekThumb, { backgroundColor: RC.greenLine }]} />
+                      )}
+                      <Text style={styles.mlPeekTitle} numberOfLines={1}>
+                        {s.platformProduct.title || 'Untitled'}
+                      </Text>
+                      <Text style={styles.mlPeekHow}>
+                        {s.matchType === 'BARCODE' ? 'barcode =' : s.matchType === 'SKU' ? 'SKU =' : 'matched'}
+                      </Text>
+                    </View>
+                  ))}
+                  <TouchableOpacity onPress={() => switchTab('inventory')} hitSlop={{ top: 6, bottom: 6 }}>
+                    <Text style={styles.mlPeekLink}>View all {matchedItems.length}</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </TouchableOpacity>
           )}
 
-          {issueCount === 0 ? (
+          {issues.length === 0 ? (
             <View style={styles.mlEmpty}>
               <Icon name="check-decagram" size={40} color={RC.green} />
               <Text style={styles.mlEmptyTitle}>No issues to fix</Text>
@@ -914,90 +1317,174 @@ const MappingReviewScreen: React.FC = () => {
             </View>
           ) : (
             <>
-              {variantItemCount > 0 && (
-                <IssueCard
-                  icon="puzzle"
-                  title="Missing variants"
-                  sub={`${variantItemCount} separate products that are probably variants`}
-                  onPress={enterResolve}
-                />
-              )}
-              {fuzzyItems.length > 0 && (
-                <IssueCard
-                  icon="content-copy"
-                  title="Duplicate data"
-                  sub={`${fuzzyItems.length} items that share the same data (SKU, title, images, etc.)`}
-                  onPress={enterResolve}
-                />
-              )}
-              {newItems.length > 0 && (
-                <IssueCard
-                  icon="shape-outline"
-                  title="New to catalog"
-                  sub={`${newItems.length} items with no match found yet`}
-                  onPress={enterResolve}
-                />
-              )}
+              <Text style={styles.lobbySection}>TO SORT</Text>
+              <IssueLane issues={issues} />
             </>
           )}
         </ScrollView>
       )}
 
-      {lobbyTab === 'inventory' && (
-        <FlatList
-          data={annotated}
-          keyExtractor={(s, i) => s.platformProduct.id || String(i)}
-          renderItem={({ item }) => <InventoryRow item={toInvItem(item)} />}
-          ItemSeparatorComponent={() => <View style={styles.mlSep} />}
-          contentContainerStyle={styles.mlList}
-          showsVerticalScrollIndicator={false}
-          ListEmptyComponent={
-            <View style={styles.mlEmpty}>
-              <Text style={styles.mlEmptyTitle}>Nothing imported yet</Text>
+      {(lobbyTab === 'inventory' || lobbyTab === 'ignored') && (
+        <>
+          {selMode ? (
+            <View style={styles.selHeader}>
+              <TouchableOpacity onPress={exitSelection} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Icon name="close" size={20} color={RC.ink} />
+              </TouchableOpacity>
+              <Text style={styles.selHeaderText}>{selIds.size} selected</Text>
+              <TouchableOpacity
+                onPress={() =>
+                  setSelIds(
+                    selIds.size === invFiltered.length
+                      ? new Set()
+                      : new Set(invFiltered.map((s) => s.platformProduct.id)),
+                  )
+                }
+              >
+                <Text style={styles.selHeaderLink}>
+                  {selIds.size === invFiltered.length ? 'Deselect all' : 'Select all'}
+                </Text>
+              </TouchableOpacity>
             </View>
+          ) : (
+            <View style={styles.invSearchWrap}>
+              <Icon name="magnify" size={20} color={RC.muted} />
+              <TextInput
+                value={invSearch}
+                onChangeText={setInvSearch}
+                placeholder="Search by name or SKU…"
+                placeholderTextColor="#999"
+                style={styles.invSearchInput}
+                autoCorrect={false}
+                autoCapitalize="none"
+                returnKeyType="search"
+              />
+              {!!invSearch && (
+                <TouchableOpacity onPress={() => setInvSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Icon name="close-circle" size={18} color={RC.faint} />
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
+          <FlatList
+            data={invFiltered}
+            keyExtractor={(s, i) => s.platformProduct.id || String(i)}
+            renderItem={({ item }) => {
+              const id = item.platformProduct.id;
+              return (
+                <InventoryRow
+                  item={{ ...toInvItem(item), selected: selIds.has(id) }}
+                  selectionMode={selMode}
+                  onPress={() => (selMode ? toggleSel(id) : setDetail(item))}
+                  onLongPress={() => {
+                    if (!selMode) {
+                      setSelMode(true);
+                      setSelIds(new Set([id]));
+                    }
+                  }}
+                />
+              );
+            }}
+            ItemSeparatorComponent={() => <View style={styles.mlSep} />}
+            contentContainerStyle={styles.mlList}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            ListEmptyComponent={
+              <View style={styles.mlEmpty}>
+                <Icon
+                  name={lobbyTab === 'ignored' ? 'trash-can-outline' : 'magnify'}
+                  size={36}
+                  color={RC.muted}
+                />
+                <Text style={styles.mlEmptyTitle}>
+                  {invSearch.trim()
+                    ? 'No items match your search'
+                    : lobbyTab === 'ignored'
+                      ? 'No ignored items'
+                      : 'Nothing imported yet'}
+                </Text>
+                {lobbyTab === 'ignored' && !invSearch.trim() && (
+                  <Text style={styles.mlEmptySub}>Items you ignore land here — restore them any time.</Text>
+                )}
+              </View>
+            }
+          />
+        </>
+      )}
+
+      {lobbyTab === 'issues' && (
+        <>
+          <LinearGradient
+            colors={['rgba(255,255,255,0)', '#FFFFFF']}
+            style={styles.fade}
+            pointerEvents="none"
+          />
+          {issues.length === 0 ? (
+            <BottomActionBar
+              primaryLabel={`Confirm mapping (${matchedItems.length})`}
+              primaryIcon={<Icon name="check" size={20} color="#fff" />}
+              onPrimary={() => setDoneVisible(true)}
+            />
+          ) : (
+            <BottomActionBar
+              tertiaryContent={
+                <View style={styles.footerProgress}>
+                  <MiniProgress
+                    pct={annotated.length ? ((annotated.length - itemsLeftCount) / annotated.length) * 100 : 0}
+                    left={`${annotated.length - itemsLeftCount} of ${annotated.length}`}
+                    right={`${annotated.length ? Math.round(((annotated.length - itemsLeftCount) / annotated.length) * 100) : 0}%`}
+                  />
+                </View>
+              }
+              primaryLabel={`Start · ${issues[0].title}`}
+              primaryIcon={<Icon name="arrow-right" size={20} color="#fff" />}
+              primaryButtonStyle={{ backgroundColor: RC.orange }}
+              onPrimary={() => issues[0].onFix?.()}
+            />
+          )}
+        </>
+      )}
+
+      {lobbyTab !== 'issues' && selMode && selIds.size > 0 && (
+        <BottomActionBar
+          primaryLabel={
+            lobbyTab === 'ignored' ? `Restore ${selIds.size}` : `Ignore ${selIds.size}`
           }
+          primaryIcon={
+            <Icon name={lobbyTab === 'ignored' ? 'restore' : 'eye-off-outline'} size={20} color="#fff" />
+          }
+          onPrimary={() => {
+            const ids = Array.from(selIds);
+            if (lobbyTab === 'ignored') restoreIds(ids);
+            else ignoreIds(ids);
+            exitSelection();
+          }}
+          secondaryLabel="Cancel"
+          onSecondary={exitSelection}
         />
       )}
 
-      {lobbyTab === 'ignored' && (
-        <FlatList
-          data={ignoredItems}
-          keyExtractor={(s, i) => s.platformProduct.id || String(i)}
-          renderItem={({ item }) => <InventoryRow item={toInvItem(item)} />}
-          ItemSeparatorComponent={() => <View style={styles.mlSep} />}
-          contentContainerStyle={styles.mlList}
-          showsVerticalScrollIndicator={false}
-          ListEmptyComponent={
-            <View style={styles.mlEmpty}>
-              <Icon name="trash-can-outline" size={36} color={RC.muted} />
-              <Text style={styles.mlEmptyTitle}>No ignored items</Text>
-              <Text style={styles.mlEmptySub}>Items you skip during matching land here.</Text>
-            </View>
-          }
+      {detail && (
+        <ItemSheet
+          item={detail}
+          isIgnored={detail.action === 'IGNORE'}
+          openCase={caseForItem(detail.platformProduct.id)}
+          onClose={() => setDetail(null)}
+          onIgnore={() => {
+            ignoreIds([detail.platformProduct.id]);
+            setDetail(null);
+          }}
+          onRestore={() => {
+            restoreIds([detail.platformProduct.id]);
+            setDetail(null);
+          }}
+          onFix={(mc) => {
+            setDetail(null);
+            enterResolveCase(mc);
+          }}
         />
       )}
-
-      <LinearGradient
-        colors={['rgba(255,255,255,0)', '#FFFFFF', '#FFFFFF']}
-        style={[styles.sticky, { paddingBottom: insets.bottom + 16 }]}
-        pointerEvents="box-none"
-      >
-        {allClear ? (
-          <RaisedBtn
-            label={`Confirm mapping (${matchedItems.length})`}
-            icon="check"
-            color={RC.green}
-            dark={RC.greenDark}
-            onPress={() => setDoneVisible(true)}
-          />
-        ) : (
-          <RaisedBtn
-            label={`Fix ${issueCount} Issue${issueCount === 1 ? '' : 's'}`}
-            icon="wrench"
-            onPress={enterResolve}
-          />
-        )}
-      </LinearGradient>
 
       {renderSearchSheet()}
 
@@ -1157,6 +1644,96 @@ function SearchSheet({
 }
 
 // ---------------------------------------------------------------------------
+// ItemSheet — tap an inventory row, see the item, act on it.
+// One glanceable card: photo · name · sku/price · where it stands — then at
+// most two buttons (Fix now / Ignore, or Restore). No dead ends.
+// ---------------------------------------------------------------------------
+function ItemSheet({
+  item,
+  isIgnored,
+  openCase,
+  onClose,
+  onIgnore,
+  onRestore,
+  onFix,
+}: {
+  item: AnnotatedSuggestion;
+  isIgnored: boolean;
+  openCase: MatchCase | null;
+  onClose: () => void;
+  onIgnore: () => void;
+  onRestore: () => void;
+  onFix: (mc: MatchCase) => void;
+}) {
+  const p = item.platformProduct;
+  const linked = item.resolved && item.action === 'LINK_EXISTING' && item.suggestedCanonicalProduct?.title;
+  const priceNum = typeof p.price === 'number' ? p.price : Number(p.price);
+  const status = isIgnored
+    ? { icon: 'eye-off-outline' as const, text: 'Ignored — won’t be imported', color: RC.muted }
+    : linked
+      ? { icon: 'link-variant' as const, text: `Linked to ${item.suggestedCanonicalProduct!.title}`, color: RC.greenDark }
+      : item.resolved && item.action === 'CREATE_NEW'
+        ? { icon: 'plus-circle-outline' as const, text: 'Will be added as a new product', color: RC.greenDark }
+        : openCase
+          ? { icon: 'help-circle-outline' as const, text: 'Needs one quick decision', color: RC.orangeDark }
+          : { icon: 'check' as const, text: 'Ready', color: RC.greenDark };
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.bsOverlay} onPress={onClose}>
+        <Pressable style={styles.itemSheet} onPress={(e) => e.stopPropagation()}>
+          <View style={styles.bsHandle} />
+          <View style={styles.itemSheetHead}>
+            <View style={styles.itemSheetThumb}>
+              {p.imageUrl ? (
+                <Image source={{ uri: p.imageUrl }} style={styles.thumbImg} />
+              ) : (
+                <Icon name="package-variant" size={28} color={QUEST.muted} />
+              )}
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={styles.itemSheetTitle} numberOfLines={2}>{p.title || 'Untitled'}</Text>
+              <Text style={styles.itemSheetMeta} numberOfLines={1}>
+                {p.sku ? `SKU ${p.sku}` : 'no SKU'}
+                {priceNum > 0 ? ` · $${priceNum.toFixed(2)}` : ''}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.itemSheetStatus}>
+            <Icon name={status.icon} size={16} color={status.color} />
+            <Text style={[styles.itemSheetStatusText, { color: status.color }]} numberOfLines={2}>
+              {status.text}
+            </Text>
+          </View>
+
+          <View style={{ gap: 10, marginTop: 16 }}>
+            {isIgnored ? (
+              <TouchableOpacity activeOpacity={0.88} onPress={onRestore} style={styles.itemSheetPrimary}>
+                <Icon name="restore" size={20} color="#fff" />
+                <Text style={styles.itemSheetPrimaryText}>Restore this item</Text>
+              </TouchableOpacity>
+            ) : (
+              <>
+                {openCase && (
+                  <TouchableOpacity activeOpacity={0.88} onPress={() => onFix(openCase)} style={styles.itemSheetPrimary}>
+                    <Icon name="arrow-right" size={20} color="#fff" />
+                    <Text style={styles.itemSheetPrimaryText}>Fix now — 1 quick question</Text>
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity activeOpacity={0.85} onPress={onIgnore} style={styles.itemSheetSecondary}>
+                  <Text style={styles.itemSheetSecondaryText}>Ignore — don’t import this item</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Done Overlay (preserved — triggers the existing submitImport path)
 // ---------------------------------------------------------------------------
 function DoneOverlay({
@@ -1227,19 +1804,107 @@ const styles = StyleSheet.create({
   lobbyTitle: { fontSize: 18, fontFamily: QFONT.b, color: QUEST.ink, letterSpacing: -0.4 },
   lobbySub: { fontSize: 12, fontFamily: QFONT.m, color: QUEST.sub, marginTop: 2 },
   lobbyScroll: { paddingHorizontal: 16, paddingBottom: 130 },
+  lobbyHint: { fontSize: 14, fontWeight: '500', color: RC.muted, lineHeight: 20, marginBottom: 12, marginHorizontal: 2 },
+  lobbySection: { fontSize: 11, fontWeight: '700', letterSpacing: 1.2, color: RC.faint, paddingTop: 16, paddingBottom: 8, paddingHorizontal: 4 },
+  lobbyDeckHint: { fontSize: 12.5, fontWeight: '600', color: RC.faint, textAlign: 'center', paddingTop: 10, paddingHorizontal: 20, lineHeight: 18 },
+  footerProgress: { paddingHorizontal: 4, paddingBottom: 10 },
+  mlPeekThumb: { width: 22, height: 22, borderRadius: 6, backgroundColor: RC.surface2 },
+  mlPeekTitle: { flex: 1, fontSize: 13, fontWeight: '600', color: RC.greenInk },
+  mlPeekHow: { fontSize: 11, fontWeight: '700', color: RC.greenDark, fontVariant: ['tabular-nums'] },
+  mlPeekLink: { fontSize: 13, fontWeight: '800', color: RC.greenDark, textDecorationLine: 'underline', marginTop: 2 },
+
+  // Inventory / Ignored — search + selection header
+  invSearchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: 'rgba(102,102,102,0.26)',
+    borderRadius: 8,
+    backgroundColor: '#FFF',
+    paddingHorizontal: 12,
+    marginHorizontal: 16,
+    marginBottom: 10,
+  },
+  invSearchInput: { flex: 1, fontSize: 16, color: RC.ink, paddingVertical: 12 },
+  selHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    minHeight: 48,
+    paddingHorizontal: 16,
+    marginHorizontal: 16,
+    marginBottom: 10,
+    borderRadius: 8,
+    backgroundColor: RC.surface2,
+  },
+  selHeaderText: { flex: 1, fontSize: 15, fontWeight: '700', color: RC.ink },
+  selHeaderLink: { fontSize: 14, fontWeight: '600', color: RC.greenDark },
+
+  // ItemSheet
+  itemSheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingHorizontal: 18,
+    paddingBottom: 34,
+  },
+  itemSheetHead: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 14 },
+  itemSheetThumb: {
+    width: 72,
+    height: 72,
+    borderRadius: 14,
+    backgroundColor: RC.surface2,
+    borderWidth: 1,
+    borderColor: RC.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  itemSheetTitle: { fontSize: 17, fontWeight: '700', color: RC.ink, letterSpacing: -0.2 },
+  itemSheetMeta: { fontSize: 13, fontWeight: '500', color: RC.muted, marginTop: 3 },
+  itemSheetStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 14,
+    backgroundColor: RC.surface,
+    borderWidth: 1,
+    borderColor: RC.line,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  itemSheetStatusText: { flex: 1, fontSize: 14, fontWeight: '600' },
+  itemSheetPrimary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: RC.green,
+    borderRadius: 12,
+    paddingVertical: 14,
+  },
+  itemSheetPrimaryText: { fontSize: 16, fontWeight: '600', color: '#fff' },
+  itemSheetSecondary: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#E5E5E5',
+    borderRadius: 12,
+    paddingVertical: 14,
+  },
+  itemSheetSecondaryText: { fontSize: 16, fontWeight: '600', color: '#71717A' },
 
   // Match-lobby v2 (issues / inventory / ignored)
   mlClearBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
     backgroundColor: RC.greenSoft,
     borderWidth: 1,
     borderColor: RC.greenLine,
-    borderRadius: 14,
-    paddingVertical: 11,
+    borderRadius: 16,
+    paddingVertical: 12,
     paddingHorizontal: 14,
-    marginBottom: 12,
+    marginBottom: 4,
   },
   mlClearIcon: {
     width: 26,
@@ -1368,8 +2033,8 @@ const styles = StyleSheet.create({
   },
   vMiniGhost: { backgroundColor: QUEST.surface, borderWidth: 1, borderColor: QUEST.borderDark },
 
-  // Sticky footer
-  sticky: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 18, paddingTop: 28 },
+  // Floating bottom action bar fade (the BottomActionBar floats above it)
+  fade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 150 },
 
   // Bottom sheet (search)
   bsOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },

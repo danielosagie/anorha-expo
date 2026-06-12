@@ -11,17 +11,15 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { X, ShieldCheck, User, Folder, Check } from 'lucide-react-native';
 import { useTheme } from '../../context/ThemeContext';
-import Button from '../Button';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../../config/env';
 import { capture, AnalyticsEvents } from '../../lib/analytics';
 import { showMessage } from 'react-native-flash-message';
 
-const ANORHA_GREEN = '#8cc63f';
-const NEUTRAL_GRAY = '#6B7280';
-const MEMBER_YELLOW = '#F59E0B';
+const ANORHA_GREEN = '#93C822';
+const ANORHA_GREEN_TINT = 'rgba(147,200,34,0.12)';
 
 const API_BASE_URL = ENV_API_BASE_URL;
 const API_BASE_RAW = API_BASE_URL.replace(/\/$/, '');
@@ -162,6 +160,8 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
     }
   };
 
+  const sendDisabled = loading || !email.trim();
+
   return (
     <Modal
       visible={visible}
@@ -169,16 +169,18 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
       transparent={true}
       onRequestClose={onClose}
     >
-      <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.overlay}
       >
-        <View style={[styles.modal, { backgroundColor: '#fff' }]}>
+        <View style={styles.modal}>
+          <View style={styles.dragHandle} />
+
           {/* Header */}
           <View style={styles.header}>
             <Text style={styles.title}>Invite Team Member</Text>
             <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-              <Icon name="close" size={24} color="#666" />
+              <X size={22} color="#71717A" />
             </TouchableOpacity>
           </View>
 
@@ -189,6 +191,7 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
               <TextInput
                 style={styles.input}
                 placeholder="colleague@company.com"
+                placeholderTextColor="#C7C7CC"
                 value={email}
                 onChangeText={setEmail}
                 keyboardType="email-address"
@@ -204,24 +207,16 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
                 <TouchableOpacity
                   style={[
                     styles.roleOption,
-                    role === 'admin' && styles.roleOptionSelectedAdmin,
+                    role === 'admin' && styles.roleOptionSelected,
                   ]}
                   onPress={() => setRole('admin')}
                 >
                   <View style={styles.roleHeader}>
-                    <Icon
-                      name="shield-crown"
+                    <ShieldCheck
                       size={20}
-                      color={role === 'admin' ? ANORHA_GREEN : '#999'}
+                      color={role === 'admin' ? ANORHA_GREEN : '#71717A'}
                     />
-                    <Text
-                      style={[
-                        styles.roleTitle,
-                        role === 'admin' && { color: ANORHA_GREEN },
-                      ]}
-                    >
-                      Admin
-                    </Text>
+                    <Text style={styles.roleTitle}>Admin</Text>
                   </View>
                   <Text style={styles.roleDescription}>
                     Full access to all platforms and team settings
@@ -231,24 +226,16 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
                 <TouchableOpacity
                   style={[
                     styles.roleOption,
-                    role === 'member' && styles.roleOptionSelectedMember,
+                    role === 'member' && styles.roleOptionSelected,
                   ]}
                   onPress={() => setRole('member')}
                 >
                   <View style={styles.roleHeader}>
-                    <Icon
-                      name="account"
+                    <User
                       size={20}
-                      color={role === 'member' ? MEMBER_YELLOW : '#999'}
+                      color={role === 'member' ? ANORHA_GREEN : '#71717A'}
                     />
-                    <Text
-                      style={[
-                        styles.roleTitle,
-                        role === 'member' && { color: MEMBER_YELLOW },
-                      ]}
-                    >
-                      Member
-                    </Text>
+                    <Text style={styles.roleTitle}>Member</Text>
                   </View>
                   <Text style={styles.roleDescription}>
                     Limited access to selected platforms only
@@ -272,38 +259,34 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
                     No pools created yet
                   </Text>
                 ) : (
-                  pools.map((pool) => (
-                    <TouchableOpacity
-                      key={pool.id}
-                      style={styles.platformOption}
-                      onPress={() => togglePool(pool.id)}
-                    >
-                      <View style={styles.platformInfo}>
-                        <Icon name="folder-outline" size={20} color={ANORHA_GREEN} />
-                        <View style={styles.platformDetails}>
-                          <Text style={styles.platformName}>
-                            {pool.name}
-                          </Text>
-                          <Text style={styles.platformType}>
-                            {pool.description || 'Pool'}
-                          </Text>
+                  pools.map((pool) => {
+                    const selected = selectedPoolIds.has(pool.id);
+                    return (
+                      <TouchableOpacity
+                        key={pool.id}
+                        style={[
+                          styles.platformOption,
+                          selected && styles.platformOptionSelected,
+                        ]}
+                        onPress={() => togglePool(pool.id)}
+                      >
+                        <View style={styles.platformInfo}>
+                          <Folder size={20} color={selected ? ANORHA_GREEN : '#71717A'} />
+                          <View style={styles.platformDetails}>
+                            <Text style={styles.platformName}>
+                              {pool.name}
+                            </Text>
+                            <Text style={styles.platformType}>
+                              {pool.description || 'Pool'}
+                            </Text>
+                          </View>
                         </View>
-                      </View>
-                      <Icon
-                        name={
-                          selectedPoolIds.has(pool.id)
-                            ? 'checkbox-marked'
-                            : 'checkbox-blank-outline'
-                        }
-                        size={24}
-                        color={
-                          selectedPoolIds.has(pool.id)
-                            ? ANORHA_GREEN
-                            : '#ccc'
-                        }
-                      />
-                    </TouchableOpacity>
-                  ))
+                        <View style={[styles.checkbox, selected && styles.checkboxOn]}>
+                          {selected && <Check size={16} color="#FFFFFF" strokeWidth={3} />}
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })
                 )}
               </View>
             )}
@@ -311,19 +294,24 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
 
           {/* Footer */}
           <View style={styles.footer}>
-            <Button
-              title="Cancel"
-              outlined
-              onPress={onClose}
+            <TouchableOpacity
               style={styles.cancelButton}
-            />
-            <Button
-              title="Send Invitation"
+              onPress={onClose}
+              disabled={loading}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.sendButton, sendDisabled && styles.sendButtonDisabled]}
               onPress={handleSendInvite}
-              loading={loading}
-              disabled={loading || !email.trim()}
-              style={styles.sendButton}
-            />
+              disabled={sendDisabled}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.sendButtonText}>Send Invitation</Text>
+              )}
+            </TouchableOpacity>
           </View>
         </View>
       </KeyboardAvoidingView>
@@ -334,26 +322,35 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'flex-end',
   },
   modal: {
+    backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    padding: 24,
-    paddingBottom: 48,
+    padding: 20,
+    paddingBottom: 40,
     maxHeight: '90%',
+  },
+  dragHandle: {
+    width: 60,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#D4D4D8',
+    alignSelf: 'center',
+    marginBottom: 16,
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 20,
   },
   title: {
     fontSize: 20,
-    fontWeight: '700',
-    color: '#111827',
+    fontFamily: 'Inter_700Bold',
+    color: '#18181B',
   },
   closeButton: {
     padding: 4,
@@ -362,41 +359,39 @@ const styles = StyleSheet.create({
     // Padding removed since modal now has padding
   },
   section: {
-    marginBottom: 24,
+    marginBottom: 20,
   },
   label: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
+    fontFamily: 'Inter_600SemiBold',
+    color: '#18181B',
     marginBottom: 8,
     marginTop: 16,
   },
   input: {
-    backgroundColor: '#F3F4F6',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 16,
-    color: '#111827',
+    backgroundColor: '#FAFAF8',
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    fontSize: 15,
+    fontFamily: 'Inter_400Regular',
+    color: '#18181B',
   },
   roleOptions: {
-    gap: 12,
+    gap: 10,
   },
   roleOption: {
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 16,
+    borderColor: '#ECEBE6',
+    borderRadius: 16,
+    padding: 14,
   },
-  roleOptionSelectedAdmin: {
+  roleOptionSelected: {
     borderColor: ANORHA_GREEN,
-    borderWidth: 2,
-    backgroundColor: ANORHA_GREEN + '05',
-  },
-  roleOptionSelectedMember: {
-    borderColor: MEMBER_YELLOW,
-    borderWidth: 2,
-    backgroundColor: MEMBER_YELLOW + '14',
+    backgroundColor: ANORHA_GREEN_TINT,
   },
   roleHeader: {
     flexDirection: 'row',
@@ -404,27 +399,40 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   roleTitle: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#18181B',
     marginLeft: 8,
   },
   roleDescription: {
     fontSize: 13,
-    color: NEUTRAL_GRAY,
+    fontFamily: 'Inter_400Regular',
+    color: '#71717A',
+    lineHeight: 19,
     marginLeft: 28,
   },
   hint: {
-    fontSize: 13,
-    color: NEUTRAL_GRAY,
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#71717A',
+    lineHeight: 21,
     marginBottom: 12,
   },
   platformOption: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
+    borderRadius: 14,
+    paddingHorizontal: 14,
     paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    marginBottom: 8,
+  },
+  platformOptionSelected: {
+    borderColor: ANORHA_GREEN,
+    backgroundColor: ANORHA_GREEN_TINT,
   },
   platformInfo: {
     flexDirection: 'row',
@@ -436,30 +444,68 @@ const styles = StyleSheet.create({
   },
   platformName: {
     fontSize: 15,
-    fontWeight: '500',
+    fontFamily: 'Inter_600SemiBold',
+    color: '#18181B',
   },
   platformType: {
     fontSize: 12,
-    color: NEUTRAL_GRAY,
+    fontFamily: 'Inter_400Regular',
+    color: '#71717A',
     textTransform: 'capitalize',
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: '#D4D4D8',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxOn: {
+    backgroundColor: ANORHA_GREEN,
+    borderColor: ANORHA_GREEN,
   },
   noPlatforms: {
     fontSize: 14,
-    color: '#999',
+    fontFamily: 'Inter_400Regular',
+    color: '#71717A',
     textAlign: 'center',
     paddingVertical: 20,
   },
   footer: {
     flexDirection: 'row',
-    marginTop: 24,
+    marginTop: 20,
     gap: 12,
   },
   cancelButton: {
     flex: 1,
+    backgroundColor: '#F1F1EE',
+    borderRadius: 16,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#18181B',
   },
   sendButton: {
     flex: 1,
     backgroundColor: ANORHA_GREEN,
+    borderRadius: 16,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sendButtonDisabled: {
+    opacity: 0.5,
+  },
+  sendButtonText: {
+    fontSize: 15,
+    fontFamily: 'Inter_700Bold',
+    color: '#FFFFFF',
   },
 });
-

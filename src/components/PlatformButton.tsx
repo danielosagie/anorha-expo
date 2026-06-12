@@ -7,6 +7,8 @@ import FacebookSvg from '../assets/facebook.svg';
 import EbaySvg from '../assets/ebay.svg';
 import CloverSvg from '../assets/clover.svg';
 import SquareSvg from '../assets/square.svg';
+import WhatnotSvg from '../assets/whatnot.svg';
+import DepopSvg from '../assets/depop-icon.svg';
 
 type Props = {
     platform: string;
@@ -19,19 +21,21 @@ type Props = {
 };
 
 const PlatformButton = ({ platform, onPress, isSelected, isConnected = false, loading = false, success = false, activeCount = 0 }: Props) => {
-    const platformComponentMap: { [key: string]: React.ComponentType<any> } = {
+    const platformSvgMap: { [key: string]: React.ComponentType<any> } = {
         shopify: ShopifySvg,
         amazon: AmazonSvg,
         facebook: FacebookSvg,
         ebay: EbaySvg,
         clover: CloverSvg,
         square: SquareSvg,
+        whatnot: WhatnotSvg,
+        depop: DepopSvg,
     };
 
-    const PlatformIcon = platformComponentMap[platform];
+    const PlatformSvg = platformSvgMap[platform];
 
     const content = (
-        <TouchableOpacity 
+        <TouchableOpacity
             style={[styles.platformButton, isSelected && styles.platformButtonSelected]}
             onPress={onPress}
             activeOpacity={0.7}
@@ -40,9 +44,10 @@ const PlatformButton = ({ platform, onPress, isSelected, isConnected = false, lo
             <View style={{ alignItems: 'center', justifyContent: 'center' }}>
                 {loading ? (
                     <ActivityIndicator color={'#6B7280'} />
-                ) : (
-                    PlatformIcon ? <PlatformIcon width={34} height={34} style={styles.platformIcon} /> : null
-                )}
+                ) : PlatformSvg ? (
+                    <PlatformSvg width={34} height={34} style={styles.platformIcon} />
+                ) : null
+                }
                 <Text style={styles.platformLabel}>
                     {platform.charAt(0).toUpperCase() + platform.slice(1)}
                 </Text>

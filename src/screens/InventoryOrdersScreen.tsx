@@ -25,7 +25,6 @@ import Animated, { FadeInUp, FadeInDown, SlideInDown, SlideOutDown } from 'react
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Button from '../components/Button';
-import { mockOrders } from '../data/mockData';
 import { observer } from '@legendapp/state/react';
 import { useLegendState } from '../context/LegendStateContext';
 import { ProductVariant as ProductVariantData, ProductImage, InventoryLevel, PlatformProductMapping, LegendStateObservables, MarketplaceListing, PlatformLocation, PlatformConnection } from '../utils/SupaLegend';
@@ -1447,10 +1446,6 @@ const InventoryOrdersScreen = observer(() => {
       </TouchableOpacity>
     );
   };
-
-  const filteredOrders = mockOrders.filter((order: MockOrderItemData) =>
-    filterStatus === 'all' || order.status === filterStatus
-  );
 
   const platformsForChips = ['shopify', 'square', 'clover', 'amazon', 'ebay', 'facebook']
     .map(platformType => {

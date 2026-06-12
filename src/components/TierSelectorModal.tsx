@@ -14,7 +14,7 @@ import {
     SafeAreaView,
 } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
-import { X, CheckCircle2, Users } from 'lucide-react-native';
+import { X } from 'lucide-react-native';
 import { useTheme } from '../context/ThemeContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
@@ -80,6 +80,7 @@ interface TierSelectorModalProps {
 }
 
 const ANORHA_GREEN = '#93C822';
+const ANORHA_GREEN_TINT = 'rgba(147,200,34,0.12)';
 const WHITE_BG = '#FFFFFF';
 
 // Mapping features for the tabular view
@@ -204,9 +205,11 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
         >
             <View style={styles.overlay}>
                 <View style={[styles.container, { paddingBottom: 34 + 20 }]}>
+                    <View style={styles.dragHandle} />
+
                     <TouchableOpacity style={styles.closeButton} onPress={onClose}>
                         <View style={styles.closeButtonInner}>
-                            <X size={20} color="#999" />
+                            <X size={18} color="#71717A" />
                         </View>
                     </TouchableOpacity>
 
@@ -298,13 +301,10 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
     );
 };
 
-// Assuming Icon is already imported at top from MaterialCommunityIcons
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-
 const styles = StyleSheet.create({
     overlay: {
         flex: 1,
-        backgroundColor: 'rgba(0, 0, 0, 0.4)',
+        backgroundColor: 'rgba(0,0,0,0.45)',
         justifyContent: 'flex-end',
     },
     container: {
@@ -312,12 +312,20 @@ const styles = StyleSheet.create({
         borderTopLeftRadius: 24,
         borderTopRightRadius: 24,
         paddingHorizontal: 20,
-        paddingTop: 24,
+        paddingTop: 12,
         maxHeight: SCREEN_HEIGHT * 0.95,
+    },
+    dragHandle: {
+        width: 60,
+        height: 4,
+        borderRadius: 2,
+        backgroundColor: '#D4D4D8',
+        alignSelf: 'center',
+        marginBottom: 16,
     },
     header: {
         alignItems: 'center',
-        marginBottom: 24,
+        marginBottom: 20,
     },
     iconContainer: {
         marginBottom: 8,
@@ -332,88 +340,87 @@ const styles = StyleSheet.create({
         width: 32,
         height: 32,
         borderRadius: 16,
-        backgroundColor: '#F2F2F7',
+        backgroundColor: '#F1F1EE',
         alignItems: 'center',
         justifyContent: 'center',
     },
     title: {
-        fontSize: 28,
-        fontWeight: '700',
-        color: '#111',
+        fontSize: 20,
+        fontFamily: 'Inter_700Bold',
+        color: '#18181B',
         marginTop: 4,
     },
     subtitle: {
-        fontSize: 15,
-        color: '#666',
+        fontSize: 14,
+        fontFamily: 'Inter_400Regular',
+        color: '#71717A',
+        lineHeight: 21,
         marginTop: 6,
     },
     usageBadge: {
         marginTop: 12,
-        paddingHorizontal: 16,
+        paddingHorizontal: 14,
         paddingVertical: 8,
-        borderRadius: 8,
-        backgroundColor: '#F3F4F6',
+        borderRadius: 10,
+        backgroundColor: '#F1F1EE',
     },
     usageBadgeText: {
         fontSize: 13,
-        fontWeight: '600',
-        color: '#6B7280',
+        fontFamily: 'Inter_600SemiBold',
+        color: '#71717A',
     },
     tabContainer: {
         flexDirection: 'row',
-        backgroundColor: '#F2F2F7',
-        borderRadius: 16,
-        padding: 4,
+        gap: 10,
         marginBottom: 20,
     },
     tabButton: {
         flex: 1,
-        paddingVertical: 10,
+        paddingVertical: 11,
         alignItems: 'center',
-        borderRadius: 12,
+        backgroundColor: WHITE_BG,
+        borderWidth: 1,
+        borderColor: '#ECEBE6',
+        borderRadius: 14,
     },
     tabButtonActive: {
-        backgroundColor: WHITE_BG,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.1,
-        shadowRadius: 2,
-        elevation: 2,
+        backgroundColor: ANORHA_GREEN_TINT,
+        borderColor: ANORHA_GREEN,
     },
     tabButtonText: {
         fontSize: 15,
-        fontWeight: '500',
-        color: '#666',
+        fontFamily: 'Inter_600SemiBold',
+        color: '#71717A',
     },
     tabButtonTextActive: {
-        color: '#111',
-        fontWeight: '600',
+        color: '#18181B',
     },
     matrixContainer: {
         borderWidth: 1,
-        borderColor: '#E5E7EB',
+        borderColor: '#ECEBE6',
         borderRadius: 16,
         padding: 16,
         marginBottom: 24,
+        backgroundColor: WHITE_BG,
     },
     matrixHeaderRow: {
         flexDirection: 'row',
         paddingBottom: 12,
         borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
+        borderBottomColor: '#ECEBE6',
         marginBottom: 12,
     },
     matrixHeaderLabel: {
         flex: 2,
         fontSize: 14,
-        fontWeight: '500',
-        color: '#666',
+        fontFamily: 'Inter_600SemiBold',
+        color: '#71717A',
     },
     matrixHeaderValueCol: {
         flex: 1,
         fontSize: 14,
-        fontWeight: '600',
-        color: '#666',
+        fontFamily: 'Inter_600SemiBold',
+        color: '#71717A',
         textAlign: 'center',
     },
     matrixRow: {
@@ -424,19 +431,20 @@ const styles = StyleSheet.create({
     matrixRowLabel: {
         flex: 2,
         fontSize: 14,
-        color: '#111',
-        fontWeight: '500',
+        fontFamily: 'Inter_400Regular',
+        color: '#18181B',
     },
     matrixRowFree: {
         flex: 1,
         fontSize: 14,
-        color: '#666',
+        fontFamily: 'Inter_400Regular',
+        color: '#71717A',
         textAlign: 'center',
     },
     matrixRowActive: {
         flex: 1,
         fontSize: 14,
-        fontWeight: '600',
+        fontFamily: 'Inter_600SemiBold',
         textAlign: 'center',
     },
     actionsContainer: {
@@ -444,32 +452,34 @@ const styles = StyleSheet.create({
         marginTop: 8,
     },
     checkoutButton: {
-        paddingVertical: 16,
-        borderRadius: 14,
+        paddingVertical: 14,
+        borderRadius: 16,
         alignItems: 'center',
+        justifyContent: 'center',
         backgroundColor: ANORHA_GREEN,
     },
     checkoutButtonDisabled: {
-        backgroundColor: '#ccc',
+        opacity: 0.5,
     },
     checkoutButtonText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '600',
+        color: '#FFFFFF',
+        fontSize: 15,
+        fontFamily: 'Inter_700Bold',
     },
     manageButton: {
         alignItems: 'center',
         paddingVertical: 14,
     },
     manageButtonText: {
-        color: '#666',
+        color: '#71717A',
         fontSize: 15,
-        fontWeight: '500',
+        fontFamily: 'Inter_600SemiBold',
         textDecorationLine: 'underline',
     },
     footerNote: {
         fontSize: 13,
-        color: '#999',
+        fontFamily: 'Inter_400Regular',
+        color: '#71717A',
     },
 });
 

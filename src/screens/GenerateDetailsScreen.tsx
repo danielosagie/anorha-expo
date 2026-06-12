@@ -28,6 +28,7 @@ import { capture, AnalyticsEvents } from '../lib/analytics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
+import { resolveItemsFromIds, resolveJobMapFromIds } from '../features/cart/flowPayloads';
 
 const ACTION_BAR_HEIGHT = 80;
 const ACTION_BAR_BOTTOM_OFFSET = 24;
@@ -758,10 +759,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   // Get shared JobsContext for cross-screen state sync (defined early to avoid a TDZ crash on web)
   const jobsContext = useJobsOptional();
 
-  // Try to pull items list from params if provided; fallback to single
+  // Items for the switcher. Canonical path: ID-BASED handoff (itemIds param) resolved
+  // from cart$ — no array-index coupling. Legacy index-shaped params are the fallback.
   const items = useMemo(() => {
     const contextMatchJobId = jobsContext?.matchJobId;
     const effectiveMatchJobId = matchJobId || contextMatchJobId;
+    const itemIdsParam = (route.params as any)?.itemIds as string[] | undefined;
+    if (Array.isArray(itemIdsParam) && itemIdsParam.length > 0) {
+      return resolveItemsFromIds(itemIdsParam, effectiveMatchJobId);
+    }
     const raw = ((route.params as any)?.items || []) as Array<{ index: number; title?: string; thumb?: string; matchesCount?: number; matchJobId?: string }>;
     const normalized = (Array.isArray(raw) ? raw : []).map((it, i) => ({
       index: it.index ?? i,
@@ -790,6 +796,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   }, [route.params, first, results, matchJobId]);
 
   useEffect(() => {
+    // Canonical: focus by item ID (index derived from the itemIds order).
+    const focusItemIdParam = (route.params as any)?.focusItemId as string | undefined;
+    const itemIdsParam = (route.params as any)?.itemIds as string[] | undefined;
+    if (focusItemIdParam && Array.isArray(itemIdsParam)) {
+      const idIdx = itemIdsParam.indexOf(focusItemIdParam);
+      if (idIdx >= 0) {
+        setCurrentProductIndex(idIdx);
+        return;
+      }
+    }
     const focusIndexParam = (route.params as any)?.focusIndex;
     if (typeof focusIndexParam === 'number' && Number.isFinite(focusIndexParam)) {
       setCurrentProductIndex(focusIndexParam);
@@ -797,9 +813,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }
     const idx = (first?.productIndex as number) ?? items[0]?.index ?? 0;
     setCurrentProductIndex(idx);
-  }, [first?.productIndex, items[0]?.index, (route.params as any)?.focusIndex]);
+  }, [first?.productIndex, items[0]?.index, (route.params as any)?.focusIndex, (route.params as any)?.focusItemId]);
 
-  const jobMap = ((route.params as any)?.jobMap || {}) as Record<number, { jobId: string; status?: string }>;
+  // Per-index generate jobs: derived live from cart$ when the handoff is id-based
+  // (jobs attach to items after navigation), with the param jobMap as fallback.
+  const jobMap = useMemo(() => {
+    const fromParams = ((route.params as any)?.jobMap || {}) as Record<number, { jobId: string; status?: string }>;
+    const ids = (route.params as any)?.itemIds as string[] | undefined;
+    return Array.isArray(ids) && ids.length > 0 ? resolveJobMapFromIds(ids, fromParams) : fromParams;
+  }, [route.params]);
   const hasGenerateForIndex = useMemo(() => (idx: number) => Boolean(jobMap[idx]?.jobId), [jobMap]);
 
   const hasMultipleResults = Array.isArray(results) && results.length > 1;

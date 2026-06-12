@@ -909,7 +909,7 @@ const DashboardScreen = () => {
     } else if (actionLink.includes('/orders')) {
       navigation.navigate('Orders');
     } else if (actionLink.includes('/pools')) {
-      navigation.navigate('Profile'); // Pools are managed in Profile
+      navigation.navigate('AccountSettings'); // Pools are managed in Profile
     }
   };
 
@@ -1416,7 +1416,7 @@ const DashboardScreen = () => {
         visible={showPartnerWelcome}
         partnerName={partnerSourceName}
         onDismiss={handleDismissPartnerWelcome}
-        onConnectPlatform={() => navigation.navigate('Profile')}
+        onConnectPlatform={() => navigation.navigate('AccountSettings')}
       />
 
       {/* Floating Tab Bar provided by Navigator, but we ensure spacing */}

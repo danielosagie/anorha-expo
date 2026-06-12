@@ -191,31 +191,6 @@ const StepPill: React.FC<{
   );
 };
 
-// Legacy step pill: bigger, equal width, clear done (green check) / in-progress (spinner) / pending (gray)
-const LegacyStepPill: React.FC<{
-  label: string;
-  color: string;
-  onPress: () => void;
-  icon?: string;
-}> = ({ label, color, onPress, icon }) => {
-  const isDone = color === ANORHA_GREEN || color === '#10B981';
-  const isProcessing = color === '#FFD700' || color === '#F59E0B';
-  return (
-    <TouchableOpacity onPress={onPress} style={styles.legacyPill}>
-      {icon ? (
-        <Icon name={icon} size={18} color="#000" />
-      ) : isDone ? (
-        <Icon name="check-circle" size={18} color={ANORHA_GREEN} />
-      ) : isProcessing ? (
-        <SpinningLoader size={16} color="#F59E0B" />
-      ) : (
-        <View style={[styles.legacyDot, { backgroundColor: color || '#D1D5DB' }]} />
-      )}
-      <Text style={[styles.legacyPillText, isDone && styles.legacyPillTextDone]} numberOfLines={1}>{label}</Text>
-    </TouchableOpacity>
-  );
-};
-
 // Item card component
 const ItemCard: React.FC<{
   item: ItemJobState | LegacyItem;
@@ -240,6 +215,10 @@ const ItemCard: React.FC<{
   secondaryText?: string | null;
   selectMode?: boolean;
   onToggleSelect?: () => void;
+  /** Legacy mode: resolved generate status driving the single status/action button. */
+  generateStatus?: 'pending' | 'processing' | 'completed' | 'failed';
+  /** Legacy mode: the item is paused on a decision (pick a match / add info). */
+  needsInput?: boolean;
   onConfirmCandidate?: () => void;
   onDenyCandidate?: () => void;
   onSubmitRefineText?: (text: string) => void;
@@ -341,34 +320,46 @@ const ItemCard: React.FC<{
             />
           ))
         ) : (
-          // Legacy mode - only Match and Generate/Details
-          <>
-            <LegacyStepPill
-              label="Match"
-              color={props.matchColor || '#4B5563'}
-              onPress={props.onPickMatch || (() => { })}
-            />
-            {props.detailsEnabled ? (
-              <LegacyStepPill
-                label="Details"
-                color={props.detailsColor || '#4B5563'}
-                onPress={props.onPickDetails || (() => { })}
-              />
-            ) : props.onQuickGenerate ? (
-              <TouchableOpacity
-                onPress={props.onQuickGenerate}
-                style={styles.legacyPill}
-              >
-                <Icon name="rocket-launch-outline" size={18} color="#000" />
-                <Text style={styles.legacyPillText}>Generate</Text>
+          // Legacy mode — ONE status-driven action per row: a ready item says so and
+          // opens its review; a stuck item says what it needs and opens the match
+          // page (where refine/add-info lives). No more cryptic step pills.
+          (() => {
+            const st = props.generateStatus ?? 'pending';
+            if (st === 'completed') {
+              return (
+                <TouchableOpacity style={[styles.statusActionBtn, styles.statusActionReady]} onPress={props.onPickDetails}>
+                  <Icon name="check-circle" size={16} color="#3F6212" />
+                  <Text style={[styles.statusActionText, { color: '#3F6212' }]}>Ready · Review listing</Text>
+                  <Icon name="chevron-right" size={16} color="#3F6212" />
+                </TouchableOpacity>
+              );
+            }
+            if (st === 'processing') {
+              return (
+                <TouchableOpacity style={[styles.statusActionBtn, styles.statusActionWorking]} onPress={props.onPickDetails}>
+                  <SpinningLoader size={14} color="#B45309" />
+                  <Text style={[styles.statusActionText, { color: '#92400E' }]}>Generating · tap for progress</Text>
+                </TouchableOpacity>
+              );
+            }
+            if (st === 'failed') {
+              return (
+                <TouchableOpacity style={[styles.statusActionBtn, styles.statusActionFailed]} onPress={props.onQuickGenerate || props.onPickDetails}>
+                  <Icon name="refresh" size={16} color="#B91C1C" />
+                  <Text style={[styles.statusActionText, { color: '#B91C1C' }]}>Failed · Retry</Text>
+                </TouchableOpacity>
+              );
+            }
+            return (
+              <TouchableOpacity style={[styles.statusActionBtn, styles.statusActionNeeds]} onPress={props.onPickMatch}>
+                <Icon name="alert-circle-outline" size={16} color="#9A3412" />
+                <Text style={[styles.statusActionText, { color: '#9A3412' }]}>
+                  {matchesCount > 0 || props.needsInput ? 'Needs you · Pick the match' : 'Needs info · Refine the match'}
+                </Text>
+                <Icon name="chevron-right" size={16} color="#9A3412" />
               </TouchableOpacity>
-            ) : (
-              <View style={[styles.legacyPill, { opacity: 0.5 }]}>
-                <Icon name="rocket-launch-outline" size={18} color="#888" />
-                <Text style={styles.legacyPillText}>Generate</Text>
-              </View>
-            )}
-          </>
+            );
+          })()
         )}
       </View>
       <Text style={styles.timelineText} numberOfLines={1}>{timelineText}</Text>
@@ -630,6 +621,23 @@ export default function ItemJobsModal(props: Props) {
     return 'Needs review';
   }, [getGenerateStatus]);
 
+  // Legacy mode: a card tap routes by status — done/working items open their
+  // details (review or live progress), failed retries, everything else lands on
+  // the match page where the user can decide or add info. Never the raw scan view.
+  const legacyOpen = useCallback((idx: number, item: LegacyItem) => {
+    const lp = props as LegacyProps;
+    const status = getGenerateStatus(item);
+    if ((status === 'completed' || status === 'processing') && lp.detailsEnabled(idx)) {
+      lp.onPickDetails(idx);
+      return;
+    }
+    if (status === 'failed') {
+      (lp.onQuickGenerate ?? lp.onPickDetails)(idx);
+      return;
+    }
+    lp.onPickMatch(idx);
+  }, [props, getGenerateStatus]);
+
   const enableMultiSelect = enhanced
     ? props.enableMultiSelect
     : (props as LegacyProps).enableMultiSelect;
@@ -877,7 +885,9 @@ export default function ItemJobsModal(props: Props) {
                           isSelected={selected.has(idx)}
                           isCurrent={idx === currentIndex}
                           isEnhanced={false}
-                          onSelect={() => legacyProps.onPickScan(idx)}
+                          onSelect={() => legacyOpen(idx, legacyItem)}
+                          generateStatus={getGenerateStatus(legacyItem)}
+                          needsInput={itemNeedsInput(idx)}
                           scanColor={legacyProps.scanColor(idx)}
                           matchColor={legacyProps.matchColor(idx)}
                           detailsColor={legacyProps.detailsColor(idx)}
@@ -937,7 +947,9 @@ export default function ItemJobsModal(props: Props) {
                       isSelected={selected.has(idx)}
                       isCurrent={idx === currentIndex}
                       isEnhanced={false}
-                      onSelect={() => legacyProps.onPickScan(idx)}
+                      onSelect={() => legacyOpen(idx, legacyItem)}
+                      generateStatus={getGenerateStatus(legacyItem)}
+                      needsInput={itemNeedsInput(idx)}
                       scanColor={legacyProps.scanColor(idx)}
                       matchColor={legacyProps.matchColor(idx)}
                       detailsColor={legacyProps.detailsColor(idx)}
@@ -1347,33 +1359,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#D1D5DB',
   },
 
-  // Legacy step pill - bigger, equal width (parent uses flex: 1)
-  legacyPill: {
+  // Single status/action button on legacy rows (status + where it takes you)
+  statusActionBtn: {
     flex: 1,
     minWidth: 0,
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
   },
-  legacyDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  legacyPillText: {
-    color: '#000',
-    fontSize: 14,
-    flex: 1,
-  },
-  legacyPillTextDone: {
-    color: '#166534',
-    fontWeight: '600',
-  },
+  statusActionReady: { borderColor: '#BEF264', backgroundColor: '#F4FCE3' },
+  statusActionWorking: { borderColor: '#FDE68A', backgroundColor: '#FFFBEB' },
+  statusActionFailed: { borderColor: '#FECACA', backgroundColor: '#FEF2F2' },
+  statusActionNeeds: { borderColor: '#FDBA74', backgroundColor: '#FFF7ED' },
+  statusActionText: { flex: 1, fontSize: 13, fontWeight: '700' },
 
   // Footer
   footerBar: {

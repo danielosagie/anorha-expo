@@ -50,6 +50,19 @@ export interface MappingSuggestion {
   fieldConflicts?: FieldConflict[];
   /** same key string matched >1 canonical — drives the Collision resolver */
   candidateVariants?: CandidateVariant[];
+  /** parsed bundle components (multi-SKU cell) — seeds the Split resolver's piece list */
+  bundleParts?: { sku: string | null; title?: string | null; quantity?: number }[];
+  /** canonical singles a kit row shares stock with — seeds the Kit ↔ singles resolver */
+  kitComponents?: CandidateVariant[];
+  /** existing link broke: partner vanished from this import or the key points elsewhere */
+  isStaleLink?: boolean;
+  staleReason?: 'missing_from_import' | 'link_changed';
+  /** already linked to the suggested canonical — hidden from review (re-import idempotency) */
+  alreadyMapped?: boolean;
+  /** persisted decision from a previous session (hash-checked server-side) */
+  priorResolution?: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE' | 'PUSH_TO_PLATFORM' | null;
+  /** identity hash of the incoming item — echo back on commit so decisions stay scoped */
+  sourceHash?: string;
 }
 
 export interface FieldConflict {

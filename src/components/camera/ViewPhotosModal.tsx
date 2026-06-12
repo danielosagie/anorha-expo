@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import DraggableFlatList, { RenderItemParams, ScaleDecorator } from 'react-native-draggable-flatlist';
+import { GestureHandlerRootView, PanGestureHandler, State } from 'react-native-gesture-handler';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const ANORHA_GREEN = '#93C822';
@@ -114,9 +115,13 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
       transparent
       onRequestClose={onClose}
     >
+      {/* RN Modals are separate native windows — RNGH gestures (incl. the
+          draggable grid's long-press drag) are dead inside one unless the Modal
+          content has its OWN GestureHandlerRootView. */}
+      <GestureHandlerRootView style={{ flex: 1 }}>
       <Animated.View style={[styles.overlay, { opacity: overlayOpacity }]} pointerEvents="box-none">
         <View style={styles.sheet}>
-          {/* Header: X | Manage Images | Back | Counter | Go */}
+          {/* Header: X | Manage Images | ‹ counter › */}
           <View style={styles.header}>
             <TouchableOpacity onPress={onClose} style={styles.closeButton} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
               <Icon name="close" size={24} color="#333" />
@@ -129,19 +134,38 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
                 style={[styles.navButton, activeIndex <= 0 && styles.navButtonDisabled]}
                 onPress={() => activeIndex > 0 && onSelectItem(items[activeIndex - 1].id)}
                 disabled={activeIndex <= 0}
+                hitSlop={{ top: 8, bottom: 8 }}
               >
-                <Text style={[styles.navButtonText, activeIndex <= 0 && styles.navButtonTextDisabled]}>Back</Text>
+                <Icon name="chevron-left" size={26} color={activeIndex <= 0 ? '#C7C7CC' : ANORHA_GREEN} />
               </TouchableOpacity>
               {totalItems > 1 && (
                 <Text style={styles.navCounterSubtext}>{activeIndex + 1} / {totalItems}</Text>
               )}
-              <TouchableOpacity style={styles.navButton} onPress={onClose}>
-                <Text style={styles.navButtonText}>Go</Text>
+              <TouchableOpacity
+                style={[styles.navButton, activeIndex >= totalItems - 1 && styles.navButtonDisabled]}
+                onPress={() => activeIndex < totalItems - 1 && onSelectItem(items[activeIndex + 1].id)}
+                disabled={activeIndex >= totalItems - 1}
+                hitSlop={{ top: 8, bottom: 8 }}
+              >
+                <Icon name="chevron-right" size={26} color={activeIndex >= totalItems - 1 ? '#C7C7CC' : ANORHA_GREEN} />
               </TouchableOpacity>
             </View>
           </View>
+          <Text style={styles.dragHint}>Swipe for other items. Hold a photo to reorder, tap to set cover.</Text>
 
-          {/* Photo grid - draggable for reordering (long-press to drag) */}
+          {/* Photo grid — long-press drag reorders; horizontal swipe hops items.
+              The swipe pan only claims clearly-horizontal moves (activeOffsetX),
+              so vertical scrolls and an in-flight drag pass through untouched. */}
+          <PanGestureHandler
+            activeOffsetX={[-28, 28]}
+            failOffsetY={[-14, 14]}
+            onHandlerStateChange={(e: any) => {
+              if (e.nativeEvent.state !== State.END) return;
+              const { translationX } = e.nativeEvent;
+              if (translationX <= -48 && activeIndex < totalItems - 1) onSelectItem(items[activeIndex + 1].id);
+              else if (translationX >= 48 && activeIndex > 0) onSelectItem(items[activeIndex - 1].id);
+            }}
+          >
           <View style={styles.scrollView}>
             <DraggableFlatList<CapturedPhoto | { id: string; type: 'add' }>
               data={[
@@ -206,8 +230,10 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
               }}
             />
           </View>
+          </PanGestureHandler>
         </View>
       </Animated.View>
+      </GestureHandlerRootView>
     </Modal>
   );
 };
@@ -218,8 +244,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
+  // Matches the cart sheet's design language: soft off-white surface, white
+  // circular controls with the same shadow as the ✕ exit button, no hairlines.
   sheet: {
-    backgroundColor: '#FFF',
+    backgroundColor: '#F6F7F4',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingBottom: 40,
@@ -231,21 +259,25 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
   },
   closeButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
   headerTitle: {
     flex: 1,
     fontSize: 17,
-    fontWeight: '600',
-    color: '#333',
+    fontWeight: '700',
+    color: '#18181B',
     textAlign: 'center',
     marginHorizontal: 8,
   },
@@ -255,12 +287,17 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   navButton: {
-    minHeight: 36,
-    minWidth: 48,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
   navButtonDisabled: {
     opacity: 0.4,
@@ -277,6 +314,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#666',
+  },
+  dragHint: {
+    fontSize: 12,
+    color: '#8E8E93',
+    textAlign: 'center',
+    paddingTop: 8,
+    paddingHorizontal: 16,
   },
   scrollView: {
     maxHeight: 320,
@@ -353,12 +397,12 @@ const styles = StyleSheet.create({
   },
   addPhotoButton: {
     borderRadius: 12,
-    borderWidth: 2,
+    borderWidth: 1.5,
     borderStyle: 'dashed',
-    borderColor: '#ccc',
+    borderColor: '#D9D9DE',
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f9f9f9',
+    backgroundColor: '#FFFFFF',
   },
   addPhotoText: {
     marginTop: 4,

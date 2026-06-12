@@ -38,7 +38,7 @@ import AmazonSvg from '../../assets/amazon.svg';
 
 export { swatchFor };
 
-type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
+export type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 export type LobbyState = 'done' | 'active' | 'locked';
 
 const PLATFORM_SVG: Record<string, React.ComponentType<any>> = {
@@ -90,6 +90,26 @@ export function HeaderIconBtn({ icon, onPress, tint = RC.ink }: { icon: IconName
     <TouchableOpacity onPress={onPress} style={lk.circleBtn} hitSlop={HIT} activeOpacity={0.7}>
       <MaterialCommunityIcons name={icon} size={18} color={tint} />
     </TouchableOpacity>
+  );
+}
+
+// Merged icon pill — e.g. [ package | trash ] in one rounded group (figma).
+export function HeaderIconGroup({
+  items,
+}: {
+  items: { icon: IconName; onPress?: () => void; tint?: string }[];
+}) {
+  return (
+    <View style={lk.iconGroup}>
+      {items.map((it, i) => (
+        <React.Fragment key={`${it.icon}-${i}`}>
+          {i > 0 && <View style={lk.iconGroupDivider} />}
+          <TouchableOpacity onPress={it.onPress} style={lk.iconGroupBtn} hitSlop={HIT} activeOpacity={0.7}>
+            <MaterialCommunityIcons name={it.icon} size={18} color={it.tint || RC.ink} />
+          </TouchableOpacity>
+        </React.Fragment>
+      ))}
+    </View>
   );
 }
 
@@ -244,6 +264,236 @@ export function LobbyCTACard({
   );
 }
 
+// ─── ThumbStrip — overlapping item swatches with a "+N" overflow tile ──────
+// Used in the hero card to preview the items a stage will act on. Only items
+// with real product art get a tile; everything else folds into the "+N" count
+// so the strip still reads as the stage's workload. No art at all → no strip.
+export function ThumbStrip({
+  items,
+  max = 5,
+  size = 36,
+}: {
+  items: { id?: string; imageUrl?: string | null }[];
+  max?: number;
+  size?: number;
+}) {
+  const withArt = items.filter((it) => !!it.imageUrl);
+  if (!withArt.length) return null;
+  const shown = withArt.slice(0, max);
+  const extra = items.length - shown.length;
+  return (
+    <View style={lk.strip}>
+      {shown.map((it, i) => (
+        <View key={it.id || i} style={[lk.stripTile, { width: size, height: size }]}>
+          <Image source={{ uri: it.imageUrl! }} style={lk.stripImg} />
+        </View>
+      ))}
+      {extra > 0 && (
+        <View style={[lk.stripTile, lk.stripMore, { width: size, height: size }]}>
+          <Text style={lk.stripMoreText}>+{extra}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+// ─── HeroCard — the big "active stage" card at the top of the import lobby ──
+export function HeroCard({
+  title,
+  sub,
+  items,
+  ctaLabel,
+  icon = 'puzzle',
+  color = RC.orange,
+  glyph = 'puzzle-outline',
+  disabled,
+  onPress,
+}: {
+  title: string;
+  sub: string;
+  items?: { id?: string; imageUrl?: string | null }[];
+  ctaLabel: string;
+  icon?: IconName;
+  color?: string;
+  glyph?: IconName;
+  disabled?: boolean;
+  onPress?: () => void;
+}) {
+  return (
+    <View style={[lk.hero, { backgroundColor: color }]}>
+      <MaterialCommunityIcons name={glyph} size={150} color="rgba(255,255,255,0.18)" style={lk.heroGlyph} />
+      <Text style={lk.heroTitle} numberOfLines={1}>{title}</Text>
+      <Text style={lk.heroSub} numberOfLines={1}>{sub}</Text>
+      {!!items && items.length > 0 && <ThumbStrip items={items} />}
+      <TouchableOpacity
+        activeOpacity={disabled ? 1 : 0.9}
+        disabled={disabled}
+        onPress={onPress}
+        style={[lk.heroBtn, { opacity: disabled ? 0.7 : 1 }]}
+      >
+        <Text style={lk.heroBtnText}>{ctaLabel}</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+// ─── UpNextRow — an upcoming (locked) or completed (done) stage row ─────────
+export function UpNextRow({
+  icon,
+  title,
+  sub,
+  count,
+  state = 'locked',
+  onPress,
+}: {
+  icon: IconName;
+  title: string;
+  sub?: string;
+  count?: number | null;
+  state?: LobbyState;
+  onPress?: () => void;
+}) {
+  const done = state === 'done';
+  const active = state === 'active';
+  return (
+    <TouchableOpacity
+      activeOpacity={onPress ? 0.85 : 1}
+      disabled={!onPress}
+      onPress={onPress}
+      style={[lk.upRow, active && lk.upRowActiveGreen, done && lk.upRowDone]}
+    >
+      <View style={[lk.upIcon, active && lk.upIconActiveGreen, done && lk.upIconDone]}>
+        <MaterialCommunityIcons
+          name={done ? 'check-bold' : icon}
+          size={26}
+          color={done || active ? RC.greenDark : RC.muted}
+        />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={[lk.upTitle, done && { color: RC.muted }]} numberOfLines={1}>{title}</Text>
+        {!!sub && <Text style={lk.upSub} numberOfLines={1}>{sub}</Text>}
+      </View>
+      {typeof count === 'number' && count > 0 && !active && (
+        <View style={lk.upPill}>
+          <Text style={lk.upPillText}>{count}</Text>
+        </View>
+      )}
+      {active && <MaterialCommunityIcons name="arrow-right" size={22} color={RC.greenDark} />}
+    </TouchableOpacity>
+  );
+}
+
+// ─── IssueLane — pressable issue rows (the match & optimize lobbies) ────────
+// Each issue is a full-width pressable card in the same style as UpNextRow
+// (the "button press" look): icon square · title · sub · count pill · chevron.
+// The first open issue gets a soft orange "start here" tint; everything stays
+// tappable in any order — nothing looks locked. Drives off the v2 cases so
+// every backend signal — consolidate, variants, collision, compare, bundle,
+// kit, stale, orphan, find — surfaces as its own row.
+export interface LaneIssue {
+  id: string;
+  icon: IconName;
+  title: string;
+  sub: string;
+  count: number;
+  state: LobbyState;
+  ctaLabel?: string;
+  onFix?: () => void;
+  /** Up to 3 product images — rendered as an overlapping stack in place of
+   *  the icon square so the row shows WHAT it's about, not just a word. */
+  thumbs?: (string | null)[];
+  /** How many more items hide behind the stack ("+N" tile). */
+  extra?: number;
+}
+
+// ─── ThumbStack — overlapping product squares + "+N" tile ──────────────────
+export function ThumbStack({
+  thumbs,
+  extra,
+  size = 30,
+}: {
+  thumbs: (string | null)[];
+  extra?: number;
+  size?: number;
+}) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      {thumbs.map((uri, i) => (
+        <View
+          key={i}
+          style={[
+            lk.stackTile,
+            { width: size, height: size, borderRadius: size * 0.3, marginLeft: i ? -size * 0.32 : 0 },
+          ]}
+        >
+          {uri ? (
+            <Image source={{ uri }} style={{ width: '100%', height: '100%' }} />
+          ) : (
+            <View style={{ flex: 1, backgroundColor: swatchFor(String(i)) }} />
+          )}
+        </View>
+      ))}
+      {extra != null && extra > 0 && (
+        <View
+          style={[
+            lk.stackTile,
+            lk.stackMore,
+            { width: size, height: size, borderRadius: size * 0.3, marginLeft: -size * 0.32 },
+          ]}
+        >
+          <Text style={[lk.stackMoreText, { fontSize: Math.max(8, size * 0.28) }]} numberOfLines={1}>
+            {extra > 99 ? '99+' : `+${extra}`}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+export function IssueLane({ issues }: { issues: LaneIssue[] }) {
+  return (
+    <View style={lk.lane}>
+      {issues.map((it) => {
+        const active = it.state === 'active';
+        const done = it.state === 'done';
+        return (
+          <TouchableOpacity
+            key={it.id}
+            activeOpacity={it.onFix && !done ? 0.85 : 1}
+            disabled={done || !it.onFix}
+            onPress={it.onFix}
+            style={[lk.upRow, active && lk.upRowActive, done && lk.upRowDone]}
+          >
+            {!done && it.thumbs && it.thumbs.length > 0 ? (
+              <ThumbStack thumbs={it.thumbs} extra={it.extra} size={32} />
+            ) : (
+              <View style={[lk.upIcon, active && lk.upIconActive, done && lk.upIconDone]}>
+                <MaterialCommunityIcons
+                  name={done ? 'check-bold' : it.icon}
+                  size={26}
+                  color={done ? RC.greenDark : active ? RC.orangeDark : RC.muted}
+                />
+              </View>
+            )}
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[lk.upTitle, done && { color: RC.muted }]} numberOfLines={1}>{it.title}</Text>
+              <Text style={lk.upSub} numberOfLines={2}>{it.sub}</Text>
+            </View>
+            {!done && it.count > 0 && (
+              <View style={[lk.upPill, active && lk.upPillActive]}>
+                <Text style={[lk.upPillText, active && { color: RC.orangeDark }]}>{it.count}</Text>
+              </View>
+            )}
+            {!done && !!it.onFix && (
+              <MaterialCommunityIcons name="chevron-right" size={20} color={active ? RC.orangeDark : RC.faint} />
+            )}
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
 // ─── RaisedBtn — the chunky footer button ("Fix N Issues") ─────────────────
 export function RaisedBtn({
   label,
@@ -335,12 +585,38 @@ export interface InventoryItemData {
   selected?: boolean;
 }
 
-export function InventoryRow({ item, onPress }: { item: InventoryItemData; onPress?: () => void }) {
+export function InventoryRow({
+  item,
+  onPress,
+  onLongPress,
+  selectionMode,
+}: {
+  item: InventoryItemData;
+  onPress?: () => void;
+  onLongPress?: () => void;
+  selectionMode?: boolean;
+}) {
   const swatch = item.color || swatchFor(item.id || item.title);
   const hasUnits = typeof item.units === 'number';
 
   return (
-    <TouchableOpacity activeOpacity={onPress ? 0.8 : 1} disabled={!onPress} onPress={onPress} style={[lk.invRow, item.selected && lk.invRowSelected]}>
+    <TouchableOpacity
+      activeOpacity={onPress || onLongPress ? 0.8 : 1}
+      disabled={!onPress && !onLongPress}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={300}
+      style={[lk.invRow, item.selected && lk.invRowSelected]}
+    >
+      {selectionMode && (
+        <View style={{ justifyContent: 'center', alignSelf: 'center' }}>
+          <MaterialCommunityIcons
+            name={item.selected ? 'check-circle' : 'circle-outline'}
+            size={24}
+            color={item.selected ? '#84CC16' : '#C7C7CC'}
+          />
+        </View>
+      )}
       {item.imageUrl ? (
         <Image source={{ uri: item.imageUrl }} style={lk.invThumb} />
       ) : (
@@ -401,21 +677,73 @@ const lk = StyleSheet.create({
   pill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, height: 38, borderRadius: 19, backgroundColor: RC.bg, borderWidth: 1, borderColor: RC.line },
   pillText: { fontSize: 13, fontWeight: '700', color: RC.ink, maxWidth: 110 },
 
+  iconGroup: { flexDirection: 'row', alignItems: 'center', height: 38, borderRadius: 19, backgroundColor: RC.bg, borderWidth: 1, borderColor: RC.line, overflow: 'hidden' },
+  iconGroupBtn: { width: 42, height: 38, alignItems: 'center', justifyContent: 'center' },
+  iconGroupDivider: { width: 1, height: 22, backgroundColor: RC.line },
+
   // Winding path
   nodeWrap: { position: 'absolute', width: LBL_W, alignItems: 'center' },
   stone: { width: NODE_W, height: NODE_H, borderRadius: NODE_H / 2, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   stoneSheen: { position: 'absolute', top: 6, left: 16, right: 16, height: 13, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.25)' },
   stoneLabel: { marginTop: 12, fontSize: 12, fontWeight: '800', letterSpacing: 0.8 },
 
-  // CTA card
-  ctaCard: { flexDirection: 'row', alignItems: 'center', gap: 14, borderRadius: 22, paddingVertical: 16, paddingLeft: 20, paddingRight: 14 },
-  ctaTitle: { fontSize: 17, fontWeight: '800', color: '#fff', letterSpacing: -0.3 },
-  ctaSub: { fontSize: 13, fontWeight: '600', color: 'rgba(255,255,255,0.92)', marginTop: 2 },
-  ctaBtn: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#FCEBCF', alignItems: 'center', justifyContent: 'center' },
+  // CTA card — the big bottom "next step" bar (figma: r24, 3px scrim, p24)
+  ctaCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    borderRadius: 24,
+    borderWidth: 3,
+    borderColor: 'rgba(0,0,0,0.18)',
+    paddingVertical: 18,
+    paddingLeft: 22,
+    paddingRight: 16,
+  },
+  ctaTitle: { fontSize: 18, fontWeight: '700', color: '#fff', letterSpacing: -0.2 },
+  ctaSub: { fontSize: 14, fontWeight: '500', color: 'rgba(255,255,255,0.92)', marginTop: 3 },
+  ctaBtn: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#FCEBCF', borderWidth: 2, borderColor: 'rgba(255,255,255,0.85)', alignItems: 'center', justifyContent: 'center' },
 
-  // Raised button
-  raised: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 16, paddingVertical: 16 },
-  raisedText: { fontSize: 15, fontWeight: '800', letterSpacing: -0.1 },
+  // Raised button — the centered status / confirm pill (figma: r24, 3px scrim)
+  raised: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 24, borderWidth: 3, borderColor: 'rgba(0,0,0,0.18)', paddingVertical: 20 },
+  raisedText: { fontSize: 16, fontWeight: '700', letterSpacing: -0.1 },
+
+  // Hero card — active stage
+  hero: { width: '100%', borderRadius: 18, borderWidth: 3, borderColor: 'rgba(0,0,0,0.10)', paddingHorizontal: 18, paddingVertical: 22, overflow: 'hidden' },
+  heroGlyph: { position: 'absolute', top: -34, right: -20 },
+  heroTitle: { fontSize: 32, fontWeight: '800', color: '#fff', letterSpacing: -0.3 },
+  heroSub: { fontSize: 15, fontWeight: '600', color: '#FFE0B3', marginTop: 4 },
+  heroBtn: { marginTop: 16, backgroundColor: '#fff', borderWidth: 2, borderColor: 'rgba(0,0,0,0.18)', borderRadius: 16, paddingVertical: 15, alignItems: 'center', justifyContent: 'center' },
+  heroBtnText: { fontSize: 16, fontWeight: '700', color: RC.muted },
+
+  // Thumb strip
+  strip: { flexDirection: 'row', alignItems: 'center', marginTop: 14, paddingLeft: 1 },
+  stripTile: { borderRadius: 8, borderWidth: 1, borderColor: '#fff', marginRight: -10, overflow: 'hidden', backgroundColor: '#C5C5C5' },
+  stripImg: { width: '100%', height: '100%' },
+  stripMore: { backgroundColor: '#C5C5C5', alignItems: 'center', justifyContent: 'center', marginRight: 0 },
+  stripMoreText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+
+  // Up-next stage row (shared by UpNextRow + IssueLane — the "button press" card)
+  upRow: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: RC.bg, borderWidth: 2, borderColor: 'rgba(153,153,153,0.5)', borderRadius: 18, padding: 16, marginBottom: 12 },
+  upRowActive: { backgroundColor: '#FFF7EC', borderColor: 'rgba(245,166,35,0.45)' },
+  upRowActiveGreen: { backgroundColor: RC.greenSoft, borderColor: RC.greenLine },
+  upRowDone: { backgroundColor: RC.surface, borderColor: RC.line },
+  upIcon: { width: 55, height: 54, borderRadius: 8, backgroundColor: '#F4F4F4', alignItems: 'center', justifyContent: 'center' },
+  upIconActive: { backgroundColor: '#FDEBD2' },
+  upIconActiveGreen: { backgroundColor: '#fff' },
+  upIconDone: { backgroundColor: RC.greenSoft },
+  upTitle: { fontSize: 16, fontWeight: '600', color: '#15181A', letterSpacing: -0.3 },
+  upSub: { fontSize: 14, fontWeight: '500', color: '#6B6F73', marginTop: 2 },
+  upPill: { backgroundColor: '#F4F4F4', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 4 },
+  upPillActive: { backgroundColor: '#FDEBD2' },
+  upPillText: { fontSize: 14, fontWeight: '600', color: '#6B6F73' },
+
+  // Issue lane container
+  lane: { width: '100%' },
+
+  // Thumb stack (overlapping product squares)
+  stackTile: { borderWidth: 2, borderColor: '#fff', overflow: 'hidden', backgroundColor: RC.surface2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.18, shadowRadius: 3, elevation: 2 },
+  stackMore: { alignItems: 'center', justifyContent: 'center' },
+  stackMoreText: { fontWeight: '800', color: RC.muted },
 
   // SegTabs
   segWrap: { flexDirection: 'row', backgroundColor: RC.surface2, borderRadius: 12, padding: 4, gap: 4, marginHorizontal: 16, marginBottom: 12 },

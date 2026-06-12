@@ -22,10 +22,22 @@ function push<K, V>(map: Map<K, V[]>, key: K, val: V) {
   else map.set(key, [val]);
 }
 
-export function classifyMatch(suggestions: DraftItem[]): MatchCase[] {
-  const open = suggestions.filter((s) => s.action !== 'IGNORE' && !s.resolved);
+export interface ClassifyResult {
+  cases: MatchCase[];
+  /** platformProduct ids whose match is identical on every field — nothing to
+   *  ask a human, so they auto-link instead of becoming a card. */
+  autoResolved: string[];
+}
+
+export function classifyMatch(suggestions: DraftItem[], platformName?: string): ClassifyResult {
+  // alreadyMapped = same link as last import (idempotent re-import) and a
+  // persisted IGNORE (hash-checked server-side) both stay out of the deck.
+  const open = suggestions.filter(
+    (s) => s.action !== 'IGNORE' && !s.resolved && !s.alreadyMapped && s.priorResolution !== 'IGNORE',
+  );
   const used = new Set<string>();
   const cases: MatchCase[] = [];
+  const autoResolved: string[] = [];
 
   // 1 · CONSOLIDATE — many incoming rows pointing at the same canonical.
   const byCanon = new Map<string, DraftItem[]>();
@@ -80,7 +92,10 @@ export function classifyMatch(suggestions: DraftItem[]): MatchCase[] {
     }
   }
 
-  // 3 · PER-ITEM — route what's left, one card each.
+  // 3 · PER-ITEM — route what's left, one card each (orphans and high-
+  // confidence fuzzy matches batch up below instead of becoming solo cards).
+  const orphanItems: DraftItem[] = [];
+  const fuzzyItems: DraftItem[] = [];
   for (const s of open) {
     if (used.has(s.platformProduct.id)) continue;
     used.add(s.platformProduct.id);
@@ -90,46 +105,51 @@ export function classifyMatch(suggestions: DraftItem[]): MatchCase[] {
 
     // Explicit backend signal: same key matched multiple canonical products.
     if (s.candidateVariants && s.candidateVariants.length) {
-      cases.push(collisionCase(s));
+      cases.push(collisionCase(s, platformName));
       continue;
     }
 
     // Explicit backend signal: matched, but specific fields disagree.
+    // High-confidence + only soft conflicts (a price drift) still belongs in
+    // the batch screen — its row shows the mismatch in orange. Critical
+    // conflicts or shaky confidence get the full compare card.
     if (s.fieldConflicts && s.fieldConflicts.length && canon?.id) {
-      cases.push(compareCase(s, 'compare'));
+      const critical = s.fieldConflicts.some((fc) => fc.severity === 'critical');
+      if (!critical && typeof s.confidence === 'number' && s.confidence >= 0.9) {
+        fuzzyItems.push(s);
+        continue;
+      }
+      cases.push(compareCase(s, 'compare', platformName));
       continue;
     }
 
-    // In catalog, not returned by this import → keep / delist / ignore.
-    if (s.direction === 'anorha_to_platform') {
+    // Stale link whose partner moved / vanished — checked BEFORE orphan because
+    // vanished-link suggestions arrive as anorha_to_platform with isStaleLink set.
+    if (s.reviewReason === 'stale_match' || s.isStaleLink === true) {
       const v = s.anorhaVariant;
-      cases.push({
-        id: `orph-${p.id}`,
-        kind: 'orphan',
-        title: 'Not in import',
-        itemIds: [p.id],
-        itemTitle: v?.title || p.title || 'Item',
-        itemSub: `${v?.sku || p.sku || 'no sku'}`,
-        itemImage: v?.imageUrl || p.imageUrl,
-        platform: 'this sync',
-      });
-      continue;
-    }
-
-    // Stale link whose partner moved / vanished.
-    if (s.reviewReason === 'stale_match') {
       cases.push({
         id: `stale-${p.id}`,
         kind: 'stale',
         title: 'Match broke',
-        note: 'The linked listing changed under it',
+        note:
+          s.staleReason === 'missing_from_import'
+            ? 'The linked listing vanished from this sync'
+            : 'The linked listing changed under it',
         itemIds: [p.id],
-        itemTitle: p.title || 'Item',
-        itemSub: p.sku || 'in catalog',
-        itemImage: p.imageUrl,
+        itemTitle: v?.title || p.title || 'Item',
+        itemSub: v?.sku || p.sku || 'in catalog',
+        itemImage: v?.imageUrl || p.imageUrl,
         platform: undefined,
-        candidates: canon?.id ? [candidate(canon, conf)] : [],
+        // Pre-pick the backend's relink candidate — one tap fixes the link.
+        candidates: canon?.id ? [{ ...candidate(canon, conf), on: true }] : [],
       });
+      continue;
+    }
+
+    // In catalog, not returned by this import → collect; emitted below as ONE
+    // batched "keep these listed?" card (per-item cards only when there's one).
+    if (s.direction === 'anorha_to_platform') {
+      orphanItems.push(s);
       continue;
     }
 
@@ -152,13 +172,33 @@ export function classifyMatch(suggestions: DraftItem[]): MatchCase[] {
       norm(canon.title) !== norm(p.title) &&
       titleDistance(canon.title, p.title) > 0.6
     ) {
-      cases.push(compareCase(s, 'collision'));
+      cases.push(compareCase(s, 'collision', platformName));
       continue;
     }
 
-    // Matched on a key but the data differs → compare & merge.
+    // HIGH-CONFIDENCE fuzzy match (≥90%, 1:1, no critical conflicts) →
+    // collect for the single "Confirm these matches?" batch screen instead
+    // of dealing a solo card. Anything unchecked there re-enters the deck.
+    if (
+      canon?.id &&
+      typeof s.confidence === 'number' &&
+      s.confidence >= 0.9 &&
+      !(s.fieldConflicts || []).some((fc) => fc.severity === 'critical')
+    ) {
+      fuzzyItems.push(s);
+      continue;
+    }
+
+    // Matched on a key → compare & merge, but ONLY when the data actually
+    // differs. A card whose every field already agrees is a question with no
+    // answer to give — those auto-link instead of wasting a human's tap.
     if (s.reviewReason === 'duplicate' || (canon?.id && (s.matchType === 'SKU' || s.matchType === 'BARCODE'))) {
-      cases.push(compareCase(s, 'compare'));
+      const cc = compareCase(s, 'compare', platformName);
+      if ((cc.rows || []).length > 0 && (cc.rows || []).every((r) => r.same)) {
+        autoResolved.push(p.id);
+      } else {
+        cases.push(cc);
+      }
       continue;
     }
 
@@ -172,48 +212,178 @@ export function classifyMatch(suggestions: DraftItem[]): MatchCase[] {
     cases.push(findCase(p, []));
   }
 
-  return cases;
+  // 4 · CONFIRM FUZZY — one screen for every ≥90% match. A single one rides
+  // the normal compare path (which also auto-links identical data).
+  if (fuzzyItems.length === 1) {
+    const cc = compareCase(fuzzyItems[0], 'compare', platformName);
+    if ((cc.rows || []).length > 0 && (cc.rows || []).every((r) => r.same)) {
+      autoResolved.push(fuzzyItems[0].platformProduct.id);
+    } else {
+      cases.push(cc);
+    }
+  } else if (fuzzyItems.length > 1) {
+    cases.push({
+      id: 'fuzzy-batch',
+      kind: 'fuzzy',
+      title: 'Same item?',
+      note: 'Yes links them · No takes a closer look later',
+      aLabel: 'My catalog',
+      bLabel: platformName ? `From ${platformName}` : 'Incoming',
+      itemIds: fuzzyItems.map((s) => s.platformProduct.id),
+      candidates: fuzzyItems
+        .slice()
+        .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
+        .map((s) => {
+          const p = s.platformProduct;
+          const canon = s.suggestedCanonicalProduct!;
+          // Differing fields ride along so the tinder card can show the same
+          // tappable cells as the compare card (catalog = a, incoming = b).
+          const rows: CompareRow[] = [];
+          if (norm(p.title) !== norm(canon.title)) {
+            rows.push({ f: 'title', a: canon.title || '—', b: p.title || '—', pick: pickSide(canon.title || '—', p.title || '—') });
+          }
+          if ((canon.sku || p.sku) && norm(p.sku) !== norm(canon.sku)) {
+            rows.push({ f: 'sku', a: canon.sku || '—', b: p.sku || '—', pick: pickSide(canon.sku || '—', p.sku || '—') });
+          }
+          const cPrice = money(canon.price);
+          const pPrice = money(p.price);
+          if (cPrice !== pPrice) {
+            rows.push({ f: 'price', a: cPrice, b: pPrice, pick: pickSide(cPrice, pPrice) });
+          }
+          return {
+            id: p.id,
+            title: p.title || canon.title || 'Item',
+            // SKU only when both sides agree — a differing SKU shows up as a
+            // field row instead, so it's never printed twice.
+            sub: norm(p.sku) === norm(canon.sku) ? p.sku || undefined : undefined,
+            uri: p.imageUrl,
+            uri2: canon.imageUrl,
+            rows: rows.length ? rows : undefined,
+          };
+        }),
+    });
+  }
+
+  // 5 · ORPHANS — one batched card for everything the import didn't return.
+  // 287 per-item "keep or remove?" cards is busywork; one checkbox list where
+  // everything defaults to "keep listed" is one tap. A single orphan keeps the
+  // focused per-item card.
+  if (orphanItems.length === 1) {
+    const s = orphanItems[0];
+    const p = s.platformProduct;
+    const v = s.anorhaVariant;
+    cases.push({
+      id: `orph-${p.id}`,
+      kind: 'orphan',
+      title: 'Still selling this?',
+      note: `In your catalog · ${platformName || 'this import'} didn’t send it back`,
+      itemIds: [p.id],
+      itemTitle: v?.title || p.title || 'Item',
+      itemSub: `${v?.sku || p.sku || 'no sku'}`,
+      itemImage: v?.imageUrl || p.imageUrl,
+      platform: platformName || 'this sync',
+    });
+  } else if (orphanItems.length > 1) {
+    cases.push({
+      id: 'orphans-batch',
+      kind: 'orphans',
+      title: 'Keep selling these?',
+      note: 'Tap what’s gone — the rest stay listed',
+      itemIds: orphanItems.map((s) => s.platformProduct.id),
+      candidates: orphanItems.map((s) => {
+        const p = s.platformProduct;
+        const v = s.anorhaVariant;
+        const price = money(v?.price ?? p.price);
+        return {
+          id: p.id,
+          title: v?.title || p.title || 'Item',
+          sub: [v?.sku || p.sku || 'no sku', price !== '—' ? price : null].filter(Boolean).join(' · '),
+          uri: v?.imageUrl || p.imageUrl,
+        };
+      }),
+    });
+  }
+
+  return { cases, autoResolved };
 }
 
 // ── case builders ──────────────────────────────────────────────────────────
-function compareCase(s: DraftItem, kind: 'compare' | 'collision'): MatchCase {
+// Default pick prefers the side that actually HAS data — never default to an
+// empty value over a real one (e.g. "—" beating "$50.00").
+function pickSide(a: string, b: string): 'a' | 'b' {
+  const aEmpty = !a || a === '—';
+  const bEmpty = !b || b === '—';
+  return aEmpty && !bEmpty ? 'b' : 'a';
+}
+
+function compareCase(s: DraftItem, kind: 'compare' | 'collision', platformName?: string): MatchCase {
   const p = s.platformProduct;
   const canon = s.suggestedCanonicalProduct!;
   let rows: CompareRow[];
   if (kind === 'compare' && s.fieldConflicts && s.fieldConflicts.length) {
     // Use the backend's exact field conflicts (title/price/stock/photos…).
-    rows = s.fieldConflicts.map((fc) => ({
-      f: fc.field,
-      a: fc.canonicalValue == null ? '—' : String(fc.canonicalValue),
-      b: fc.platformValue == null ? '—' : String(fc.platformValue),
-      clash: fc.severity === 'critical',
-      pick: fc.severity === 'critical' ? undefined : 'a',
-    }));
+    // A "conflict" whose two displays read the same (null vs undefined, equal
+    // strings) is not a question — mark it same so the card hides it.
+    rows = s.fieldConflicts.map((fc) => {
+      const a = fc.canonicalValue == null ? '—' : String(fc.canonicalValue);
+      const b = fc.platformValue == null ? '—' : String(fc.platformValue);
+      const same = a === b;
+      return {
+        f: fc.field,
+        a,
+        b,
+        same,
+        clash: !same && fc.severity === 'critical',
+        pick: same || fc.severity === 'critical' ? undefined : pickSide(a, b),
+      };
+    });
   } else {
     rows = [];
     const titleSame = norm(p.title) === norm(canon.title);
-    rows.push({ f: 'title', a: canon.title || '—', b: p.title || '—', same: titleSame, pick: titleSame ? undefined : 'a' });
+    rows.push({ f: 'title', a: canon.title || '—', b: p.title || '—', same: titleSame, pick: titleSame ? undefined : pickSide(canon.title || '—', p.title || '—') });
     const skuSame = norm(p.sku) === norm(canon.sku);
-    if (canon.sku || p.sku) rows.push({ f: 'sku', a: canon.sku || '—', b: p.sku || '—', same: skuSame, clash: kind === 'collision' && skuSame, pick: kind === 'collision' ? undefined : 'a' });
-    rows.push({ f: 'price', a: money(canon.price), b: money(p.price), same: canon.price === p.price, pick: 'a' });
+    if (canon.sku || p.sku) rows.push({ f: 'sku', a: canon.sku || '—', b: p.sku || '—', same: skuSame, clash: kind === 'collision' && skuSame, pick: kind === 'collision' ? undefined : pickSide(canon.sku || '—', p.sku || '—') });
+    // Compare what the user would SEE — "$5.00" vs "$5.00", "—" vs "—".
+    // (Raw null vs undefined used to flag equal-empty prices as different.)
+    const priceSame = money(canon.price) === money(p.price);
+    rows.push({ f: 'price', a: money(canon.price), b: money(p.price), same: priceSame, pick: priceSame ? undefined : pickSide(money(canon.price), money(p.price)) });
   }
 
   return {
     id: `${kind}-${p.id}`,
     kind,
-    title: kind === 'collision' ? 'Same item?' : 'Compare',
-    note: kind === 'collision' ? 'Same key, different goods' : 'Tap a side to keep that field',
+    title: kind === 'collision' ? 'Same item?' : 'Same item, different info',
+    note: kind === 'collision' ? 'Same SKU, different look' : 'Tap the one to keep',
     itemIds: [p.id],
-    aLabel: kind === 'collision' ? trim(canon.title || 'A', 10) : 'In catalog',
-    bLabel: kind === 'collision' ? trim(p.title || 'B', 10) : 'Incoming',
-    aChip: kind === 'collision' ? 'existing' : 'live',
-    bChip: kind === 'collision' ? 'incoming' : 'new',
+    aLabel: 'My catalog',
+    bLabel: platformName ? `From ${platformName}` : 'Incoming',
+    aChip: kind === 'collision' ? undefined : 'live',
+    bChip: kind === 'collision' ? undefined : 'new',
     aTone: kind === 'collision' ? 'danger' : 'ok',
     bTone: kind === 'collision' ? 'danger' : 'warn',
     aImage: canon.imageUrl,
     bImage: p.imageUrl,
     rows,
+    conf: typeof s.confidence === 'number' ? s.confidence : undefined,
+    why: matchWhy(s),
   };
+}
+
+// One plain-English line of evidence for "why matched?" — shown on demand.
+function matchWhy(s: DraftItem): string | undefined {
+  const canon = s.suggestedCanonicalProduct;
+  switch (s.matchType) {
+    case 'BARCODE':
+      return 'same barcode';
+    case 'SKU':
+      return canon?.sku ? `same SKU · ${canon.sku}` : 'same SKU';
+    case 'TITLE':
+      return 'titles look alike';
+    case 'AI_SEMANTIC':
+      return 'AI thinks they’re the same product';
+    default:
+      return canon?.id ? 'similar listing' : undefined;
+  }
 }
 
 function findCase(p: MappingSuggestion['platformProduct'], candidates: CandidateItem[]): MatchCase {
@@ -237,22 +407,38 @@ function candidate(canon: NonNullable<MappingSuggestion['suggestedCanonicalProdu
     sub: `${canon.sku || 'no sku'} · ${money(canon.price)}`,
     hint,
     uri: canon.imageUrl,
+    sku: canon.sku || null,
+    price: typeof canon.price === 'number' ? canon.price : null,
   };
 }
 
 function variantsCase(pid: string, group: DraftItem[]): MatchCase {
+  const parentTitle = group[0].platformProduct.parentTitle || group[0].platformProduct.title || 'Product';
   return {
     id: `var-${pid}`,
     kind: 'variants',
-    title: 'Stray variants',
-    parentTitle: group[0].platformProduct.parentTitle || group[0].platformProduct.title || 'Product',
+    title: 'Group these together?',
+    note: 'Tap any that don’t belong',
+    parentTitle,
     itemIds: group.map((g) => g.platformProduct.id),
-    candidates: group.map((g) => ({
-      id: g.platformProduct.id,
-      title: g.platformProduct.sku || g.platformProduct.title,
-      sub: variantHint(g),
-      hint: g.suggestedCanonicalProduct?.id ? `→ ${trim(g.suggestedCanonicalProduct.title, 12)}` : undefined,
-    })),
+    candidates: group.map((g) => {
+      const p = g.platformProduct;
+      // One human line per row: the variant's own title when it has one,
+      // otherwise its SKU — and the sub never repeats what the title shows.
+      const title = (p.title && p.title !== parentTitle ? p.title : '') || p.sku || 'Variant';
+      const price = money(p.price);
+      const sub =
+        title === p.sku
+          ? price !== '—' ? price : undefined
+          : [p.sku, price !== '—' ? price : null].filter(Boolean).join(' · ') || undefined;
+      return {
+        id: p.id,
+        title,
+        sub,
+        uri: p.imageUrl,
+        hint: g.suggestedCanonicalProduct?.id ? `→ ${trim(g.suggestedCanonicalProduct.title, 12)}` : undefined,
+      };
+    }),
   };
 }
 
@@ -276,7 +462,7 @@ function alignCase(pid: string, group: DraftItem[]): MatchCase {
   };
 }
 
-function collisionCase(s: DraftItem): MatchCase {
+function collisionCase(s: DraftItem, platformName?: string): MatchCase {
   const p = s.platformProduct;
   const cands = s.candidateVariants || [];
   const top = cands[0];
@@ -286,10 +472,8 @@ function collisionCase(s: DraftItem): MatchCase {
     title: 'Same item?',
     note: `“${p.sku || p.title}” matches ${cands.length} product${cands.length === 1 ? '' : 's'}`,
     itemIds: [p.id],
-    aLabel: trim(top?.title || 'Existing', 10),
-    bLabel: trim(p.title || 'Incoming', 10),
-    aChip: 'existing',
-    bChip: 'incoming',
+    aLabel: 'My catalog',
+    bLabel: platformName ? `From ${platformName}` : 'Incoming',
     aTone: 'danger',
     bTone: 'danger',
     aImage: top?.imageUrl,
@@ -330,7 +514,14 @@ function splitCase(s: DraftItem): MatchCase {
     itemIds: [p.id],
     itemTitle: p.title || 'Bundle',
     itemSub: `${p.sku || 'no sku'} · ${money(p.price)}`,
-    parts: [], // components arrive once the backend parses the bundle
+    // Seed the piece list from the backend's parsed multi-SKU cell; the
+    // resolver lets the user edit/add/remove pieces either way.
+    parts: (s.bundleParts || []).map((part, i) => ({
+      name: part.title || part.sku || `Part ${i + 1}`,
+      sku: part.sku || '—',
+      qty: String(part.quantity ?? 1),
+      price: '—',
+    })),
   };
 }
 
@@ -344,7 +535,13 @@ function kitCase(s: DraftItem): MatchCase {
     itemIds: [p.id],
     itemTitle: p.title || 'Kit',
     itemSub: `${p.sku || 'no sku'} · ${money(p.price)}`,
-    candidates: [], // the component singles arrive from the backend
+    // The component singles come from the backend (canonicals sharing the base SKU).
+    candidates: (s.kitComponents || []).map((c) => ({
+      id: c.id,
+      title: c.title || c.sku || 'Piece',
+      sub: `${c.sku || 'no sku'} · ${money(typeof c.price === 'number' ? c.price : null)}`,
+      uri: c.imageUrl,
+    })),
   };
 }
 
@@ -396,6 +593,7 @@ export function applyMatchDecision(
     if (kind === 'collision') return set('LINK_EXISTING'); // "they're the same → merge"
     if (kind === 'compare' || kind === 'consolidate') return set('CREATE_NEW'); // keep both / apart
     if (kind === 'find') return set('CREATE_NEW'); // add as new
+    if (kind === 'variants') return set('CREATE_NEW'); // keep separate = its own product
     return { ...s, resolved: true };
   }
 

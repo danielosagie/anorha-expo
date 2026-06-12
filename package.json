@@ -65,6 +65,7 @@
     "posthog-react-native": "^4.36.1",
     "react": "19.2.0",
     "react-native": "0.83.2",
+    "react-native-calendars": "^1.1314.0",
     "react-native-chart-kit": "^6.12.0",
     "react-native-draggable-flatlist": "^4.0.2",
     "react-native-dropdown-picker": "^5.4.6",

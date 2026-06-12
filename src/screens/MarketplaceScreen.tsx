@@ -6,6 +6,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
 import PlaceholderImage from '../components/Placeholder';
 import Button from '../components/Button';
+import EmptyState from '../components/EmptyState';
 import { Platform } from 'react-native';
 
 const MarketplaceItem = ({ item, onAddToInventory, navigation }: { item: any; onAddToInventory: (item: any) => void; navigation: any }) => {
@@ -75,61 +76,14 @@ const getPlatformColor = (platform: string) => {
   }
 };
 
-// Sample marketplace data
-const mockMarketplaceItems = [
-  {
-    id: 1,
-    title: 'Premium Caribbean Spice Collection',
-    price: 49.99,
-    platform: 'Shopify',
-    seller: 'Island Flavors Co.',
-    rating: 4.8,
-    sales: 243
-  },
-  {
-    id: 2,
-    title: 'Handcrafted Wooden Serving Bowl',
-    price: 65.50,
-    platform: 'Amazon',
-    seller: 'Caribbean Crafts',
-    rating: 4.5,
-    sales: 189
-  },
-  {
-    id: 3,
-    title: 'Authentic Jamaican Coffee Beans',
-    price: 22.99,
-    platform: 'Clover',
-    seller: 'Blue Mountain Imports',
-    rating: 4.9,
-    sales: 412
-  },
-  {
-    id: 4,
-    title: 'Caribbean Hot Sauce Variety Pack',
-    price: 27.50,
-    platform: 'Square',
-    seller: 'Tropical Heat',
-    rating: 4.7,
-    sales: 178
-  },
-  {
-    id: 5,
-    title: 'Organic Caribbean Cacao Powder',
-    price: 18.99,
-    platform: 'Shopify',
-    seller: 'Natural Delights',
-    rating: 4.6,
-    sales: 156
-  },
-];
-
 const MarketplaceScreen = ({ navigation }: { navigation: any }) => {
   const theme = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
-  
+
   const categories = ['All', 'Food', 'Crafts', 'Spices', 'Accessories'];
+  // Real marketplace feed isn't wired yet — render empty rather than fake items.
+  const items: any[] = [];
   
   const handleAddToInventory = (item: any) => {
     // Add logic to add item to inventory
@@ -192,7 +146,7 @@ const MarketplaceScreen = ({ navigation }: { navigation: any }) => {
       </Animated.View>
       
       <FlatList
-        data={mockMarketplaceItems}
+        data={items}
         renderItem={({ item }) => (
           <Animated.View 
             entering={FadeInUp.delay(200 + item.id * 100).duration(500)}
@@ -209,68 +163,12 @@ const MarketplaceScreen = ({ navigation }: { navigation: any }) => {
         numColumns={2}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
-        ListHeaderComponent={
-          <>
-            <View style={styles.sellerStatsSection}>
-              <Text style={styles.sellerStatsSectionTitle}>Top Sellers</Text>
-              <View style={styles.sellerCards}>
-                <TouchableOpacity style={styles.sellerCard}>
-                  <View style={[styles.sellerAvatar, {backgroundColor: '#0E8F7F20'}]}>
-                    <Text style={[styles.sellerInitial, {color: '#0E8F7F'}]}>J</Text>
-                  </View>
-                  <Text style={styles.sellerCardName}>J-Shop</Text>
-                  <Text style={styles.sellerCardStat}>256 products</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.sellerCard}>
-                  <View style={[styles.sellerAvatar, {backgroundColor: '#F17F5F20'}]}>
-                    <Text style={[styles.sellerInitial, {color: '#F17F5F'}]}>A</Text>
-                  </View>
-                  <Text style={styles.sellerCardName}>Amazing</Text>
-                  <Text style={styles.sellerCardStat}>193 products</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.sellerCard}>
-                  <View style={[styles.sellerAvatar, {backgroundColor: '#3CAD4620'}]}>
-                    <Text style={[styles.sellerInitial, {color: '#3CAD46'}]}>T</Text>
-                  </View>
-                  <Text style={styles.sellerCardName}>TechBox</Text>
-                  <Text style={styles.sellerCardStat}>167 products</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-            
-            <View style={styles.categoriesSection}>
-              <Text style={styles.categoriesSectionTitle}>Browse Categories</Text>
-              <View style={styles.categoriesGrid}>
-                <TouchableOpacity style={styles.categoryItem}>
-                  <View style={[styles.categoryIcon, {backgroundColor: '#0E8F7F20'}]}>
-                    <Icon name="tag-outline" size={24} color="#0E8F7F" />
-                  </View>
-                  <Text style={styles.categoryName}>Clothing</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.categoryItem}>
-                  <View style={[styles.categoryIcon, {backgroundColor: '#F17F5F20'}]}>
-                    <Icon name="food-apple-outline" size={24} color="#F17F5F" />
-                  </View>
-                  <Text style={styles.categoryName}>Food</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.categoryItem}>
-                  <View style={[styles.categoryIcon, {backgroundColor: '#3CAD4620'}]}>
-                    <Icon name="laptop" size={24} color="#3CAD46" />
-                  </View>
-                  <Text style={styles.categoryName}>Electronics</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.categoryItem}>
-                  <View style={[styles.categoryIcon, {backgroundColor: '#865AF020'}]}>
-                    <Icon name="sofa-outline" size={24} color="#865AF0" />
-                  </View>
-                  <Text style={styles.categoryName}>Home</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </>
-        }
         ListEmptyComponent={
-          <Text style={styles.emptyText}>No items found</Text>
+          <EmptyState
+            icon="storefront-outline"
+            title="No marketplace items yet"
+            subtitle="Items shared to the marketplace will show up here."
+          />
         }
         ListFooterComponent={<View style={styles.listFooter} />}
       />

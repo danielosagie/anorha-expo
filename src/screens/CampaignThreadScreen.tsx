@@ -1,29 +1,31 @@
-import React, { useMemo, useRef, useEffect, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react';
 import {
   Dimensions,
   KeyboardAvoidingView,
+  PanResponder,
   Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { interpolate, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
-import { ChevronLeft, Menu, Package, Trash2, AlertCircle, CheckCircle2, X, MessagesSquare, Plus } from 'lucide-react-native';
+import { ChevronLeft, Menu, MessageCircle, Package, Search, Settings, AlertCircle, CheckCircle2, X, Plus } from 'lucide-react-native';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { ConversationComposer } from '../features/liquidationConversation/components/ConversationComposer';
 import { ConversationList } from '../features/liquidationConversation/components/ConversationList';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
+import type { CampaignThreadSummary } from '../features/liquidationConversation/types';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -50,6 +52,115 @@ const relativeTime = (iso?: string) => {
   return `${Math.floor(h / 24)}d ago`;
 };
 
+type DrawerContentProps = {
+  threads: CampaignThreadSummary[];
+  activeThreadId: string | null;
+  onSelectThread: (threadId: string) => void;
+  onNewThread: () => void;
+  onNavInventory: () => void;
+  onNavSettings: () => void;
+  onCloseDrawer: () => void;
+  bottomInset: number;
+};
+
+// Owns the search query locally so each keystroke re-renders only the drawer
+// content — not the whole chat screen (message list, composer, header).
+const DrawerContent = React.memo(({
+  threads,
+  activeThreadId,
+  onSelectThread,
+  onNewThread,
+  onNavInventory,
+  onNavSettings,
+  onCloseDrawer,
+  bottomInset,
+}: DrawerContentProps) => {
+  const [threadSearch, setThreadSearch] = useState('');
+
+  // Recents: newest first, locally filtered by the search box
+  const visibleThreads = useMemo(() => {
+    const sorted = [...threads].sort(
+      (a, b) =>
+        new Date(b.lastMessageAt || b.updatedAt).getTime() - new Date(a.lastMessageAt || a.updatedAt).getTime(),
+    );
+    const q = threadSearch.trim().toLowerCase();
+    if (!q) return sorted;
+    return sorted.filter(t => (t.title || (t.isPrimary ? 'Main thread' : 'Thread')).toLowerCase().includes(q));
+  }, [threads, threadSearch]);
+
+  return (
+    <>
+      {/* Search */}
+      <View style={s.drawerSearch}>
+        <Search size={18} color="#71717A" />
+        <TextInput
+          style={s.drawerSearchInput}
+          value={threadSearch}
+          onChangeText={setThreadSearch}
+          placeholder="Search threads…"
+          placeholderTextColor="#9CA3AF"
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="search"
+        />
+      </View>
+
+      {/* Pinned nav shortcuts */}
+      <TouchableOpacity style={s.navRow} onPress={onCloseDrawer} activeOpacity={0.7}>
+        <MessageCircle size={20} color="#18181B" />
+        <Text style={s.navRowLabel}>Chat</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={s.navRow} onPress={onNavInventory} activeOpacity={0.7}>
+        <Package size={20} color="#18181B" />
+        <Text style={s.navRowLabel}>Inventory</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={s.navRow} onPress={onNavSettings} activeOpacity={0.7}>
+        <Settings size={20} color="#18181B" />
+        <Text style={s.navRowLabel}>Campaign settings</Text>
+      </TouchableOpacity>
+      <View style={s.drawerDivider} />
+
+      {/* Recents — newest first */}
+      <Text style={s.recentsLabel}>Recents</Text>
+      <ScrollView contentContainerStyle={{ paddingBottom: bottomInset + 92 }} showsVerticalScrollIndicator={false}>
+        {visibleThreads.length === 0 ? (
+          <Text style={s.drawerEmpty}>
+            {threadSearch.trim() ? 'No threads match your search.' : 'No threads yet — start one below.'}
+          </Text>
+        ) : (
+          visibleThreads.map(t => {
+            const active = t.id === activeThreadId;
+            return (
+              <TouchableOpacity key={t.id} style={[s.threadRow, active && s.threadRowActive]} onPress={() => onSelectThread(t.id)} activeOpacity={0.7}>
+                <View style={[s.threadDot, { backgroundColor: active ? '#93C822' : '#D4D4D8' }]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={s.threadTitle} numberOfLines={1}>
+                    {t.title || (t.isPrimary ? 'Main thread' : 'Thread')}
+                  </Text>
+                  <Text style={s.threadMeta} numberOfLines={1}>
+                    {t.isPrimary ? 'Primary · ' : ''}{relativeTime(t.lastMessageAt || t.updatedAt)}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })
+        )}
+      </ScrollView>
+
+      {/* Floating new-chat FAB */}
+      <TouchableOpacity
+        style={[s.newChatFab, { bottom: bottomInset + 16 }]}
+        onPress={onNewThread}
+        activeOpacity={0.85}
+      >
+        <Plus size={18} color="#FFFFFF" />
+        <Text style={s.newChatFabText}>New chat</Text>
+      </TouchableOpacity>
+    </>
+  );
+});
+DrawerContent.displayName = 'DrawerContent';
+
 const CampaignThreadScreen = () => {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
@@ -68,6 +179,8 @@ const CampaignThreadScreen = () => {
   );
 
   const controller = useLiquidationConversationController({ adapter, initialCampaignId: campaignId });
+  const controllerRef = useRef(controller);
+  useEffect(() => { controllerRef.current = controller; });
   const [menuOpen, setMenuOpen] = useState(false);
   const insets = useSafeAreaInsets();
   const [headerH, setHeaderH] = useState(104);
@@ -79,46 +192,75 @@ const CampaignThreadScreen = () => {
   const drawerProgress = useSharedValue(0);
   const [drawerMounted, setDrawerMounted] = useState(false);
 
-  const openDrawer = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-    setDrawerMounted(true);
-    drawerProgress.value = withTiming(1, { duration: 240 });
-  };
-  const closeDrawer = () => {
+  const closeDrawer = useCallback(() => {
+    drawerMountedRef.current = false;
     drawerProgress.value = withTiming(0, { duration: 220 }, finished => {
       if (finished) runOnJS(setDrawerMounted)(false);
     });
-  };
+  }, [drawerProgress]);
 
-  const edgePan = Gesture.Pan()
-    .activeOffsetX(14)
-    .failOffsetY([-16, 16])
-    .onBegin(() => runOnJS(setDrawerMounted)(true))
-    .onChange(e => {
-      'worklet';
-      drawerProgress.value = Math.max(0, Math.min(1, e.translationX / DRAWER_W));
-    })
-    .onEnd(e => {
-      'worklet';
-      const open = e.translationX > DRAWER_W * 0.4 || e.velocityX > 600;
-      drawerProgress.value = withTiming(open ? 1 : 0, { duration: 200 }, finished => {
-        if (finished && !open) runOnJS(setDrawerMounted)(false);
-      });
-    });
+  // Plain PanResponder (JS responder system) on the edge strip: RNGH's Pan
+  // never activated on this absolute strip under Fabric, and a drawer pull
+  // doesn't need native-thread tracking. Created once — everything it closes
+  // over (shared value, setState, refs, DRAWER_W) is stable across renders.
+  const drawerMountedRef = useRef(false);
+  const edgePan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, g) => g.dx > 10 && Math.abs(g.dy) < g.dx,
+      onPanResponderGrant: () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+        drawerMountedRef.current = true;
+        setDrawerMounted(true);
+      },
+      onPanResponderMove: (_e, g) => {
+        drawerProgress.value = Math.max(0, Math.min(1, g.dx / DRAWER_W));
+      },
+      onPanResponderRelease: (_e, g) => {
+        // g.vx is px/ms — 0.45 ≈ a 450px/s fling.
+        const open = g.dx > DRAWER_W * 0.35 || g.vx > 0.45;
+        drawerProgress.value = withTiming(open ? 1 : 0, { duration: 200 }, finished => {
+          if (finished && !open) runOnJS(setDrawerMounted)(false);
+        });
+        if (!open) drawerMountedRef.current = false;
+      },
+      onPanResponderTerminate: () => {
+        drawerProgress.value = withTiming(0, { duration: 150 }, finished => {
+          if (finished) runOnJS(setDrawerMounted)(false);
+        });
+        drawerMountedRef.current = false;
+      },
+    }),
+  ).current;
 
   const overlayStyle = useAnimatedStyle(() => ({ opacity: drawerProgress.value * 0.45 }));
   const panelStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: interpolate(drawerProgress.value, [0, 1], [-DRAWER_W, 0]) }],
   }));
 
-  const switchThread = (threadId: string) => {
-    if (threadId !== controller.activeThreadId) controller.openThread(threadId);
+  const switchThread = useCallback((threadId: string) => {
+    const c = controllerRef.current;
+    if (threadId !== c.activeThreadId) c.openThread(threadId);
     closeDrawer();
-  };
-  const startThread = async () => {
+  }, [closeDrawer]);
+  const startThread = useCallback(async () => {
     closeDrawer();
-    try { await controller.createNewThread(); } catch { /* ignore */ }
-  };
+    try { await controllerRef.current.createNewThread(); } catch { /* ignore */ }
+  }, [closeDrawer]);
+  const navToInventory = useCallback(() => {
+    closeDrawer();
+    navigation.navigate('Inventory');
+  }, [closeDrawer, navigation]);
+  const navToSettings = useCallback(() => {
+    closeDrawer();
+    // Campaign settings for THIS clearout (not the app settings page).
+    navigation.navigate('CampaignSettings', { campaignId, title: passedTitle });
+  }, [closeDrawer, navigation, campaignId, passedTitle]);
+
+  // Our left-edge pan opens the threads drawer; the stack's back-swipe would
+  // steal that exact gesture, so it's off for this screen (the ‹ button remains).
+  useEffect(() => {
+    navigation.setOptions?.({ gestureEnabled: false });
+  }, [navigation]);
 
   // Success haptic when the agent finishes streaming a turn (chat-template polish)
   const prevStreamingRef = useRef(false);
@@ -151,9 +293,9 @@ const CampaignThreadScreen = () => {
     setMenuOpen(false);
     navigation.navigate('LiquidationCampaignScreen', { campaignId, entryPoint: 'detail' });
   };
-  const deleteCampaign = () => {
+  const goToSettings = () => {
     setMenuOpen(false);
-    navigation.navigate('SproutHomeScreen');
+    navigation.navigate('CampaignSettings', { campaignId, title: passedTitle });
   };
 
   const composerPlaceholder = controller.isStreaming
@@ -274,9 +416,6 @@ const CampaignThreadScreen = () => {
             >
               <ChevronLeft size={22} color="#18181B" />
             </TouchableOpacity>
-            <TouchableOpacity style={s.navCircle} onPress={openDrawer} activeOpacity={0.85}>
-              <MessagesSquare size={19} color="#18181B" />
-            </TouchableOpacity>
           </View>
 
           <View style={s.titlePill}>
@@ -315,18 +454,16 @@ const CampaignThreadScreen = () => {
               <Text style={s.dropText}>Inventory</Text>
             </TouchableOpacity>
             <View style={s.dropDivider} />
-            <TouchableOpacity style={s.dropItem} onPress={deleteCampaign} activeOpacity={0.7}>
-              <Trash2 size={18} color="#DC2626" />
-              <Text style={[s.dropText, { color: '#DC2626' }]}>Delete clearout</Text>
+            <TouchableOpacity style={s.dropItem} onPress={goToSettings} activeOpacity={0.7}>
+              <Settings size={18} color="#3F3F46" />
+              <Text style={s.dropText}>Campaign settings</Text>
             </TouchableOpacity>
           </View>
         </View>
       ) : null}
 
-      {/* ── Threads drawer: left-edge swipe (or the header button) ──────── */}
-      <GestureDetector gesture={edgePan}>
-        <View style={[s.edgeSwipe, { top: insets.top + 50 }]} />
-      </GestureDetector>
+      {/* ── Threads drawer: pull right from the left edge ──────── */}
+      <View style={[s.edgeSwipe, { top: insets.top + 50 }]} {...edgePan.panHandlers} />
 
       <Animated.View style={[s.drawerOverlay, overlayStyle]} pointerEvents={drawerMounted ? 'auto' : 'none'}>
         <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={closeDrawer} />
@@ -336,35 +473,16 @@ const CampaignThreadScreen = () => {
         style={[s.drawerPanel, { width: DRAWER_W, paddingTop: insets.top + 14 }, panelStyle]}
         pointerEvents={drawerMounted ? 'auto' : 'none'}
       >
-        <View style={s.drawerHead}>
-          <Text style={s.drawerTitle}>Threads</Text>
-          <TouchableOpacity style={s.newThreadBtn} onPress={startThread} activeOpacity={0.85}>
-            <Plus size={16} color="#FFFFFF" />
-            <Text style={s.newThreadText}>New</Text>
-          </TouchableOpacity>
-        </View>
-        <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 20 }} showsVerticalScrollIndicator={false}>
-          {controller.threads.length === 0 ? (
-            <Text style={s.drawerEmpty}>No threads yet — start one above.</Text>
-          ) : (
-            controller.threads.map(t => {
-              const active = t.id === controller.activeThreadId;
-              return (
-                <TouchableOpacity key={t.id} style={[s.threadRow, active && s.threadRowActive]} onPress={() => switchThread(t.id)} activeOpacity={0.7}>
-                  <View style={[s.threadDot, { backgroundColor: active ? '#93C822' : '#D4D4D8' }]} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[s.threadTitle, active && { color: '#18181B' }]} numberOfLines={1}>
-                      {t.title || (t.isPrimary ? 'Main thread' : 'Thread')}
-                    </Text>
-                    <Text style={s.threadMeta} numberOfLines={1}>
-                      {t.isPrimary ? 'Primary · ' : ''}{relativeTime(t.lastMessageAt || t.updatedAt)}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })
-          )}
-        </ScrollView>
+        <DrawerContent
+          threads={controller.threads}
+          activeThreadId={controller.activeThreadId}
+          onSelectThread={switchThread}
+          onNewThread={startThread}
+          onNavInventory={navToInventory}
+          onNavSettings={navToSettings}
+          onCloseDrawer={closeDrawer}
+          bottomInset={insets.bottom}
+        />
       </Animated.View>
     </View>
   );
@@ -427,23 +545,41 @@ const s = StyleSheet.create({
   dropDivider: { height: 1, backgroundColor: '#F1F2EE', marginHorizontal: 12 },
 
   // Threads drawer
-  edgeSwipe: { position: 'absolute', left: 0, bottom: 0, width: 26 },
+  edgeSwipe: { position: 'absolute', left: 0, bottom: 0, width: 34 },
   drawerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000' },
   drawerPanel: {
     position: 'absolute', top: 0, left: 0, bottom: 0,
     backgroundColor: '#FFFFFF', paddingHorizontal: 14,
+    borderTopRightRadius: 28, borderBottomRightRadius: 28,
     shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 24, shadowOffset: { width: 6, height: 0 }, elevation: 16,
   },
-  drawerHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, marginBottom: 4 },
-  drawerTitle: { fontSize: 20, color: '#18181B', fontFamily: 'Inter_700Bold' },
-  newThreadBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#93C822', borderRadius: 999, paddingHorizontal: 13, paddingVertical: 8 },
-  newThreadText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 13 },
+  drawerSearch: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#F1F1EE', borderRadius: 14, paddingHorizontal: 12, marginBottom: 10,
+  },
+  drawerSearchInput: {
+    flex: 1, fontSize: 15, color: '#18181B', fontFamily: 'Inter_400Regular',
+    paddingVertical: Platform.OS === 'ios' ? 11 : 8,
+  },
+  navRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 4 },
+  navRowLabel: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
+  drawerDivider: { height: 1, backgroundColor: '#F1F1EE', marginVertical: 8 },
+  recentsLabel: {
+    fontSize: 13, color: '#71717A', fontFamily: 'Inter_600SemiBold',
+    textTransform: 'uppercase', letterSpacing: 0.5, paddingHorizontal: 4, paddingVertical: 8,
+  },
   drawerEmpty: { color: '#9CA3AF', fontFamily: 'Inter_500Medium', fontSize: 13, paddingVertical: 20, textAlign: 'center' },
   threadRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13, paddingHorizontal: 10, borderRadius: 14 },
-  threadRowActive: { backgroundColor: 'rgba(147,200,34,0.10)' },
+  threadRowActive: { backgroundColor: 'rgba(147,200,34,0.12)' },
   threadDot: { width: 8, height: 8, borderRadius: 4 },
-  threadTitle: { fontSize: 15, color: '#3F3F46', fontFamily: 'Inter_600SemiBold' },
+  threadTitle: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
   threadMeta: { fontSize: 12, color: '#9CA3AF', fontFamily: 'Inter_500Medium', marginTop: 2 },
+  newChatFab: {
+    position: 'absolute', right: 16, flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#93C822', borderRadius: 999, paddingHorizontal: 16, paddingVertical: 12,
+    shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 8,
+  },
+  newChatFabText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 14 },
 });
 
 export default CampaignThreadScreen;

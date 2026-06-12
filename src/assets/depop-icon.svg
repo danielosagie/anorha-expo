@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 246 251">
+  <!-- "d" letterform extracted from the Depop wordmark (first two subpaths).
+       fill-rule=evenodd cuts out the inner counter. -->
+  <path fill="#ff2300" fill-rule="evenodd"
+    d="M 0,167.9
+       c 0,-54.5 38.884,-88 101.06,-88
+       l 64.373,0 l 0,-79.9 l 80.567,0 l 0,251
+       l -145.24,0
+       c -61.877,0 -100.76,-32.2 -100.76,-83.1
+       Z
+       M 85,165.2
+       c 0,20.9 12.653,31.8 36.96,31.8
+       l 43.04,0 l 0,-64 l -42.64,0
+       c -24.31,0 -37.36,11 -37.36,32.2
+       Z"/>
+</svg>

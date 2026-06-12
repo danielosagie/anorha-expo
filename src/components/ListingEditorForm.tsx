@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle, useRef, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Modal, Pressable, FlatList, SectionList, Alert, ActivityIndicator, Dimensions, Linking, Platform } from 'react-native';
-import { ScrollView as ScrollViewHorizontal } from 'react-native-gesture-handler';
 import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
 import { Paths, Directory, File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
@@ -24,7 +23,7 @@ import { overlay } from 'react-native-paper';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
-import { LineChart, BarChart } from 'react-native-chart-kit';
+import { PricingGuidanceCard } from './pricing/PricingGuidanceCard';
 import { logger } from 'react-native-reanimated/lib/typescript/common';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
@@ -252,9 +251,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [ebayConditionsLoading, setEbayConditionsLoading] = useState<boolean>(false);
   const [pricingResearchLoading, setPricingResearchLoading] = useState<boolean>(false);
   const [pricingResearchModalVisible, setPricingResearchModalVisible] = useState<boolean>(false);
-  const [pricingSourcesSheetVisible, setPricingSourcesSheetVisible] = useState<boolean>(false);
-  const [pricingHistoryRange, setPricingHistoryRange] = useState<'1W' | '1M' | '3M'>('1M');
-  const [selectedPricingPointIdx, setSelectedPricingPointIdx] = useState<number | null>(null);
   const [pricingResearchResult, setPricingResearchResult] = useState<{
     low?: number; median?: number; high?: number; recommended?: number;
     samples?: Array<{ title: string; price: number; url?: string; quantitySold?: number; watchers?: number; estimatedDaysToSell?: number }>;
@@ -661,14 +657,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       });
       const data = await res.json();
       setPricingResearchResult(data);
-      setPricingSourcesSheetVisible(false);
-      setSelectedPricingPointIdx(null);
       setPricingResearchModalVisible(true);
     } catch (e) {
       console.error('[ListingEditorForm] Pricing research error:', e);
       setPricingResearchResult({ error: (e as Error)?.message || 'Failed to research pricing' });
-      setPricingSourcesSheetVisible(false);
-      setSelectedPricingPointIdx(null);
       setPricingResearchModalVisible(true);
     } finally {
       setPricingResearchLoading(false);
@@ -2013,9 +2005,9 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       {/* Pricing Research Modal - stocks-style with chart, sources, accuracy */}
       <Modal visible={pricingResearchModalVisible} transparent animationType="slide">
         <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }} onPress={() => setPricingResearchModalVisible(false)}>
-          <Pressable style={{ backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '90%' }} onPress={e => e.stopPropagation()}>
+          <Pressable style={{ backgroundColor: '#F2F2F7', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '90%' }} onPress={e => e.stopPropagation()}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 20, paddingBottom: 12 }}>
-              <Text style={{ fontSize: 18, fontWeight: '700', color: '#1F2937' }}>eBay Sold Prices</Text>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: '#1F2937' }}>Pricing research</Text>
               <TouchableOpacity onPress={() => setPricingResearchModalVisible(false)}>
                 <Icon name="close" size={24} color="#6B7280" />
               </TouchableOpacity>
@@ -2025,263 +2017,20 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 <Text style={{ fontSize: 14, color: '#ef4444' }}>{pricingResearchResult.error}</Text>
               </View>
             ) : pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
-              <ScrollView style={{ maxHeight: 580 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24 }}>
-                {/* Accuracy / recency + Sources toggle (expands section below) */}
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 12 }}>
-                  <Text style={{ fontSize: 13, color: '#6B7280' }}>
-                    Based on {(pricingResearchResult.sampleCount ?? pricingResearchResult.samples?.length ?? 0)} sold listings
-                    {pricingResearchResult.cachedAt
-                      ? ` · Cached ${(() => {
-                        const d = new Date(pricingResearchResult.cachedAt);
-                        const mins = Math.round((Date.now() - d.getTime()) / 60000);
-                        if (mins < 60) return `${mins}m ago`;
-                        const h = Math.floor(mins / 60);
-                        return `${h}h ago`;
-                      })()}`
-                      : ''}
-                  </Text>
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#F3F4F6', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 12 }}
-                    onPress={() => setPricingSourcesSheetVisible((v) => !v)}
-                  >
-                    <Icon name="web" size={14} color="#4B5563" />
-                    <Text style={{ fontSize: 12, fontWeight: '600', color: '#4B5563', marginLeft: 4 }}>{pricingSourcesSheetVisible ? 'Hide sources' : 'Sources'}</Text>
-                  </TouchableOpacity>
-                </View>
-                {/* Expandable Sources section (toggled by button above) */}
-                {pricingSourcesSheetVisible && (
-                  <View style={{ marginBottom: 16, paddingVertical: 10, paddingHorizontal: 12, backgroundColor: '#F9FAFB', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' }}>
-                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#1F2937', marginBottom: 8 }}>Sources</Text>
-                    {Array.isArray(pricingResearchResult?.samples) && pricingResearchResult.samples.length > 0 && (
-                      <View style={{ marginTop: 4 }}>
-                        {pricingResearchResult.samples.slice(0, 8).map((sample, idx) => (
-                          <View key={`inline-sample-${idx}`} style={{ marginBottom: 8 }}>
-                            <Text style={{ fontSize: 12, color: '#111827' }} numberOfLines={1}>
-                              {sample.title || 'Listing'} • ${typeof sample.price === 'number' ? sample.price.toFixed(2) : sample.price}
-                              {typeof sample.estimatedDaysToSell === 'number' ? ` • ~${Math.round(sample.estimatedDaysToSell)}d` : ''}
-                            </Text>
-                            {sample.url ? (
-                              <TouchableOpacity onPress={() => Linking.openURL(sample.url!)}>
-                                <Text style={{ fontSize: 12, color: '#2563EB', marginTop: 1 }}>View listing</Text>
-                              </TouchableOpacity>
-                            ) : null}
-                          </View>
-                        ))}
-                      </View>
-                    )}
-                  </View>
-                )}
-
-                {/* Three options */}
-                {(() => {
-                  // Calculate timeToSell from samples to match chart data (same logic as backend)
-                  const averageDaysNearTarget = (
-                    targetPrice: number,
-                    samples: Array<{ price: number; estimatedDaysToSell?: number }>,
-                  ): number | undefined => {
-                    const withDays = samples.filter((s) => typeof s.estimatedDaysToSell === 'number' && Number.isFinite(s.estimatedDaysToSell));
-                    if (!withDays.length) return undefined;
-                    const sorted = withDays
-                      .map((s) => ({ ...s, dist: Math.abs(Number(s.price) - targetPrice) }))
-                      .sort((a, b) => a.dist - b.dist)
-                      .slice(0, Math.min(5, withDays.length));
-                    if (!sorted.length) return undefined;
-                    console.log("Sorted: " + sorted)
-                    const avg = sorted.reduce((sum, s) => sum + Number(s.estimatedDaysToSell || 0), 0) / sorted.length;
-                    return Math.round(avg);
-                  };
-                  const samples = pricingResearchResult?.samples || [];
-                  const low = pricingResearchResult?.low ?? 0;
-                  const median = pricingResearchResult?.median ?? 0;
-                  const recommended = pricingResearchResult?.recommended ?? median;
-                  const high = pricingResearchResult?.high ?? 0;
-                  const fastSaleDays = averageDaysNearTarget(low, samples);
-                  const recommendedDays = averageDaysNearTarget(recommended, samples);
-                  const maxProfitDays = averageDaysNearTarget(high, samples);
-                  return (
-                    <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
-                      <TouchableOpacity
-                        style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center' }}
-                        onPress={() => {
-                          patchField('price', String(low.toFixed(2)));
-                          patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low, recommended, high } }));
-                          setPricingResearchModalVisible(false);
-                        }}
-                      >
-                        <Text style={{ fontSize: 10, color: '#6B7280' }}>Fast sale</Text>
-                        <Text style={{ fontSize: 14, fontWeight: '700' }}>${low.toFixed(2)}</Text>
-                        <Text style={{ fontSize: 10, color: '#6B7280', marginTop: 2 }}>
-                          ~{fastSaleDays ?? '—'}d avg
-                        </Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#3B82F6', backgroundColor: '#EFF6FF', alignItems: 'center' }}
-                        onPress={() => {
-                          patchField('price', String(recommended.toFixed(2)));
-                          patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low, recommended, high } }));
-                          setPricingResearchModalVisible(false);
-                        }}
-                      >
-                        <Text style={{ fontSize: 10, color: '#1E40AF' }}>Recommended</Text>
-                        <Text style={{ fontSize: 14, fontWeight: '700', color: '#1E40AF' }}>${recommended.toFixed(2)}</Text>
-                        <Text style={{ fontSize: 10, color: '#1E40AF', marginTop: 2 }}>
-                          ~{recommendedDays ?? '—'}d avg
-                        </Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center' }}
-                        onPress={() => {
-                          patchField('price', String(high.toFixed(2)));
-                          patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low, recommended, high } }));
-                          setPricingResearchModalVisible(false);
-                        }}
-                      >
-                        <Text style={{ fontSize: 10, color: '#6B7280' }}>Max profit</Text>
-                        <Text style={{ fontSize: 14, fontWeight: '700' }}>${high.toFixed(2)}</Text>
-                        <Text style={{ fontSize: 10, color: '#6B7280', marginTop: 2 }}>
-                          ~{maxProfitDays ?? '—'}d avg
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })()}
-
-                {/* Interactive chart: Sold price vs estimated time on market */}
-                {(() => {
-                  const marketPoints = (pricingResearchResult.samples || [])
-                    .filter((s) => typeof s.estimatedDaysToSell === 'number' && Number.isFinite(s.estimatedDaysToSell) && typeof s.price === 'number')
-                    .sort((a, b) => Number(a.price) - Number(b.price));
-                  const windowWidth = Dimensions.get('window').width;
-                  const chartWidth = Math.max(marketPoints.length * 60, windowWidth + 60, 320);
-                  if (marketPoints.length >= 2) {
-                    const maxLabels = 10;
-                    const step = Math.max(1, Math.floor(marketPoints.length / maxLabels));
-                    const labels = marketPoints.map((p, i) =>
-                      (i % step === 0 || i === marketPoints.length - 1) ? `$${Number(p.price).toFixed(1)}` : ''
-                    );
-                    const data = marketPoints.map((p) => Math.round(Number(p.estimatedDaysToSell)));
-                    const selected = selectedPricingPointIdx != null && selectedPricingPointIdx < marketPoints.length ? marketPoints[selectedPricingPointIdx] : null;
-                    return (
-                      <View style={{ marginBottom: 16 }}>
-                        <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 4 }}>Time to sell at each price</Text>
-                        <Text style={{ fontSize: 12, color: '#6B7280', marginBottom: 6 }}>Y: Time (days to sell) · X: Price ($)</Text>
-                        <ScrollViewHorizontal
-                          horizontal
-                          showsHorizontalScrollIndicator={true}
-                          scrollEventThrottle={16}
-                          nestedScrollEnabled={Platform.OS === 'android'}
-                          style={{ marginHorizontal: -8, width: windowWidth - 40 }}
-                          contentContainerStyle={{ paddingHorizontal: 8 }}
-                        >
-                          <View style={{ width: chartWidth }}>
-                          <BarChart
-                            data={{
-                              labels,
-                              datasets: [{ data }],
-                            }}
-                            width={chartWidth}
-                            height={200}
-                            yAxisLabel=""
-                            yAxisSuffix="d"
-                            chartConfig={{
-                              backgroundColor: '#ffffff',
-                              backgroundGradientFrom: '#ffffff',
-                              backgroundGradientTo: '#ffffff',
-                              decimalPlaces: 0,
-                              color: (opacity = 1) => `rgba(234, 179, 8, ${opacity})`,
-                              labelColor: () => '#6B7280',
-                              style: { borderRadius: 12 },
-                              barPercentage: 0.6,
-                            }}
-                            style={{ borderRadius: 12, backgroundColor: '#ffffff' }}
-                            withInnerLines={true}
-                            fromZero
-                          />
-                          </View>
-                        </ScrollViewHorizontal>
-                        <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 4, textAlign: 'center' }}>Price ($) →  Swipe to see more</Text>
-                        {selected != null && (
-                          <View style={{ marginTop: 8, padding: 10, borderRadius: 10, backgroundColor: '#F9FAFB' }}>
-                            <Text style={{ fontSize: 13, fontWeight: '600', color: '#111827' }} numberOfLines={1}>{selected.title || 'Listing'}</Text>
-                            <Text style={{ fontSize: 12, color: '#4B5563', marginTop: 2 }}>
-                              ${Number(selected.price).toFixed(2)} • ~{Math.round(Number(selected.estimatedDaysToSell))}d to sell
-                            </Text>
-                            {selected.url ? (
-                              <TouchableOpacity onPress={() => Linking.openURL(selected.url!)}>
-                                <Text style={{ fontSize: 12, color: '#2563EB', marginTop: 4, fontWeight: '600' }}>View listing</Text>
-                              </TouchableOpacity>
-                            ) : null}
-                          </View>
-                        )}
-                      </View>
-                    );
-                  }
-
-                  const points = pricingResearchResult.history?.dataPoints ?? [];
-                  const rangeMs = pricingHistoryRange === '1W' ? 7 * 24 * 60 * 60 * 1000 : pricingHistoryRange === '1M' ? 30 * 24 * 60 * 60 * 1000 : 90 * 24 * 60 * 60 * 1000;
-                  const cutoff = Date.now() - rangeMs;
-                  const filtered = points.filter(p => new Date(p.date).getTime() >= cutoff);
-                  if (filtered.length < 2) {
-                    return (
-                      <View style={{ marginBottom: 16, paddingVertical: 12, paddingHorizontal: 12, backgroundColor: '#F9FAFB', borderRadius: 12 }}>
-                        <Text style={{ fontSize: 13, color: '#6B7280' }}>Not enough points yet for trend. Tap Sources to inspect sold listing links.</Text>
-                      </View>
-                    );
-                  }
-                  const labels = filtered.map(p => {
-                    const d = new Date(p.date);
-                    return `${d.getMonth() + 1}/${d.getDate()}`;
-                  });
-                  const data = filtered.map(p => p.median);
-                  const trendChartWidth = Math.max(filtered.length * 60, Dimensions.get('window').width + 60, 320);
-                  return (
-                    <View style={{ marginBottom: 16 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                        <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151' }}>Price trend (cached runs)</Text>
-                        <View style={{ flexDirection: 'row', gap: 6 }}>
-                          {(['1W', '1M', '3M'] as const).map(r => (
-                            <TouchableOpacity
-                              key={r}
-                              onPress={() => setPricingHistoryRange(r)}
-                              style={{ paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: pricingHistoryRange === r ? '#EFF6FF' : '#F3F4F6' }}
-                            >
-                              <Text style={{ fontSize: 12, fontWeight: '600', color: pricingHistoryRange === r ? '#1E40AF' : '#6B7280' }}>{r}</Text>
-                            </TouchableOpacity>
-                          ))}
-                        </View>
-                      </View>
-                      <ScrollViewHorizontal
-                        horizontal
-                        showsHorizontalScrollIndicator={true}
-                        scrollEventThrottle={16}
-                        nestedScrollEnabled={Platform.OS === 'android'}
-                        style={{ width: Dimensions.get('window').width - 40 }}
-                      >
-                        <View style={{ width: trendChartWidth }}>
-                      <LineChart
-                        data={{ labels, datasets: [{ data: data.length ? data : [0] }] }}
-                        width={trendChartWidth}
-                        height={160}
-                        chartConfig={{
-                          backgroundColor: '#ffffff',
-                          backgroundGradientFrom: '#ffffff',
-                          backgroundGradientTo: '#ffffff',
-                          decimalPlaces: 0,
-                          color: (opacity = 1) => `rgba(234, 179, 8, ${opacity})`,
-                          labelColor: () => '#6B7280',
-                          style: { borderRadius: 12 },
-                        }}
-                        style={{ borderRadius: 12, backgroundColor: '#ffffff' }}
-                        withInnerLines={false}
-                        withOuterLines={true}
-                      />
-                        </View>
-                      </ScrollViewHorizontal>
-                    </View>
-                  );
-                })()}
-
+              <ScrollView style={{ maxHeight: 620 }} contentContainerStyle={{ paddingHorizontal: 8, paddingBottom: 28 }}>
+                {/* The one shared pricing overview (same card as the add-product preview). */}
+                <PricingGuidanceCard
+                  headers="none"
+                  pricing={pricingResearchResult}
+                  onApplyPrice={(price) => {
+                    const low = pricingResearchResult.low ?? 0;
+                    const recommended = pricingResearchResult.recommended ?? pricingResearchResult.median ?? 0;
+                    const high = pricingResearchResult.high ?? 0;
+                    patchField('price', price.toFixed(2));
+                    patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low, recommended, high } }));
+                    setPricingResearchModalVisible(false);
+                  }}
+                />
               </ScrollView>
             ) : (
               <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>

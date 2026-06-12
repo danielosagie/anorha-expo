@@ -11,6 +11,7 @@
  * Generics are caller-supplied for now; Phase 3 will bind these to types
  * generated from the backend's OpenAPI spec.
  */
+import { z } from 'zod';
 import { API_BASE_URL } from '../config/env';
 import { ensureSupabaseJwt } from './supabase';
 
@@ -115,3 +116,22 @@ export const api = {
 
 /** Lower-level escape hatch when you need full control over method/options. */
 export { request as apiRequest };
+
+/**
+ * Advisory contract validation for API responses. Never throws and never strips:
+ * the original payload is returned untouched (typed), and any mismatch against the
+ * shared contract (src/contracts) is logged as drift telemetry. Use at the seam:
+ *
+ *   const status = parseOrWarn(zMatchJobStatus, await api.get(`/api/products/match/jobs/${id}/status`), 'match job status');
+ */
+export function parseOrWarn<S extends z.ZodType>(schema: S, data: unknown, label: string): z.infer<S> {
+  const result = schema.safeParse(data);
+  if (!result.success) {
+    const issues = result.error.issues
+      .slice(0, 3)
+      .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+      .join(' · ');
+    console.warn(`[contract] ${label} drifted from contract — ${issues}`);
+  }
+  return data as z.infer<S>;
+}

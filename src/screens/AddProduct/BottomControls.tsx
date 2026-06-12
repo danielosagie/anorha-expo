@@ -167,8 +167,7 @@ export const BottomControls: React.FC<{
           : 'Capture receipt';
       }
       if (photosCount === 0) return 'Take a photo to get started';
-      if (totalItems > 0) return `Manage ${totalItems} Item${totalItems === 1 ? '' : 's'}`;
-      return 'Manage Items';
+      return 'Cart';
     };
 
     const activeMode = hoveredMode || cameraMode;
@@ -261,16 +260,7 @@ export const BottomControls: React.FC<{
 
         {((cameraMode === 'shelf' && !showDeepSearchSheet && items.length > 0 && onOpenSheet) || (cameraMode !== 'shelf' && (cameraMode === 'barcode' || photosCount >= 1 || items.some((i) => i.title)))) && (
           <Animated.View entering={SlideInDown.delay(700)} style={styles.continueButtonContainer}>
-            {cameraMode === 'shelf' && !showDeepSearchSheet && onOpenSheet ? (
-              <TouchableOpacity
-                style={styles.continueButton}
-                onPress={onOpenSheet}
-              >
-                <Text style={styles.continueButtonText} numberOfLines={1}>
-                  Move to listing flow
-                </Text>
-              </TouchableOpacity>
-            ) : cameraMode === 'barcode' ? (
+            {cameraMode === 'barcode' ? (
               hasBarcodeResult ? (
                 <View style={styles.barcodeActionsRow}>
                   {onOpenBarcodeEntry && (
@@ -314,25 +304,24 @@ export const BottomControls: React.FC<{
                   }}
                   disabled={activeIndex <= 0}
                 >
-                  {matchedItemsCount > 0 && (
-                    <View style={styles.itemNavArrowMatchBadge} />
-                  )}
                   <Icon name="chevron-left" size={24} color={activeIndex > 0 ? "#FFF" : "rgba(255,255,255,0.3)"} />
                 </TouchableOpacity>
 
-                {/* Center - Continue Button with item counter */}
+                {/* Center - Cart button (opens the cart; reachability lift).
+                    Shelf prefers the bulk-items sheet when available. */}
                 <TouchableOpacity
                   style={styles.continueButton}
-                  onPress={onContinue}
+                  onPress={cameraMode === 'shelf' && onOpenSheet ? onOpenSheet : onContinue}
                 >
-                  {totalItems > 0 && (
-                    <View style={styles.itemCountBadge}>
-                      <Text style={styles.itemCountBadgeText}>{totalItems}/{maxItems}</Text>
-                    </View>
-                  )}
+                  {photosCount > 0 && <Icon name="cart-outline" size={18} color="#FFF" style={{ marginRight: 6 }} />}
                   <Text style={styles.continueButtonText} numberOfLines={1}>
                     {getContinueText()}
                   </Text>
+                  {totalItems > 0 && (
+                    <View style={[styles.itemCountBadge, { marginRight: 0, marginLeft: 8 }]}>
+                      <Text style={styles.itemCountBadgeText}>{totalItems}</Text>
+                    </View>
+                  )}
                 </TouchableOpacity>
 
                 {/* Right Arrow/New Item */}
@@ -351,7 +340,7 @@ export const BottomControls: React.FC<{
                   >
                     <Icon name="plus" size={24} color={totalItems >= maxItems ? 'rgba(255,255,255,0.4)' : '#FFF'} />
                     <Text style={[styles.continueButtonText, totalItems >= maxItems && { color: 'rgba(255,255,255,0.6)' }]}>
-                      {totalItems >= maxItems ? 'Limit reached' : 'New Item'}
+                      {totalItems >= maxItems ? 'Limit reached' : 'New'}
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -368,7 +357,7 @@ export const BottomControls: React.FC<{
 const styles = StyleSheet.create({
   bottomControls: {
     position: 'absolute',
-    bottom: 100,
+    bottom: 16, // navigator row removed on this screen; controls own the bottom edge
     left: 0,
     right: 0,
     paddingBottom: Platform.OS === 'ios' ? 34 : 20,
@@ -403,9 +392,11 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.3)',
   },
   captureButtonInner: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 75,
+    height: 75,
+    borderRadius: 60,
+    borderColor: "#00000033",
+    borderWidth: 5,
     backgroundColor: 'white',
   },
   modeSelectorWrapper: {
@@ -528,27 +519,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 10,
   },
   itemNavArrow: {
+    minWidth: 52,
     height: 48,
     flexDirection: "row",
-    paddingHorizontal: 8,
+    flexShrink: 0,
+    paddingHorizontal: 10,
     gap: 4,
     borderRadius: 22,
     backgroundColor: 'rgba(255,255,255,0.15)',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  itemNavArrowMatchBadge: {
-    position: 'absolute',
-    top: -6,
-    right: -4,
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 2,
-    borderColor: '#93C822',
   },
   itemNavArrowDisabled: {
     opacity: 0.4,
@@ -558,7 +541,6 @@ const styles = StyleSheet.create({
   },
   continueButton: {
     flex: 1,
-    marginHorizontal: 12,
     backgroundColor: '#93C822',
     borderRadius: 22,
     paddingVertical: 14,
