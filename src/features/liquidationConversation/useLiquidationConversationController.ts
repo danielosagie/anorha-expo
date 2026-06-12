@@ -8,6 +8,8 @@ import {
   HOME_DRAFT_SCOPE,
   acknowledgeMessage,
   appendAssistantDelta,
+  appendAssistantReasoning,
+  appendAssistantToolStep,
   completeActionMessage,
   completeAssistantMessage,
   createActionMessage,
@@ -350,8 +352,27 @@ export const useLiquidationConversationController = ({
               messageId,
             ));
           },
+          onReasoning: ({ reasoning, messageId }) => {
+            setThreadStateFor(threadId, current => appendAssistantReasoning(
+              current,
+              item.campaignId,
+              threadId,
+              reasoning,
+              messageId,
+            ));
+          },
           onAssistantCompleted: ({ content, messageId }) => {
             setThreadStateFor(threadId, current => completeAssistantMessage(current, content, messageId), { immediate: true });
+          },
+          // Completed tool steps attach to the streaming assistant bubble as
+          // compact items (label + status only; arguments never reach the client).
+          onToolCompleted: ({ tool, label, status, durationMs }) => {
+            setThreadStateFor(threadId, current => appendAssistantToolStep(
+              current,
+              item.campaignId,
+              threadId,
+              { tool, label, status, durationMs },
+            ));
           },
           onActionCompleted: ({ clientMessageId, summary }) => {
             setThreadStateFor(
@@ -371,6 +392,9 @@ export const useLiquidationConversationController = ({
           messages: remoteMessages,
         }), { immediate: true });
       }
+      // Pull fresh thread metadata so the backend's topic auto-title replaces
+      // "New chat" in the drawer once the first turn lands.
+      void loadThreads(item.campaignId).catch(() => undefined);
     } catch (streamError: any) {
       setThreadStateFor(
         threadId,
@@ -390,7 +414,7 @@ export const useLiquidationConversationController = ({
         }
       }
     }
-  }, [adapter, setThreadStateFor]);
+  }, [adapter, loadThreads, setThreadStateFor]);
 
   const ensureChatThread = useCallback(async (forceFreshThread: boolean) => {
     const campaignId = activeCampaignIdRef.current;
@@ -402,8 +426,11 @@ export const useLiquidationConversationController = ({
       return activeThreadIdRef.current;
     }
 
+    // Create as "New chat" so the backend auto-titles the thread from the first
+    // message's topic. Passing a custom title here (e.g. "Chat 3") makes the
+    // backend titler skip it, which is why threads were never named by topic.
     const created = await adapter.createThread(campaignId, {
-      title: `Chat ${threads.length + 1}`,
+      title: 'New chat',
     });
     setThreads(prev => [created, ...prev.filter(thread => thread.id !== created.id)]);
     setActiveThreadId(created.id);

@@ -17,6 +17,8 @@ export interface CampaignSummary {
   stateSummary?: string;
   inventoryScope?: 'all' | 'pool' | 'specific';
   timeframeDays?: number;
+  /** First campaign item's image — the home card thumbnail. */
+  imageUrl?: string;
   stats?: {
     soldToday?: number;
     totalCount?: number;
@@ -75,6 +77,12 @@ export interface CampaignOverview {
     createdAt: string;
     metadata?: Record<string, unknown>;
   }>;
+  /** Most recent scheduled 12h Sprout digest, if the backend has produced one. */
+  latestDigest?: {
+    text: string;
+    createdAt: string;
+    nextReportAt?: string;
+  };
 }
 
 export type ConversationTarget = { mode: 'home' } | { mode: 'thread'; threadId: string };
@@ -153,12 +161,27 @@ export interface StreamTurnInput {
   actionPayload?: Record<string, unknown>;
 }
 
+/**
+ * Compact, arg-free record of one executed agent tool. Streamed only AFTER the
+ * tool finishes (tool.completed) and persisted in the assistant message's
+ * metadata.toolSteps — the chat renders these as step items; raw arguments,
+ * SQL, and tool syntax never reach the client.
+ */
+export interface ConversationToolStep {
+  tool: string;
+  label: string;
+  status?: string;
+  durationMs?: number;
+}
+
 export interface StreamTurnObserver {
   onThreadCreated?: (threadId: string) => void;
   onMessageAck?: (payload: { clientMessageId: string; serverMessageId?: string; threadId?: string }) => void;
   onAssistantStarted?: (payload: { messageId?: string; threadId?: string }) => void;
   onAssistantDelta?: (payload: { delta: string; messageId?: string; threadId?: string }) => void;
+  onReasoning?: (payload: { reasoning: string; messageId?: string; threadId?: string }) => void;
   onAssistantCompleted?: (payload: { messageId?: string; content?: string; threadId?: string }) => void;
+  onToolCompleted?: (payload: ConversationToolStep & { threadId?: string }) => void;
   onActionCompleted?: (payload: {
     clientMessageId?: string;
     actionType?: string;

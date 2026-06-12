@@ -204,6 +204,50 @@ export const appendAssistantDelta = (
   );
 };
 
+/** Attach a completed tool step to the streaming assistant message's metadata. */
+export const appendAssistantToolStep = (
+  state: ConversationThreadState,
+  campaignId: string,
+  threadId: string,
+  step: { tool: string; label: string; status?: string; durationMs?: number },
+  assistantMessageId?: string,
+): ConversationThreadState => {
+  const ensured = ensureAssistantPlaceholder(state, campaignId, threadId, assistantMessageId);
+  return withUpdatedAt(
+    updateMessage(ensured.state, ensured.assistantMessageId, message => ({
+      ...message,
+      metadata: {
+        ...(message.metadata || {}),
+        toolSteps: [
+          ...((message.metadata?.toolSteps as any[]) || []),
+          step,
+        ],
+      },
+    })),
+  );
+};
+
+/** Accumulate streamed reasoning/thinking text into the streaming assistant message. */
+export const appendAssistantReasoning = (
+  state: ConversationThreadState,
+  campaignId: string,
+  threadId: string,
+  reasoning: string,
+  assistantMessageId?: string,
+): ConversationThreadState => {
+  if (!reasoning) return state;
+  const ensured = ensureAssistantPlaceholder(state, campaignId, threadId, assistantMessageId);
+  return withUpdatedAt(
+    updateMessage(ensured.state, ensured.assistantMessageId, message => ({
+      ...message,
+      metadata: {
+        ...(message.metadata || {}),
+        reasoning: `${(message.metadata?.reasoning as string) || ''}${reasoning}`,
+      },
+    })),
+  );
+};
+
 export const completeAssistantMessage = (
   state: ConversationThreadState,
   content?: string,
