@@ -41,6 +41,9 @@ import MarketplaceScreen from '../screens/MarketplaceScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import ConnectionsScreen from '../screens/ConnectionsScreen';
+import PrivacySecurityScreen from '../screens/PrivacySecurityScreen';
+import AccountLoginScreen from '../screens/AccountLoginScreen';
+import PoolDetailScreen from '../screens/PoolDetailScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
 import ProductDetailScreen from '../screens/ProductDetail';
 import PhoneAuthScreen from '../screens/PhoneAuthScreen';
@@ -117,6 +120,12 @@ export type AppStackParamList = {
     payload: {
       jobId?: string;
       firstPhotos: any[];
+      /**
+       * ID-BASED handoff (canonical going forward): cart$ item ids this run covers.
+       * Prefer resolving item data from the cart store by id over the index-coupled
+       * bulkItems/resultIndexMap fields below (kept for un-migrated consumers).
+       */
+      itemIds?: string[];
       bulkItems?: any[];
       confirmedQuickMatchByItemId?: Record<string, {
         serpApiData: any[];
@@ -154,6 +163,9 @@ export type AppStackParamList = {
   Profile: { refresh?: number };
   AccountSettings: { refresh?: number } | undefined;
   Connections: undefined;
+  PrivacySecurity: undefined;
+  AccountLogin: undefined;
+  PoolDetail: { poolId: string; name?: string; isPartnerPool?: boolean };
   DeleteAccountInfo: undefined;
   NotificationSettings: undefined;
   Team: undefined;
@@ -294,17 +306,24 @@ export type AppStackParamList = {
   GenerateDetailsScreen: {
     jobId: string,
     status: string,
-    results: Array<{
+    /** ID-BASED handoff (canonical): the screen resolves items/jobs from cart$ by id. */
+    itemIds?: string[],
+    focusItemId?: string,
+    /** Optional pre-fetched results (the screen also polls by jobId). */
+    results?: Array<{
       productIndex: number,
       platforms: any[],
       scrapedData: any[],
       originalSelection: any[],
     }>,
-    summary: any[],
-    completedAt: string,
+    summary?: any[],
+    completedAt?: string,
     initialData?: Array<{}>,
+    /** Legacy index-shaped fallbacks — emitted by buildGenerateDetailsLaunch (src/features/cart/flowPayloads.ts). */
     items?: Array<{ index: number; title?: string; thumb?: string; matchesCount?: number; matchJobId?: string }>,
+    /** Missing index = no generate job for that item. */
     jobMap?: Record<number, { jobId: string; status?: string }>,
+    userImagesByIndex?: Record<number, string[]>,
     matchJobId?: string,
     focusIndex?: number,
   };
@@ -386,6 +405,12 @@ const TabNavigator = () => {
         setTimeout(() => {
           navigation.navigate('Partners');
         }, 500);
+      } else if (data?.type === 'sprout_insight' && data?.campaignId) {
+        // A proactive Sprout ping (sale / needs-you / digest) → open that campaign's
+        // thread so the freshly posted message is right there.
+        setTimeout(() => {
+          navigation.navigate('CampaignThreadScreen', { campaignId: String(data.campaignId) });
+        }, 500);
       }
     }
   }, [lastNotificationResponse]);
@@ -418,34 +443,43 @@ const TabNavigator = () => {
         tabBarStyle: tabBarContainerStyle,
       }}
 
-      tabBar={(props: any) => (
-        <TabBar
-          {...props}
-          containerStyle={tabBarContainerStyle}
-          surfaceStyle={tabBarSurfaceStyle}
-          bottomInset={tabBarBottom}
-          rowHeight={TAB_ROW_HEIGHT}
-        />
-      )}
-      initialRouteName="Inventory"
+      tabBar={(props: any) => {
+        // Capture screen is full-bleed camera chrome (Shop-style): no navigator row.
+        // Its own bottom controls carry Back / shutter / mode + the cart CTA.
+        const focusedRouteName = props.state?.routes?.[props.state?.index]?.name;
+        if (focusedRouteName === 'AddProduct') return null;
+        return (
+          <TabBar
+            {...props}
+            containerStyle={tabBarContainerStyle}
+            surfaceStyle={tabBarSurfaceStyle}
+            bottomInset={tabBarBottom}
+            rowHeight={TAB_ROW_HEIGHT}
+          />
+        );
+      }}
+      initialRouteName="Clearouts"
     >
+      {/* Sprout home is the leftmost tab and the landing screen. */}
+      <Tab.Screen
+        name="Clearouts"
+        component={SproutHomeScreen}
+        options={{
+          tabBarLabel: 'Home',
+          tabBarAccessibilityLabel: 'Home',
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
+            <Icon name="home-variant-outline" color={color} size={size} />
+          ),
+        }}
+      />
       <Tab.Screen
         name="Inventory"
         component={InventoryOrdersScreen}
         options={{
           tabBarLabel: 'Inventory',
+          tabBarAccessibilityLabel: 'Inventory',
           tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Icon name="package-variant" color={color} size={size} />
-          ),
-        }}
-      />
-      <Tab.Screen
-        name="Clearouts"
-        component={SproutHomeScreen}
-        options={{
-          tabBarLabel: 'Sprout',
-          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
-            <Icon name="emoticon-outline" color={color} size={size} />
           ),
         }}
       />
@@ -453,9 +487,10 @@ const TabNavigator = () => {
         name="Profile"
         component={SettingsScreen}
         options={{
-          tabBarLabel: 'Settings',
+          tabBarLabel: 'Profile',
+          tabBarAccessibilityLabel: 'Profile',
           tabBarIcon: ({ color, size }: { color: string; size: number }) => (
-            <Icon name="cog-outline" color={color} size={size} />
+            <Icon name="account-outline" color={color} size={size} />
           ),
         }}
       />
@@ -503,9 +538,14 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="PastScans" component={PastScansScreen} />
     <AppStackNav.Screen name="MappingReview" component={MappingReviewScreen} />
     <AppStackNav.Screen name="SyncRules" component={SyncRulesScreen} />
-    <AppStackNav.Screen name="Profile" component={ProfileScreen} />
+    {/* Legacy account/profile mega-screen. Registered ONLY as 'AccountSettings' —
+        a stack route also named 'Profile' collided with the Profile TAB and made
+        navigate('Profile') push this legacy screen over the tabs. */}
     <AppStackNav.Screen name="AccountSettings" component={ProfileScreen} />
     <AppStackNav.Screen name="Connections" component={ConnectionsScreen} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="PrivacySecurity" component={PrivacySecurityScreen} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="AccountLogin" component={AccountLoginScreen} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="PoolDetail" component={PoolDetailScreen} options={{ headerShown: false }} />
     <AppStackNav.Screen name="DeleteAccountInfo" component={DeleteAccountInfoScreen} />
     <AppStackNav.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
     <AppStackNav.Screen name="Team" component={TeamScreen} />

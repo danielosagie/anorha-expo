@@ -195,8 +195,11 @@ const GlobalSearchScreen: React.FC = () => {
 
   const handleResultPress = (item: SearchResult) => {
     if (item.type === 'product') {
-      const target = item.productId || item.id;
-      navigation.navigate('ProductDetail', { productId: target });
+      // ProductDetail loads a ProductVariant by its Id (.eq('Id', productId)), so
+      // pass the VARIANT id (item.id = v.Id), NOT the parent product id
+      // (item.productId = v.ProductId). Passing the parent id found nothing and the
+      // tap looked dead / popped "Product Not Found".
+      navigation.navigate('ProductDetail', { productId: item.id });
     }
   };
 

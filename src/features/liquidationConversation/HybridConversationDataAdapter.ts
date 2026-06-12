@@ -561,6 +561,14 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     await this.safeConvexMutation('threads:removeByCampaign', { campaignId });
   }
 
+  // Pause/resume a campaign from the home screen (PATCH the session status).
+  async setCampaignStatus(campaignId: string, status: CampaignSummary['status']): Promise<void> {
+    await this.tryRequestNest(`/api/agent/sessions/${campaignId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+  }
+
   async renameThread(campaignId: string, threadId: string, title: string): Promise<CampaignThreadSummary> {
     await renameThreadLocal(campaignId, threadId, title);
     await this.tryRequestNest(`/api/agent/sessions/${campaignId}/threads/${threadId}`, {

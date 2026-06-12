@@ -103,18 +103,24 @@ const ToolActivityCard = ({
 
   if (!count && !hasReasoning) return null;
 
+  const totalMs = steps.reduce((sum, s) => sum + (typeof s.durationMs === 'number' ? s.durationMs : 0), 0);
+  const totalSecs = totalMs > 0 ? (totalMs / 1000).toFixed(1) : null;
   const summary = count > 0
-    ? `${count} step${count === 1 ? '' : 's'}`
+    ? `${count} step${count === 1 ? '' : 's'}${totalSecs ? ` · ${totalSecs}s` : ''}`
     : 'Thinking';
 
   return (
     <View style={styles.activityCard}>
-      <TouchableOpacity style={styles.activityHeader} onPress={() => setExpanded(e => !e)} activeOpacity={0.7}>
-        <Icon name="auto-fix" size={13} color="#5D7E16" />
-        <Text style={styles.activityHeaderText}>{streaming ? 'Working' : summary}</Text>
+      {/* Quiet summary line — no loud icon; just status, a count, and a fold toggle. */}
+      <TouchableOpacity style={styles.activityHeader} onPress={() => setExpanded(e => !e)} activeOpacity={0.6}>
+        {streaming ? (
+          <ActivityIndicator size="small" color="#9CA3AF" style={styles.activitySpinner} />
+        ) : null}
+        <Text style={styles.activityHeaderText}>
+          {streaming ? `Working${count ? ` · ${count}` : ''}` : summary}
+        </Text>
         <View style={styles.activitySpacer} />
-        {streaming ? <ActivityIndicator size="small" color="#93C822" style={styles.activitySpinner} /> : null}
-        <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color="#A1A1AA" />
+        <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={15} color="#C4C4CC" />
       </TouchableOpacity>
 
       {expanded ? (
@@ -531,14 +537,15 @@ const styles = StyleSheet.create({
   activityHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
+    gap: 6,
     paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingVertical: 8,
   },
   activityHeaderText: {
-    fontSize: 12.5,
-    color: '#52525B',
-    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+    color: '#9CA3AF',
+    fontFamily: 'Inter_500Medium',
+    letterSpacing: 0.1,
   },
   activitySpacer: {
     flex: 1,

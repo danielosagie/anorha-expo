@@ -26,6 +26,7 @@ import {
 import type {
   CampaignConfig,
   CampaignOverview,
+  CampaignStatus,
   CampaignSummary,
   CampaignThreadSummary,
   ConversationMessage,
@@ -320,6 +321,12 @@ export const useLiquidationConversationController = ({
     setThreadStateFor(threadId, current => markQueueItemSending(current, item.clientMessageId));
     setError(null);
 
+    // One stable assistant-message id PER TURN. The backend doesn't send a message
+    // id in the stream, so we derive it from this turn's clientMessageId. Every
+    // delta / reasoning / tool step / completion for THIS run targets this id, so a
+    // new run always opens its own bubble + activity card.
+    const assistantId = `assistant-${item.clientMessageId}`;
+
     try {
       await adapter.streamTurn(
         {
@@ -340,7 +347,7 @@ export const useLiquidationConversationController = ({
               current,
               item.campaignId,
               threadId,
-              messageId,
+              messageId || assistantId,
             ).state);
           },
           onAssistantDelta: ({ delta, messageId }) => {
@@ -349,7 +356,7 @@ export const useLiquidationConversationController = ({
               item.campaignId,
               threadId,
               delta,
-              messageId,
+              messageId || assistantId,
             ));
           },
           onReasoning: ({ reasoning, messageId }) => {
@@ -358,20 +365,21 @@ export const useLiquidationConversationController = ({
               item.campaignId,
               threadId,
               reasoning,
-              messageId,
+              messageId || assistantId,
             ));
           },
           onAssistantCompleted: ({ content, messageId }) => {
-            setThreadStateFor(threadId, current => completeAssistantMessage(current, content, messageId), { immediate: true });
+            setThreadStateFor(threadId, current => completeAssistantMessage(current, content, messageId || assistantId), { immediate: true });
           },
-          // Completed tool steps attach to the streaming assistant bubble as
-          // compact items (label + status only; arguments never reach the client).
+          // Completed tool steps attach to THIS run's assistant bubble as compact
+          // items (label + status only; arguments never reach the client).
           onToolCompleted: ({ tool, label, status, durationMs }) => {
             setThreadStateFor(threadId, current => appendAssistantToolStep(
               current,
               item.campaignId,
               threadId,
               { tool, label, status, durationMs },
+              assistantId,
             ));
           },
           onActionCompleted: ({ clientMessageId, summary }) => {
@@ -601,6 +609,18 @@ export const useLiquidationConversationController = ({
     });
   }, [adapter]);
 
+  // Pause/resume a campaign (e.g. from the home long-press selection). Optimistic;
+  // reloads from the server if the write fails so the card never lies.
+  const setCampaignStatus = useCallback(async (campaignId: string, status: CampaignStatus) => {
+    setCampaigns(prev => prev.map(campaign => (campaign.id === campaignId ? { ...campaign, status } : campaign)));
+    try {
+      await adapter.setCampaignStatus(campaignId, status);
+    } catch (statusError) {
+      await loadCampaigns().catch(() => undefined);
+      throw statusError;
+    }
+  }, [adapter, loadCampaigns]);
+
   // Dump photos into the chat: upload them, identify + draft each via the
   // existing /api/products/analyze pipeline, add the new drafts to this clearout,
   // then tell Sprout what landed so it can react (research / liquidate / hold).
@@ -729,6 +749,7 @@ export const useLiquidationConversationController = ({
     deleteThread,
     renameCampaign,
     deleteCampaign,
+    setCampaignStatus,
     sendComposer,
     dispatchAction,
     retryMessage,

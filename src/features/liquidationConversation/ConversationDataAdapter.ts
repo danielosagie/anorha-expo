@@ -27,6 +27,7 @@ export interface ConversationDataAdapter {
   createThread(campaignId: string, input: CreateThreadInput): Promise<CampaignThreadSummary>;
   renameCampaign(campaignId: string, title: string): Promise<CampaignSummary>;
   deleteCampaign(campaignId: string): Promise<void>;
+  setCampaignStatus(campaignId: string, status: CampaignSummary['status']): Promise<void>;
   renameThread(campaignId: string, threadId: string, title: string): Promise<CampaignThreadSummary>;
   deleteThread(campaignId: string, threadId: string): Promise<void>;
   submitDecision(campaignId: string, threadId: string, decision: DecisionSubmission): Promise<void>;

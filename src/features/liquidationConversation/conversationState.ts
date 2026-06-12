@@ -167,15 +167,8 @@ export const ensureAssistantPlaceholder = (
   threadId: string,
   assistantMessageId?: string,
 ): { state: ConversationThreadState; assistantMessageId: string } => {
-  const existing = state.messages.find(
-    message => message.role === 'assistant' && message.deliveryState === 'streaming',
-  );
-  if (existing) {
-    return { state, assistantMessageId: existing.id };
-  }
-  const nextId = assistantMessageId || createClientId('assistant');
-  const nextState = appendMessage(state, {
-    id: nextId,
+  const makeMessage = (id: string): ConversationMessage => ({
+    id,
     campaignId,
     threadId,
     role: 'assistant',
@@ -184,7 +177,27 @@ export const ensureAssistantPlaceholder = (
     deliveryState: 'streaming',
     kind: 'text',
   });
-  return { state: nextState, assistantMessageId: nextId };
+
+  // With an explicit (turn-scoped) id, ALWAYS bind to that message. Each agent run
+  // gets its own bubble + activity card instead of piling steps onto the previous
+  // run's card (the "it just updates the original one" bug). Reusing whatever
+  // message happened to still be 'streaming' is what caused that.
+  if (assistantMessageId) {
+    const byId = state.messages.find(message => message.id === assistantMessageId);
+    if (byId) {
+      return { state, assistantMessageId };
+    }
+    return { state: appendMessage(state, makeMessage(assistantMessageId)), assistantMessageId };
+  }
+
+  const existing = state.messages.find(
+    message => message.role === 'assistant' && message.deliveryState === 'streaming',
+  );
+  if (existing) {
+    return { state, assistantMessageId: existing.id };
+  }
+  const nextId = createClientId('assistant');
+  return { state: appendMessage(state, makeMessage(nextId)), assistantMessageId: nextId };
 };
 
 export const appendAssistantDelta = (
