@@ -538,6 +538,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#ECEBE6',
     overflow: 'hidden',
+    // Hug the content (a tidy pill) instead of stretching the full bubble width.
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
   },
   activityHeader: {
     flexDirection: 'row',

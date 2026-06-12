@@ -103,13 +103,24 @@ export const useLiquidationConversationController = ({
   }, [activeCampaignId, activeThreadState?.draft, homeDrafts, surfaceState]);
 
   const activeMessages = useMemo(
-    () => (activeThreadState?.messages || []).map(message => ({
-      ...message,
-      time: new Date(message.createdAt).toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
-    })),
+    () => (activeThreadState?.messages || [])
+      .filter(message => {
+        // Keep user + still-streaming bubbles always. Drop phantom EMPTY agent
+        // bubbles (no text, no tool steps, no decision, not an action) — those were
+        // rendering as blank space and leaving a gap above the real reply.
+        if (message.role === 'user' || message.deliveryState === 'streaming') return true;
+        const hasText = !!(message.content && message.content.trim());
+        const steps = (message.metadata as any)?.toolSteps;
+        const hasSteps = Array.isArray(steps) && steps.length > 0;
+        return hasText || hasSteps || !!message.decisionPrompt || message.kind === 'action';
+      })
+      .map(message => ({
+        ...message,
+        time: new Date(message.createdAt).toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+      })),
     [activeThreadState?.messages],
   );
 
