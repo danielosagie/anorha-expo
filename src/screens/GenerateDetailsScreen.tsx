@@ -5,10 +5,12 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal,
 import { CameraView } from 'expo-camera';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
-import ItemJobsModal from '../components/ItemJobsModal';
 import PyramidGrid from '../components/PyramidGrid';
 import { getPlatformRequirements } from '../utils/platformRequirements';
-import { Boxes, X, Sparkles, Pencil, ArrowLeft } from 'lucide-react-native';
+import { Boxes, X, Sparkles, Pencil, ArrowLeft, ChevronLeft, History } from 'lucide-react-native';
+import { BlurView } from 'expo-blur';
+import { ProgressiveBlurView } from '../components/ProgressiveBlurView';
+import { CHAT_COLORS, CHAT_FONT, GLASS, GLASS_HEADER_STYLES } from '../design/chatGlass';
 import KeyboardAwareBottomActionBar from '../components/KeyboardAwareBottomActionBar';
 import { SmartCommandInput, FieldOption } from '../components/SmartCommandInput';
 import ListingEditorForm from '../components/ListingEditorForm';
@@ -548,7 +550,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     };
   }, [variantIdForDraft, updateCounter]);
   const platformKeys: string[] = useMemo(() => Object.keys(displayedPlatforms as Record<string, any>), [displayedPlatforms]);
-  const [jobsModalVisible, setJobsModalVisible] = useState(false);
+  // Chat-style item switcher dropdown (replaces the old bulk ItemJobsModal here)
+  const [itemMenuOpen, setItemMenuOpen] = useState(false);
   const [userGenerateJobs, setUserGenerateJobs] = useState<Array<{ jobId: string; status: string; createdAt: string; completedAt?: string }>>([]);
   const [checklist, setChecklist] = useState<Record<string, { missing: string[]; ready: boolean }>>({});
   const [versionsSheetOpen, setVersionsSheetOpen] = useState(false);
@@ -839,6 +842,56 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const [bottomNavState, setBottomNavState] = useState<'empty' | 'selection' | 'template' | 'platform'>('empty');
   const [itemGenerateJobs, setItemGenerateJobs] = useState<Record<number, { jobId: string; status?: string }>>(jobMap || {});
+
+  // ── Item switcher (chat-style) ──────────────────────────────────────────
+  // One simple mental model: the header pill shows where you are; tapping it
+  // lists the cart's items with live generation status. No multi-select, no
+  // batch ops, no match re-entry — matching was confirmed before checkout.
+  const hasResultForIndex = useMemo(
+    () => (idx: number) => Array.isArray(results) && (results as GeneratedResult[]).some((r: any) => r.productIndex === idx),
+    [results]
+  );
+  const itemStatusForIndex = (idx: number): { label: string; color: string } => {
+    const s = itemGenerateJobs[idx]?.status;
+    if (s === 'failed' || s === 'cancelled') return { label: 'Generation failed', color: CHAT_COLORS.error };
+    if (s === 'completed' || hasResultForIndex(idx)) return { label: 'Ready to review', color: CHAT_COLORS.success };
+    if (s === 'processing' || s === 'queued') return { label: 'Generating…', color: CHAT_COLORS.warning };
+    if (s) return { label: 'Generating…', color: CHAT_COLORS.warning };
+    return { label: 'Queued', color: CHAT_COLORS.idle };
+  };
+  const switchToItem = (idx: number) => {
+    setItemMenuOpen(false);
+    if (idx === currentProductIndex) return;
+    const targetJobId = itemGenerateJobs[idx]?.jobId;
+    if (targetJobId && jobId && targetJobId !== jobId && !hasResultForIndex(idx)) {
+      // Item lives on a different generate job — reload the screen against it.
+      navigation.navigate('LoadingScreen' as any, {
+        processType: 'generate',
+        payload: { jobId: targetJobId, firstPhotos: [] },
+        onCompleteRoute: {
+          screen: 'GenerateDetailsScreen',
+          params: { jobId: targetJobId, items, jobMap: itemGenerateJobs, focusIndex: idx },
+        },
+      });
+      return;
+    }
+    // Same job (batched results) — just refocus and re-hydrate in place.
+    lastHydratedJobRef.current = null;
+    setCurrentProductIndex(idx);
+    setSelectedIndices([]);
+    setSelectedPlatforms([]);
+    setSelectedTemplate(null);
+    setBottomNavState('empty');
+  };
+  const currentItemPosition = useMemo(() => {
+    const pos = items.findIndex((it: any) => it.index === currentProductIndex);
+    return pos >= 0 ? pos + 1 : 1;
+  }, [items, currentProductIndex]);
+  const currentItemTitle = useMemo(() => {
+    const it: any = items.find((i: any) => i.index === currentProductIndex);
+    const raw = (it?.title || '').trim();
+    return raw && !/^item \d+$/i.test(raw) ? raw : `Item ${currentItemPosition}`;
+  }, [items, currentProductIndex, currentItemPosition]);
 
   // Initialize from generate job only when we didn't navigate with items/jobMap (e.g. deep link)
   // When we have items from params (came from Match), don't call - avoids loading "most recent" match job and mixing jobs
@@ -2418,52 +2471,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         </View>
       )}
       <ScrollView style={styles.container} contentContainerStyle={[styles.content, { paddingBottom: bottomSafePadding }]}>
-        <View style={{ position: 'absolute', top: -32, right: 16, zIndex: 4000, flexDirection: 'row', gap: 8 }}>
-          <TouchableOpacity onPress={() => setVersionsSheetOpen(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5' }}>
-            <Text style={{ color: '#000', fontWeight: '600' }}>•••</Text>
-          </TouchableOpacity>
-        </View>
-        {/* Back button and Current Jobs buttons */}
-        <View style={{ position: 'absolute', top: -32, left: 16, zIndex: 4000, flexDirection: 'row', gap: 8 }}>
-          <TouchableOpacity
-            onPress={() => {
-              // Navigate back to past scans page
-              navigation.goBack();
-            }}
-            style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}
-          >
-            <Icon name="arrow-left" size={18} color={'#000'} />
-            <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Back</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity onPress={() => setJobsModalVisible(true)} style={{ paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' }}>
-            <Boxes size={18} color={'#000'} />
-            <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Current Jobs</Text>
-          </TouchableOpacity>
-        </View>
-
-        {hasMultipleResults && (
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, paddingHorizontal: 16, backgroundColor: '#f3f4f6', marginHorizontal: 16, marginTop: 8, borderRadius: 8, gap: 16 }}>
-            <TouchableOpacity
-              onPress={() => setCurrentProductIndex(i => Math.max(0, i - 1))}
-              disabled={currentProductIndex <= 0}
-              style={{ padding: 8, opacity: currentProductIndex <= 0 ? 0.5 : 1 }}
-            >
-              <Icon name="chevron-left" size={24} color="#374151" />
-            </TouchableOpacity>
-            <Text style={{ fontSize: 15, fontWeight: '600', color: '#111' }}>
-              Item {currentProductIndex + 1} of {results.length}
-            </Text>
-            <TouchableOpacity
-              onPress={() => setCurrentProductIndex(i => Math.min((results?.length ?? 1) - 1, i + 1))}
-              disabled={currentProductIndex >= (results?.length ?? 1) - 1}
-              style={{ padding: 8, opacity: currentProductIndex >= (results?.length ?? 1) - 1 ? 0.5 : 1 }}
-            >
-              <Icon name="chevron-right" size={24} color="#374151" />
-            </TouchableOpacity>
-          </View>
-        )}
-
         <ScrollView ref={mainScrollRef}>
           {effectiveResult ? (
 
@@ -2578,99 +2585,89 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
 
 
-        <ItemJobsModal
-          visible={jobsModalVisible}
-          onClose={() => setJobsModalVisible(false)}
-          items={items}
-          currentIndex={currentProductIndex}
-          scanColor={() => '#10B981'}
-          matchColor={() => '#10B981'}
-          detailsColor={(idx) => {
-            const s = itemGenerateJobs[idx]?.status;
-            if (s === 'completed') return '#93C822';
-            if (s === 'failed') return '#e11d48';
-            if (s) return '#FFD700';
-            return '#4B5563';
-          }}
-          detailsEnabled={(idx) => !!itemGenerateJobs[idx]?.jobId}
-          countLabel={'Generations'}
-          getSecondaryText={(idx) => {
-            const jid = itemGenerateJobs[idx]?.jobId;
-            const rec = jid ? userGenerateJobs.find(j => j.jobId === jid) : null;
-            if (!rec) return null;
-            if (rec.status === 'completed') return 'Generated';
-            if (rec.status === 'failed') return 'Generation failed';
-            if (rec.status === 'processing' || rec.status === 'queued') return 'Generating…';
-            const date = rec.completedAt || rec.createdAt;
-            return date ? `Last: ${new Date(date).toLocaleString()}` : null;
-          }}
-          onQuickGenerate={async (idx) => {
-            try {
-              // Navigate back to match selection to start the generate flow
-              setCurrentProductIndex(idx);
-              setJobsModalVisible(false);
-              navigation.navigate('MatchSelectionScreen' as any, {
-                focusIndex: idx,
-                items,
-                jobMap: itemGenerateJobs,
-                jobId: matchJobId
-              });
-            } catch (e) {
-              console.error('Quick generate failed:', e);
-            }
-          }}
-          onPickScan={(idx) => {
-            // Reset hydration ref so the useEffect re-hydrates platforms for the new item
-            lastHydratedJobRef.current = null;
-            setCurrentProductIndex(idx);
-            setSelectedIndices([]);
-            setSelectedPlatforms([]);
-            setSelectedTemplate(null);
-            setJobsModalVisible(false);
-            setBottomNavState('empty');
-          }}
-          onPickMatch={(idx) => {
-            // Jump to match selection for this item, use specific match job id for that item
-            const selectedItem = items.find(item => item.index === idx);
-            // Fallback chain: item's matchJobId -> route param matchJobId -> context matchJobId
-            const itemMatchJobId = selectedItem?.matchJobId || matchJobId || jobsContext?.matchJobId;
-            if (!itemMatchJobId) {
-              console.warn('[GEN-DETAILS] No matchJobId available for navigation');
-              return;
-            }
-            setCurrentProductIndex(idx);
-            setJobsModalVisible(false);
-            navigation.navigate('MatchSelectionScreen' as any, {
-              jobId: itemMatchJobId,
-              focusIndex: idx,
-              items,
-              jobMap: itemGenerateJobs
-            });
-          }}
-          onPickDetails={(idx) => {
-            const jid = itemGenerateJobs[idx]?.jobId;
-            if (jid) {
-              setCurrentProductIndex(idx);
-              setJobsModalVisible(false);
-              // Navigate via LoadingScreen to show proper loading state
-              navigation.navigate('LoadingScreen' as any, {
-                processType: 'generate',
-                payload: { jobId: jid, firstPhotos: [] },
-                onCompleteRoute: {
-                  screen: 'GenerateDetailsScreen',
-                  params: {
-                    jobId: jid,
-                    items,
-                    jobMap: itemGenerateJobs,
-                    focusIndex: idx
-                  }
-                }
-              });
-            }
-          }}
-        />
-
       </ScrollView>
+
+      {/* ── Floating glass header (chat-style): back · item pill · switcher ── */}
+      <View style={[styles.glassHeader, { paddingTop: insets.top + 6 }]}>
+        <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+          <ProgressiveBlurView intensity={Platform.OS === 'ios' ? 50 : 28} tint="light" direction="down" />
+          <LinearGradient
+            colors={['#FFFFFF', 'rgba(255,255,255,0.85)', 'rgba(255,255,255,0)']}
+            locations={[0, 0.55, 1]}
+            style={StyleSheet.absoluteFill}
+          />
+        </View>
+        <View style={styles.glassHeaderRow}>
+          <TouchableOpacity style={styles.navCircle} onPress={() => navigation.goBack()} activeOpacity={0.85}>
+            <ChevronLeft size={22} color={CHAT_COLORS.ink} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.titlePill}
+            activeOpacity={items.length > 1 ? 0.85 : 1}
+            onPress={() => { if (items.length > 1) setItemMenuOpen(open => !open); }}
+          >
+            <Text style={styles.pillTitle} numberOfLines={1}>{currentItemTitle}</Text>
+            <Text style={styles.pillSub} numberOfLines={1}>
+              {items.length > 1 ? `Item ${currentItemPosition} of ${items.length} · ` : ''}
+              {itemStatusForIndex(currentProductIndex).label}
+            </Text>
+          </TouchableOpacity>
+
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {items.length > 1 ? (
+              <TouchableOpacity style={styles.itemsPill} onPress={() => setItemMenuOpen(open => !open)} activeOpacity={0.85}>
+                <Boxes size={16} color={CHAT_COLORS.ink} />
+                <Text style={styles.itemsPillText}>{currentItemPosition}/{items.length}</Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity style={styles.navCircle} onPress={() => setVersionsSheetOpen(true)} activeOpacity={0.85}>
+              <History size={18} color={CHAT_COLORS.ink} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+
+      {/* ── Item switcher dropdown (chat-style; replaces the bulk ItemJobsModal) ── */}
+      {itemMenuOpen ? (
+        <View style={[StyleSheet.absoluteFill, { zIndex: 5500 }]} pointerEvents="box-none">
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setItemMenuOpen(false)} />
+          <View style={[styles.itemDropdown, { top: insets.top + 58 }]}>
+            <ScrollView style={{ maxHeight: 380 }} showsVerticalScrollIndicator={false}>
+              {items.map((it: any, i: number) => {
+                const status = itemStatusForIndex(it.index);
+                const active = it.index === currentProductIndex;
+                return (
+                  <TouchableOpacity
+                    key={`${it.index}-${i}`}
+                    style={[styles.itemRow, active && styles.itemRowActive]}
+                    onPress={() => switchToItem(it.index)}
+                    activeOpacity={0.7}
+                  >
+                    {it.thumb ? (
+                      <Image source={{ uri: it.thumb }} style={styles.itemThumb} />
+                    ) : (
+                      <View style={[styles.itemThumb, { alignItems: 'center', justifyContent: 'center' }]}>
+                        <Boxes size={14} color={CHAT_COLORS.faint} />
+                      </View>
+                    )}
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.itemRowTitle} numberOfLines={1}>{(it.title || '').trim() || `Item ${i + 1}`}</Text>
+                      <Text
+                        style={[styles.itemRowMeta, { color: status.color === CHAT_COLORS.idle ? CHAT_COLORS.faint : status.color }]}
+                        numberOfLines={1}
+                      >
+                        {status.label}
+                      </Text>
+                    </View>
+                    <View style={[styles.itemDot, { backgroundColor: status.color }]} />
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </View>
+      ) : null}
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{
@@ -2844,7 +2841,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               secondaryLabel={'Save to Inventory'}
               onSecondary={doSaveToInventory}
               tertiaryContent={hasMultipleResults ? (
-                <Text style={{ fontSize: 11, color: '#6b7280', textAlign: 'center', marginTop: 4 }}>Use arrows above to switch items, then Publish each</Text>
+                <Text style={{ fontSize: 11, color: '#6b7280', textAlign: 'center', marginTop: 4 }}>Tap the item pill up top to switch items, then Publish each</Text>
               ) : <View style={{ height: 10 }} />}
             />
           </View>
@@ -3366,6 +3363,23 @@ export default GenerateDetailsScreen;
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff', paddingTop: "20%" },
   content: { padding: 16 },
+
+  // Chat-style floating glass header + item switcher
+  glassHeader: { ...GLASS_HEADER_STYLES.header },
+  glassHeaderRow: { ...GLASS_HEADER_STYLES.headerRow },
+  navCircle: { ...GLASS_HEADER_STYLES.navCircle },
+  titlePill: { ...GLASS_HEADER_STYLES.titlePill },
+  pillTitle: { ...GLASS_HEADER_STYLES.pillTitle },
+  pillSub: { ...GLASS_HEADER_STYLES.pillSub },
+  itemsPill: { ...GLASS_HEADER_STYLES.actionPill },
+  itemsPillText: { ...GLASS_HEADER_STYLES.actionPillText },
+  itemDropdown: { ...GLASS_HEADER_STYLES.dropdown, minWidth: 260, maxWidth: 330, paddingVertical: 8 },
+  itemRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 11, borderRadius: 14, marginHorizontal: 6 },
+  itemRowActive: { backgroundColor: CHAT_COLORS.brandSoft },
+  itemRowTitle: { fontSize: 15, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.semibold },
+  itemRowMeta: { fontSize: 12, fontFamily: CHAT_FONT.medium, marginTop: 2 },
+  itemThumb: { width: 34, height: 34, borderRadius: 10, backgroundColor: CHAT_COLORS.bubble },
+  itemDot: { width: 8, height: 8, borderRadius: 4 },
   heading: { color: '#000', fontSize: 24, fontWeight: '700', marginBottom: 6 },
   subheading: { color: '#000', fontSize: 18, fontWeight: '600', marginBottom: 4 },
   meta: { color: '#000', marginBottom: 4 },
