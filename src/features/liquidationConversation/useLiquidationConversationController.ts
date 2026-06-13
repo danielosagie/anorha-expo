@@ -405,12 +405,20 @@ export const useLiquidationConversationController = ({
       );
 
       setThreadStateFor(threadId, current => dequeueTurn(current, item.clientMessageId), { immediate: true });
-      const remoteMessages = await adapter.getMessages(item.campaignId, threadId).catch(() => null);
-      if (remoteMessages) {
-        setThreadStateFor(threadId, current => ({
-          ...current,
-          messages: remoteMessages,
-        }), { immediate: true });
+      // A text turn's assistant message is already complete from the stream (content
+      // + tool steps). Re-fetching and replacing it swaps in a server-id copy with a
+      // different React key, which unmounts/remounts the bubble — that's the activity
+      // card "flash". Only ACTION turns refetch, since they can surface approval
+      // prompts that the stream doesn't carry. (Server already persists everything;
+      // it reconciles on the next natural thread load.)
+      if (item.kind === 'action') {
+        const remoteMessages = await adapter.getMessages(item.campaignId, threadId).catch(() => null);
+        if (remoteMessages) {
+          setThreadStateFor(threadId, current => ({
+            ...current,
+            messages: remoteMessages,
+          }), { immediate: true });
+        }
       }
       // Pull fresh thread metadata so the backend's topic auto-title replaces
       // "New chat" in the drawer once the first turn lands.
