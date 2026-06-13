@@ -59,6 +59,7 @@ import {
   Modal,
   TextInput,
   KeyboardAvoidingView,
+  PanResponder,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
@@ -452,6 +453,21 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const navigation = useNavigation();
   const route = useRoute();
   const theme = useTheme();
+
+  // Left-edge swipe → go back to wherever we came from. AddProduct is a hidden TAB
+  // screen, so it has no native back gesture; a thin left-edge strip gives one
+  // without touching the camera or the sheets' own gestures. Created once.
+  const backEdgePan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, g) => g.dx > 12 && Math.abs(g.dy) < Math.abs(g.dx) * 0.8,
+      onPanResponderRelease: (_e, g) => {
+        if (g.dx > 55 || g.vx > 0.4) {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+          if ((navigation as any).canGoBack?.()) (navigation as any).goBack();
+        }
+      },
+    }),
+  ).current;
   const rawParams = (route.params ?? {}) as any;
   const __ds = rawParams?.designState as string | undefined; // design-export state seed (web only)
   const __dsHasItems = !!__ds && ['withItems', 'loading', 'shelfComplete', 'matchSheet'].includes(__ds);
@@ -3731,6 +3747,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   return (
     <GestureHandlerRootView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="black" />
+
+      {/* Left-edge back-swipe strip (only when no sheet is open, so it never fights
+          a sheet's own gestures). Thin, so it won't catch normal taps/scrolls. */}
+      {!isAnySheetVisible ? (
+        <View
+          {...backEdgePan.panHandlers}
+          style={{ position: 'absolute', left: 0, top: 90, bottom: 0, width: 24, zIndex: 50 }}
+        />
+      ) : null}
 
       {/* DEV/design-export preview Modal only. Real flows render the preview + folder page as
           opaque overlays INSIDE the cart sheet Modal (below) — iOS can't stack Modals. */}
