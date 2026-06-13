@@ -10,6 +10,7 @@ import { getPlatformRequirements } from '../utils/platformRequirements';
 import { Boxes, X, Sparkles, Pencil, ArrowLeft, ChevronLeft, History } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
 import { ProgressiveBlurView } from '../components/ProgressiveBlurView';
+import { SwipeBackWheel } from '../components/SwipeBackWheel';
 import { CHAT_COLORS, CHAT_FONT, GLASS, GLASS_HEADER_STYLES } from '../design/chatGlass';
 import KeyboardAwareBottomActionBar from '../components/KeyboardAwareBottomActionBar';
 import { SmartCommandInput, FieldOption } from '../components/SmartCommandInput';
@@ -2598,9 +2599,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           />
         </View>
         <View style={styles.glassHeaderRow}>
-          <TouchableOpacity style={styles.navCircle} onPress={() => navigation.goBack()} activeOpacity={0.85}>
-            <ChevronLeft size={22} color={CHAT_COLORS.ink} />
-          </TouchableOpacity>
+          {/* Layout slot — the real back control is the SwipeBackWheel overlay below. */}
+          <View style={styles.navCircle} />
 
           <TouchableOpacity
             style={styles.titlePill}
@@ -2627,6 +2627,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           </View>
         </View>
       </View>
+
+      {/* Pull-to-go-back wheel (overlays the header back slot + left-edge gesture). */}
+      <SwipeBackWheel onBack={() => navigation.goBack()} top={insets.top + 6} left={14} tint="light" />
 
       {/* ── Item switcher dropdown (chat-style; replaces the bulk ItemJobsModal) ── */}
       {itemMenuOpen ? (
