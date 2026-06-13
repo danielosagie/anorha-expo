@@ -6,7 +6,7 @@ import { AudioModule, RecordingPresets, useAudioRecorder } from 'expo-audio';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Plus, ArrowRight, AudioLines, X, Check, Clock } from 'lucide-react-native';
 import { API_BASE_URL } from '../../../config/env';
-import { persistPendingVoice, getPendingVoice, clearPendingVoice } from '../pendingVoice';
+import { persistPendingVoice, getPendingVoice, clearPendingVoice, fileExists } from '../pendingVoice';
 
 type Props = {
   value: string;
@@ -168,6 +168,13 @@ export const ConversationComposer = ({
   const transcribeFile = useCallback(async (uri: string) => {
     setTranscribing(true);
     try {
+      // The recorder writes to the volatile ExpoAudio cache; if persisting failed
+      // and the cache file was already purged, uploading it throws NSCocoaError 260
+      // ("no such file") deep in RCTNetworking. Bail (and drop the dead marker) instead.
+      if (!(await fileExists(uri))) {
+        await clearPendingVoice(uri);
+        return;
+      }
       const token = getAuthToken ? await getAuthToken() : null;
       if (!token) return; // keep pending; retry once auth is available
       const form = new FormData();

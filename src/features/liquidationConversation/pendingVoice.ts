@@ -47,6 +47,16 @@ const readMarker = async (): Promise<PendingVoice | null> => {
   }
 };
 
+/** Does the audio file still exist on disk? Guards uploads against a purged cache file. */
+export const fileExists = async (uri: string): Promise<boolean> => {
+  try {
+    const info = await FileSystem.getInfoAsync(uri);
+    return !!info.exists;
+  } catch {
+    return false;
+  }
+};
+
 /** The pending note, but only if its audio file still exists on disk. */
 export const getPendingVoice = async (): Promise<PendingVoice | null> => {
   const marker = await readMarker();
