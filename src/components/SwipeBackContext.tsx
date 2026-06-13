@@ -38,3 +38,32 @@ export const useSuppressSwipeBackWhen = (active: boolean): void => {
     return ctx.addSuppressor();
   }, [active, ctx]);
 };
+
+// ── Back-button anchor ──────────────────────────────────────────────────────
+// A pin-mode ring must sit on the screen's REAL back button on any device, not at a
+// guessed pinTop/pinLeft. A screen publishes its back button's measured WINDOW rect
+// here (via measureInWindow); the ring reads it and positions itself exactly there.
+// Module-level pub/sub so only the ring re-renders, never the whole app.
+export type BackButtonRect = { x: number; y: number; width: number; height: number };
+
+let currentBackRect: BackButtonRect | null = null;
+const backRectListeners = new Set<(r: BackButtonRect | null) => void>();
+
+/** Screens call this (from the back button's measureInWindow) to anchor the ring. */
+export const publishBackButtonRect = (rect: BackButtonRect | null): void => {
+  currentBackRect = rect;
+  backRectListeners.forEach((cb) => cb(rect));
+};
+
+/** The ring subscribes to the latest published back-button rect (null = none). */
+export const useBackButtonRect = (): BackButtonRect | null => {
+  const [rect, setRect] = useState<BackButtonRect | null>(currentBackRect);
+  useEffect(() => {
+    backRectListeners.add(setRect);
+    setRect(currentBackRect);
+    return () => {
+      backRectListeners.delete(setRect);
+    };
+  }, []);
+  return rect;
+};

@@ -95,6 +95,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { SvgXml } from 'react-native-svg';
+import { useSuppressSwipeBackWhen, publishBackButtonRect } from '../components/SwipeBackContext';
 import { CapturedPhoto } from '../components/camera/PhotoStack';
 import ViewPhotosModal from '../components/camera/ViewPhotosModal';
 import CameraControls from '../components/camera/CameraControls';
@@ -457,17 +458,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Left-edge swipe → go back to wherever we came from. AddProduct is a hidden TAB
   // screen, so it has no native back gesture; a thin left-edge strip gives one
   // without touching the camera or the sheets' own gestures. Created once.
-  const backEdgePan = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_e, g) => g.dx > 12 && Math.abs(g.dy) < Math.abs(g.dx) * 0.8,
-      onPanResponderRelease: (_e, g) => {
-        if (g.dx > 55 || g.vx > 0.4) {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-          if ((navigation as any).canGoBack?.()) (navigation as any).goBack();
-        }
-      },
-    }),
-  ).current;
+  // (Left-edge back is now the global SwipeBackRing, applied via the navigator HOC.)
   const rawParams = (route.params ?? {}) as any;
   const __ds = rawParams?.designState as string | undefined; // design-export state seed (web only)
   const __dsHasItems = !!__ds && ['withItems', 'loading', 'shelfComplete', 'matchSheet'].includes(__ds);
@@ -482,6 +473,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   const sessionIdRef = useRef<string | null>(null);
   const shelfPhotoUriForDraftRef = useRef<string | null>(null);
+  // The swipe-back ring anchors to this button's real measured rect (device-independent).
+  const backButtonRef = useRef<any>(null);
+  useEffect(() => () => { publishBackButtonRect(null); }, []); // clear anchor on unmount
   const saveDraftTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftSessionCreatePromiseRef = useRef<Promise<string | null> | null>(null);
   const hasAutoOpenedFtuxRef = useRef(false);
@@ -3686,6 +3680,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     opacity: overlayOpacity.value,
   }));
 
+  // Stand the swipe-back ring down while any sheet is open (their gestures must win).
+  // MUST be above the permission early-returns below, or the hook count changes between renders.
+  useSuppressSwipeBackWhen(showDeepSearchSheet || (!!showMatchSheet && !!matchData) || showBarcodeResultModal);
+
   // Permission check
   if (hasPermission === null) {
     return (
@@ -3753,15 +3751,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   return (
     <GestureHandlerRootView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="black" />
-
-      {/* Left-edge back-swipe strip (only when no sheet is open, so it never fights
-          a sheet's own gestures). Thin, so it won't catch normal taps/scrolls. */}
-      {!isAnySheetVisible ? (
-        <View
-          {...backEdgePan.panHandlers}
-          style={{ position: 'absolute', left: 0, top: 90, bottom: 0, width: 24, zIndex: 50 }}
-        />
-      ) : null}
 
       {/* DEV/design-export preview Modal only. Real flows render the preview + folder page as
           opaque overlays INSIDE the cart sheet Modal (below) — iOS can't stack Modals. */}
@@ -3887,6 +3876,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
         {/* Back button — sits where the old photo stack lived (top-left over the camera) */}
         <TouchableOpacity
+          ref={backButtonRef}
+          onLayout={() => {
+            // Publish the button's real window rect so the swipe-back ring rims it exactly,
+            // on any device/orientation (re-fires whenever it lays out / moves).
+            backButtonRef.current?.measureInWindow((x: number, y: number, width: number, height: number) => {
+              if (width && height) publishBackButtonRect({ x, y, width, height });
+            });
+          }}
           style={styles.cameraBackButton}
           activeOpacity={0.8}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}

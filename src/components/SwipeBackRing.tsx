@@ -3,7 +3,7 @@ import { Animated, Dimensions, PanResponder, StyleSheet, View } from 'react-nati
 import Svg, { Circle, Path } from 'react-native-svg';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useSwipeBackSuppressed } from './SwipeBackContext';
+import { useSwipeBackSuppressed, useBackButtonRect } from './SwipeBackContext';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 const { height: SCREEN_H } = Dimensions.get('window');
@@ -72,9 +72,17 @@ export const SwipeBackRing: React.FC<Props> = ({
   const progressRef = useRef(0);
   const stageRef = useRef(0);
   const committingRef = useRef(false);
+  // The PanResponder is created once and captures the FIRST render's closures. Route
+  // onBack through a live ref so a committed swipe always calls the CURRENT handler —
+  // otherwise the ring fills on a revisit but the stale back closure no-ops.
+  const onBackRef = useRef(onBack);
+  onBackRef.current = onBack;
   const [grabY, setGrabY] = useState(SCREEN_H / 2);
   const suppressed = useSwipeBackSuppressed();
   const insets = useSafeAreaInsets();
+  // Pin mode anchors to the screen's REAL back button (measured), so it lands on the
+  // button on any device. Falls back to pinTop/pinLeft only until a rect is published.
+  const backRect = useBackButtonRect();
 
   useEffect(() => {
     const id = progress.addListener(({ value }) => {
@@ -112,9 +120,10 @@ export const SwipeBackRing: React.FC<Props> = ({
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
     // Hold the armed state a beat so it registers, then pop AND reset — otherwise a
     // screen that stays mounted (tab screens do) comes back with the ring stuck armed
-    // and the gesture dead (committingRef never cleared).
+    // and the gesture dead (committingRef never cleared). Call the LATEST onBack (ref),
+    // never the first-render closure captured by the PanResponder.
     setTimeout(() => {
-      onBack();
+      onBackRef.current();
       reset();
     }, 140);
   };
@@ -161,9 +170,11 @@ export const SwipeBackRing: React.FC<Props> = ({
   // Activity ring: two arcs from the bottom (6 o'clock) growing up to the top (12 o'clock),
   // one bowing right (CW), one bowing left (CCW), both in lockstep with the pull.
   const stroke = 3;
-  const R = (size - stroke) / 2 - 1;
-  const cx = size / 2;
-  const cy = size / 2;
+  // In pin mode, rim the measured back button at its real size; otherwise use `size`.
+  const ringSize = mode === 'pin' && backRect ? backRect.width : size;
+  const R = (ringSize - stroke) / 2 - 1;
+  const cx = ringSize / 2;
+  const cy = ringSize / 2;
   const HALF = Math.PI * R;
   const halfOffset = progress.interpolate({ inputRange: [0, 1], outputRange: [HALF, 0], extrapolate: 'clamp' });
   const rightArc = `M ${cx} ${cy + R} A ${R} ${R} 0 0 1 ${cx} ${cy - R}`;
@@ -182,9 +193,15 @@ export const SwipeBackRing: React.FC<Props> = ({
         <View {...pan.panHandlers} style={[styles.edge, { width: edgeWidth }]} />
         <Animated.View
           pointerEvents="none"
-          style={[styles.pinRing, { top: insets.top + pinTop, left: pinLeft, width: size, height: size, opacity: appear }]}
+          style={[styles.pinRing, {
+            top: backRect ? backRect.y : insets.top + pinTop,
+            left: backRect ? backRect.x : pinLeft,
+            width: ringSize,
+            height: ringSize,
+            opacity: appear,
+          }]}
         >
-          <Svg width={size} height={size}>
+          <Svg width={ringSize} height={ringSize}>
             <Circle cx={cx} cy={cy} r={R} stroke={TRACK} strokeWidth={stroke} fill="none" />
             <AnimatedPath
               d={rightArc}

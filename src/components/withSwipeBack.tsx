@@ -18,6 +18,9 @@ type Options = {
   pinLeft?: number;
   accent?: string;
   armed?: string;
+  /** Custom back action (gets the screen's navigation). Defaults to navigation.goBack().
+   *  Use to match a screen's real back button (e.g. goBack-or-navigate fallback). */
+  onBack?: (navigation: any) => void;
 };
 
 export function withSwipeBack<P extends object>(Component: React.ComponentType<P>, opts: Options = {}) {
@@ -27,8 +30,13 @@ export function withSwipeBack<P extends object>(Component: React.ComponentType<P
     // (e.g. AddProduct) stay mounted, so a prior commit/half-pull would otherwise linger.
     const [focusNonce, setFocusNonce] = useState(0);
     useFocusEffect(useCallback(() => { setFocusNonce((n) => n + 1); }, []));
+    const { onBack: customOnBack, ...ringOpts } = opts;
+    // A custom onBack always has somewhere to go (e.g. goBack-or-navigate), so keep the
+    // ring enabled even when canGoBack() is false; otherwise gate on canGoBack().
+    const handleBack = customOnBack ? () => customOnBack(navigation) : () => navigation.goBack();
+    const enabled = customOnBack ? true : navigation.canGoBack();
     return (
-      <SwipeBackRing onBack={() => navigation.goBack()} enabled={navigation.canGoBack()} {...opts} resetNonce={focusNonce}>
+      <SwipeBackRing onBack={handleBack} enabled={enabled} {...ringOpts} resetNonce={focusNonce}>
         <Component {...props} />
       </SwipeBackRing>
     );

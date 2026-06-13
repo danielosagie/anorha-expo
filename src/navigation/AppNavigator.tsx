@@ -501,7 +501,15 @@ const TabNavigator = () => {
         // Black camera screen with its own sheet/vertical gestures: PIN mode (no page
         // translate — that was eating the sheets' swipe-down) draws the ring around the real
         // 44×44 back button. It also calls useSuppressSwipeBackWhen(isAnySheetVisible).
-        component={sb(AddProductScreen, { mode: 'pin', size: 44, pinTop: 16, pinLeft: 16, accent: '#FFFFFF' })}
+        // The ring anchors to the back button's MEASURED window rect (publishBackButtonRect
+        // in AddProductScreen), so it tracks the real 44×44 button on any device. pinTop/
+        // pinLeft are only a pre-measure fallback, never seen (the ring is invisible at rest).
+        // onBack mirrors the real back button exactly (goBack, else Inventory) so the swipe
+        // works on every revisit, not just the first.
+        component={sb(AddProductScreen, {
+          mode: 'pin', size: 44, pinLeft: 16, accent: '#FFFFFF',
+          onBack: (nav: any) => { if (nav.canGoBack?.()) nav.goBack(); else nav.navigate('Inventory'); },
+        })}
         options={{
           tabBarButton: () => null,
           tabBarItemStyle: { display: 'none' },
@@ -528,7 +536,7 @@ const AuthStack = ({ showOnboarding }: { showOnboarding: boolean }) => (
 // Apply the left-swipe-back ring to every app-stack screen by default. Cache by component
 // so each screen wraps exactly once (stable identity → no remount on AppStack re-render).
 const sbCache = new Map<React.ComponentType<any>, React.ComponentType<any>>();
-const sb = (C: React.ComponentType<any>, opts?: { surface?: string; mode?: 'slide' | 'pin'; size?: number; pinTop?: number; pinLeft?: number; accent?: string; armed?: string }) => {
+const sb = (C: React.ComponentType<any>, opts?: { surface?: string; mode?: 'slide' | 'pin'; size?: number; pinTop?: number; pinLeft?: number; accent?: string; armed?: string; onBack?: (navigation: any) => void }) => {
   let w = sbCache.get(C);
   if (!w) { w = withSwipeBack(C, opts); sbCache.set(C, w); }
   return w;
