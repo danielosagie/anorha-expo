@@ -23,7 +23,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { PricingGuidanceCard } from '../../components/pricing/PricingGuidanceCard';
+import { PricingGuidanceCard, PricingGuidanceData } from '../../components/pricing/PricingGuidanceCard';
 
 const GREEN = '#93C822';
 const COLORS = {
@@ -49,13 +49,8 @@ export interface MatchPreviewData {
   photoUri?: string;
   title: string;
   description?: string;
-  pricing?: {
-    low?: number;
-    high?: number;
-    median?: number;
-    average?: number;
-    samples?: MatchPreviewComp[];
-  };
+  // The full pricing shape the card renders (live + sold comps + history + time-to-sell).
+  pricing?: PricingGuidanceData;
 }
 
 export interface MatchPreviewProps {

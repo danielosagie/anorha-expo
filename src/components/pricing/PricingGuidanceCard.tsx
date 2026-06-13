@@ -10,6 +10,7 @@
 import React from 'react';
 import { View, Text, Image, TouchableOpacity, StyleSheet, Linking } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { PriceHistorySlider, HistoryPoint } from './PriceHistorySlider';
 
 const GREEN = '#93C822';
 const COLORS = {
@@ -39,6 +40,12 @@ export interface PricingGuidanceData {
   sampleCount?: number;
   cachedAt?: string;
   samples?: PricingComp[];
+  /** Current LIVE eBay asking prices (Browse API) — "listed right now" vs sold comps. */
+  livePricing?: { low?: number | null; median?: number | null; high?: number | null; sampleCount?: number } | null;
+  /** Backend time-to-sell estimate (preferred over the per-comp heuristic when present). */
+  timeToSell?: { fastSaleAvgDays?: number; recommendedAvgDays?: number; maxProfitAvgDays?: number; basis?: string };
+  /** 90-day sold-comp median history for the sparkline. */
+  history?: { dataPoints: HistoryPoint[] };
 }
 
 export interface PricingGuidanceCardProps {
@@ -104,6 +111,14 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
   const fillRight = hasRange ? pct(high!) : 1;
   const centerVal = typeof median === 'number' ? median : hasRange ? (low! + high!) / 2 : 0;
 
+  // Live eBay asking price (Browse API) — "listed right now", shown next to the
+  // sold-comp metrics so the seller sees both at a glance.
+  const live =
+    p.livePricing && (typeof p.livePricing.median === 'number' || typeof p.livePricing.low === 'number')
+      ? p.livePricing
+      : null;
+  const liveValue = live ? live.median ?? live.high ?? live.low : undefined;
+
   const recommended = typeof p.recommended === 'number' ? p.recommended : median;
   const sampleCount = p.sampleCount ?? (samples.length || undefined);
   const cached = cachedLabel(p.cachedAt);
@@ -130,14 +145,25 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
 
         <View style={styles.metricRow}>
           <View style={styles.metricCol}>
-            <Text style={styles.kicker}>AVERAGE</Text>
+            <Text style={styles.kicker}>SOLD AVG</Text>
             <Text style={styles.metricValue}>{money(average)}</Text>
           </View>
           <View style={styles.metricCol}>
-            <Text style={styles.kicker}>MEDIAN</Text>
+            <Text style={styles.kicker}>SOLD MED</Text>
             <Text style={styles.metricValue}>{money(median)}</Text>
           </View>
+          {live ? (
+            <View style={styles.metricCol}>
+              <Text style={[styles.kicker, styles.liveKicker]}>● LIVE</Text>
+              <Text style={styles.metricValue}>{money(liveValue)}</Text>
+            </View>
+          ) : null}
         </View>
+        {live && typeof live.sampleCount === 'number' ? (
+          <Text style={styles.liveMeta}>
+            {live.sampleCount} listed now{typeof live.low === 'number' && typeof live.high === 'number' ? ` · ${rangeText(live.low, live.high)}` : ''}
+          </Text>
+        ) : null}
 
         <View style={styles.divider} />
 
@@ -165,7 +191,14 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
         {applyOptions ? (
           <View style={styles.applyRow}>
             {applyOptions.map((opt) => {
-              const days = averageDaysNearTarget(opt.price, samples);
+              // Prefer the backend time-to-sell estimate; fall back to the per-comp heuristic.
+              const backendDays =
+                opt.kind === 'fast'
+                  ? p.timeToSell?.fastSaleAvgDays
+                  : opt.kind === 'recommended'
+                  ? p.timeToSell?.recommendedAvgDays
+                  : p.timeToSell?.maxProfitAvgDays;
+              const days = typeof backendDays === 'number' ? Math.round(backendDays) : averageDaysNearTarget(opt.price, samples);
               const highlight = opt.kind === 'recommended';
               return (
                 <TouchableOpacity
@@ -185,6 +218,14 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
               );
             })}
           </View>
+        ) : null}
+
+        {/* 90-day sold-comp median history */}
+        {p.history?.dataPoints && p.history.dataPoints.length >= 2 ? (
+          <>
+            <View style={styles.divider} />
+            <PriceHistorySlider dataPoints={p.history.dataPoints} />
+          </>
         ) : null}
       </View>
 
@@ -258,6 +299,8 @@ const styles = StyleSheet.create({
   metricRow: { flexDirection: 'row', marginTop: 18 },
   metricCol: { flex: 1 },
   metricValue: { color: COLORS.text, fontSize: 22, fontWeight: '700', marginTop: 6 },
+  liveKicker: { color: GREEN },
+  liveMeta: { color: COLORS.label, fontSize: 12.5, marginTop: 8 },
 
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: COLORS.hairline, marginVertical: 20 },
 

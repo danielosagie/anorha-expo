@@ -725,6 +725,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             high: pr.high,
             median: pr.median,
             average: pr.average,
+            recommended: pr.recommended,
+            sampleCount: pr.sampleCount,
+            cachedAt: pr.cachedAt,
+            livePricing: pr.livePricing,
+            timeToSell: pr.timeToSell,
+            history: pr.history,
             samples: Array.isArray(pr.samples)
               ? pr.samples.map((s: any) => ({
                   title: s.title,
