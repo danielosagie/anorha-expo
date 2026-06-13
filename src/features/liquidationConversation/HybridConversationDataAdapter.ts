@@ -47,6 +47,10 @@ type NestSession = {
   primaryThreadId?: string;
   /** First campaign item's image (backend list enrichment). */
   thumbnailUrl?: string;
+  /** When the agent's next autonomous check is scheduled (ISO). */
+  nextWakeAt?: string;
+  /** Sold/total item counts (backend list enrichment) — drives the card progress bar. */
+  stats?: { soldCount?: number; totalCount?: number; negotiating?: number };
 };
 
 type NestThread = {
@@ -874,6 +878,8 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
       stateSummary: session.state?.phase ? `Phase: ${session.state.phase}` : undefined,
       timeframeDays: timeframe,
       imageUrl: session.thumbnailUrl,
+      nextWakeAt: session.nextWakeAt,
+      stats: session.stats,
     };
   }
 

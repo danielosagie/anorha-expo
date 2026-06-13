@@ -19,6 +19,8 @@ export interface CampaignSummary {
   timeframeDays?: number;
   /** First campaign item's image — the home card thumbnail. */
   imageUrl?: string;
+  /** When the agent's next autonomous check is scheduled (ISO) — shown on the card. */
+  nextWakeAt?: string;
   stats?: {
     soldToday?: number;
     totalCount?: number;

@@ -552,7 +552,7 @@ const SproutHomeScreen: React.FC = () => {
       {/* ── Static header: edge-to-edge, pinned at top, rounded bottom ── */}
       <View style={[styles.header, { backgroundColor: THEME.heroTop, paddingTop: insets.top + 2 }]}>
         {!isNight && (
-          <LinearGradient colors={[THEME.bgFrom, THEME.bgTo]} style={StyleSheet.absoluteFill} pointerEvents="none" />
+          <LinearGradient colors={[THEME.bgTo, THEME.bgTo]} style={StyleSheet.absoluteFill} pointerEvents="none" />
         )}
         {/* Top bar: date-range pill + New, no background of its own */}
         <View style={styles.topBarRow}>
@@ -946,6 +946,20 @@ const CampaignCard: React.FC<{
     return Math.max(0, Math.ceil(campaign.timeframeDays - elapsed));
   }, [campaign.createdAt, campaign.timeframeDays]);
 
+  // When the agent next wakes to check this campaign — shown on the Running pill so
+  // the seller knows it's actively watched and when the next pass lands.
+  const nextCheckLabel = useMemo(() => {
+    if (!campaign.nextWakeAt) return null;
+    const ms = new Date(campaign.nextWakeAt).getTime() - Date.now();
+    if (Number.isNaN(ms)) return null;
+    if (ms <= 60_000) return 'checking now';
+    const mins = Math.round(ms / 60000);
+    if (mins < 60) return `next check ${mins}m`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `next check ${hrs}h`;
+    return `next check ${Math.round(hrs / 24)}d`;
+  }, [campaign.nextWakeAt]);
+
   // Completed cards keep the LIGHT card skin at half opacity in both modes —
   // per the mockup they read as receipts, not live surfaces.
   const isCompleted = campaign.status === 'completed';
@@ -960,8 +974,8 @@ const CampaignCard: React.FC<{
           ? { text: 'Needs you', bg: 'rgba(31,95,168,0.28)', fg: '#9CC4F0' }
           : { text: 'Needs you', bg: '#DCEBFB', fg: '#1F5FA8' }
         : isNight
-          ? { text: 'Running', bg: 'rgba(147,200,34,0.18)', fg: '#C9E588' }
-          : { text: 'Running', bg: '#EAF7CF', fg: '#4E6B12' };
+          ? { text: nextCheckLabel || 'Running', bg: 'rgba(147,200,34,0.18)', fg: '#C9E588' }
+          : { text: nextCheckLabel || 'Running', bg: '#EAF7CF', fg: '#4E6B12' };
 
   // First campaign item's image (backend list enrichment); green leaf fallback.
   const thumbUrl = campaign.imageUrl;
@@ -972,11 +986,11 @@ const CampaignCard: React.FC<{
   const daysBadgeBg = isCompleted ? '#7F7F7F' : isNight ? '#494B44' : '#93C822';
   // Pending pill: amber by day, muted olive at night (matches mockup variants).
   const pendingBg = isNight ? '#494B44' : '#A56300';
-  // Lighter green frame (the dark #3A5A24 read far too dark around the fill).
-  const goalBorder = isCompleted ? '#6BA03A' : '#5C8B2C';
+  // Green pill frame + fill (Figma 4607:2327/2328). The pill floats on the card
+  // surface; the ticks are a separate gray strip to its right (no track behind).
+  const goalBorder = isCompleted ? '#6BA03A' : '#3A5A24';
   const goalFillBg = isCompleted ? '#95BF46' : '#7BB304';
-  const goalTrackBg = isCompleted ? '#6BA03A' : '#5C8B2C';
-  const tickColor = isCompleted ? '#D9D9D9' : isNight ? '#585858' : '#D9D9D9';
+  const tickColor = isCompleted ? '#D9D9D9' : isNight ? '#585858' : '#D4D4D4';
 
   return (
     <TouchableOpacity
@@ -1041,25 +1055,17 @@ const CampaignCard: React.FC<{
         )}
       </View>
 
-      {/* Goal bar: bordered track, $raised/$goal label, decorative tick-lines */}
+      {/* Goal bar: the green pill (with its label) on the left grows by sold %, and
+          the gray ticks sit OUTSIDE it to the right, filling the remainder and
+          shrinking as the pill grows. */}
       <View style={styles.goalRow}>
-        <View style={[styles.goalOuter, { borderColor: goalBorder, backgroundColor: goalTrackBg }]}>
-          <View style={[styles.goalFill, { backgroundColor: goalFillBg }]} />
-          <View style={styles.goalLabelWrap} pointerEvents="none">
-            <Text style={styles.goalLabel} numberOfLines={1}>
-              {hasDollars ? (
-                <>
-                  {currency(campaign.raised!)}
-                  <Text style={styles.goalLabelDim}>/{currency(campaign.goal!)} goal</Text>
-                </>
-              ) : (
-                `${goalPct}% sold`
-              )}
-            </Text>
-          </View>
+        <View style={[styles.goalFill, { width: `${goalPct}%`, backgroundColor: goalFillBg, borderColor: goalBorder }]}>
+          <Text style={styles.goalLabel} numberOfLines={1}>
+            {hasDollars ? currency(campaign.raised!) : `${goalPct}%`}
+          </Text>
         </View>
-        <View style={styles.tickRow}>
-          {Array.from({ length: 11 }).map((_, i) => (
+        <View style={styles.tickRow} pointerEvents="none">
+          {Array.from({ length: 28 }).map((_, i) => (
             <View key={i} style={[styles.tick, { backgroundColor: tickColor }]} />
           ))}
         </View>
@@ -1419,27 +1425,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     paddingBottom: 16,
   },
-  goalOuter: {
-    flex: 1,
-    height: 44,
-    borderRadius: 10,
-    borderWidth: 1,
-    padding: 1.5,
-    overflow: 'hidden',
-    flexDirection: 'row',
-    alignItems: 'stretch',
-  },
-  // Rounded green fill that fills the whole track, so the dark-green frame reads
-  // evenly on all four sides (matches the Figma pill). Progress shows in the text.
+  // Green "button" pill on the card surface: grows by sold %, label inside, green
+  // border. minWidth keeps the label legible at 0%. Width is set inline.
   goalFill: {
-    flex: 1,
-    borderRadius: 6,
+    minWidth: 56,
+    height: 40,
+    borderRadius: 9,
+    borderWidth: 1.5,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
   },
-  goalLabelWrap: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   goalLabel: { color: '#FFFFFF', fontFamily: FONT.medium, fontSize: 14, lineHeight: 20 },
-  goalLabelDim: { color: '#3A5A24', fontFamily: FONT.medium },
-  tickRow: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 35 },
-  tick: { width: 3, height: '100%', borderRadius: 1.5 },
+  // Gray ticks = the empty remainder, OUTSIDE the pill to its right; flex:1 fills the
+  // leftover space and shrinks as the pill grows.
+  tickRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    height: 35,
+  },
+  tick: { width: 3, height: 24, borderRadius: 1.5 },
 
   completedHeader: { marginTop: 8, marginBottom: 12, gap: 10 },
   completedLabel: { color: '#71717A', fontFamily: FONT.medium, fontSize: 14, letterSpacing: 0.4 },

@@ -17,7 +17,8 @@ import Animated, { interpolate, runOnJS, useAnimatedStyle, useSharedValue, withT
 import { LinearGradient } from 'expo-linear-gradient';
 import { ProgressiveBlurView } from '../components/ProgressiveBlurView';
 import * as Haptics from 'expo-haptics';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
+import { setActiveThread } from '../lib/activeThread';
 import { useAuth } from '@clerk/clerk-expo';
 import { ChevronLeft, Menu, MessageCircle, Package, Search, Settings, AlertCircle, CheckCircle2, X, Plus } from 'lucide-react-native';
 import { ensureSupabaseJwt } from '../../lib/supabase';
@@ -181,6 +182,15 @@ const CampaignThreadScreen = () => {
 
   const controller = useLiquidationConversationController({ adapter, initialCampaignId: campaignId });
   const controllerRef = useRef(controller);
+
+  // Mark this thread foregrounded so a reply push for THIS campaign is suppressed
+  // in-app (the seller is already watching it); cleared on blur so it pings elsewhere.
+  useFocusEffect(
+    useCallback(() => {
+      setActiveThread(campaignId ?? null, controller.activeThreadId ?? null);
+      return () => setActiveThread(null, null);
+    }, [campaignId, controller.activeThreadId]),
+  );
   useEffect(() => { controllerRef.current = controller; });
   const [menuOpen, setMenuOpen] = useState(false);
   const insets = useSafeAreaInsets();
