@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Animated, {
   Easing,
   FadeIn,
@@ -11,8 +11,36 @@ import Animated, {
 } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Markdown from 'react-native-markdown-display';
-import type { ConversationMessage, DecisionPrompt } from '../types';
+import type { ChatJobCardMeta, ConversationMessage, DecisionPrompt } from '../types';
 import { TimestampRevealContext } from './timestampReveal';
+
+// A tappable cart card the agent drops in after turning photos into draft listings.
+// Tapping it opens the AddProduct cart hydrated from the quick-scan session.
+const ChatJobCard = ({ card, onOpen }: { card: ChatJobCardMeta; onOpen?: (sessionId: string) => void }) => (
+  <TouchableOpacity
+    style={styles.jobCard}
+    activeOpacity={0.85}
+    disabled={!onOpen}
+    onPress={() => card.sessionId && onOpen?.(card.sessionId)}
+  >
+    {card.coverImageUrl ? (
+      <Image source={{ uri: card.coverImageUrl }} style={styles.jobCardImage} />
+    ) : (
+      <View style={[styles.jobCardImage, styles.jobCardImageFallback]}>
+        <Icon name="image-multiple-outline" size={20} color="#5D7E16" />
+      </View>
+    )}
+    <View style={styles.jobCardBody}>
+      <Text style={styles.jobCardTitle} numberOfLines={1}>
+        {card.title || (card.itemCount === 1 ? 'New item' : `${card.itemCount} items`)}
+      </Text>
+      <Text style={styles.jobCardSub} numberOfLines={1}>
+        {card.itemCount} item{card.itemCount === 1 ? '' : 's'} · tap to review and publish
+      </Text>
+    </View>
+    <Icon name="chevron-right" size={22} color="#9CA3AF" />
+  </TouchableOpacity>
+);
 
 const TypingDot = ({ delay }: { delay: number }) => {
   const progress = useSharedValue(0.3);
@@ -169,9 +197,10 @@ type Props = {
   message: MessageWithTime;
   onDecision: (prompt: DecisionPrompt, action: 'approve' | 'revise' | 'follow_up') => void;
   onRetry: (clientMessageId: string) => void;
+  onOpenCart?: (sessionId: string) => void;
 };
 
-const StreamingMessageBubbleBase = ({ message, onDecision, onRetry }: Props) => {
+const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart }: Props) => {
   const isUser = message.role === 'user';
   const isStreaming = message.deliveryState === 'streaming';
   const isFailed = message.deliveryState === 'failed';
@@ -208,6 +237,7 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry }: Props) => 
     ? (message.metadata as any).toolSteps as ToolStep[]
     : []);
   const reasoning = !isUser ? ((message.metadata as any)?.reasoning as string | undefined) : undefined;
+  const jobCard = !isUser ? ((message.metadata as any)?.jobCard as ChatJobCardMeta | undefined) : undefined;
 
   return (
     <Animated.View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft, revealRowStyle]}>
@@ -228,17 +258,22 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry }: Props) => 
           <ToolActivityCard steps={toolSteps} reasoning={reasoning} streaming={isStreaming} />
         ) : null}
 
+        {jobCard?.sessionId ? (
+          <ChatJobCard card={jobCard} onOpen={onOpenCart} />
+        ) : null}
+
         {isUser ? (
           <Text style={[styles.messageText, styles.userMessageText]}>{content}</Text>
-        ) : isStreaming ? (
-          // Normal-chat feel: a typing bubble while the agent works (the activity
-          // card above shows its steps as they land), then the finished message
-          // appears — no token-by-token "streaming" text on the seller's side.
-          <TypingIndicator />
         ) : renderMarkdown ? (
+          // Stream the reply live: render the partial markdown as deltas arrive
+          // (content accumulates via appendAssistantDelta). The typing bubble only
+          // shows BEFORE the first token, while the agent is still working or calling
+          // tools (the activity card above shows those steps as they land).
           <MarkdownBoundary content={content}>
             <Markdown style={styles.markdown}>{content}</Markdown>
           </MarkdownBoundary>
+        ) : isStreaming ? (
+          <TypingIndicator />
         ) : null}
 
         {message.actionMeta?.summary ? (
@@ -312,7 +347,8 @@ export const StreamingMessageBubble = React.memo(StreamingMessageBubbleBase, (pr
     a.actionMeta?.summary === b.actionMeta?.summary &&
     a.decisionPrompt === b.decisionPrompt &&
     (aSteps?.length || 0) === (bSteps?.length || 0) &&
-    ((a.metadata as any)?.reasoning || '') === ((b.metadata as any)?.reasoning || '')
+    ((a.metadata as any)?.reasoning || '') === ((b.metadata as any)?.reasoning || '') &&
+    ((a.metadata as any)?.jobCard?.sessionId || '') === ((b.metadata as any)?.jobCard?.sessionId || '')
   );
 });
 
@@ -320,6 +356,43 @@ const styles = StyleSheet.create({
   row: {
     width: '100%',
     marginBottom: 10,
+  },
+  jobCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderRadius: 14,
+    backgroundColor: '#F4F7EC',
+    borderWidth: 1,
+    borderColor: '#E2EAD0',
+    minWidth: 220,
+  },
+  jobCardImage: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: '#E5E7EB',
+  },
+  jobCardImageFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  jobCardBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  jobCardTitle: {
+    color: '#1F2937',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+  },
+  jobCardSub: {
+    color: '#5D7E16',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+    marginTop: 2,
   },
   rowLeft: {
     alignItems: 'flex-start',

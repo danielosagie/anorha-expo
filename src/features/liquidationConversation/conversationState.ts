@@ -397,6 +397,7 @@ export const toQueueItem = ({
   content,
   actionType,
   actionPayload,
+  imageUrls,
 }: {
   campaignId: string;
   threadId: string;
@@ -405,6 +406,7 @@ export const toQueueItem = ({
   content?: string;
   actionType?: string;
   actionPayload?: Record<string, unknown>;
+  imageUrls?: string[];
 }): ConversationQueueItem => ({
   id: createClientId('queue'),
   campaignId,
@@ -414,6 +416,7 @@ export const toQueueItem = ({
   content,
   actionType,
   actionPayload,
+  imageUrls,
   createdAt: new Date().toISOString(),
 });
 

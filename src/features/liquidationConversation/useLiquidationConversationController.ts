@@ -112,7 +112,8 @@ export const useLiquidationConversationController = ({
         const hasText = !!(message.content && message.content.trim());
         const steps = (message.metadata as any)?.toolSteps;
         const hasSteps = Array.isArray(steps) && steps.length > 0;
-        return hasText || hasSteps || !!message.decisionPrompt || message.kind === 'action';
+        const hasJobCard = !!(message.metadata as any)?.jobCard?.sessionId;
+        return hasText || hasSteps || hasJobCard || !!message.decisionPrompt || message.kind === 'action';
       })
       .map(message => ({
         ...message,
@@ -349,6 +350,7 @@ export const useLiquidationConversationController = ({
           content: item.content,
           actionType: item.actionType,
           actionPayload: item.actionPayload,
+          imageUrls: item.imageUrls,
         },
         {
           onMessageAck: ({ clientMessageId, serverMessageId }) => {
@@ -411,7 +413,11 @@ export const useLiquidationConversationController = ({
       // card "flash". Only ACTION turns refetch, since they can surface approval
       // prompts that the stream doesn't carry. (Server already persists everything;
       // it reconciles on the next natural thread load.)
-      if (item.kind === 'action') {
+      // Action turns can surface approval prompts the stream doesn't carry; PHOTO turns
+      // post a separate job-card message mid-turn (skipped by the live bridge while the
+      // turn is in flight). Both need a one-shot server reconcile so the card / prompt
+      // actually lands instead of waiting for the next natural thread load.
+      if (item.kind === 'action' || (item.imageUrls && item.imageUrls.length > 0)) {
         const remoteMessages = await adapter.getMessages(item.campaignId, threadId).catch(() => null);
         if (remoteMessages) {
           setThreadStateFor(threadId, current => ({
@@ -482,7 +488,7 @@ export const useLiquidationConversationController = ({
     void adapter.persistDraft(campaignId, threadId, value).catch(() => undefined);
   }, [adapter, setHomeDraft, setThreadStateFor, surfaceState]);
 
-  const queueTextMessage = useCallback(async (content: string) => {
+  const queueTextMessage = useCallback(async (content: string, imageUrls?: string[]) => {
     const campaignId = activeCampaignIdRef.current;
     if (!campaignId) {
       throw new Error('Select a campaign first');
@@ -504,6 +510,7 @@ export const useLiquidationConversationController = ({
       clientMessageId,
       kind: 'message',
       content,
+      imageUrls,
     });
 
     setThreadStateFor(threadId, current => enqueueTurn(current, queueItem, message), { immediate: true });
@@ -641,71 +648,33 @@ export const useLiquidationConversationController = ({
     }
   }, [adapter, loadCampaigns]);
 
-  // Dump photos into the chat: upload them, identify + draft each via the
-  // existing /api/products/analyze pipeline, add the new drafts to this clearout,
-  // then tell Sprout what landed so it can react (research / liquidate / hold).
-  const ingestPhotos = useCallback(async (photos: string[], text: string) => {
-    const campaignId = activeCampaignIdRef.current;
-    if (!campaignId || !photos.length) return;
-    setNotice(`Reviewing ${photos.length} photo${photos.length === 1 ? '' : 's'}…`);
-    try {
-      const token = await ensureSupabaseJwt();
-      const drafts: Array<{ id: string; productId?: string; title: string; price?: number; imageUrl: string }> = [];
-      await Promise.all(
-        photos.slice(0, 8).map(async uri => {
-          try {
-            const url = await uploadProductImage(uri, createClientId('photo'));
-            const resp = await fetch(`${API_BASE_URL}/api/products/analyze`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-              body: JSON.stringify({ imageUris: [url], selectedPlatforms: ['ebay'] }),
-            });
-            if (resp.ok) {
-              const json = await resp.json();
-              const v = json?.variant;
-              if (v?.Id) drafts.push({ id: v.Id, productId: json?.product?.Id, title: v.Title || 'Unidentified item', price: v.Price, imageUrl: url });
-            }
-          } catch {
-            /* skip this photo */
-          }
-        }),
-      );
-      if (!drafts.length) {
-        setNotice('Could not read those photos. Try clearer shots.');
-        return;
-      }
-      // Add the new drafts to this clearout
-      try { await (adapter as any).addCampaignItems?.(campaignId, drafts.map(d => d.id)); } catch { /* ignore add failure */ }
-      // Kick off the full per-platform listing generation (async, same job the add-product flow uses)
-      try {
-        await fetch(`${API_BASE_URL}/api/products/generate/jobs`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({
-            products: drafts.map((d, i) => ({ productIndex: i, productId: d.productId, variantId: d.id, imageUrls: [d.imageUrl], coverImageIndex: 0 })),
-            selectedPlatforms: ['ebay'],
-          }),
-        });
-      } catch { /* generation is best-effort */ }
-      setNotice(null);
-      const list = drafts.map(d => (d.price ? `${d.title} (~$${Math.round(d.price)})` : d.title)).join(', ');
-      const summary = `${text ? text + '\n\n' : ''}I dropped ${drafts.length} item${drafts.length === 1 ? '' : 's'} from photos into this clearout and you're drafting the full listings: ${list}. What's the play — research pricing, push them aggressively, or hold?`;
-      await queueTextMessage(summary);
-    } catch {
-      setNotice('Could not process photos. Please try again.');
-    }
-  }, [adapter, queueTextMessage]);
-
   const sendComposer = useCallback(async (photos?: string[]) => {
     const content = composerText.trim();
     if (photos && photos.length) {
+      // Hand the photos to the AGENT and let it decide what to do (identify + price,
+      // or build draft listings via analyze_photos / analyze_shelf). We just upload
+      // them and send a normal turn carrying the urls — no more fork to /analyze.
       setComposerValue('');
-      await ingestPhotos(photos, content);
+      setNotice(`Adding ${photos.length} photo${photos.length === 1 ? '' : 's'}…`);
+      try {
+        const urls = (await Promise.all(
+          photos.slice(0, 8).map(uri => uploadProductImage(uri, createClientId('photo')).catch(() => null)),
+        )).filter((u): u is string => !!u);
+        setNotice(null);
+        if (!urls.length) {
+          setNotice('Could not upload those photos. Try again.');
+          return;
+        }
+        const displayText = content || `added ${urls.length} photo${urls.length === 1 ? '' : 's'}`;
+        await queueTextMessage(displayText, urls);
+      } catch {
+        setNotice('Could not process photos. Please try again.');
+      }
       return;
     }
     if (!content) return;
     await queueTextMessage(content);
-  }, [composerText, queueTextMessage, ingestPhotos, setComposerValue]);
+  }, [composerText, queueTextMessage, setComposerValue, setNotice]);
 
   const submitDecision = useCallback(async (prompt: DecisionPrompt, action: 'approve' | 'revise' | 'follow_up') => {
     const campaignId = activeCampaignIdRef.current;

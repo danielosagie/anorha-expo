@@ -138,6 +138,8 @@ export interface ConversationQueueItem {
   content?: string;
   actionType?: string;
   actionPayload?: Record<string, unknown>;
+  /** Public urls of photos the seller attached — the agent decides what to do with them. */
+  imageUrls?: string[];
   createdAt: string;
 }
 
@@ -159,6 +161,18 @@ export interface StreamTurnInput {
   content?: string;
   actionType?: string;
   actionPayload?: Record<string, unknown>;
+  /** Public urls of photos attached to this turn (already uploaded). */
+  imageUrls?: string[];
+}
+
+/** Payload the agent attaches (message.metadata.jobCard) for a tappable cart card. */
+export interface ChatJobCardMeta {
+  /** quick-scan-session id the AddProduct cart hydrates from. */
+  sessionId: string;
+  itemCount: number;
+  coverImageUrl?: string;
+  title?: string;
+  status?: string;
 }
 
 /**

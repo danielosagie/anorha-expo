@@ -339,6 +339,15 @@ const CampaignThreadScreen = () => {
           loading={controller.isLoadingMessages}
           onDecision={controller.submitDecision}
           onRetry={controller.retryMessage}
+          onOpenCart={(sessionId: string) => {
+            // AddProduct is a hidden TAB screen, so go through the nested navigator
+            // (the pattern PastScans uses), with a flat fallback.
+            try {
+              navigation.navigate('TabNavigator', { screen: 'AddProduct', params: { sessionId } });
+            } catch {
+              navigation.navigate('AddProduct', { sessionId });
+            }
+          }}
           contentTopInset={headerH + 8}
           contentBottomInset={footerH + 8}
         />

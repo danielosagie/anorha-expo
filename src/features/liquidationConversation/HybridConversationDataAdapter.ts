@@ -251,6 +251,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
           content: input.content,
           actionType: input.actionType,
           actionPayload: input.actionPayload,
+          imageUrls: input.imageUrls,
         }),
       } as any);
 
@@ -743,6 +744,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
         content: input.content,
         threadId: input.threadId,
         clientMessageId: input.clientMessageId,
+        imageUrls: input.imageUrls,
       }),
     });
 
