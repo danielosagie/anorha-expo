@@ -16,6 +16,7 @@ import { API_BASE_URL } from '../config/env';
 import PlatformAvatar from '../components/PlatformAvatar';
 import CreatePoolSheet from '../components/pools/CreatePoolSheet';
 import { PageHeader } from '../components/ui/PageHeader';
+import { normalizeDisplayName } from '../config/platforms';
 
 const statusOf = (raw?: string): { label: string; color: string } => {
   const s = (raw || '').toLowerCase();
@@ -25,9 +26,9 @@ const statusOf = (raw?: string): { label: string; color: string } => {
   return { label: raw || 'Connected', color: '#71717A' };
 };
 
-/** "myshop.myshopify.com" → "myshop". */
+/** "myshop.myshopify.com" → "myshop"; resolves known platforms to their label. */
 const shopLabel = (c: any): string =>
-  String(c.DisplayName || c.PlatformType || 'Platform').replace(/\.myshopify\.com$/i, '');
+  normalizeDisplayName(String(c.DisplayName || c.PlatformType || 'Platform'));
 
 type Pool = { id: string; name: string; description?: string; isPartnerPool?: boolean };
 

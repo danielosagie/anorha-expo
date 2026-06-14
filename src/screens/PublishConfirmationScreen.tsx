@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Image, TouchableOpacity, ScrollView } from 'rea
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes, PackagePlus } from 'lucide-react-native';
 import PlatformLogo from '../components/PlatformLogo';
+import { normalizeDisplayName } from '../config/platforms';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 
@@ -220,14 +221,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
 };
 
 function platformLabel(key: string): string {
-  switch (key) {
-    case 'ebay': return 'eBay';
-    case 'clover': return 'Clover';
-    case 'shopify': return 'Shopify';
-    case 'amazon': return 'Amazon';
-    case 'square': return 'Square';
-    default: return key.charAt(0).toUpperCase() + key.slice(1);
-  }
+  return normalizeDisplayName(key);
 }
 
 function platformIconName(key: string): string {

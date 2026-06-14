@@ -16,6 +16,7 @@ import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import PlatformAvatar from '../components/PlatformAvatar';
+import { normalizeDisplayName } from '../config/platforms';
 
 type Card = {
   key: string;
@@ -32,11 +33,9 @@ const statusOf = (raw?: string): { label: string; color: string } => {
   return { label: raw || 'Connected', color: '#71717A' };
 };
 
-/** "myshop.myshopify.com" → "myshop"; fall back to the platform name. */
-const shopLabel = (c: any): string => {
-  const name = String(c.DisplayName || c.PlatformType || 'Platform');
-  return name.replace(/\.myshopify\.com$/i, '');
-};
+/** "myshop.myshopify.com" → "myshop"; resolves known platforms to their label. */
+const shopLabel = (c: any): string =>
+  normalizeDisplayName(String(c.DisplayName || c.PlatformType || 'Platform'));
 
 const SettingsScreen = () => {
   const navigation = useNavigation<any>();
