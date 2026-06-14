@@ -5,7 +5,7 @@
 // group card (N rows → one product with variants). Reversibility lives in the
 // parent: answers patch the suggestion list, nothing commits until "Complete".
 
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Progress from 'react-native-progress';
@@ -104,19 +104,10 @@ const DecisionQueue: React.FC<DecisionQueueProps> = ({
   theme, insets, suggestions, initialTotal, onAnswer, onDropFromGroup, onSearch, onClose, onDone, searchSheet,
 }) => {
   const units = useMemo(() => buildUnits(suggestions), [suggestions]);
-  const doneFired = useRef(false);
 
   const remaining = units.length;
   const total = Math.max(initialTotal, remaining);
   const completed = total - remaining;
-
-  // Fire onDone once the queue empties — in an effect, not during render.
-  useEffect(() => {
-    if (remaining === 0 && !doneFired.current) {
-      doneFired.current = true;
-      onDone();
-    }
-  }, [remaining, onDone]);
 
   if (remaining === 0) {
     return (
@@ -125,7 +116,7 @@ const DecisionQueue: React.FC<DecisionQueueProps> = ({
           <Icon name="check-circle-outline" size={40} color={theme.colors.primary} />
           <Text style={[styles.allClearTitle, { color: theme.colors.text }]}>All reviewed</Text>
           <Text style={[styles.allClearSub, { color: theme.colors.textSecondary }]}>Every item has a decision. Tap below to finish.</Text>
-          <TouchableOpacity onPress={onClose} style={[styles.primaryBtn, { backgroundColor: theme.colors.primary, marginTop: 20, paddingHorizontal: 28 }]}>
+          <TouchableOpacity onPress={onDone} style={[styles.primaryBtn, { backgroundColor: theme.colors.primary, marginTop: 20, paddingHorizontal: 28 }]}>
             <Text style={styles.primaryBtnText}>Done</Text>
           </TouchableOpacity>
         </View>

@@ -469,7 +469,7 @@ const MappingReviewScreen: React.FC = () => {
         onDropFromGroup={handleDropFromGroup}
         onSearch={openSearchFor}
         onClose={() => setQueueOpen(false)}
-        onDone={() => { /* queue shows its own all-clear; user taps Done */ }}
+        onDone={() => { setQueueOpen(false); setDoneVisible(true); }}
         searchSheet={
           <SearchSheet
             theme={theme}
