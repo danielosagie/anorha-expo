@@ -30,6 +30,7 @@ import type {
   DecisionSubmission,
   ItemStatus,
   NegotiationDecisionInput,
+  QuestionPrompt,
   RunFlashCampaignInput,
   StreamTurnInput,
   StreamTurnObserver,
@@ -628,6 +629,35 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
         clientMessageId: createClientId('decision'),
       }),
     });
+  }
+
+  // The newest unanswered ask_seller_question pending action for this thread,
+  // hydrated into a QuestionPrompt. Null when Sprout isn't waiting on a choice.
+  async getPendingQuestion(campaignId: string, threadId: string): Promise<QuestionPrompt | null> {
+    const res = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
+      `/api/agent/sessions/${campaignId}/pending-actions?threadId=${encodeURIComponent(threadId)}`,
+    ).catch(() => null);
+    const actions = res?.pendingActions || [];
+    const open = actions
+      .filter((a) => a?.toolName === 'ask_seller_question' && a?.status !== 'completed' && a?.status !== 'rejected')
+      .sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
+    const action = open[0];
+    const questions = action?.input?.questions;
+    if (!action || !Array.isArray(questions) || questions.length === 0) return null;
+    return { pendingActionId: action.id, threadId: action.threadId, questions };
+  }
+
+  // Record the seller's answer (does NOT resume the turn — the controller sends
+  // the chosen text as a normal message so Sprout replies with full streaming).
+  async answerQuestion(
+    campaignId: string,
+    pendingActionId: string,
+    answer: { answers?: Record<string, string[]>; other?: string; text?: string },
+  ): Promise<void> {
+    await this.requestNest(
+      `/api/agent/sessions/${campaignId}/pending-actions/${pendingActionId}/answer`,
+      { method: 'POST', body: JSON.stringify(answer) },
+    );
   }
 
   async getCampaignConfig(campaignId: string): Promise<CampaignConfig> {

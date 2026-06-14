@@ -208,6 +208,8 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart }
   const dragX = useContext(TimestampRevealContext);
   const revealRowStyle = useAnimatedStyle(() => ({ transform: [{ translateX: dragX?.value ?? 0 }] }));
   const revealTimeStyle = useAnimatedStyle(() => ({ opacity: dragX ? Math.min(1, -dragX.value / 46) : 0 }));
+  const [digestOpen, setDigestOpen] = useState(false);
+  const isDigest = !isUser && (message.metadata as any)?.kind === 'digest';
 
   const statusLabel = useMemo(() => {
     if (message.kind === 'action') {
@@ -238,6 +240,32 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart }
     : []);
   const reasoning = !isUser ? ((message.metadata as any)?.reasoning as string | undefined) : undefined;
   const jobCard = !isUser ? ((message.metadata as any)?.jobCard as ChatJobCardMeta | undefined) : undefined;
+
+  // Digest / watch-cycle check-ins live in the feed but stay folded by default so
+  // they don't crowd the conversation. Tap to expand.
+  if (isDigest) {
+    return (
+      <Animated.View style={[styles.row, styles.rowLeft, revealRowStyle]}>
+        <View style={[styles.card, styles.assistantCard, { backgroundColor: '#F4F9E8', borderColor: '#E4EFC9', borderWidth: 0.5 }]}>
+          <TouchableOpacity
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
+            activeOpacity={0.7}
+            onPress={() => setDigestOpen(o => !o)}
+          >
+            <Icon name="leaf" size={14} color="#3B6D11" />
+            <Text style={{ flex: 1, fontSize: 13, color: '#3B6D11', fontFamily: 'Inter_600SemiBold' }}>Sprout check-in</Text>
+            <Icon name={digestOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#7A9B3C" />
+          </TouchableOpacity>
+          <Text
+            numberOfLines={digestOpen ? undefined : 1}
+            style={{ marginTop: digestOpen ? 8 : 4, fontSize: digestOpen ? 14 : 13, color: digestOpen ? '#3B5314' : '#5F7A2E', fontFamily: 'Inter_400Regular', lineHeight: 20 }}
+          >
+            {content}
+          </Text>
+        </View>
+      </Animated.View>
+    );
+  }
 
   return (
     <Animated.View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft, revealRowStyle]}>

@@ -12,6 +12,7 @@ import type {
   CreateThreadInput,
   DecisionSubmission,
   NegotiationDecisionInput,
+  QuestionPrompt,
   RunFlashCampaignInput,
 } from './types';
 
@@ -31,6 +32,8 @@ export interface ConversationDataAdapter {
   renameThread(campaignId: string, threadId: string, title: string): Promise<CampaignThreadSummary>;
   deleteThread(campaignId: string, threadId: string): Promise<void>;
   submitDecision(campaignId: string, threadId: string, decision: DecisionSubmission): Promise<void>;
+  getPendingQuestion(campaignId: string, threadId: string): Promise<QuestionPrompt | null>;
+  answerQuestion(campaignId: string, pendingActionId: string, answer: { answers?: Record<string, string[]>; other?: string; text?: string }): Promise<void>;
   getCampaignConfig(campaignId: string): Promise<CampaignConfig>;
   updateCampaignConfig(campaignId: string, update: CampaignConfigUpdate): Promise<CampaignConfig>;
   getCampaignOverview(campaignId: string): Promise<CampaignOverview>;

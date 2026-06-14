@@ -111,6 +111,26 @@ export interface DecisionPrompt {
   strategyId?: string;
 }
 
+export interface QuestionOption {
+  label: string;
+  description?: string;
+  recommended?: boolean;
+}
+
+export interface QuestionItem {
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  options: QuestionOption[];
+}
+
+// A Sprout ask_seller_question pending action, hydrated for the question card.
+export interface QuestionPrompt {
+  pendingActionId: string;
+  threadId?: string;
+  questions: QuestionItem[];
+}
+
 export interface ConversationMessage {
   id: string;
   campaignId: string;

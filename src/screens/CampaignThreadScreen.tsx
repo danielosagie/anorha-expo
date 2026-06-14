@@ -27,6 +27,7 @@ import { ConversationComposer } from '../features/liquidationConversation/compon
 import { ConversationList } from '../features/liquidationConversation/components/ConversationList';
 import { ConvexLiveMessages } from '../features/liquidationConversation/ConvexLiveMessages';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
+import QuestionCard from '../features/liquidationConversation/components/QuestionCard';
 import type { CampaignThreadSummary } from '../features/liquidationConversation/types';
 
 const CONVEX_TEMPLATE =
@@ -39,7 +40,6 @@ const QUICK_CHIPS = [
   { label: 'Lower floor', action: 'lower_floor' },
   { label: 'Flash sale', action: 'run_flash_campaign' },
   { label: 'Pause campaign', action: 'pause_campaign' },
-  { label: '+ attach items', action: 'attach_items' },
 ];
 
 const relativeTime = (iso?: string) => {
@@ -362,6 +362,19 @@ const CampaignThreadScreen = () => {
           contentBottomInset={footerH + 8}
         />
 
+        {/* ── Sprout's structured question (tappable options), above the composer ── */}
+        {controller.pendingQuestion && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 8, marginBottom: footerH }}>
+            <QuestionCard
+              prompt={controller.pendingQuestion}
+              submitting={controller.answeringQuestion}
+              onSubmit={(answers, other) =>
+                controller.submitAnswer(controller.pendingQuestion!, answers, other)
+              }
+            />
+          </View>
+        )}
+
         {/* ── Bottom: floating glass composer (no border, fades to white) ─ */}
         <View
           style={[s.footer, { paddingBottom: insets.bottom || 10 }]}
@@ -390,6 +403,7 @@ const CampaignThreadScreen = () => {
             </View>
           ) : null}
 
+          {/* Scroll Chips of quick options - Iceboxxed for now
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -402,6 +416,7 @@ const CampaignThreadScreen = () => {
               </TouchableOpacity>
             ))}
           </ScrollView>
+          */}
 
           <ConversationComposer
             value={controller.composerText}
@@ -558,7 +573,7 @@ const s = StyleSheet.create({
   noticeText: { flex: 1, color: '#5D7E16', fontFamily: 'Inter_500Medium', fontSize: 12 },
   chipsContent: { paddingHorizontal: 12, gap: 8, flexDirection: 'row', paddingBottom: 8, paddingTop: 2 },
   quickChip: { paddingHorizontal: 13, paddingVertical: 7, borderRadius: 16, backgroundColor: '#F4F4F1' },
-  quickChipText: { fontSize: 12, color: '#52525B', fontFamily: 'Inter_500Medium' },
+  quickChipText: { fontSize: 14, color: '#52525B', fontFamily: 'Inter_500Medium' },
 
   // Clean dropdown menu
   dropdown: {
