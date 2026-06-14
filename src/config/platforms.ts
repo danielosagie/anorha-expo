@@ -6,9 +6,22 @@ export type PlatformKey =
   | 'square'
   | 'facebook';
 
-const DEFAULT_PLATFORM_KEYS: PlatformKey[] = [
+// Every platform the app knows about — used to validate env overrides.
+const ALL_PLATFORM_KEYS: PlatformKey[] = [
   'shopify',
   'amazon',
+  'ebay',
+  'clover',
+  'square',
+  'facebook',
+];
+
+// Platforms shown in the connect picker by default. Only list ones with a real
+// connect flow: Amazon has no backend auth yet, so offering it produced a dead
+// button. It stays in ALL_PLATFORM_KEYS so a build can opt back in via
+// EXPO_PUBLIC_ENABLED_PLATFORMS once the backend lands.
+const DEFAULT_PLATFORM_KEYS: PlatformKey[] = [
+  'shopify',
   'ebay',
   'clover',
   'square',
@@ -37,7 +50,7 @@ const parseEnabledPlatforms = (): PlatformKey[] => {
     .filter(Boolean) as PlatformKey[];
 
   const valid = tokens.filter((p) =>
-    (DEFAULT_PLATFORM_KEYS as PlatformKey[]).includes(p),
+    (ALL_PLATFORM_KEYS as PlatformKey[]).includes(p),
   );
 
   return valid.length ? valid : DEFAULT_PLATFORM_KEYS;

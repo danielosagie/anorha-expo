@@ -44,6 +44,7 @@ import { Zap, ShieldCheck, CheckCircle as LucideCheckCircle, Bell as LucideBell 
 
 import LocationsManagerV2 from '../components/LocationsManagerV2';
 import ConnectedPlatformList from '../components/ConnectedPlatformList';
+import { PLATFORM_CONFIG, PlatformKey } from '../config/platforms';
 import BaseModal from '../components/BaseModal';
 import { AppDropdown } from '../components/ui/AppDropdown';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -701,7 +702,8 @@ const ProfileScreen = () => {
         }
       })();
     } else {
-      Alert.alert('Connect', `Connect logic for ${platform} not implemented yet.`);
+      const label = PLATFORM_CONFIG[platform as PlatformKey]?.label || platform;
+      Alert.alert(`${label} coming soon`, `Connecting ${label} isn't available yet. We'll let you know when it's ready.`);
     }
   }, [setShopifyFlowStep, setPastedShopifyUrl, setManualShopName, navigation, refreshConnections, currentOrg?.id]);
 
@@ -2085,41 +2087,10 @@ const ProfileScreen = () => {
               onPlatformToggle={() => { }}
               onGeneratePress={() => { }}
               onStartConnect={(platform) => {
+                // Route through the single source of truth so this picker stays in
+                // sync with every platform (csv/clover were missing here before).
                 setIsAddConnectionModalVisible(false);
-                if (platform === 'shopify') {
-                  setShopifyFlowStep('enterInfo');
-                  setPastedShopifyUrl('');
-                  setManualShopName('');
-                } else if (platform === 'clover') {
-                  handleCloverConnect();
-                } else if (platform === 'square') {
-                  handleSquareConnect();
-                } else if (platform === 'facebook') {
-                  handleFacebookConnect();
-                } else if (platform === 'ebay') {
-                  (async () => {
-                    const { data: { user } } = await supabase.auth.getUser();
-                    if (!user) return;
-                    const finalRedirectUri = 'anorhaapp://auth-callback?platform=ebay';
-                    const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
-                    const url = `${SSSYNC_API_BASE_URL}/api/auth/ebay/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}${orgIdParam}`;
-                    const result = await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
-
-                    // Parse result for errors
-                    const parsed = parseOAuthResult(result, 'eBay');
-                    if (!parsed.success && parsed.errorMessage) {
-                      showAlert({
-                        title: 'Connection Failed',
-                        message: parsed.errorMessage,
-                        type: 'error'
-                      });
-                    } else if (parsed.success) {
-                      refreshConnections(); // Refresh connections on success
-                    }
-                  })();
-                } else {
-                  Alert.alert('Connect', `Connect logic for ${platform} not implemented yet.`);
-                }
+                handleStartConnectPlatform(platform);
               }}
             />
 
