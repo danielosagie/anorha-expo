@@ -15,13 +15,8 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import VariantInventoryEditor, { VariantInventoryEditorProps } from './VariantInventoryEditor';
 import { useTheme } from '../context/ThemeContext';
 import { supabase } from '../lib/supabase';
-// Platform logo imports
-import SquareSvg from '../assets/square.svg';
-import ShopifySvg from '../assets/shopify.svg';
-import CloverSvg from '../assets/clover.svg';
-import AmazonSvg from '../assets/amazon.svg';
-import EbaySvg from '../assets/ebay.svg';
-import FacebookSvg from '../assets/facebook.svg';
+import PlatformLogo from './PlatformLogo';
+import { getPlatform } from '../config/platforms';
 import PlatformFilterChips from './PlatformFilterChips';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 
@@ -34,16 +29,6 @@ interface LocationInventory {
   price?: number;
   platformType?: string; // For showing platform logo
 }
-
-// Platform logo map for location dropdown
-const platformLogoMap: Record<string, any> = {
-  square: SquareSvg,
-  shopify: ShopifySvg,
-  clover: CloverSvg,
-  amazon: AmazonSvg,
-  ebay: EbaySvg,
-  facebook: FacebookSvg,
-};
 
 interface VariantInventory {
   id: string;
@@ -511,8 +496,9 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
                     {/* Platform logo */}
                     {(() => {
                       const selectedLoc = locations.find(l => l.id === selectedLocationId);
-                      const Logo = selectedLoc?.platformType ? platformLogoMap[selectedLoc.platformType.toLowerCase()] : null;
-                      return Logo ? <Logo width={16} height={16} style={{ marginRight: 6 }} /> : (
+                      return selectedLoc?.platformType && getPlatform(selectedLoc.platformType) ? (
+                        <PlatformLogo type={selectedLoc.platformType} size={16} style={{ marginRight: 6 }} />
+                      ) : (
                         <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#FACC15', marginRight: 8 }} />
                       );
                     })()}
@@ -543,7 +529,6 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
                       {locations
                         .filter(loc => !selectedPlatformFilter || loc.platformType?.toLowerCase() === selectedPlatformFilter.toLowerCase())
                         .map(loc => {
-                          const LocLogo = loc.platformType ? platformLogoMap[loc.platformType.toLowerCase()] : null;
                           return (
                             <TouchableOpacity
                               key={loc.id}
@@ -561,7 +546,9 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
                                 setShowLocationPicker(false);
                               }}
                             >
-                              {LocLogo && <LocLogo width={16} height={16} style={{ marginRight: 8 }} />}
+                              {loc.platformType && getPlatform(loc.platformType) && (
+                                <PlatformLogo type={loc.platformType} size={16} style={{ marginRight: 8 }} />
+                              )}
                               <Text style={{
                                 fontWeight: selectedLocationId === loc.id ? '600' : '400',
                                 color: '#000',

@@ -19,20 +19,19 @@ import DraggableFlatList, { RenderItemParams, ScaleDecorator } from 'react-nativ
 import { useTheme } from '../context/ThemeContext';
 import Button from './Button';
 import Card from './Card';
-import ShopifySvg from '../assets/shopify.svg';
-import SquareSvg from '../assets/square.svg';
-import CloverSvg from '../assets/clover.svg';
+import PlatformLogo from './PlatformLogo';
+import { getPlatform, listPlatforms } from '../config/platforms';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import { SessionContext } from '../context/SessionContext';
 
 const API_BASE_URL = ENV_API_BASE_URL;
 
-const PLATFORM_LOGOS: Record<string, any> = {
-  shopify: ShopifySvg,
-  square: SquareSvg,
-  clover: CloverSvg,
-};
+// Platform brand logos, keyed by platform key — derived from the central
+// registry so adding a platform there flows through here automatically.
+const PLATFORM_LOGOS: Record<string, React.FC<any>> = Object.fromEntries(
+  listPlatforms().map((d) => [d.key, d.logo]),
+);
 
 
 type ViewMode = 'default' | 'managePools' | 'createLocation' | 'createPool' | 'partners' | 'invitePartner';
@@ -209,10 +208,11 @@ const PoolAccordionItem = ({
               <Text style={styles.accordionBadgeText}>({locationCount})</Text>
             )}
             <View style={styles.accordionIcons}>
-              {platformTypes.map(type => {
-                const Logo = PLATFORM_LOGOS[type as keyof typeof PLATFORM_LOGOS];
-                return Logo ? <Logo key={type} width={14} height={14} style={{ marginLeft: 4 }} /> : null;
-              })}
+              {platformTypes.map(type => (
+                getPlatform(type) ? (
+                  <PlatformLogo key={type} type={type} size={14} style={{ marginLeft: 4 }} />
+                ) : null
+              ))}
             </View>
           </View>
 
@@ -240,12 +240,13 @@ const PoolAccordionItem = ({
           ) : (
             validLocationIds.map(locId => {
               const meta = locationMetadataMap.get(locId);
-              const Logo = meta?.platformType ? PLATFORM_LOGOS[meta.platformType as keyof typeof PLATFORM_LOGOS] : null;
 
               return (
                 <View key={locId} style={styles.accordionItemRow}>
                   <Text style={styles.accordionItemText}>{meta?.locationName || locId}</Text>
-                  {Logo && <Logo width={16} height={16} />}
+                  {meta?.platformType && getPlatform(meta.platformType) && (
+                    <PlatformLogo type={meta.platformType} size={16} />
+                  )}
                 </View>
               );
             })
@@ -340,9 +341,9 @@ const PartnerWelcomeOverlay: React.FC<{
           </TouchableOpacity>
 
           <View style={{ marginTop: 24, flexDirection: 'row', gap: 12, opacity: 0.6 }}>
-            <ShopifySvg width={24} height={24} />
-            <SquareSvg width={24} height={24} />
-            <CloverSvg width={24} height={24} />
+            <PlatformLogo type="shopify" size={24} />
+            <PlatformLogo type="square" size={24} />
+            <PlatformLogo type="clover" size={24} />
           </View>
         </View>
       </View>

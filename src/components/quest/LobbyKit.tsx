@@ -29,31 +29,13 @@ import Animated, {
 import { hardShadow, swatchFor } from './QuestKit';
 import { RC } from '../resolve/ResolveKit';
 
-import ShopifySvg from '../../assets/shopify.svg';
-import SquareSvg from '../../assets/square.svg';
-import CloverSvg from '../../assets/clover.svg';
-import EbaySvg from '../../assets/ebay.svg';
-import FacebookSvg from '../../assets/facebook.svg';
-import AmazonSvg from '../../assets/amazon.svg';
+import PlatformLogo from '../PlatformLogo';
+import { getPlatform } from '../../config/platforms';
 
 export { swatchFor };
 
 export type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 export type LobbyState = 'done' | 'active' | 'locked';
-
-const PLATFORM_SVG: Record<string, React.ComponentType<any>> = {
-  shopify: ShopifySvg,
-  square: SquareSvg,
-  clover: CloverSvg,
-  ebay: EbaySvg,
-  facebook: FacebookSvg,
-  amazon: AmazonSvg,
-};
-function platformSvg(name: string): React.ComponentType<any> | null {
-  const n = (name || '').toLowerCase();
-  const hit = Object.keys(PLATFORM_SVG).find((k) => n.includes(k));
-  return hit ? PLATFORM_SVG[hit] : null;
-}
 
 // ─── LobbyHeader — back circle · centered title · right slot ────────────────
 export function LobbyHeader({
@@ -635,14 +617,11 @@ export function InventoryRow({
         )}
         {!!(item.platforms && item.platforms.length) && (
           <View style={lk.platRow}>
-            {item.platforms.slice(0, 4).map((p, i) => {
-              const Svgc = platformSvg(p);
-              return (
-                <View key={`${p}-${i}`} style={lk.platBadge}>
-                  {Svgc ? <Svgc width={12} height={12} /> : <Text style={lk.platLetter}>{p.charAt(0).toUpperCase()}</Text>}
-                </View>
-              );
-            })}
+            {item.platforms.slice(0, 4).map((p, i) => (
+              <View key={`${p}-${i}`} style={lk.platBadge}>
+                {getPlatform(p) ? <PlatformLogo type={p} size={12} /> : <Text style={lk.platLetter}>{p.charAt(0).toUpperCase()}</Text>}
+              </View>
+            ))}
           </View>
         )}
       </View>

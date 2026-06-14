@@ -3,22 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-nativ
 import VariantInventoryRow from './VariantInventoryRow';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-// Platform logo imports
-import SquareSvg from '../assets/square.svg';
-import ShopifySvg from '../assets/shopify.svg';
-import CloverSvg from '../assets/clover.svg';
-import AmazonSvg from '../assets/amazon.svg';
-import EbaySvg from '../assets/ebay.svg';
-import FacebookSvg from '../assets/facebook.svg';
-
-const platformLogoMap: Record<string, any> = {
-  square: SquareSvg,
-  shopify: ShopifySvg,
-  clover: CloverSvg,
-  amazon: AmazonSvg,
-  ebay: EbaySvg,
-  facebook: FacebookSvg,
-};
+import PlatformLogo from './PlatformLogo';
 
 export interface InventoryItemData {
   quantity: number;
@@ -75,7 +60,6 @@ const AllTabRow: React.FC<{
   externalUpdateQuantity?: boolean;
   externalUpdatePrice?: boolean;
 }> = ({ variantId, locId, locName, platformKey, isGlobal, quantity, price, onUpdateInventory, externalUpdateQuantity, externalUpdatePrice }) => {
-  const Logo = platformLogoMap[platformKey] || null;
   const isShopifyGlobal = platformKey === 'shopify' && !!isGlobal;
   const displayName = locName?.length > 18 ? locName.slice(0, 18) + '…' : locName;
 
@@ -117,7 +101,7 @@ const AllTabRow: React.FC<{
     <View style={styles.allRowCard}>
       {/* Platform Logo + Location Name */}
       <View style={styles.allRowHeader}>
-        {Logo && <Logo width={18} height={18} />}
+        <PlatformLogo type={platformKey} size={18} />
         <Text style={styles.locationName} numberOfLines={1}>{displayName}</Text>
         {isShopifyGlobal && (
           <View style={styles.globalBadge}>

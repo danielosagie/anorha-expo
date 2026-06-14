@@ -6,15 +6,9 @@ import {
   StyleSheet,
   ScrollView,
 } from 'react-native';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import ShadowSurface from './ui/ShadowSurface';
-import ShopifySvg from '../assets/shopify.svg';
-import AmazonSvg from '../assets/amazon.svg';
-import FacebookSvg from '../assets/facebook.svg';
-import EbaySvg from '../assets/ebay.svg';
-import CloverSvg from '../assets/clover.svg';
-import SquareSvg from '../assets/square.svg';
+import PlatformLogo from './PlatformLogo';
 
 interface PlatformFilterChipsProps {
   platforms: Array<{
@@ -26,19 +20,6 @@ interface PlatformFilterChipsProps {
   onSelectPlatform: (platformType: string | null) => void;
   activeColor?: string;
 }
-
-const HIGHLIGHT_ORANGE = '#FF9900';
-
-const getPlatformIcon = (platformType: string) => {
-  const type = platformType.toLowerCase();
-  if (type.includes('shopify')) return ShopifySvg;
-  if (type.includes('square')) return SquareSvg;
-  if (type.includes('clover')) return CloverSvg;
-  if (type.includes('amazon')) return AmazonSvg;
-  if (type.includes('ebay')) return EbaySvg;
-  if (type.includes('facebook')) return FacebookSvg;
-  return null; // Return null for unknown platforms
-};
 
 const PlatformFilterChips: React.FC<PlatformFilterChipsProps> = ({
   platforms,
@@ -119,24 +100,12 @@ const PlatformFilterChips: React.FC<PlatformFilterChipsProps> = ({
                 activeOpacity={0.7}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  {(() => {
-                    const IconComponent = getPlatformIcon(platform.type);
-                    return IconComponent ? (
-                      <IconComponent
-                        width={16}
-                        height={16}
-                        fill={isSelected ? '#FFFFFF' : theme.colors.text}
-                        style={styles.platformIcon}
-                      />
-                    ) : (
-                      <Icon
-                        name="store"
-                        size={16}
-                        color={isSelected ? '#FFFFFF' : theme.colors.text}
-                        style={styles.platformIcon}
-                      />
-                    );
-                  })()}
+                  <PlatformLogo
+                    type={platform.type}
+                    size={16}
+                    color={isSelected ? '#FFFFFF' : theme.colors.text}
+                    style={styles.platformIcon}
+                  />
                   <Text
                     style={[
                       styles.platformFilterChipText,

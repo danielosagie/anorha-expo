@@ -39,16 +39,8 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
     UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-/* ── SVG logos ──────────────────────────────────────────────── */
-import ShopifySvg from '../assets/shopify.svg';
-import EbaySvg from '../assets/ebay.svg';
-import FacebookSvg from '../assets/facebook.svg';
-
-const PLATFORM_LOGOS: Record<string, any> = {
-    shopify: ShopifySvg,
-    ebay: EbaySvg,
-    facebook: FacebookSvg,
-};
+/* ── Platform brand logos ───────────────────────────────────── */
+import PlatformLogo from './PlatformLogo';
 
 const PLATFORM_LABELS: Record<string, string> = {
     shopify: 'Shopify',
@@ -404,7 +396,6 @@ export default function DeliveryShippingSheet({
                             <View style={s.tabRow}>
                                 {shippingCapablePlatforms.map((pk) => {
                                     const isActive = pk.toLowerCase() === selectedTab.toLowerCase();
-                                    const Logo = PLATFORM_LOGOS[pk.toLowerCase()];
                                     return (
                                         <TouchableOpacity
                                             key={pk}
@@ -412,7 +403,7 @@ export default function DeliveryShippingSheet({
                                             activeOpacity={0.75}
                                             style={[s.tab, isActive && s.tabActive]}
                                         >
-                                            {Logo && <Logo width={18} height={18} />}
+                                            <PlatformLogo type={pk} size={18} />
                                             <Text style={[s.tabText, isActive && s.tabTextActive]}>
                                                 {PLATFORM_LABELS[pk.toLowerCase()] || pk}
                                             </Text>

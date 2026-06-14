@@ -33,34 +33,11 @@ import {
 } from '../components/quest/LobbyKit';
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
-import ShopifySvg from '../assets/shopify.svg';
-import SquareSvg from '../assets/square.svg';
-import CloverSvg from '../assets/clover.svg';
-import EbaySvg from '../assets/ebay.svg';
-import FacebookSvg from '../assets/facebook.svg';
-import AmazonSvg from '../assets/amazon.svg';
-import DepopSvg from '../assets/depop.svg';
-import WhatnotSvg from '../assets/whatnot.svg';
+import PlatformLogo from '../components/PlatformLogo';
+import { getPlatform } from '../config/platforms';
 
 type ImportOverviewRouteProp = RouteProp<AppStackParamList, 'ImportOverview'>;
 type ImportOverviewNavProp = StackNavigationProp<AppStackParamList, 'ImportOverview'>;
-
-const platformSvgMap: Record<string, React.ComponentType<any>> = {
-  shopify: ShopifySvg,
-  square: SquareSvg,
-  clover: CloverSvg,
-  ebay: EbaySvg,
-  facebook: FacebookSvg,
-  amazon: AmazonSvg,
-  depop: DepopSvg,
-  whatnot: WhatnotSvg,
-};
-
-const getPlatformLogoComponent = (name: string): React.ComponentType<any> | null => {
-  const n = (name || '').toLowerCase();
-  const match = Object.entries(platformSvgMap).find(([key]) => n.includes(key));
-  return match?.[1] || null;
-};
 
 const getPlatformColor = (name: string): string => {
   const n = (name || '').toLowerCase();
@@ -82,7 +59,6 @@ const ImportOverviewScreen = () => {
 
   const { connectionId, platformName } = route.params as any;
   const platformColor = getPlatformColor(platformName);
-  const PlatformLogo = getPlatformLogoComponent(platformName);
 
   const session = useImportSession({
     connectionId,
@@ -367,8 +343,8 @@ const ImportOverviewScreen = () => {
     <HeaderPill
       label={platformName}
       leading={
-        PlatformLogo ? (
-          <PlatformLogo width={16} height={16} />
+        getPlatform(platformName) ? (
+          <PlatformLogo type={platformName} size={16} />
         ) : (
           <Store size={14} color={platformColor} />
         )

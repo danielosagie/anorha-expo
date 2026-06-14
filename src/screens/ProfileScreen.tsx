@@ -10,12 +10,7 @@ import Card from '../components/Card';
 import Button from '../components/Button';
 import PlaceholderImage from '../components/Placeholder';
 import OrgSwitcher from '../components/OrgSwitcher';
-import ShopifySvg from '../assets/shopify.svg';
-import AmazonSvg from '../assets/amazon.svg';
-import FacebookSvg from '../assets/facebook.svg';
-import EbaySvg from '../assets/ebay.svg';
-import CloverSvg from '../assets/clover.svg';
-import SquareSvg from '../assets/square.svg';
+import PlatformLogo from '../components/PlatformLogo';
 import { useNavigation, useFocusEffect, useRoute, RouteProp, useIsFocused } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -133,18 +128,6 @@ const SQUARE_SCOPES = [
 //   // Convert byte array to hex string
 //   return Array.from(byteArray, (byte: number) => byte.toString(16).padStart(2, '0')).join('');
 // };
-
-const getPlatformIcon = (platformId: PlatformId): React.ComponentType<any> | null => {
-  const iconMap: { [key: string]: React.ComponentType<any> } = {
-    shopify: ShopifySvg,
-    amazon: AmazonSvg,
-    facebook: FacebookSvg,
-    ebay: EbaySvg,
-    clover: CloverSvg,
-    square: SquareSvg,
-  };
-  return iconMap[platformId] || null;
-};
 
 // Connection status types
 const CONNECTION_STATUS = {
@@ -2226,7 +2209,7 @@ const ProfileScreen = () => {
             {/* Header with Icon */}
             <View style={styles.shopifyModalHeader}>
               <View style={styles.shopifyIconContainer}>
-                <ShopifySvg width={40} height={40} />
+                <PlatformLogo type="shopify" size={40} />
               </View>
               <Text style={styles.shopifyModalTitle}>Connect Shopify</Text>
               <TouchableOpacity

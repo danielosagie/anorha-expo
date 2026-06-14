@@ -4,15 +4,7 @@ import {
   StyleSheet,
   Platform,
 } from 'react-native';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import ShopifySvg from '../assets/shopify.svg';
-import AmazonSvg from '../assets/amazon.svg';
-import FacebookSvg from '../assets/facebook.svg';
-import EbaySvg from '../assets/ebay.svg';
-import CloverSvg from '../assets/clover.svg';
-import SquareSvg from '../assets/square.svg';
-import WhatnotSvg from '../assets/whatnot.svg';
-import DepopSvg from '../assets/depop-icon.svg';
+import PlatformLogo from './PlatformLogo';
 
 interface PlatformAvatarProps {
   platformType: string;
@@ -30,27 +22,6 @@ const PlatformAvatar: React.FC<PlatformAvatarProps> = ({
   };
 
   const config = sizeConfig[size];
-  const type = platformType.toLowerCase().trim();
-
-  const platformSvgMap: Record<string, React.FC<any>> = {
-    shopify: ShopifySvg,
-    square: SquareSvg,
-    clover: CloverSvg,
-    amazon: AmazonSvg,
-    ebay: EbaySvg,
-    facebook: FacebookSvg,
-    whatnot: WhatnotSvg,
-    depop: DepopSvg,
-  };
-
-  // Find the SVG component that matches
-  let SVGComponent = null;
-  for (const [key, component] of Object.entries(platformSvgMap)) {
-    if (type.includes(key)) {
-      SVGComponent = component;
-      break;
-    }
-  }
 
   return (
     <View
@@ -63,18 +34,7 @@ const PlatformAvatar: React.FC<PlatformAvatarProps> = ({
         },
       ]}
     >
-      {SVGComponent ? (
-        <SVGComponent
-          width={config.icon}
-          height={config.icon}
-        />
-      ) : (
-        <Icon
-          name="store"
-          size={config.icon}
-          color={'#666'}
-        />
-      )}
+      <PlatformLogo type={platformType} size={config.icon} fallbackIcon="store" />
     </View>
   );
 };

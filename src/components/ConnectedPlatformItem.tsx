@@ -5,12 +5,7 @@ import * as Progress from 'react-native-progress';
 import { useTheme } from '../context/ThemeContext';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { API_BASE_URL } from '../config/env';
-import ShopifySvg from '../assets/shopify.svg';
-import AmazonSvg from '../assets/amazon.svg';
-import FacebookSvg from '../assets/facebook.svg';
-import EbaySvg from '../assets/ebay.svg';
-import CloverSvg from '../assets/clover.svg';
-import SquareSvg from '../assets/square.svg';
+import PlatformLogo from './PlatformLogo';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { ensureSupabaseJwt } from '../lib/supabase';
@@ -64,18 +59,6 @@ const CONNECTION_STATUS = {
 };
 
 // --- Helpers ---
-const getPlatformIcon = (platformId: string): React.ComponentType<any> | null => {
-    const iconMap: { [key: string]: React.ComponentType<any> } = {
-        shopify: ShopifySvg,
-        amazon: AmazonSvg,
-        facebook: FacebookSvg,
-        ebay: EbaySvg,
-        clover: CloverSvg,
-        square: SquareSvg,
-    };
-    return iconMap[platformId] || null;
-};
-
 const getStatusDisplay = (status: string): { label: string, color: string, icon: string } => {
     switch (status?.toLowerCase()) {
         case CONNECTION_STATUS.ACTIVE:
@@ -178,7 +161,6 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
         displayShopName = connection.DisplayName.replace('.myshopify.com', '');
     }
 
-    const PlatformIconComponent = getPlatformIcon(platformConfig.key);
     const progressStatus = (progress?.status || '').toLowerCase();
     const effectiveStatus = progressStatus && CONNECTION_STATUS[progressStatus.toUpperCase() as keyof typeof CONNECTION_STATUS]
         ? progressStatus
@@ -254,11 +236,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
             {/* Left column: icon + name + status/timestamp */}
             <View style={styles.integrationLeft}>
                 <View style={styles.platformIconContainer}>
-                    {PlatformIconComponent ? (
-                        <PlatformIconComponent width={32} height={32} />
-                    ) : (
-                        <Icon name="store" size={32} color="#555" />
-                    )}
+                    <PlatformLogo type={platformConfig.key} size={32} fallbackIcon="store" />
                 </View>
 
                 <View style={styles.integrationMain}>

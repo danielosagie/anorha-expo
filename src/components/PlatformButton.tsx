@@ -1,14 +1,7 @@
 import React from 'react';
 import { TouchableOpacity, StyleSheet, Text, View, ActivityIndicator } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import ShopifySvg from '../assets/shopify.svg';
-import AmazonSvg from '../assets/amazon.svg';
-import FacebookSvg from '../assets/facebook.svg';
-import EbaySvg from '../assets/ebay.svg';
-import CloverSvg from '../assets/clover.svg';
-import SquareSvg from '../assets/square.svg';
-import WhatnotSvg from '../assets/whatnot.svg';
-import DepopSvg from '../assets/depop-icon.svg';
+import PlatformLogo from './PlatformLogo';
 
 type Props = {
     platform: string;
@@ -21,19 +14,6 @@ type Props = {
 };
 
 const PlatformButton = ({ platform, onPress, isSelected, isConnected = false, loading = false, success = false, activeCount = 0 }: Props) => {
-    const platformSvgMap: { [key: string]: React.ComponentType<any> } = {
-        shopify: ShopifySvg,
-        amazon: AmazonSvg,
-        facebook: FacebookSvg,
-        ebay: EbaySvg,
-        clover: CloverSvg,
-        square: SquareSvg,
-        whatnot: WhatnotSvg,
-        depop: DepopSvg,
-    };
-
-    const PlatformSvg = platformSvgMap[platform];
-
     const content = (
         <TouchableOpacity
             style={[styles.platformButton, isSelected && styles.platformButtonSelected]}
@@ -44,10 +24,9 @@ const PlatformButton = ({ platform, onPress, isSelected, isConnected = false, lo
             <View style={{ alignItems: 'center', justifyContent: 'center' }}>
                 {loading ? (
                     <ActivityIndicator color={'#6B7280'} />
-                ) : PlatformSvg ? (
-                    <PlatformSvg width={34} height={34} style={styles.platformIcon} />
-                ) : null
-                }
+                ) : (
+                    <PlatformLogo type={platform} size={34} style={styles.platformIcon} fallbackIcon="store" />
+                )}
                 <Text style={styles.platformLabel}>
                     {platform.charAt(0).toUpperCase() + platform.slice(1)}
                 </Text>
