@@ -842,6 +842,10 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
           direction: item.direction || 'platform_to_anorha',
           productShape: item.productShape || (parentId ? 'variant_family' : 'simple'),
           parentId,
+          // VALUE-conflict resolution: true = the user chose "use theirs" (adopt
+          // the canonical's field over the incoming platform value). Carried so the
+          // decision is durable in the commit record; undefined keeps the default.
+          valueOverride: item.originalData?.valueOverride === true ? true : undefined,
           sourceHash: item.sourceHash,
           suggestedCanonicalProduct:
             item.direction === 'anorha_to_platform'
