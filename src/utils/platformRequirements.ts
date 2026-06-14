@@ -1,13 +1,15 @@
+import { listPlatforms, getPlatform } from '../config/platforms';
+
 export type RequirementMap = Record<string, string[]>;
 
-const DEFAULT_REQUIREMENTS: RequirementMap = {
-  shopify: ['title', 'price', 'description', 'images', 'category'],
-  amazon: ['title', 'price', 'description', 'images'],
-  ebay: ['title', 'price', 'description', 'images', 'category'],
-  clover: ['title', 'price'],
-  square: ['title', 'price'],
-  facebook: ['title', 'price', 'description', 'images'],
-};
+// Per-platform required fields come from the central registry's capabilities.
+const DEFAULT_REQUIREMENTS: RequirementMap = Object.fromEntries(
+  listPlatforms().map((d) => [d.key, d.capabilities.requiredFields]),
+);
+
+/** Whether a platform requires a category (has a browsable taxonomy). */
+const needsCategory = (platformKey?: string): boolean =>
+  !!getPlatform(platformKey)?.capabilities.supportsTaxonomy;
 
 export function getPlatformRequirements(overrides?: RequirementMap): RequirementMap {
   if (!overrides) return DEFAULT_REQUIREMENTS;
@@ -54,10 +56,10 @@ export function isPlatformReady(platformData: any, platformKey: string, ignoredP
   const hasTitle = platformData.title?.toString().trim().length > 0;
   const hasSku = platformData.sku?.toString().trim().length > 0;
   const hasPrice = hasPlatformPrice(platformData);
-  const needsCategory = ['shopify', 'ebay'].includes(platformKey?.toLowerCase?.() || '');
+  const categoryRequired = needsCategory(platformKey);
   const hasCategory = !!(platformData.productCategoryId || platformData.categoryId);
 
-  return hasTitle && hasSku && hasPrice && (!needsCategory || hasCategory);
+  return hasTitle && hasSku && hasPrice && (!categoryRequired || hasCategory);
 }
 
 /**
@@ -78,7 +80,7 @@ export function getMissingPlatformFields(platformData: any, platformKey: string)
     missing.push('price (either flat or all variants)');
   }
 
-  if (['shopify', 'ebay'].includes(platformKey?.toLowerCase?.() || '') && !platformData.productCategoryId && !platformData.categoryId) {
+  if (needsCategory(platformKey) && !platformData.productCategoryId && !platformData.categoryId) {
     missing.push('category');
   }
 

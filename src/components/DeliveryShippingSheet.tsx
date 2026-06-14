@@ -41,15 +41,12 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 /* ── Platform brand logos ───────────────────────────────────── */
 import PlatformLogo from './PlatformLogo';
+import { listPlatforms, getPlatform } from '../config/platforms';
 
-const PLATFORM_LABELS: Record<string, string> = {
-    shopify: 'Shopify',
-    ebay: 'eBay',
-    facebook: 'Facebook',
-};
-
-/* Platforms that support shipping / delivery settings */
-const SHIPPING_PLATFORMS = new Set(['ebay', 'facebook', 'shopify']);
+/* Platforms that support shipping / delivery settings (from the registry). */
+const SHIPPING_PLATFORMS = new Set<string>(
+    listPlatforms().filter((d) => d.capabilities.shipping).map((d) => d.key),
+);
 
 const STORAGE_KEY = '@anorha/shipping_prefs';
 
@@ -405,7 +402,7 @@ export default function DeliveryShippingSheet({
                                         >
                                             <PlatformLogo type={pk} size={18} />
                                             <Text style={[s.tabText, isActive && s.tabTextActive]}>
-                                                {PLATFORM_LABELS[pk.toLowerCase()] || pk}
+                                                {getPlatform(pk)?.label || pk}
                                             </Text>
                                         </TouchableOpacity>
                                     );
