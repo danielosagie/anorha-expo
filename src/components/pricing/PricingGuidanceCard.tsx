@@ -141,7 +141,6 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
       <View style={styles.priceCard}>
         <Text style={styles.kicker}>CURRENT VALUE</Text>
         <Text style={styles.bigValue}>{rangeText(low, high)}</Text>
-        {metaLine ? <Text style={styles.metaLine}>{metaLine}</Text> : null}
 
         <View style={styles.metricRow}>
           <View style={styles.metricCol}>
@@ -149,7 +148,7 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
             <Text style={styles.metricValue}>{money(average)}</Text>
           </View>
           <View style={styles.metricCol}>
-            <Text style={styles.kicker}>SOLD MED</Text>
+            <Text style={styles.kicker}>SOLD MEDIAN</Text>
             <Text style={styles.metricValue}>{money(median)}</Text>
           </View>
           {live ? (
@@ -233,9 +232,9 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
       {samples.length > 0 && (
         <>
           {headers === 'screen' ? (
-            <Text style={styles.sectionHeader}>Recent comps</Text>
+            <Text style={styles.sectionHeader}>Recent comps (${sampleCount})</Text>
           ) : (
-            <Text style={styles.compsKicker}>RECENT COMPS</Text>
+            <Text style={styles.compsKicker}>RECENT COMPS (${sampleCount})</Text>
           )}
           <View style={styles.compsCard}>
             {samples.map((c, i) => (
@@ -280,57 +279,66 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
   );
 };
 
+// Inter (loaded app-wide) → chat-consistent type. Stripped to essentials: small labels,
+// a modest value (no 52px hero), compact paddings.
+const FONT = {
+  regular: 'Inter_400Regular',
+  medium: 'Inter_500Medium',
+  semibold: 'Inter_600SemiBold',
+  bold: 'Inter_700Bold',
+};
+
 const styles = StyleSheet.create({
   sectionHeader: {
     color: COLORS.text,
-    fontSize: 22,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-    marginTop: 26,
-    marginBottom: 12,
-    marginHorizontal: 20,
+    fontSize: 15,
+    fontFamily: FONT.bold,
+    letterSpacing: -0.2,
+    marginTop: 18,
+    marginBottom: 8,
+    marginHorizontal: 4,
   },
 
-  priceCard: { marginHorizontal: 12, padding: 22, borderRadius: 22, backgroundColor: COLORS.card },
-  kicker: { color: COLORS.label, fontSize: 12.5, fontWeight: '700', letterSpacing: 1 },
-  bigValue: { color: COLORS.text, fontSize: 52, fontWeight: '800', letterSpacing: -1.5, marginTop: 8 },
-  metaLine: { color: COLORS.label, fontSize: 13, marginTop: 6 },
+  priceCard: { marginHorizontal: 0, padding: 16, borderRadius: 16, backgroundColor: COLORS.card },
+  kicker: { color: COLORS.label, fontSize: 10.5, fontFamily: FONT.semibold, letterSpacing: 0.8 },
+  bigValue: { color: COLORS.text, fontSize: 26, fontFamily: FONT.bold, letterSpacing: -0.5, marginTop: 4 },
+  metaLine: { color: COLORS.label, fontSize: 11.5, fontFamily: FONT.regular, marginTop: 4 },
 
-  metricRow: { flexDirection: 'row', marginTop: 18 },
+  metricRow: { flexDirection: 'row', marginTop: 14 },
   metricCol: { flex: 1 },
-  metricValue: { color: COLORS.text, fontSize: 22, fontWeight: '700', marginTop: 6 },
+  metricValue: { color: COLORS.text, fontSize: 16, fontFamily: FONT.semibold, marginTop: 4 },
   liveKicker: { color: GREEN },
-  liveMeta: { color: COLORS.label, fontSize: 12.5, marginTop: 8 },
+  liveMeta: { color: COLORS.label, fontSize: 11, fontFamily: FONT.regular, marginTop: 6 },
 
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: COLORS.hairline, marginVertical: 20 },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: COLORS.hairline, marginVertical: 14 },
 
   suggestedRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  suggestedLabel: { color: COLORS.label, fontSize: 16 },
-  suggestedValue: { color: COLORS.text, fontSize: 18, fontWeight: '700' },
+  suggestedLabel: { color: COLORS.label, fontSize: 14, fontFamily: FONT.regular },
+  suggestedValue: { color: COLORS.text, fontSize: 14, fontFamily: FONT.semibold },
 
   sliderTrack: {
-    height: 8,
-    borderRadius: 4,
+    height: 12,
+    borderRadius: 3,
     backgroundColor: COLORS.track,
-    marginTop: 16,
+    marginTop: 12,
     justifyContent: 'center',
   },
-  sliderFill: { position: 'absolute', height: 8, borderRadius: 4, backgroundColor: GREEN },
+  sliderFill: { position: 'absolute', height: 12, borderRadius: 3, backgroundColor: GREEN },
   sliderTick: {
     position: 'absolute',
     width: 4,
-    height: 4,
-    borderRadius: 2,
+    height: 8,
+    borderRadius: 9,
     backgroundColor: COLORS.card,
     marginLeft: -2,
   },
-  sliderLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
-  sliderLabel: { color: COLORS.label, fontSize: 15 },
+  sliderLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
+  sliderLabel: { color: COLORS.label, fontSize: 12, fontFamily: FONT.regular },
 
-  applyRow: { flexDirection: 'row', gap: 8, marginTop: 18 },
+  applyRow: { flexDirection: 'row', gap: 8, marginTop: 14 },
   applyChip: {
     flex: 1,
-    paddingVertical: 10,
+    paddingVertical: 9,
     paddingHorizontal: 8,
     borderRadius: 12,
     borderWidth: 1,
@@ -339,27 +347,27 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.card,
   },
   applyChipHighlight: { borderColor: GREEN, backgroundColor: 'rgba(147,200,34,0.12)' },
-  applyLabel: { fontSize: 11, color: COLORS.label, fontWeight: '600' },
+  applyLabel: { fontSize: 10.5, color: COLORS.label, fontFamily: FONT.semibold },
   applyLabelHighlight: { color: '#3F6212' },
-  applyPrice: { fontSize: 15, fontWeight: '700', color: COLORS.text, marginTop: 2 },
-  applyDays: { fontSize: 10, color: COLORS.label, marginTop: 2 },
+  applyPrice: { fontSize: 13.5, fontFamily: FONT.bold, color: COLORS.text, marginTop: 2 },
+  applyDays: { fontSize: 9.5, color: COLORS.label, fontFamily: FONT.regular, marginTop: 2 },
 
   compsKicker: {
     color: COLORS.label,
-    fontSize: 12.5,
-    fontWeight: '700',
-    letterSpacing: 1,
-    marginTop: 20,
-    marginBottom: 10,
-    marginHorizontal: 20,
+    fontSize: 11,
+    fontFamily: FONT.semibold,
+    letterSpacing: 0.8,
+    marginTop: 16,
+    marginBottom: 8,
+    marginHorizontal: 4,
   },
-  compsCard: { marginHorizontal: 12, borderRadius: 22, backgroundColor: COLORS.card, overflow: 'hidden' },
-  compRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14 },
+  compsCard: { marginHorizontal: 0, borderRadius: 16, backgroundColor: COLORS.card, overflow: 'hidden' },
+  compRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 12 },
   compRowDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: COLORS.hairline },
-  compThumb: { width: 52, height: 52, borderRadius: 12, backgroundColor: '#EFEFF2' },
+  compThumb: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#EFEFF2' },
   compThumbEmpty: { alignItems: 'center', justifyContent: 'center' },
-  compMid: { flex: 1, marginLeft: 14, marginRight: 10 },
-  compTitle: { color: COLORS.text, fontSize: 16, fontWeight: '600' },
-  compSub: { color: COLORS.label, fontSize: 13, marginTop: 4 },
-  compPrice: { color: COLORS.text, fontSize: 17, fontWeight: '700', marginRight: 4 },
+  compMid: { flex: 1, marginLeft: 12, marginRight: 10 },
+  compTitle: { color: COLORS.text, fontSize: 13.5, fontFamily: FONT.semibold },
+  compSub: { color: COLORS.label, fontSize: 11.5, fontFamily: FONT.regular, marginTop: 3 },
+  compPrice: { color: COLORS.text, fontSize: 14, fontFamily: FONT.bold, marginRight: 4 },
 });

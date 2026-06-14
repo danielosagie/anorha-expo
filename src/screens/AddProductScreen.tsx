@@ -898,7 +898,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         if (id) setActiveItemId(id);
         handleImageUpload();
       }}
-      sellLabel={previewItemId && itemStageById[previewItemId] === 'generated' ? 'Review listing' : undefined}
+      sellLabel="Confirm item"
       onSell={() => {
         const id = previewItemId;
         setPreviewItemId(null);

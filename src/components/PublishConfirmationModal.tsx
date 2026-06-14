@@ -26,6 +26,8 @@ interface PublishConfirmationModalProps {
         price?: number | string;
     };
     isPublishing?: boolean;
+    /** When provided, shows a "Save to inventory only" option (no platform publish). */
+    onSaveToInventory?: () => void;
 }
 
 export default function PublishConfirmationModal({
@@ -37,7 +39,8 @@ export default function PublishConfirmationModal({
     selectedConnectionIds,
     setSelectedConnectionIds,
     productSummary,
-    isPublishing = false
+    isPublishing = false,
+    onSaveToInventory
 }: PublishConfirmationModalProps) {
 
     // Track which platforms are selected for publishing
@@ -275,6 +278,17 @@ export default function PublishConfirmationModal({
                             )}
                         </TouchableOpacity>
                     </View>
+
+                    {onSaveToInventory ? (
+                        <TouchableOpacity
+                            onPress={onSaveToInventory}
+                            disabled={isPublishing}
+                            style={styles.saveOnlyButton}
+                        >
+                            <Icon name="content-save-outline" size={16} color="#6B7280" />
+                            <Text style={styles.saveOnlyText}>Just save to inventory</Text>
+                        </TouchableOpacity>
+                    ) : null}
                 </View>
             </View>
         </Modal>
@@ -437,6 +451,19 @@ const styles = StyleSheet.create({
         fontSize: 15,
         fontWeight: '600',
         color: '#4B5563'
+    },
+    saveOnlyButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        paddingBottom: 20,
+        paddingTop: 2,
+    },
+    saveOnlyText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#6B7280',
     },
     publishButton: {
         flex: 1,

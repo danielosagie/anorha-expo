@@ -123,15 +123,13 @@ export const AddDetailsSheet: React.FC<AddDetailsSheetProps> = ({
             <Text style={styles.headline}>What are you selling?</Text>
             {photoUri ? <Image source={{ uri: photoUri }} style={styles.miniThumb} /> : null}
           </View>
-          <Text style={styles.reason}>
-            {reason || "Your photo is saved. We couldn't ID the item from it, so a quick detail or a shot of the tag helps."}
-          </Text>
+          
 
           <TextInput
             style={styles.input}
             value={detail}
             onChangeText={setDetail}
-            placeholder="Add an optional description to improve AI accuracy."
+            placeholder="Add an optional description to help with accuracy."
             placeholderTextColor={COLORS.placeholder}
             multiline
             autoFocus
@@ -276,8 +274,9 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   input: {
-    fontSize: 22,
+    fontSize: 18,
     lineHeight: 30,
+    fontWeight: 500,
     color: COLORS.text,
     minHeight: 96,
     textAlignVertical: 'top',

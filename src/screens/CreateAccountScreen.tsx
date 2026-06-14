@@ -37,19 +37,20 @@ import Animated, {
   SlideOutLeft,
   FadeInDown,
 } from 'react-native-reanimated';
+import ConnectAccountsStep from '../components/onboarding/ConnectAccountsStep';
 
 const { width } = Dimensions.get('window');
 const API_BASE = API_BASE_URL;
 
-// --- THEME (matches OnboardingSlides.tsx) ---
+// --- THEME (matches the app's design language — Profile / Connections) ---
 const ONBOARDING = {
-  bg: '#FEF4DD',           // Cream background
-  green: '#5c9c00',        // Active buttons, dots, cards
-  title: '#313131ff',      // Primary text
-  subtitle: '#666',        // Secondary text
-  dotInactive: '#E5E5E5',  // Inactive pagination dots
-  cardBg: 'rgba(255,255,255,0.9)',
-  border: 'rgba(0,0,0,0.15)',
+  bg: '#F6F7F4',           // App light background
+  green: '#93C822',        // Primary green (active buttons, dots, selected cards)
+  title: '#18181B',        // Primary text (ink)
+  subtitle: '#71717A',     // Secondary text
+  dotInactive: '#E4E4E7',  // Inactive pagination dots
+  cardBg: '#FFFFFF',       // White surfaces
+  border: '#ECEBE6',       // Hairline borders
 };
 
 // CreateAccountScreen can live in AuthStack (signup flow) or AppStack (resume incomplete onboarding).
@@ -68,7 +69,8 @@ type Step =
   | 'ROLE'
   | 'CONTACT'
   | 'TEAM'
-  | 'FINISH';
+  | 'FINISH'
+  | 'CONNECT';
 
 interface FormData {
   businessName: string;
@@ -750,6 +752,8 @@ export default function CreateAccountScreen() {
   // State
   const [currentStep, setCurrentStep] = useState<Step>((route.params?.initialStep as Step) || 'WELCOME');
   const [loading, setLoading] = useState(false);
+  // Org created at FINISH — handed to the CONNECT step so connections link to it.
+  const [createdOrgId, setCreatedOrgId] = useState<string | null>(null);
   const [isLoadingAddress, setIsLoadingAddress] = useState(false);
   const [isRequestingLoc, setIsRequestingLoc] = useState(false);
   const [isRequestingNotif, setIsRequestingNotif] = useState(false);
@@ -1194,12 +1198,11 @@ export default function CreateAccountScreen() {
 
       capture(AnalyticsEvents.ONBOARDING_COMPLETED, { create_organization: !!createOrganization });
 
-      // After onboarding we go to main app. CreateAccountScreen can be in AuthStack or AppStack;
-      // TabNavigator lives in AppStack — cast so reset() is valid when we're in App stack.
-      (navigation as StackNavigationProp<AppStackParamList, 'CreateAccountScreen'>).reset({
-        index: 0,
-        routes: [{ name: 'TabNavigator' }],
-      });
+      // Onboarding data is saved and the org exists. Hand off to the (skippable)
+      // CONNECT step so the user can hook up their stores — connecting there kicks
+      // off a background inventory pull + draft mappings via the new org.
+      setCreatedOrgId(createdOrgId);
+      setCurrentStep('CONNECT');
 
     } catch (error: any) {
       Alert.alert('Error', 'Setup failed. Please try again.');
@@ -1208,10 +1211,18 @@ export default function CreateAccountScreen() {
     }
   }, [clerkUser, formData, createOrganization, refreshOrgs, navigation]);
 
+  // Leave onboarding for the main app (from the CONNECT step: "Continue" or skip).
+  const finishToApp = useCallback(() => {
+    (navigation as StackNavigationProp<AppStackParamList, 'CreateAccountScreen'>).reset({
+      index: 0,
+      routes: [{ name: 'TabNavigator' }],
+    });
+  }, [navigation]);
+
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      {currentStep !== 'WELCOME' && (
+      {currentStep !== 'WELCOME' && currentStep !== 'CONNECT' && (
         <View style={styles.headerRow}>
           <TouchableOpacity onPress={() => {
             if (currentStep === 'BUSINESS_NAME') goToStep('WELCOME');
@@ -1336,6 +1347,10 @@ export default function CreateAccountScreen() {
               onFinish={handleFinish}
             />
           )}
+
+          {currentStep === 'CONNECT' && (
+            <ConnectAccountsStep orgId={createdOrgId} onDone={finishToApp} />
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -1345,7 +1360,7 @@ export default function CreateAccountScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FEF4DD',
+    backgroundColor: ONBOARDING.bg,
   },
   headerRow: {
     flexDirection: 'row',
@@ -1364,9 +1379,7 @@ const styles = StyleSheet.create({
     width: 24,
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#FFF",
-    borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.3)"
+    backgroundColor: ONBOARDING.dotInactive,
   },
   stepDotActive: {
     backgroundColor: ONBOARDING.green,

@@ -15,6 +15,7 @@ import { UnicodeSpinner } from './UnicodeSpinner';
 import { getShelfProgressPresentation } from './utils';
 import { MatchResponse, JobResponse, QuickMatchSelection, ItemLoadingState, ShelfProgressState, UnicodeSpinnerDefinition } from './types';
 import type { CartTreeNode } from './hooks/useBulkItems';
+import { buildGenerateDetailsLaunch } from '../../features/cart/flowPayloads';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const MAX_BATCH_ITEMS = 100;
@@ -682,20 +683,13 @@ export const BulkItemsSheet: React.FC<{
               // headline's promise); the library path is a small link below.
               return (
                 <View style={styles.emptyState}>
-                  <TouchableOpacity style={styles.emptyStateCard} onPress={onClose} activeOpacity={0.85}>
-                    <View style={styles.emptyStateIconCircle}>
-                      <Icon name="camera-outline" size={24} color="#18181B" />
-                    </View>
+                  <TouchableOpacity style={styles.emptyStateIconCircle} onPress={onClose} activeOpacity={0.85}>
+                    <Icon name="camera-outline" size={24} color="#18181B" />
                     <Text style={styles.emptyStateTitle}>
                       {cameraMode === 'shelf' ? 'Scan a shelf' : 'Scan your first item'}
                     </Text>
-                    <Text style={styles.emptyStateSub}>
-                      {cameraMode === 'shelf' ? 'One photo, we find every item' : 'Snap a photo and we build the listing'}
-                    </Text>
                   </TouchableOpacity>
-                  <TouchableOpacity onPress={onImageUpload} hitSlop={{ top: 10, bottom: 10, left: 16, right: 16 }}>
-                    <Text style={styles.emptyStateUploadLink}>or upload from your library</Text>
-                  </TouchableOpacity>
+                
                 </View>
               );
             })()
@@ -759,7 +753,7 @@ export const BulkItemsSheet: React.FC<{
                     const statusSubtitle = loadingState?.isLoading
                       ? (loadingState.stage || 'Working…')
                       : loadingState?.error
-                        ? 'Match failed · tap retry'
+                        ? (confirmedMatch ? 'Generation failed · tap retry' : 'Match failed · tap retry')
                         : isGenerated
                           ? 'Details ready · tap to review'
                           : isLocalInventoryMatch
@@ -900,9 +894,29 @@ export const BulkItemsSheet: React.FC<{
                             </TouchableOpacity>
                           ) : <View style={{ flex: 1 }} />}
                           {/* Per-card pills stripped (Shop-style): tap the row to review,
-                              swipe right to generate. Error recovery keeps its pill. */}
-                          {loadingState?.error ? (
-                            <TouchableOpacity style={styles.cartReviewPill} onPress={(e) => { e.stopPropagation?.(); onRetryItemScan?.(item.id); }}>
+                              swipe right to generate. Generated and error rows keep one pill each. */}
+                          {isGenerated ? (
+                            <TouchableOpacity
+                              style={[styles.cartReviewPill, styles.cartReviewPillBrand]}
+                              onPress={(e) => {
+                                e.stopPropagation?.();
+                                const launch = buildGenerateDetailsLaunch(item.id);
+                                if (launch) (navigation as any).navigate('GenerateDetailsScreen', launch);
+                              }}
+                            >
+                              <Text style={styles.cartReviewPillText}>Review listing</Text>
+                            </TouchableOpacity>
+                          ) : loadingState?.error ? (
+                            <TouchableOpacity
+                              style={styles.cartReviewPill}
+                              onPress={(e) => {
+                                e.stopPropagation?.();
+                                // Match already confirmed → the failure was generation; re-run
+                                // generation directly with that match. Only matchless items re-scan.
+                                if (confirmedMatch) handleAnalyzeAndNavigate([item], { keepSheetOpen: true });
+                                else onRetryItemScan?.(item.id);
+                              }}
+                            >
                               <Text style={styles.cartReviewPillText}>Retry</Text>
                             </TouchableOpacity>
                           ) : null}
@@ -1140,6 +1154,7 @@ const styles = StyleSheet.create({
   qtyStepper: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: '#F1F1EE', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 7 },
   qtyText: { fontSize: 15, fontWeight: '700', color: '#18181B', minWidth: 16, textAlign: 'center' },
   cartReviewPill: { backgroundColor: '#18181B', borderRadius: 999, paddingHorizontal: 16, paddingVertical: 8 },
+  cartReviewPillBrand: { backgroundColor: '#93C822' },
   cartReviewPillText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
   cartAddDetailsPill: { backgroundColor: '#93C822' },
   saveForLaterText: { fontSize: 13, fontWeight: '600', color: '#71717A', textDecorationLine: 'underline' },
@@ -1200,11 +1215,13 @@ const styles = StyleSheet.create({
   usageLimitSecondary: { marginTop: 10, paddingVertical: 6, paddingHorizontal: 12 },
   usageLimitSecondaryText: { fontSize: 14, fontWeight: '600', color: '#5A8F12' },
   // Empty cart
-  emptyState: { alignItems: 'center', paddingTop: 28 },
-  emptyStateCard: { alignItems: 'center', paddingVertical: 8, paddingHorizontal: 24 },
+  emptyState: { alignItems: 'center', paddingTop: 48 },
   emptyStateIconCircle: {
-    width: 60,
-    height: 60,
+    flexDirection: "row",
+    paddingVertical: 24,
+    paddingHorizontal: 28,
+    gap: 9,
+    alignContent: "center",
     borderRadius: 30,
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
@@ -1215,7 +1232,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     elevation: 2,
   },
-  emptyStateTitle: { fontSize: 17, fontWeight: '700', color: '#18181B', marginTop: 14 },
+  emptyStateTitle: { fontSize: 17, fontWeight: '700', color: '#18181B'},
   emptyStateSub: { fontSize: 13, color: '#71717A', marginTop: 4, textAlign: 'center' },
   emptyStateUploadLink: { fontSize: 14, fontWeight: '600', color: '#5A8F12', marginTop: 14 },
   listToolbar: {

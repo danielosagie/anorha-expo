@@ -129,18 +129,19 @@ const TabBar: React.FC<TabBarProps> = ({
           { paddingBottom: bottomInset, height: rowHeight + bottomInset },
         ]}
       >
+        {/* Search Button
         <TouchableOpacity
           onPress={handleSearch}
           accessibilityRole="button"
           accessibilityLabel="Search"
           activeOpacity={0.9}
         >
-          {/* No drop shadow — a top-black → bottom-grey gradient gives the depth
-              so the button sits in the bar instead of floating above it. */}
+          
           <View style={[styles.sideButton, dark && styles.sideButtonNight]}>
             <Icon name="magnify" size={22} color={dark ? NIGHT_INACTIVE : '#6B7280'} />
           </View>
         </TouchableOpacity>
+        */}
 
         <ShadowSurface
           shadow="lg"
@@ -227,7 +228,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 32,
+    paddingHorizontal: 64,
   },
   sideButton: {
     height: SIDE_BUTTON_SIZE,

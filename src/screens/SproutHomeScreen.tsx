@@ -988,8 +988,9 @@ const CampaignCard: React.FC<{
   const pendingBg = isNight ? '#494B44' : '#A56300';
   // Green pill frame + fill (Figma 4607:2327/2328). The pill floats on the card
   // surface; the ticks are a separate gray strip to its right (no track behind).
-  const goalBorder = isCompleted ? '#6BA03A' : '#3A5A24';
-  const goalFillBg = isCompleted ? '#95BF46' : '#7BB304';
+  // At 0% the pill reads gray (nothing raised yet) rather than a misleading green.
+  const goalBorder = goalPct === 0 ? '#666' : isCompleted ? '#6BA03A' : '#3A5A24';
+  const goalFillBg = goalPct === 0 ? '#999' : isCompleted ? '#95BF46' : '#7BB304';
   const tickColor = isCompleted ? '#D9D9D9' : isNight ? '#585858' : '#D4D4D4';
 
   return (

@@ -3,7 +3,7 @@
 // partners share through — managed here now, not buried in the legacy profile),
 // and apps (Slack/Gmail via Composio, placeholders until it's configured).
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,9 +14,11 @@ import { useOrg } from '../context/OrgContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import PlatformAvatar from '../components/PlatformAvatar';
+import PlatformConnectSheet from '../components/PlatformConnectSheet';
 import CreatePoolSheet from '../components/pools/CreatePoolSheet';
 import { PageHeader } from '../components/ui/PageHeader';
-import { normalizeDisplayName } from '../config/platforms';
+import { getPlatform, normalizeDisplayName } from '../config/platforms';
+import { usePlatformConnect, ConnectablePlatform } from '../hooks/usePlatformConnect';
 
 const statusOf = (raw?: string): { label: string; color: string } => {
   const s = (raw || '').toLowerCase();
@@ -46,6 +48,63 @@ const ConnectionsScreen = () => {
 
   const [pools, setPools] = useState<Pool[]>([]);
   const [managing, setManaging] = useState(false);
+
+  // Wire the global platform-picker overlay so choosing a platform from the
+  // "Connect a platform" sheet shows the consent page, then opens the OAuth
+  // webview. Without this, the sheet opened but `overlay.onStartConnect` was
+  // undefined here (only ProfileScreen registered one), so taps did nothing.
+  const { connect } = usePlatformConnect({ orgId: currentOrg?.id });
+  const [consentPlatform, setConsentPlatform] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+
+  const handleStartConnect = useCallback(
+    (platform: string) => {
+      overlay.hide();
+      if (platform === 'csv') {
+        Alert.alert('Import from CSV', 'CSV import lives under Profile → Import Inventory for now.');
+        return;
+      }
+      const def = getPlatform(platform);
+      if (!def?.connect) {
+        Alert.alert(def?.label ?? 'Platform', `${def?.label ?? 'This platform'} can’t be connected in-app yet.`);
+        return;
+      }
+      // Show the per-platform consent page; the webview opens on "Continue".
+      setConnectError(null);
+      setConsentPlatform(def.key);
+    },
+    [overlay],
+  );
+
+  // "Continue to <Platform>" on the consent page → run the OAuth webview.
+  const handleContinueConnect = useCallback(async () => {
+    if (!consentPlatform) return;
+    setConnecting(true);
+    setConnectError(null);
+    try {
+      const res = await connect(consentPlatform as ConnectablePlatform);
+      if (res.success) {
+        setConsentPlatform(null);
+        refresh?.();
+      } else if (!res.cancelled && res.errorMessage) {
+        setConnectError(res.errorMessage);
+      }
+      // res.cancelled → user backed out of the browser; keep the sheet open.
+    } finally {
+      setConnecting(false);
+    }
+  }, [consentPlatform, connect, refresh]);
+
+  // Hold the latest handler in a ref so the focus effect below can stay stable.
+  const startConnectRef = useRef(handleStartConnect);
+  startConnectRef.current = handleStartConnect;
+  useFocusEffect(
+    useCallback(() => {
+      overlay.enableForScreen((p: string) => startConnectRef.current(p));
+      return () => overlay.disableForScreen();
+    }, [overlay.enableForScreen, overlay.disableForScreen]),
+  );
 
   const disconnectPlatform = (c: any) => {
     Alert.alert('Remove connection', `Disconnect "${shopLabel(c)}"? Your products stay in Anorha.`, [
@@ -194,24 +253,25 @@ const ConnectionsScreen = () => {
         {/* Pools — the location groups that platforms sync and partners share through */}
         <View style={styles.sectionHeaderRow}>
           <Text style={[styles.section, { marginBottom: 0 }]}>Pools</Text>
-          <TouchableOpacity
-            style={styles.newPoolPill}
-            activeOpacity={0.8}
-            onPress={() => setCreatePoolOpen(true)}
-            disabled={!currentOrg?.id}
-          >
-            <Plus size={14} color="#FFFFFF" />
-            <Text style={styles.newPoolPillText}>New pool</Text>
-          </TouchableOpacity>
+
         </View>
         <View style={styles.card}>
           {poolsLoading && pools.length === 0 ? (
             <View style={styles.loadingRow}><ActivityIndicator color="#93C822" /></View>
           ) : pools.length === 0 ? (
-            <Text style={styles.empty}>
-              No pools yet. Pools group your store locations so inventory syncs together —
-              and they're what you share with partners.
-            </Text>
+            <><Text style={styles.empty}>
+                No pools yet. Pools group your store locations so inventory syncs together —
+                and they're what you share with partners.
+              </Text><TouchableOpacity
+                style={[styles.connectBtn, {backgroundColor: "#666"}]}
+                activeOpacity={0.8}
+                onPress={() => setCreatePoolOpen(true)}
+                disabled={!currentOrg?.id}
+              >
+                  <Plus size={14} color="#FFFFFF" />
+                  <Text style={styles.newPoolPillText}>New pool</Text>
+                </TouchableOpacity></>
+            
           ) : (
             pools.map((p, i) => (
               <TouchableOpacity
@@ -233,12 +293,23 @@ const ConnectionsScreen = () => {
                 </View>
                 <ChevronRight size={20} color="#D4D4D8" />
               </TouchableOpacity>
+              
+              
             ))
           )}
+          
+
         </View>
-        <Text style={styles.appsHint}>
-          Tap a pool to manage its locations and partner sharing.
-        </Text>
+        <TouchableOpacity
+            style={[styles.connectBtn, {backgroundColor: "#666",}]}
+            activeOpacity={0.8}
+            onPress={() => setCreatePoolOpen(true)}
+            disabled={!currentOrg?.id}
+          >
+            <Plus size={16} color="#FFFFFF" />
+            <Text style={styles.connectText}>New pool</Text>
+          </TouchableOpacity>
+
 
         {/* Apps (Slack, Gmail, …) */}
         <Text style={[styles.section, { marginTop: 26 }]}>Apps</Text>
@@ -253,14 +324,13 @@ const ConnectionsScreen = () => {
               <TouchableOpacity
                 style={styles.connectPill}
                 activeOpacity={0.8}
-                onPress={() => Alert.alert(a.label, `Connecting ${a.label} runs through Composio — it'll be available here once Composio is set up.`)}
+                onPress={() => Alert.alert(a.label, `Connecting ${a.label} is coming soon!`)}
               >
                 <Text style={styles.connectPillText}>Connect</Text>
               </TouchableOpacity>
             </View>
           ))}
         </View>
-        <Text style={styles.appsHint}>Slack and Gmail connect through Composio — available once it's set up.</Text>
       </ScrollView>
 
       <CreatePoolSheet
@@ -270,6 +340,19 @@ const ConnectionsScreen = () => {
         onCreated={() => {
           setCreatePoolOpen(false);
           void loadPools();
+        }}
+      />
+
+      <PlatformConnectSheet
+        visible={!!consentPlatform}
+        platform={consentPlatform}
+        busy={connecting}
+        error={connectError}
+        onContinue={handleContinueConnect}
+        onCancel={() => {
+          if (connecting) return;
+          setConsentPlatform(null);
+          setConnectError(null);
         }}
       />
     </View>

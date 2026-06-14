@@ -11,10 +11,10 @@ import {
 
 // Static copy mirrors backend src/platform-connections/platform-disclosures.ts.
 // Never used as a gate — the modal opens from local state regardless of network.
-const DISCLOSURES: Record<
-  string,
-  { title: string; subtitle: string; bullets: string[]; apiKey?: boolean }
-> = {
+// Exported so the richer PlatformConnectSheet (OAuth consent page) reuses the
+// same per-platform copy instead of redefining it.
+export type PlatformDisclosure = { title: string; subtitle: string; bullets: string[]; apiKey?: boolean };
+export const DISCLOSURES: Record<string, PlatformDisclosure> = {
   shopify: {
     title: 'Connect Shopify store',
     subtitle: 'Keep your products, inventory and orders in sync with your Shopify store',

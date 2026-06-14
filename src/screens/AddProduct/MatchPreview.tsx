@@ -22,8 +22,10 @@ import {
   Pressable,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { PricingGuidanceCard, PricingGuidanceData } from '../../components/pricing/PricingGuidanceCard';
+import { ProgressiveBlurView } from '../../components/ProgressiveBlurView';
 
 const GREEN = '#93C822';
 const COLORS = {
@@ -95,19 +97,26 @@ export const MatchPreview: React.FC<MatchPreviewProps> = ({
   onAddPhoto,
   onSell,
   onOpenComp,
-  sellLabel = 'Sell this item',
+  sellLabel = 'Confirm item',
 }) => {
   const insets = useSafeAreaInsets();
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [correctionText, setCorrectionText] = useState('');
   const p = data.pricing ?? {};
 
+  const handleWrongItem = () => {
+    // Host wrong-item destination (the Add-details page) wins; the correction sheet is the fallback.
+    if (onWrongItem) { onWrongItem(); return; }
+    setCorrectionText('');
+    setCorrectionOpen(true);
+  };
+
   return (
     <View style={styles.root}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 120 + insets.bottom }}
+        contentContainerStyle={{ paddingBottom: 196 + insets.bottom }}
       >
         {/* Hero */}
         <View style={[styles.heroWrap, { marginTop: insets.top + 8 }]}>
@@ -120,27 +129,16 @@ export const MatchPreview: React.FC<MatchPreviewProps> = ({
           )}
         </View>
 
-        {/* Title / wrong-item / description card */}
+        {/* Title / description card (wrong-item is now a secondary button in the footer) */}
         <View style={styles.infoCard}>
           <Text style={styles.title}>{data.title}</Text>
-          <TouchableOpacity
-            onPress={() => {
-              // When the host provides a wrong-item destination (the Add-details page),
-              // route there; the built-in correction sheet is the standalone fallback.
-              if (onWrongItem) { onWrongItem(); return; }
-              setCorrectionText('');
-              setCorrectionOpen(true);
-            }}
-            activeOpacity={0.6}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Text style={styles.wrongItem}>Wrong item?</Text>
-          </TouchableOpacity>
           {!!data.description && <Text style={styles.description}>{data.description}</Text>}
         </View>
 
         {/* Pricing guidance + recent comps — the one shared pricing overview */}
-        <PricingGuidanceCard pricing={p} onOpenComp={onOpenComp} />
+       <View style={{marginHorizontal: 12 }}>
+            <PricingGuidanceCard pricing={p} onOpenComp={onOpenComp} />
+        </View>
       </ScrollView>
 
       {/* Back button */}
@@ -153,10 +151,22 @@ export const MatchPreview: React.FC<MatchPreviewProps> = ({
         <Icon name="chevron-left" size={26} color="#FFFFFF" />
       </TouchableOpacity>
 
-      {/* Sticky CTA */}
+      {/* Sticky CTA — glass footer (header-style blur, flipped for the bottom) so content
+          scrolls under it; Confirm item primary + Wrong item? secondary. */}
       <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
+        <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+          <ProgressiveBlurView intensity={Platform.OS === 'ios' ? 50 : 28} tint="light" direction="up" />
+          <LinearGradient
+            colors={['rgba(242,242,247,0)', 'rgba(242,242,247,0.9)', '#F2F2F7']}
+            locations={[0, 0.55, 1]}
+            style={StyleSheet.absoluteFill}
+          />
+        </View>
         <TouchableOpacity style={styles.sellBtn} activeOpacity={0.85} onPress={onSell}>
           <Text style={styles.sellLabel}>{sellLabel}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.secondaryBtn} activeOpacity={0.7} onPress={handleWrongItem}>
+          <Text style={styles.secondaryLabel}>Wrong item?</Text>
         </TouchableOpacity>
       </View>
 
@@ -248,11 +258,22 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     paddingHorizontal: 16,
-    paddingTop: 12,
-    backgroundColor: COLORS.bg,
+    paddingTop: 28,
+    backgroundColor: 'transparent',
   },
   sellBtn: { backgroundColor: GREEN, borderRadius: 18, height: 56, alignItems: 'center', justifyContent: 'center' },
-  sellLabel: { color: '#0A0A0B', fontSize: 18, fontWeight: '800', letterSpacing: -0.2 },
+  sellLabel: { color: '#FFFFFF', fontSize: 18, fontWeight: '800', letterSpacing: -0.2 },
+  secondaryBtn: {
+    marginTop: 10,
+    height: 50,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: COLORS.hairline,
+  },
+  secondaryLabel: { color: COLORS.text, fontSize: 16, fontWeight: '700' },
 
   // "Wrong item?" correction sheet
   correctionRoot: { flex: 1, justifyContent: 'flex-end' },

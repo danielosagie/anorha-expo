@@ -28,7 +28,7 @@ const PlatformFilterChips: React.FC<PlatformFilterChipsProps> = ({
   activeColor,
 }) => {
   const theme = useTheme();
-  const activeHighlightColor = activeColor || theme.colors.primary;
+  const activeHighlightColor = "#333"
 
   return (
     <View style={styles.container}>

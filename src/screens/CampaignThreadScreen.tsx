@@ -616,6 +616,7 @@ const s = StyleSheet.create({
   threadTitle: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
   threadMeta: { fontSize: 12, color: '#9CA3AF', fontFamily: 'Inter_500Medium', marginTop: 2 },
   newChatFab: {
+    flex: 1,
     position: 'absolute', right: 16, flexDirection: 'row', alignItems: 'center', gap: 6,
     backgroundColor: '#93C822', borderRadius: 999, paddingHorizontal: 16, paddingVertical: 12,
     shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 8,

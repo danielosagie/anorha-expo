@@ -23,6 +23,8 @@ import {
 } from 'react-native';
 import Animated, { FadeInUp, FadeInDown, SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
+import { ListFilter } from 'lucide-react-native';
+import { ChevronsUpDownIcon } from 'lucide-react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Button from '../components/Button';
 import { observer } from '@legendapp/state/react';
@@ -1488,8 +1490,8 @@ const InventoryOrdersScreen = observer(() => {
       {/* Tappable header title → AppMenu (Inventory / Orders / Scan inventory). */}
       <View style={[styles.titleBar, { top: insets.top + 6 }]} pointerEvents="box-none">
         <TouchableOpacity style={styles.titleTap} onPress={() => setHeaderMenuOpen(true)} activeOpacity={0.7}>
-          <Text style={styles.titleText}>{activeTab === 'inventory' ? 'Inventory' : 'Orders'}</Text>
-          <Icon name="chevron-down" size={22} color="#FFFFFF" />
+          <Text style={styles.titleText}>{activeTab === 'inventory' ? 'Inventory' : 'Orders'}</Text> {/*Page Title*/}
+          <ChevronsUpDownIcon color="#2c2c2c" fontWeight={500}/>
         </TouchableOpacity>
       </View>
 
@@ -1597,9 +1599,10 @@ const InventoryOrdersScreen = observer(() => {
                           <TouchableOpacity
                             onPress={() => setFilterSheetOpen(true)}
                             activeOpacity={0.8}
-                            style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 13, height: 48, borderRadius: 32, borderWidth: 1, borderColor: '#E4E4E7', backgroundColor: '#666' }}
+                            style={{ flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: "center", width: 48, height: 48, borderRadius: 32, borderWidth: 2, borderColor: 'rgba(153, 153, 153, 0.20)', backgroundColor: '#fff' }}
                           >
-                            <Icon name="tune-variant" size={20} color="#fff" />
+                      
+                            <ListFilter  size={24} fontWeight={500} color="#666"/>
                             
                           </TouchableOpacity>
                         </View>
@@ -2386,7 +2389,7 @@ const InventoryOrdersScreen = observer(() => {
 const styles = StyleSheet.create({
   background: {
     flex: 1,
-    backgroundColor: "#93C822", // CHAT_COLORS.brand — align with the chat-style palette
+    backgroundColor: "#F2F2F7", // CHAT_COLORS.brand — align with the chat-style palette
   },
   titleBar: {
     position: 'absolute',
@@ -2398,10 +2401,12 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   titleTap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  titleText: { fontSize: 26, fontWeight: '700', color: '#FFFFFF' },
+  titleText: { fontSize: 26, fontWeight: '700', color: '#2c2c2c' },
   container: {
     borderTopRightRadius: 32,
     borderTopLeftRadius: 32,
+    borderColor: "#99999962",
+    borderWidth: 1,
     flex: 1,
     backgroundColor: '#F4F4F1', // CHAT_COLORS.surface
     padding: 4,
