@@ -152,7 +152,7 @@ export interface ImportDraftSummary {
 
 export type DraftAnswer = 'primary' | 'secondary' | 'skip';
 export type DraftDecision =
-  | { kind: 'answer'; unitId: string; answer: DraftAnswer; at?: string }
+  | { kind: 'answer'; unitId: string; answer: DraftAnswer; parts?: number[]; at?: string }
   | { kind: 'drop'; itemId: string; at?: string };
 
 export interface CompletedDecision {

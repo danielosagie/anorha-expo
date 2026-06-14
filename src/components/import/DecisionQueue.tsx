@@ -5,24 +5,24 @@
 // renderer: show the current card, post the answer, render whatever draft comes
 // back. "Back" reopens a decision server-side; nothing is committed until Done.
 
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Progress from 'react-native-progress';
 
-import { MappingSuggestion, DraftUnit, ImportDraft, DraftAnswer } from '../../types/importSession';
+import { MappingSuggestion, DraftUnit, ImportDraft, DraftAnswer, DraftDecision } from '../../types/importSession';
 import { BRAND_PRIMARY } from '../../design/tokens';
 
 interface DecisionQueueProps {
   theme: any;
   insets: { top: number; bottom: number; left: number; right: number };
-  /** The whole server-built draft: ordered units, history, summary. */
+  /** The server-built plan: ordered units, auto-resolved, summary. */
   draft: ImportDraft;
-  /** Record a decision (server re-materializes and returns the next draft). */
-  onAnswer: (unitId: string, answer: DraftAnswer) => void;
-  /** Remove one row from a proposed combine group. */
-  onDrop: (itemId: string) => void;
-  /** Step back into the most recent decision. */
+  /** The local decision log — drives which unit is current and progress. */
+  log: DraftDecision[];
+  /** Record a choice locally (saved + pushed by the hook). No round-trip. */
+  onRecord: (decision: DraftDecision) => void;
+  /** Step back into a decision (drops it from the log; the unit returns). */
   onReopen: (unitId: string) => void;
   /** Open inventory search to pick a different match ("Show others"). */
   onSearch: (item: MappingSuggestion) => void;
@@ -31,6 +31,8 @@ interface DecisionQueueProps {
   onCommit: () => void;
   searchSheet?: React.ReactNode;
 }
+
+const now = () => new Date().toISOString();
 
 interface CardCopy {
   badge: string;
@@ -89,24 +91,31 @@ function Thumb({ uri, size = 44 }: { uri?: string | null; size?: number }) {
 }
 
 const DecisionQueue: React.FC<DecisionQueueProps> = ({
-  theme, insets, draft, onAnswer, onDrop, onReopen, onSearch, onClose, onCommit, searchSheet,
+  theme, insets, draft, log, onRecord, onReopen, onSearch, onClose, onCommit, searchSheet,
 }) => {
-  const units = draft.units;
-  const done = draft.completed.length;
-  const total = done + units.length;
-  const lastDecision = draft.completed[draft.completed.length - 1];
+  // Walk the fixed plan, filtering out what the log already answered.
+  const answeredIds = useMemo(() => new Set(log.filter((d) => d.kind === 'answer').map((d) => (d as any).unitId)), [log]);
+  const droppedIds = useMemo(() => new Set(log.filter((d) => d.kind === 'drop').map((d) => (d as any).itemId)), [log]);
+  const pending = useMemo(() => draft.units.filter((u) => !answeredIds.has(u.id)), [draft.units, answeredIds]);
+  const lastAnsweredId = useMemo(() => {
+    for (let i = log.length - 1; i >= 0; i--) if (log[i].kind === 'answer') return (log[i] as any).unitId as string;
+    return undefined;
+  }, [log]);
 
-  if (units.length === 0) {
+  const total = draft.units.length;
+  const done = total - pending.length;
+
+  if (pending.length === 0) {
     return (
       <View style={[styles.screen, { backgroundColor: theme.colors.background, paddingTop: insets.top + 24 }]}>
         <View style={styles.allClear}>
           <Icon name="check-circle-outline" size={40} color={theme.colors.primary} />
           <Text style={[styles.allClearTitle, { color: theme.colors.text }]}>All reviewed</Text>
           <Text style={[styles.allClearSub, { color: theme.colors.textSecondary }]}>Every item has a decision. Tap below to finish.</Text>
-          {draft.canUndo && lastDecision ? (
-            <TouchableOpacity onPress={() => onReopen(lastDecision.unitId)} style={styles.undoLink} hitSlop={8}>
+          {lastAnsweredId ? (
+            <TouchableOpacity onPress={() => onReopen(lastAnsweredId)} style={styles.undoLink} hitSlop={8}>
               <Icon name="undo-variant" size={15} color={theme.colors.textSecondary} />
-              <Text style={[styles.undoText, { color: theme.colors.textSecondary }]}>Undo "{lastDecision.choiceLabel}"</Text>
+              <Text style={[styles.undoText, { color: theme.colors.textSecondary }]}>Undo last</Text>
             </TouchableOpacity>
           ) : null}
           <TouchableOpacity onPress={onCommit} style={[styles.primaryBtn, { backgroundColor: theme.colors.primary, marginTop: 20, paddingHorizontal: 28 }]}>
@@ -117,15 +126,17 @@ const DecisionQueue: React.FC<DecisionQueueProps> = ({
     );
   }
 
-  const unit = units[0];
+  const unit = pending[0];
   const copy = copyFor(unit);
+  const answer = (a: DraftAnswer, parts?: number[]) =>
+    onRecord({ kind: 'answer', unitId: unit.id, answer: a, parts, at: now() });
   const onSecondary = () => {
     // "Show others" routes to search instead of resolving the collision here.
     if (unit.variant === 'collision' && unit.kind === 'single') {
       onSearch(unit.item);
       return;
     }
-    onAnswer(unit.id, 'secondary');
+    answer('secondary');
   };
 
   return (
@@ -139,8 +150,8 @@ const DecisionQueue: React.FC<DecisionQueueProps> = ({
           <Text style={[styles.headerTitle, { color: theme.colors.text }]}>Review</Text>
           <Text style={[styles.headerSub, { color: theme.colors.textSecondary }]}>{done} of {total} done</Text>
         </View>
-        {draft.canUndo && lastDecision ? (
-          <TouchableOpacity onPress={() => onReopen(lastDecision.unitId)} style={styles.undoLink} hitSlop={8}>
+        {lastAnsweredId ? (
+          <TouchableOpacity onPress={() => onReopen(lastAnsweredId)} style={styles.undoLink} hitSlop={8}>
             <Icon name="undo-variant" size={16} color={theme.colors.textSecondary} />
             <Text style={[styles.undoText, { color: theme.colors.textSecondary }]}>Back</Text>
           </TouchableOpacity>
@@ -165,12 +176,12 @@ const DecisionQueue: React.FC<DecisionQueueProps> = ({
 
         {unit.kind === 'group' ? (
           <View style={styles.groupGrid}>
-            {unit.members.map((m) => (
+            {unit.members.filter((m) => !droppedIds.has(m.platformProduct.id)).map((m) => (
               <View key={m.platformProduct.id} style={styles.groupChip}>
                 <View>
                   <Thumb uri={m.platformProduct.imageUrl} size={56} />
                   {!m.groupCover && (
-                    <TouchableOpacity style={styles.dropBtn} onPress={() => onDrop(m.platformProduct.id)} hitSlop={6}>
+                    <TouchableOpacity style={styles.dropBtn} onPress={() => onRecord({ kind: 'drop', itemId: m.platformProduct.id, at: now() })} hitSlop={6}>
                       <Icon name="close" size={12} color="#fff" />
                     </TouchableOpacity>
                   )}
@@ -189,31 +200,101 @@ const DecisionQueue: React.FC<DecisionQueueProps> = ({
         )}
       </ScrollView>
 
-      {/* Two buttons + Skip */}
-      <View style={[styles.actions, { paddingBottom: insets.bottom + 14 }]}>
-        {unit.recommended ? (
-          <Text style={[styles.suggestText, { color: theme.colors.primary }]}>
-            ★ Suggested: {unit.recommended === 'primary' ? copy.primary : copy.secondary}
-          </Text>
-        ) : null}
-        <View style={styles.actionRow}>
-          <TouchableOpacity onPress={onSecondary} style={[styles.secondaryBtn]} activeOpacity={0.85}>
-            <Text style={[styles.secondaryBtnText, { color: theme.colors.textSecondary }]}>{copy.secondary}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => onAnswer(unit.id, 'primary')} style={[styles.primaryBtn, { backgroundColor: theme.colors.primary }]} activeOpacity={0.85}>
-            <Icon name="check" size={16} color="#fff" />
-            <Text style={styles.primaryBtnText}>{copy.primary}</Text>
+      {/* Actions — split gets its own collapse/expand control */}
+      {unit.kind === 'single' && unit.variant === 'split' ? (
+        <SplitActions key={unit.id} theme={theme} insets={insets} parts={unit.item.bundleParts || []} onAnswer={answer} />
+      ) : (
+        <View style={[styles.actions, { paddingBottom: insets.bottom + 14 }]}>
+          {unit.recommended ? (
+            <Text style={[styles.suggestText, { color: theme.colors.primary }]}>
+              ★ Suggested: {unit.recommended === 'primary' ? copy.primary : copy.secondary}
+            </Text>
+          ) : null}
+          <View style={styles.actionRow}>
+            <TouchableOpacity onPress={onSecondary} style={[styles.secondaryBtn]} activeOpacity={0.85}>
+              <Text style={[styles.secondaryBtnText, { color: theme.colors.textSecondary }]}>{copy.secondary}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => answer('primary')} style={[styles.primaryBtn, { backgroundColor: theme.colors.primary }]} activeOpacity={0.85}>
+              <Icon name="check" size={16} color="#fff" />
+              <Text style={styles.primaryBtnText}>{copy.primary}</Text>
+            </TouchableOpacity>
+          </View>
+          <TouchableOpacity onPress={() => answer('skip')} style={styles.skipBtn} hitSlop={6}>
+            <Text style={[styles.skipText, { color: theme.colors.textSecondary }]}>Skip for now</Text>
           </TouchableOpacity>
         </View>
-        <TouchableOpacity onPress={() => onAnswer(unit.id, 'skip')} style={styles.skipBtn} hitSlop={6}>
-          <Text style={[styles.skipText, { color: theme.colors.textSecondary }]}>Skip for now</Text>
-        </TouchableOpacity>
-      </View>
+      )}
 
       {searchSheet}
     </View>
   );
 };
+
+// SPLIT — collapsed it's one tap ("Add all parts as new"); the ✕ expands it into
+// per-part include/skip toggles, and the bulk "Add all as new" button stays.
+function SplitActions({
+  theme, insets, parts, onAnswer,
+}: {
+  theme: any;
+  insets: { bottom: number };
+  parts: { sku: string | null; title?: string | null }[];
+  onAnswer: (answer: DraftAnswer, parts?: number[]) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [included, setIncluded] = useState<Set<number>>(() => new Set(parts.map((_, i) => i)));
+  const toggle = (i: number) => setIncluded((prev) => {
+    const next = new Set(prev);
+    next.has(i) ? next.delete(i) : next.add(i);
+    return next;
+  });
+
+  if (!expanded) {
+    return (
+      <View style={[styles.actions, { paddingBottom: insets.bottom + 14 }]}>
+        <Text style={[styles.suggestText, { color: theme.colors.primary }]}>★ Suggested: Add all {parts.length} as new</Text>
+        <View style={styles.actionRow}>
+          <TouchableOpacity onPress={() => onAnswer('secondary')} style={styles.secondaryBtn} activeOpacity={0.85}>
+            <Text style={[styles.secondaryBtnText, { color: theme.colors.textSecondary }]}>Keep as one</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => onAnswer('primary')} style={[styles.primaryBtn, { backgroundColor: theme.colors.primary }]} activeOpacity={0.85}>
+            <Icon name="check" size={16} color="#fff" />
+            <Text style={styles.primaryBtnText}>Add all {parts.length} as new</Text>
+          </TouchableOpacity>
+        </View>
+        <TouchableOpacity onPress={() => setExpanded(true)} style={styles.skipBtn} hitSlop={6}>
+          <Text style={[styles.skipText, { color: theme.colors.textSecondary }]}>Choose which parts…</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  const chosen = parts.map((_, i) => i).filter((i) => included.has(i));
+  return (
+    <View style={[styles.actions, { paddingBottom: insets.bottom + 14 }]}>
+      <ScrollView style={styles.partsPick} showsVerticalScrollIndicator={false}>
+        {parts.map((p, i) => (
+          <TouchableOpacity key={i} onPress={() => toggle(i)} style={styles.partPickRow} activeOpacity={0.7}>
+            <Icon name={included.has(i) ? 'checkbox-marked' : 'checkbox-blank-outline'} size={20} color={included.has(i) ? theme.colors.primary : '#9CA3AF'} />
+            <Text style={[styles.partPickText, { color: theme.colors.text }]} numberOfLines={1}>{p.title || p.sku || `Part ${i + 1}`}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+      <View style={styles.actionRow}>
+        <TouchableOpacity onPress={() => onAnswer('primary')} style={styles.secondaryBtn} activeOpacity={0.85}>
+          <Text style={[styles.secondaryBtnText, { color: theme.colors.textSecondary }]}>Add all as new</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => (chosen.length === 0 ? onAnswer('skip') : onAnswer('primary', chosen))}
+          style={[styles.primaryBtn, { backgroundColor: theme.colors.primary }]}
+          activeOpacity={0.85}
+        >
+          <Icon name="check" size={16} color="#fff" />
+          <Text style={styles.primaryBtnText}>{chosen.length === 0 ? 'Skip all' : `Add ${chosen.length}`}</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
 
 function variantLabel(s: MappingSuggestion): string {
   const t = s.platformProduct.title;
@@ -291,6 +372,9 @@ const styles = StyleSheet.create({
   suggestText: { fontSize: 12, textAlign: 'center', marginBottom: 8, fontFamily: 'PlusJakartaSans_600SemiBold' },
   undoLink: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, paddingVertical: 4 },
   undoText: { fontSize: 13, fontFamily: 'PlusJakartaSans_600SemiBold' },
+  partsPick: { maxHeight: 180, marginBottom: 10 },
+  partPickRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9 },
+  partPickText: { fontSize: 15, flex: 1, fontFamily: 'PlusJakartaSans_500Medium' },
 
   groupGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, marginTop: 22 },
   groupChip: { width: 72, alignItems: 'center', gap: 6 },

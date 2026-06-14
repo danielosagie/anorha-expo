@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
@@ -12,7 +12,7 @@ import {
   ConnectionLocation,
   ImportSessionCounts,
   ImportDraft,
-  DraftAnswer,
+  DraftDecision,
 } from '../types/importSession';
 
 const SSSYNC_API_BASE_URL = (
@@ -38,10 +38,9 @@ export interface UseImportSessionResult {
   suggestions: MappingSuggestion[] | null;
   setSuggestions: React.Dispatch<React.SetStateAction<MappingSuggestion[] | null>>;
   importDraft: ImportDraft | null;
-  answerDecision: (unitId: string, answer: DraftAnswer) => Promise<void>;
-  dropFromGroup: (itemId: string) => Promise<void>;
-  reopenDecision: (unitId: string) => Promise<void>;
-  undoDecision: () => Promise<void>;
+  draftLog: DraftDecision[];
+  recordDecision: (decision: DraftDecision) => void;
+  reopenDecision: (unitId: string) => void;
   loading: boolean;
   error: string | null;
   hasLoadedDraft: boolean;
@@ -119,6 +118,9 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
   // ordered, with per-unit recommendations). An enhancement layered over the
   // local pipeline — null until fetched / if the endpoint is unavailable.
   const [importDraft, setImportDraft] = useState<ImportDraft | null>(null);
+  // The running decision log (the user's choices), held locally and saved to the
+  // server as they go. Seeded from the draft on load so the queue resumes.
+  const [draftLog, setDraftLog] = useState<DraftDecision[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasLoadedDraft, setHasLoadedDraft] = useState(false);
@@ -499,16 +501,20 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
       // app just keeps the raw rows for the lobby's matched/skipped tabs.
       setSuggestions(deduped);
 
-      // The processed, reversible draft IS the import flow now (the queue renders
-      // it and posts answers back). Cleared first so a stale draft can't outlive
-      // a refresh.
+      // The processed plan IS the import flow now (the queue walks it and records
+      // choices locally). Cleared first so a stale draft can't outlive a refresh;
+      // the saved log comes back on the draft so the queue resumes mid-flow.
       setImportDraft(null);
       try {
         const draftRes = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/import-draft`, {
           method: 'GET',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         });
-        if (draftRes.ok) setImportDraft((await draftRes.json()) as ImportDraft);
+        if (draftRes.ok) {
+          const draft = (await draftRes.json()) as ImportDraft;
+          setImportDraft(draft);
+          setDraftLog(Array.isArray(draft.decisions) ? draft.decisions : []);
+        }
       } catch {
         // ignore — draft fetch failure leaves the queue empty until refresh
       }
@@ -522,26 +528,46 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
 
   const refreshSuggestions = useCallback(() => fetchMappingSuggestions(), [fetchMappingSuggestions]);
 
-  // ── Reversible draft actions: every one posts to the backend (the single
-  // source of truth) and renders the draft it sends back. The app never derives.
-  const postDraft = useCallback(async (path: string, body?: any): Promise<void> => {
+  // ── The decision log: choices live here, saved to the server as the user goes
+  // (debounced) and pushed once at commit. Reversing is instant — it's a local
+  // edit, no round-trip. The app never derives; it just records taps.
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveDraftLog = useCallback((log: DraftDecision[]) => {
     if (!connectionId) return;
-    const token = await ensureSupabaseJwt();
-    const res = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/import-draft/${path}`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body || {}),
-    });
-    if (res.ok) setImportDraft((await res.json()) as ImportDraft);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      try {
+        const token = await ensureSupabaseJwt();
+        await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/import-draft/decisions`, {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ decisions: log }),
+        });
+      } catch {
+        // best-effort persistence; the in-memory log is still authoritative
+      }
+    }, 700);
   }, [connectionId]);
 
-  const answerDecision = useCallback(
-    (unitId: string, answer: DraftAnswer) => postDraft('answer', { unitId, answer }),
-    [postDraft],
-  );
-  const dropFromGroup = useCallback((itemId: string) => postDraft('drop', { itemId }), [postDraft]);
-  const reopenDecision = useCallback((unitId: string) => postDraft('reopen', { unitId }), [postDraft]);
-  const undoDecision = useCallback(() => postDraft('undo'), [postDraft]);
+  // Record (or replace) a decision. Answers are keyed by unit; drops accumulate.
+  const recordDecision = useCallback((decision: DraftDecision) => {
+    setDraftLog((prev) => {
+      const next = decision.kind === 'answer'
+        ? [...prev.filter((d) => !(d.kind === 'answer' && d.unitId === decision.unitId)), decision]
+        : [...prev, decision];
+      saveDraftLog(next);
+      return next;
+    });
+  }, [saveDraftLog]);
+
+  // Step back into a decision — drop it from the log; the unit returns to the queue.
+  const reopenDecision = useCallback((unitId: string) => {
+    setDraftLog((prev) => {
+      const next = prev.filter((d) => !(d.kind === 'answer' && d.unitId === unitId));
+      saveDraftLog(next);
+      return next;
+    });
+  }, [saveDraftLog]);
 
   // Sync productCreationMode effect - update suggestions selection
   useEffect(() => {
@@ -943,7 +969,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
       const confirmRes = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/import-draft/commit`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ syncRules: syncRulesPayload }),
+        body: JSON.stringify({ decisions: draftLog, syncRules: syncRulesPayload }),
       });
 
       if (!confirmRes.ok) {
@@ -1013,10 +1039,9 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
     suggestions,
     setSuggestions,
     importDraft,
-    answerDecision,
-    dropFromGroup,
+    draftLog,
+    recordDecision,
     reopenDecision,
-    undoDecision,
     loading,
     error,
     hasLoadedDraft,

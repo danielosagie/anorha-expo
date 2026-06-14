@@ -216,8 +216,8 @@ const MappingReviewScreen: React.FC = () => {
     suggestions,
     setSuggestions,
     importDraft,
-    answerDecision,
-    dropFromGroup,
+    draftLog,
+    recordDecision,
     reopenDecision,
     loading,
     error,
@@ -457,8 +457,8 @@ const MappingReviewScreen: React.FC = () => {
         theme={theme}
         insets={insets}
         draft={importDraft}
-        onAnswer={answerDecision}
-        onDrop={dropFromGroup}
+        log={draftLog}
+        onRecord={recordDecision}
         onReopen={reopenDecision}
         onSearch={openSearchFor}
         onClose={() => { setSearchSheet({ visible: false, targetId: null }); setQueueOpen(false); }}
