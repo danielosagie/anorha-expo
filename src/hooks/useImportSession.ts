@@ -273,6 +273,11 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
             return {
               action: 'LINK_EXISTING' as const,
               isSelected: true,
+              // These are already linked in the DB — settle them so they never
+              // surface as a pending decision (and carry the idempotency hash).
+              resolved: true,
+              alreadyMapped: true,
+              sourceHash: m.SourceHash ?? undefined,
               platformProduct: {
                 id: m.PlatformProductId || m.Id,
                 sku: m.PlatformSku || pv?.Sku || 'N/A',
@@ -360,16 +365,30 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
               // If this item already exists from DB, update it with scan data (richer info)
               if (existingIds.has(itemId)) {
                 const existing = suggestions.find(s => s.platformProduct?.id === itemId);
-                if (existing && item.suggestedCanonicalVariant) {
-                  existing.suggestedCanonicalProduct = {
-                    id: item.suggestedCanonicalVariant.Id,
-                    sku: item.suggestedCanonicalVariant.Sku,
-                    title: item.suggestedCanonicalVariant.Title,
-                    price: item.suggestedCanonicalVariant.Price,
-                    imageUrl: item.suggestedCanonicalVariant.ImageUrl,
-                  };
-                  existing.matchType = item.matchType || existing.matchType;
-                  existing.confidence = item.confidence ?? existing.confidence;
+                if (existing) {
+                  if (item.suggestedCanonicalVariant) {
+                    existing.suggestedCanonicalProduct = {
+                      id: item.suggestedCanonicalVariant.Id,
+                      sku: item.suggestedCanonicalVariant.Sku,
+                      title: item.suggestedCanonicalVariant.Title,
+                      price: item.suggestedCanonicalVariant.Price,
+                      imageUrl: item.suggestedCanonicalVariant.ImageUrl,
+                    };
+                    existing.matchType = item.matchType || existing.matchType;
+                    existing.confidence = item.confidence ?? existing.confidence;
+                  }
+                  // Don't drop the server's decision signals for known rows: a
+                  // re-scan can newly flag a broken link or a value conflict.
+                  existing.suggestionId = item.suggestionId ?? existing.suggestionId;
+                  existing.sourceHash = item.sourceHash ?? existing.sourceHash;
+                  existing.fieldConflicts = item.fieldConflicts ?? existing.fieldConflicts;
+                  existing.isStaleLink = item.isStaleLink ?? existing.isStaleLink;
+                  existing.staleReason = item.staleReason ?? existing.staleReason;
+                  existing.compositionType = item.compositionType ?? existing.compositionType;
+                  // A newly-surfaced conflict or broken link must re-open the row.
+                  if ((item.fieldConflicts && item.fieldConflicts.length > 0) || item.isStaleLink) {
+                    existing.resolved = false;
+                  }
                 }
                 continue;
               }
@@ -481,7 +500,9 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
 
       // Pull the backend's processed draft (recommendations, reasons, the
       // "done automatically" panel). Non-fatal: the queue still works from the
-      // local pipeline if the endpoint isn't there yet.
+      // local pipeline if the endpoint isn't there yet. Cleared first so a stale
+      // draft can never outlive a refresh that fails to produce a fresh one.
+      setImportDraft(null);
       try {
         const draftRes = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/import-draft`, {
           method: 'GET',
@@ -489,7 +510,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         });
         if (draftRes.ok) setImportDraft((await draftRes.json()) as ImportDraft);
       } catch {
-        // ignore — draft is an enhancement, not a dependency
+        // ignore — draft is an enhancement, not a dependency (stays null)
       }
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred.');

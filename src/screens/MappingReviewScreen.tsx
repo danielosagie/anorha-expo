@@ -470,8 +470,8 @@ const MappingReviewScreen: React.FC = () => {
         onAnswer={handleAnswer}
         onDropFromGroup={handleDropFromGroup}
         onSearch={openSearchFor}
-        onClose={() => setQueueOpen(false)}
-        onDone={() => { setQueueOpen(false); setDoneVisible(true); }}
+        onClose={() => { setSearchSheet({ visible: false, targetId: null }); setQueueOpen(false); }}
+        onDone={() => { setSearchSheet({ visible: false, targetId: null }); setQueueOpen(false); setDoneVisible(true); }}
         searchSheet={
           <SearchSheet
             theme={theme}
