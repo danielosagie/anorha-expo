@@ -10,7 +10,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image } from 'rea
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Progress from 'react-native-progress';
 
-import { MappingSuggestion } from '../../types/importSession';
+import { MappingSuggestion, DraftUnit } from '../../types/importSession';
 import { BRAND_PRIMARY } from '../../design/tokens';
 import { DecisionAnswer, DecisionUnit, buildUnits } from '../../features/import/decisions';
 
@@ -27,6 +27,9 @@ interface DecisionQueueProps {
   onSearch: (item: MappingSuggestion) => void;
   onClose: () => void;
   onDone: () => void;
+  /** The backend's processed units, keyed to enrich a card with its reason +
+   *  recommended choice. Optional — cards render fine without it. */
+  draftUnits?: DraftUnit[];
   searchSheet?: React.ReactNode;
 }
 
@@ -101,9 +104,15 @@ function Thumb({ uri, size = 44 }: { uri?: string | null; size?: number }) {
 }
 
 const DecisionQueue: React.FC<DecisionQueueProps> = ({
-  theme, insets, suggestions, initialTotal, onAnswer, onDropFromGroup, onSearch, onClose, onDone, searchSheet,
+  theme, insets, suggestions, initialTotal, onAnswer, onDropFromGroup, onSearch, onClose, onDone, draftUnits, searchSheet,
 }) => {
   const units = useMemo(() => buildUnits(suggestions), [suggestions]);
+  // The backend's per-unit reason + recommended choice, looked up by unit id.
+  const draftById = useMemo(() => {
+    const m = new Map<string, DraftUnit>();
+    for (const u of draftUnits || []) m.set(u.id, u);
+    return m;
+  }, [draftUnits]);
 
   const remaining = units.length;
   const total = Math.max(initialTotal, remaining);
@@ -126,6 +135,7 @@ const DecisionQueue: React.FC<DecisionQueueProps> = ({
 
   const unit = units[0];
   const copy = copyFor(unit);
+  const hint = draftById.get(unit.id);
   const onSecondary = () => {
     // "Show others" routes to search instead of resolving.
     if (unit.kind === 'single' && unit.item.candidateVariants && unit.item.candidateVariants.length > 0 && !unit.item.fieldConflicts?.length) {
@@ -157,6 +167,12 @@ const DecisionQueue: React.FC<DecisionQueueProps> = ({
       <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
         <Text style={[styles.cardTitle, { color: theme.colors.text }]}>{copy.title}</Text>
         {copy.sub ? <Text style={[styles.cardSub, { color: theme.colors.textSecondary }]}>{copy.sub}</Text> : null}
+        {hint?.reason ? (
+          <View style={styles.reasonRow}>
+            <Icon name="information-outline" size={13} color={theme.colors.textSecondary} />
+            <Text style={[styles.reasonText, { color: theme.colors.textSecondary }]}>{hint.reason}</Text>
+          </View>
+        ) : null}
 
         {unit.kind === 'group' ? (
           <View style={styles.groupGrid}>
@@ -186,6 +202,11 @@ const DecisionQueue: React.FC<DecisionQueueProps> = ({
 
       {/* Two buttons + Skip */}
       <View style={[styles.actions, { paddingBottom: insets.bottom + 14 }]}>
+        {hint?.recommended ? (
+          <Text style={[styles.suggestText, { color: theme.colors.primary }]}>
+            ★ Suggested: {hint.recommended === 'primary' ? copy.primary : copy.secondary}
+          </Text>
+        ) : null}
         <View style={styles.actionRow}>
           <TouchableOpacity onPress={onSecondary} style={[styles.secondaryBtn]} activeOpacity={0.85}>
             <Text style={[styles.secondaryBtnText, { color: theme.colors.textSecondary }]}>{copy.secondary}</Text>
@@ -276,6 +297,9 @@ const styles = StyleSheet.create({
   body: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 24 },
   cardTitle: { fontSize: 22, fontFamily: 'PlusJakartaSans_700Bold', letterSpacing: -0.3 },
   cardSub: { fontSize: 15, marginTop: 6, fontFamily: 'PlusJakartaSans_500Medium' },
+  reasonRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
+  reasonText: { fontSize: 13, flex: 1, fontFamily: 'PlusJakartaSans_400Regular' },
+  suggestText: { fontSize: 12, textAlign: 'center', marginBottom: 8, fontFamily: 'PlusJakartaSans_600SemiBold' },
 
   groupGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, marginTop: 22 },
   groupChip: { width: 72, alignItems: 'center', gap: 6 },

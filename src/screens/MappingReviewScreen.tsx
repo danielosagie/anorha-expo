@@ -216,6 +216,7 @@ const MappingReviewScreen: React.FC = () => {
   const {
     suggestions,
     setSuggestions,
+    importDraft,
     loading,
     error,
     counts: hookCounts,
@@ -465,6 +466,7 @@ const MappingReviewScreen: React.FC = () => {
         insets={insets}
         suggestions={suggestions || []}
         initialTotal={queueTotal}
+        draftUnits={importDraft?.units}
         onAnswer={handleAnswer}
         onDropFromGroup={handleDropFromGroup}
         onSearch={openSearchFor}
@@ -528,6 +530,11 @@ const MappingReviewScreen: React.FC = () => {
             unfilledColor="#E5E7EB"
             borderWidth={0}
           />
+          {importDraft && importDraft.summary.autoResolved > 0 && (
+            <Text style={[styles.autoMatched, { color: theme.colors.textSecondary }]}>
+              ✓ {importDraft.summary.autoResolved} matched automatically
+            </Text>
+          )}
         </View>
       )}
 
@@ -1130,6 +1137,11 @@ const styles = StyleSheet.create({
   progPct: {
     fontSize: 12,
     fontWeight: '700',
+  },
+  autoMatched: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 6,
   },
 
   // Content

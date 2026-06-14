@@ -101,6 +101,64 @@ export interface MappingSuggestion {
   groupCover?: boolean;
 }
 
+// ── The processed import draft (mirrors anorha-bknd import-draft.types.ts) ────
+// The backend does the processing — normalize, auto-resolve, cluster, derive,
+// order — and hands us a finished draft. The app renders it; presentation copy
+// (see DecisionQueue.copyFor) stays here. DraftItem is shape-compatible with
+// MappingSuggestion, so a unit's items feed straight into applyAnswer/commit.
+
+export type DraftVariant =
+  | 'combine' | 'duplicate' | 'family' | 'split' | 'kit'
+  | 'collision' | 'value' | 'match' | 'stale' | 'new';
+
+export interface DraftSingleUnit {
+  kind: 'single';
+  id: string;
+  question: ImportDecisionQuestion;
+  variant: DraftVariant;
+  recommended: 'primary' | 'secondary' | null;
+  reason: string;
+  item: MappingSuggestion;
+}
+
+export interface DraftGroupUnit {
+  kind: 'group';
+  id: string;
+  question: 'group';
+  variant: DraftVariant;
+  recommended: 'primary' | 'secondary' | null;
+  reason: string;
+  title: string;
+  members: MappingSuggestion[];
+}
+
+export type DraftUnit = DraftSingleUnit | DraftGroupUnit;
+
+export interface AutoResolvedItem {
+  id: string;
+  title: string;
+  sku?: string | null;
+  imageUrl?: string | null;
+  reason: string;
+  matchedTo?: { id?: string | null; title?: string | null; sku?: string | null; imageUrl?: string | null } | null;
+}
+
+export interface ImportDraftSummary {
+  considered: number;
+  decisions: number;
+  autoResolved: number;
+  byQuestion: { group: number; same: number; keep: number };
+}
+
+export interface ImportDraft {
+  connectionId: string;
+  version: string;
+  generatedAt: string;
+  units: DraftUnit[];
+  autoResolved: AutoResolvedItem[];
+  summary: ImportDraftSummary;
+}
+
 export type ProductCreationMode = 'sync_everywhere' | 'pull_only' | 'push_only' | 'do_nothing';
 
 export interface ConnectionLocation {

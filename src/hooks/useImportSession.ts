@@ -11,6 +11,7 @@ import {
   ProductCreationMode,
   ConnectionLocation,
   ImportSessionCounts,
+  ImportDraft,
 } from '../types/importSession';
 import { buildCombineGroups } from '../features/import/decisions';
 
@@ -36,6 +37,7 @@ export interface UseImportSessionResult {
   // Core state
   suggestions: MappingSuggestion[] | null;
   setSuggestions: React.Dispatch<React.SetStateAction<MappingSuggestion[] | null>>;
+  importDraft: ImportDraft | null;
   loading: boolean;
   error: string | null;
   hasLoadedDraft: boolean;
@@ -109,6 +111,10 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
   } = options;
 
   const [suggestions, setSuggestions] = useState<MappingSuggestion[] | null>(null);
+  // The backend-built decision draft (processed: auto-resolved, clustered,
+  // ordered, with per-unit recommendations). An enhancement layered over the
+  // local pipeline — null until fetched / if the endpoint is unavailable.
+  const [importDraft, setImportDraft] = useState<ImportDraft | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasLoadedDraft, setHasLoadedDraft] = useState(false);
@@ -472,6 +478,19 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
 
       console.log(`[useImportSession] 📊 Final: ${grouped.length} total suggestions (${grouped.filter(s => s.action === 'LINK_EXISTING').length} matched, ${grouped.filter(s => s.action === 'UNMATCHED').length} unmatched)`);
       setSuggestions(grouped);
+
+      // Pull the backend's processed draft (recommendations, reasons, the
+      // "done automatically" panel). Non-fatal: the queue still works from the
+      // local pipeline if the endpoint isn't there yet.
+      try {
+        const draftRes = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/import-draft`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        });
+        if (draftRes.ok) setImportDraft((await draftRes.json()) as ImportDraft);
+      } catch {
+        // ignore — draft is an enhancement, not a dependency
+      }
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred.');
       setSuggestions([]);
@@ -994,6 +1013,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
   return {
     suggestions,
     setSuggestions,
+    importDraft,
     loading,
     error,
     hasLoadedDraft,
