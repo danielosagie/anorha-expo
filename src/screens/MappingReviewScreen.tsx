@@ -31,6 +31,8 @@ import { MappingSuggestion } from '../types/importSession';
 import Card from '../components/Card';
 import PillTabs from '../components/ui/PillTabs';
 import { tokens, BRAND_PRIMARY} from '../design/tokens';
+import DecisionQueue from '../components/import/DecisionQueue';
+import { applyAnswer, buildUnits, DecisionAnswer, DecisionUnit } from '../features/import/decisions';
 
 // ---------------------------------------------------------------------------
 // Reason metadata
@@ -237,6 +239,8 @@ const MappingReviewScreen: React.FC = () => {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [doneVisible, setDoneVisible] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [queueTotal, setQueueTotal] = useState(0);
 
   const annotated = useMemo<AnnotatedSuggestion[]>(
     () => annotateSuggestions(suggestions || []),
@@ -362,10 +366,24 @@ const MappingReviewScreen: React.FC = () => {
     }));
   }, [updateOne]);
 
-  const openSearchFor = useCallback((item: AnnotatedSuggestion) => {
+  const openSearchFor = useCallback((item: { platformProduct: { id: string } }) => {
     setSearchSheet({ visible: true, targetId: item.platformProduct.id });
     setSearchQuery('');
   }, []);
+
+  // ── Three-question decision queue (GROUP → SAME → KEEP) ──────────────────────
+  const openQueue = useCallback(() => {
+    setQueueTotal(buildUnits(suggestions || []).length);
+    setQueueOpen(true);
+  }, [suggestions]);
+
+  const handleAnswer = useCallback((unit: DecisionUnit, answer: DecisionAnswer) => {
+    setSuggestions((prev) => applyAnswer(prev || [], unit, answer));
+  }, [setSuggestions]);
+
+  const handleDropFromGroup = useCallback((id: string) => {
+    updateOne(id, (s) => ({ ...s, groupId: undefined, groupCover: undefined, groupTitle: undefined }));
+  }, [updateOne]);
 
   const handleSearchSelect = useCallback((result: SearchResult) => {
     if (!searchSheet.targetId) return;
@@ -469,6 +487,37 @@ const MappingReviewScreen: React.FC = () => {
   }
 
   // ---------------------------------------------------------------------------
+  // Render: full-screen decision queue (GROUP → SAME → KEEP)
+  // ---------------------------------------------------------------------------
+  if (queueOpen) {
+    return (
+      <DecisionQueue
+        theme={theme}
+        insets={insets}
+        suggestions={suggestions || []}
+        initialTotal={queueTotal}
+        onAnswer={handleAnswer}
+        onDropFromGroup={handleDropFromGroup}
+        onSearch={openSearchFor}
+        onClose={() => setQueueOpen(false)}
+        onDone={() => { /* queue shows its own all-clear; user taps Done */ }}
+        searchSheet={
+          <SearchSheet
+            theme={theme}
+            visible={searchSheet.visible}
+            onClose={() => setSearchSheet({ visible: false, targetId: null })}
+            query={searchQuery}
+            onQueryChange={setSearchQuery}
+            results={searchResults}
+            loading={searchLoading}
+            onSelect={handleSearchSelect}
+          />
+        }
+      />
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // Render: full-screen REVIEW mode (replaces main content)
   // ---------------------------------------------------------------------------
   if (reviewMode) {
@@ -567,8 +616,8 @@ const MappingReviewScreen: React.FC = () => {
                 isOpen={openGroup === reason}
                 onToggle={() => setOpenGroup(openGroup === reason ? null : reason)}
                 onBulk={() => handleBulkForReason(reason)}
-                onReview={() => setReviewMode({ reason, index: 0 })}
-                onItemPress={(idx) => setReviewMode({ reason, index: idx })}
+                onReview={openQueue}
+                onItemPress={() => openQueue()}
               />
             );
           })}
@@ -668,10 +717,7 @@ const MappingReviewScreen: React.FC = () => {
             </TouchableOpacity>
           ) : (
             <TouchableOpacity
-              onPress={() => {
-                const firstReason = REASON_ORDER.find((r) => grouped[r].length > 0);
-                if (firstReason) setReviewMode({ reason: firstReason, index: 0 });
-              }}
+              onPress={openQueue}
               style={[styles.stickyPrimaryBtn, { backgroundColor: theme.colors.primary }]}
               activeOpacity={0.85}
             >

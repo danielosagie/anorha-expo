@@ -12,6 +12,7 @@ import {
   ConnectionLocation,
   ImportSessionCounts,
 } from '../types/importSession';
+import { buildCombineGroups } from '../features/import/decisions';
 
 const SSSYNC_API_BASE_URL = (
   process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL ||
@@ -429,6 +430,24 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
                   isSelected,
                   matchType: item.matchType,
                   confidence: typeof item.confidence === 'number' ? item.confidence : undefined,
+                  // ── Carry through the server's decision signals (was dropped) ──
+                  suggestionId: item.suggestionId,
+                  sourceHash: item.sourceHash,
+                  productShape: item.productShape,
+                  compositionType: item.compositionType,
+                  bundleParts: item.bundleParts,
+                  kitComponents: item.kitComponents,
+                  candidateVariants: item.candidateVariants,
+                  familyDecisionReason: item.familyDecisionReason,
+                  familyMemberCount: item.familyMemberCount,
+                  familyResolvedCount: item.familyResolvedCount,
+                  familyUnmatchedCount: item.familyUnmatchedCount,
+                  isDuplicateSuggestedCanonical: item.isDuplicateSuggestedCanonical,
+                  duplicateSuggestedCanonicalSuggestionIds: item.duplicateSuggestedCanonicalSuggestionIds,
+                  fieldConflicts: item.fieldConflicts,
+                  isStaleLink: item.isStaleLink,
+                  staleReason: item.staleReason,
+                  alreadyMapped: item.alreadyMapped,
                 });
               }
             }
@@ -447,8 +466,12 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         return true;
       });
 
-      console.log(`[useImportSession] 📊 Final: ${deduped.length} total suggestions (${deduped.filter(s => s.action === 'LINK_EXISTING').length} matched, ${deduped.filter(s => s.action === 'UNMATCHED').length} unmatched)`);
-      setSuggestions(deduped);
+      // Propose COMBINE clusters among the no-match pile (e.g. 3 separate soap
+      // rows → one product in 3 scents). Conservative; only ever proposes.
+      const grouped = buildCombineGroups(deduped);
+
+      console.log(`[useImportSession] 📊 Final: ${grouped.length} total suggestions (${grouped.filter(s => s.action === 'LINK_EXISTING').length} matched, ${grouped.filter(s => s.action === 'UNMATCHED').length} unmatched)`);
+      setSuggestions(grouped);
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred.');
       setSuggestions([]);
@@ -792,29 +815,46 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
 
   const submitImport = useCallback(async () => {
     if (!connectionId || connectionId === 'csv-import') return;
-    const confirmedMappings = (suggestions || [])
+    // v2 commit contract: structured items[] (productShape + parentId + nested
+    // variant families). A COMBINE answer carries a shared groupId → parentId so
+    // the backend nests the rows as variants of one product. The /confirm-mappings
+    // endpoint routes to persistCommitForConnection when items[] is non-empty.
+    const commitAction = (item: MappingSuggestion): 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE' | 'PUSH_TO_PLATFORM' => {
+      if (item.direction === 'anorha_to_platform') return 'PUSH_TO_PLATFORM';
+      if (item.action === 'CREATE_NEW') return 'CREATE_NEW';
+      if (item.action === 'LINK_EXISTING') return 'LINK_EXISTING';
+      return 'IGNORE';
+    };
+    const items = (suggestions || [])
       .filter((item) => item.isSelected)
       .map((item) => {
-        let action: string;
-        if (item.direction === 'anorha_to_platform') {
-          action = 'push';
-        } else if (item.action === 'CREATE_NEW') {
-          action = 'create';
-        } else if (item.action === 'LINK_EXISTING') {
-          action = 'link';
-        } else {
-          action = 'ignore';
-        }
+        const parentId = item.groupId || item.platformProduct.parentId || null;
         return {
-          platformProductId: item.platformProduct.id,
-          platformVariantId: item.platformProduct.id,
-          platformProductSku: item.platformProduct.sku,
-          platformProductTitle: item.platformProduct.title,
-          sssyncVariantId:
+          platformProduct: {
+            id: item.platformProduct.id,
+            sku: item.platformProduct.sku || null,
+            title: item.platformProduct.title || null,
+            price: item.platformProduct.price ?? null,
+            imageUrl: item.platformProduct.imageUrl ?? null,
+            parentId,
+          },
+          action: commitAction(item),
+          direction: item.direction || 'platform_to_anorha',
+          productShape: item.productShape || (parentId ? 'variant_family' : 'simple'),
+          parentId,
+          sourceHash: item.sourceHash,
+          suggestedCanonicalProduct:
             item.direction === 'anorha_to_platform'
-              ? item.anorhaVariant?.id || item.platformProduct.id
-              : item.suggestedCanonicalProduct?.id || null,
-          action: action as 'link' | 'create' | 'ignore' | 'push',
+              ? null
+              : item.suggestedCanonicalProduct?.id
+                ? {
+                    id: item.suggestedCanonicalProduct.id,
+                    sku: item.suggestedCanonicalProduct.sku || null,
+                    title: item.suggestedCanonicalProduct.title || null,
+                    price: item.suggestedCanonicalProduct.price ?? null,
+                    imageUrl: item.suggestedCanonicalProduct.imageUrl ?? null,
+                  }
+                : null,
         };
       });
 
@@ -883,7 +923,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
       const confirmRes = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/confirm-mappings`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ confirmedMatches: confirmedMappings, syncRules: syncRulesPayload }),
+        body: JSON.stringify({ items, syncRules: syncRulesPayload }),
       });
 
       if (!confirmRes.ok) {
@@ -905,7 +945,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
               operationId,
               jobId: jobId || null,
               connectionId,
-              itemsTotal: confirmedMappings?.length || 0,
+              itemsTotal: items?.length || 0,
               startedAt: new Date().toISOString(),
             }),
           );

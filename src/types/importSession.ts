@@ -1,5 +1,37 @@
 // Shared types for import session (mapping suggestions, wizard state, etc.)
 
+/**
+ * The whole import collapses to three questions, asked in order:
+ *   group → "is this one product, or several?"  (combine / split / kit / family)
+ *   same  → "is this the same as something you already have?" (confirm / pick / value / stale)
+ *   keep  → "bring it in, or skip?"
+ * `null` means the machine is sure — auto-resolved, zero taps.
+ * See anorha-bknd/docs/import/MINIMAL_DECISIONS.md.
+ */
+export type ImportDecisionQuestion = 'group' | 'same' | 'keep';
+
+export type ProductShape = 'simple' | 'variant_family' | 'unmatched_variant';
+export type CompositionType = 'simple' | 'bundle' | 'kit';
+export type FamilyDecisionReason =
+  | 'new_variant_family'
+  | 'incomplete_variant_family'
+  | 'conflicting_variant_family';
+
+export interface CanonicalRef {
+  id: string;
+  sku?: string | null;
+  title?: string | null;
+  price?: number | string | null;
+  imageUrl?: string | null;
+}
+
+export interface FieldConflict {
+  field: 'title' | 'price' | 'stock' | 'barcode' | 'tags' | 'photos' | string;
+  platformValue: string | number | null;
+  canonicalValue: string | number | null;
+  severity?: 'warning' | 'critical';
+}
+
 export interface MappingSuggestion {
   action: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE' | 'UNMATCHED';
   prevAction?: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE' | 'UNMATCHED';
@@ -34,6 +66,39 @@ export interface MappingSuggestion {
   resolved?: boolean;
   prevTab?: 'all' | 'needs_review' | 'matched' | 'ignored';
   originalData?: any;
+
+  // ── Server-computed signals (previously dropped on the floor) ──────────────
+  suggestionId?: string;
+  sourceHash?: string;
+  productShape?: ProductShape;
+  /** bundle = one row hides several SKUs (Split) · kit = set whose pieces are canonical singles. */
+  compositionType?: CompositionType;
+  bundleParts?: { sku: string | null; title?: string | null; quantity?: number }[];
+  kitComponents?: CanonicalRef[];
+  /** One SKU string matched >1 different canonical → pick-one. */
+  candidateVariants?: CanonicalRef[];
+  familyDecisionReason?: FamilyDecisionReason;
+  familyMemberCount?: number;
+  familyResolvedCount?: number;
+  familyUnmatchedCount?: number;
+  /** Many incoming rows point at the same canonical → combine-many→1. */
+  isDuplicateSuggestedCanonical?: boolean;
+  duplicateSuggestedCanonicalSuggestionIds?: string[];
+  /** Matched, but specific fields disagree → confirm-value. */
+  fieldConflicts?: FieldConflict[];
+  isStaleLink?: boolean;
+  staleReason?: 'missing_from_import' | 'link_changed';
+  alreadyMapped?: boolean;
+
+  // ── Client-derived (decisions.ts) ──────────────────────────────────────────
+  /** Which of the three questions this row raises (undefined once resolved/auto). */
+  question?: ImportDecisionQuestion;
+  /** Combine grouping: rows sharing a groupId are one proposed variant family. */
+  groupId?: string;
+  /** Display title for the proposed combine group (e.g. "Handmade Soap"). */
+  groupTitle?: string;
+  /** The cover/master row of a combine group (others fold under it). */
+  groupCover?: boolean;
 }
 
 export type ProductCreationMode = 'sync_everywhere' | 'pull_only' | 'push_only' | 'do_nothing';
