@@ -16,6 +16,7 @@ import { Check } from 'lucide-react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 import PlatformLogo from '../PlatformLogo';
+import { listPlatforms } from '../../config/platforms';
 
 import { usePlatformConnect, ConnectablePlatform } from '../../hooks/usePlatformConnect';
 import { usePlatformConnections } from '../../context/PlatformConnectionsContext';
@@ -32,13 +33,21 @@ type PlatformDef = {
   blurb: string;
 };
 
-const PLATFORMS: PlatformDef[] = [
-  { key: 'shopify', name: 'Shopify', blurb: 'Products, inventory & orders' },
-  { key: 'square', name: 'Square', blurb: 'Catalog & in-store inventory' },
-  { key: 'clover', name: 'Clover', blurb: 'Items & stock levels' },
-  { key: 'ebay', name: 'eBay', blurb: 'Listings & sold orders' },
-  { key: 'facebook', name: 'Facebook', blurb: 'Marketplace & catalogs' },
-];
+// One blurb per connectable platform; the list itself derives from the registry,
+// so any platform with a connect def shows up here automatically.
+const BLURBS: Record<string, string> = {
+  shopify: 'Products, inventory & orders',
+  square: 'Catalog & in-store inventory',
+  clover: 'Items & stock levels',
+  ebay: 'Listings & sold orders',
+  facebook: 'Marketplace & catalogs',
+};
+
+const PLATFORMS: PlatformDef[] = listPlatforms({ connectableOnly: true }).map((d) => ({
+  key: d.key as ConnectablePlatform,
+  name: d.label,
+  blurb: BLURBS[d.key] ?? '',
+}));
 
 export default function ConnectAccountsStep({
   orgId,

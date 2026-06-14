@@ -11,6 +11,7 @@ import Button from '../components/Button';
 import PlaceholderImage from '../components/Placeholder';
 import OrgSwitcher from '../components/OrgSwitcher';
 import PlatformLogo from '../components/PlatformLogo';
+import { PlatformKey } from '../config/platforms';
 import { useNavigation, useFocusEffect, useRoute, RouteProp, useIsFocused } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -67,19 +68,7 @@ type ProfileScreenRouteParams = {
 type ProfileScreenNavigationProp = StackNavigationProp<AppStackParamList>;
 
 // Define available platforms centrally (or import if moved)
-const AVAILABLE_PLATFORMS = [
-  { key: 'shopify', name: 'Shopify', icon: 'shopping' },
-  { key: 'amazon', name: 'Amazon', icon: 'package' },
-  { key: 'clover', name: 'Clover', icon: 'leaf' },
-  { key: 'square', name: 'Square', icon: 'square-outline' },
-  { key: 'ebay', name: 'eBay', icon: 'shopping' },
-  { key: 'facebook', name: 'Facebook', icon: 'facebook' },
-  { key: 'depop', name: 'Depop', icon: 'alpha-d' },
-  { key: 'whatnot', name: 'Whatnot', icon: 'chat-processing' },
-  { key: 'etsy', name: 'Etsy', icon: 'alpha-e' },
-];
-
-type PlatformId = typeof AVAILABLE_PLATFORMS[number]['key'];
+type PlatformId = PlatformKey | 'etsy';
 
 // --- Backend Connection Type (ASSUMPTION - Adjust as needed) ---
 interface PlatformConnection {
