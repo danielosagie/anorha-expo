@@ -38,13 +38,12 @@ import DashboardScreen from '../screens/DashboardScreen';
 import GlobalSearchScreen from '../screens/GlobalSearchScreen';
 import InventoryOrdersScreen from '../screens/InventoryOrdersScreen';
 import ImportProgressBanner from '../components/ImportProgressBanner';
-import MarketplaceScreen from '../screens/MarketplaceScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
 import ProductDetailScreen from '../screens/ProductDetail';
-import PhoneAuthScreen from '../screens/PhoneAuthScreen';
 import CreateAccountScreen from '../screens/CreateAccountScreen';
 import AccountSyncIssueScreen from '../screens/AccountSyncIssueScreen';
+// NOTE: PhoneAuthScreen was removed — phone verification now goes through VerifyCodeScreen.
 import PastScansScreen from '../screens/PastScansScreen';
 import TeamScreen from '../screens/TeamScreen';
 import MappingReviewScreen from '../screens/MappingReviewScreen';
@@ -54,7 +53,6 @@ import LoadingScreen from '../screens/LoadingScreen';
 import MatchSelectionScreen, { JobResponse } from '../screens/MatchSelectionScreen';
 import GenerateDetailsScreen from '../screens/GenerateDetailsScreen';
 import VerifyCodeScreen from '../screens/VerifyCodeScreen';
-import MarketplaceChatScreen from '../screens/MarketplaceChatScreen';
 import ActivityFeedScreen from '../screens/ActivityFeedScreen';
 import PublishConfirmationScreen from '../screens/PublishConfirmationScreen';
 import PartnerAcceptScreen from '../screens/PartnerAcceptScreen';
@@ -71,7 +69,6 @@ import BackupsScreen from '../screens/BackupsScreen';
 import BillingScreen from '../screens/BillingScreen';
 import BillingSupportScreen from '../screens/BillingSupportScreen';
 import DeleteAccountInfoScreen from '../screens/DeleteAccountInfoScreen';
-import { isFeatureEnabled } from '../config/features';
 import { SessionContext } from '../context/SessionContext';
 
 // --- Define Param Lists for Type Safety --- //
@@ -302,16 +299,6 @@ export type AppStackParamList = {
     jobMap?: Record<number, { jobId: string; status?: string }>,
     matchJobId?: string,
     focusIndex?: number,
-  };
-  GenerateJobOverviewScreen: {
-    /** @deprecated Use GenerateDetailsScreen directly. */
-    jobId: string;
-    matchJobId?: string;
-    items?: Array<{ index: number; title?: string; thumb?: string; matchesCount?: number; matchJobId?: string }>;
-    jobMap?: Record<number, { jobId: string; status?: string }>;
-  };
-  PhotoUpload: {
-    onDone: (uris: string[]) => void;
   };
   PublishConfirmation: {
     productId?: string;
