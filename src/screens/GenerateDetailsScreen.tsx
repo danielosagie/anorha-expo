@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -2516,7 +2517,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             alignItems: 'center',
             minWidth: 200,
           }}>
-            <ActivityIndicator size="large" color="#93C822" />
+            <ActivityIndicator size="large" color={BRAND_PRIMARY} />
             <Text style={{ marginTop: 16, fontSize: 18, fontWeight: '600', color: '#111' }}>
               Publishing...
             </Text>
@@ -2625,8 +2626,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             <Text style={styles.meta}>No results</Text>
           )}
         </ScrollView>
-
-
 
       </ScrollView>
 
@@ -2925,7 +2924,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               {['title', 'description', 'tags', 'price', 'sku', 'barcode', 'seoTitle', 'seoDescription', 'options'].map((f) => {
                 const selected = fillSelectedFields.includes(f);
                 return (
-                  <TouchableOpacity key={f} onPress={() => setFillSelectedFields(prev => selected ? prev.filter(x => x !== f) : [...prev, f])} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: selected ? '#93C822' : '#E5E5E5', backgroundColor: selected ? 'rgba(147,200,34,0.08)' : '#fff', marginRight: 8, marginBottom: 8 }}>
+                  <TouchableOpacity key={f} onPress={() => setFillSelectedFields(prev => selected ? prev.filter(x => x !== f) : [...prev, f])} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: selected ? BRAND_PRIMARY : '#E5E5E5', backgroundColor: selected ? 'rgba(147,200,34,0.08)' : '#fff', marginRight: 8, marginBottom: 8 }}>
                     <Text style={{ color: '#000' }}>{f}</Text>
                   </TouchableOpacity>
                 );
@@ -2935,7 +2934,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               <TouchableOpacity onPress={() => setFillOverlayOpen(false)} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12 }}>
                 <Text style={{ color: '#000' }}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => { setFillOverlayOpen(false); fillTheRest(); }} style={{ backgroundColor: '#93C822', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <TouchableOpacity onPress={() => { setFillOverlayOpen(false); fillTheRest(); }} style={{ backgroundColor: BRAND_PRIMARY, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                 <Sparkles size={16} color={'#111'} />
                 <Text style={{ color: '#000', fontWeight: '700' }}>Fill selected</Text>
               </TouchableOpacity>
@@ -2974,10 +2973,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           <View style={styles.versionsSheet}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
               <View style={{ flexDirection: 'row', gap: 8 }}>
-                <TouchableOpacity onPress={() => setVersionsTab('versions')} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: versionsTab === 'versions' ? '#93C822' : '#E5E5E5', backgroundColor: versionsTab === 'versions' ? 'rgba(147,200,34,0.08)' : '#fff' }}>
+                <TouchableOpacity onPress={() => setVersionsTab('versions')} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: versionsTab === 'versions' ? BRAND_PRIMARY : '#E5E5E5', backgroundColor: versionsTab === 'versions' ? 'rgba(147,200,34,0.08)' : '#fff' }}>
                   <Text style={{ color: '#000', fontWeight: '600' }}>Versions</Text>
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => setVersionsTab('sources')} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: versionsTab === 'sources' ? '#93C822' : '#E5E5E5', backgroundColor: versionsTab === 'sources' ? 'rgba(147,200,34,0.08)' : '#fff' }}>
+                <TouchableOpacity onPress={() => setVersionsTab('sources')} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: versionsTab === 'sources' ? BRAND_PRIMARY : '#E5E5E5', backgroundColor: versionsTab === 'sources' ? 'rgba(147,200,34,0.08)' : '#fff' }}>
                   <Text style={{ color: '#000', fontWeight: '600' }}>Sources</Text>
                 </TouchableOpacity>
               </View>
@@ -3012,7 +3011,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                         style={[
                           {
                             borderWidth: 1,
-                            borderColor: isCurrentVersion ? '#93C822' : '#E5E5E5',
+                            borderColor: isCurrentVersion ? BRAND_PRIMARY : '#E5E5E5',
                             backgroundColor: isCurrentVersion ? 'rgba(147,200,34,0.05)' : '#fff',
                             borderRadius: 10,
                             padding: 12,
@@ -3022,7 +3021,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
                           <Text style={{ color: '#000', fontWeight: '600', flex: 1 }}>
                             Match from {new Date(v.createdAt).toLocaleDateString()}
-                            {isCurrentVersion && <Text style={{ color: '#93C822' }}> (Current)</Text>}
+                            {isCurrentVersion && <Text style={{ color: BRAND_PRIMARY }}> (Current)</Text>}
                             {hasMultipleVersions && (
                               <Text style={{ color: '#666', fontWeight: '400' }}> • {v.versionCount} versions</Text>
                             )}
@@ -3073,7 +3072,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                                 }}
                                 style={{
                                   borderWidth: 1,
-                                  borderColor: isCurrentSubVersion ? '#93C822' : '#E5E5E5',
+                                  borderColor: isCurrentSubVersion ? BRAND_PRIMARY : '#E5E5E5',
                                   backgroundColor: isCurrentSubVersion ? 'rgba(147,200,34,0.05)' : '#F8F9FA',
                                   borderRadius: 8,
                                   padding: 8,
@@ -3083,7 +3082,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                                   <Text style={{ color: '#000', fontSize: 13, fontWeight: '600' }}>
                                     Version {(v.allVersions?.length || 0) - versionIndex}
-                                    {isCurrentSubVersion && <Text style={{ color: '#93C822' }}> (Current)</Text>}
+                                    {isCurrentSubVersion && <Text style={{ color: BRAND_PRIMARY }}> (Current)</Text>}
                                   </Text>
                                   <Text style={{ color: '#666', fontSize: 11 }}>
                                     {new Date(version.createdAt).toLocaleTimeString()}
@@ -3402,7 +3401,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             <View style={{ flexDirection: 'row', gap: 12 }}>
               <TouchableOpacity
                 onPress={handlePickImage}
-                style={{ flex: 1, paddingVertical: 12, backgroundColor: '#93C822', borderRadius: 8, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}
+                style={{ flex: 1, paddingVertical: 12, backgroundColor: BRAND_PRIMARY, borderRadius: 8, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}
               >
                 <Icon name="image-plus" size={18} color="#FFF" />
                 <Text style={{ color: '#FFF', fontWeight: '600' }}>Add Photos</Text>
@@ -3488,13 +3487,13 @@ const styles = StyleSheet.create({
   missingBadge: { backgroundColor: '#fecaca', borderRadius: 999, paddingHorizontal: 6, paddingVertical: 2 },
   modalCancelButton: { marginTop: 16, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
   btnSecondary: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
-  btnPrimary: { backgroundColor: '#93C822', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
+  btnPrimary: { backgroundColor: BRAND_PRIMARY, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
   blackBtnPrimary: { backgroundColor: '#000', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
 
   // Platform picker modal styles
   platformPickerModal: { position: 'absolute', top: '15%', left: 16, right: 16, backgroundColor: '#fff', borderRadius: 16, padding: 20, maxHeight: '70%', zIndex: 6001 },
   platformPill: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, backgroundColor: '#fff' },
-  generatePlatformPill: { borderColor: '#93C822', backgroundColor: 'rgba(147,200,34,0.05)' },
+  generatePlatformPill: { borderColor: BRAND_PRIMARY, backgroundColor: 'rgba(147,200,34,0.05)' },
   addMissingFieldButton: {
     flexDirection: 'row',
     alignItems: 'center',

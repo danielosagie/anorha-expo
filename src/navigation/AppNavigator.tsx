@@ -39,7 +39,7 @@ import AuthScreen from '../screens/AuthScreen';
 import DashboardScreen from '../screens/DashboardScreen';
 import GlobalSearchScreen from '../screens/GlobalSearchScreen';
 import InventoryOrdersScreen from '../screens/InventoryOrdersScreen';
-import MarketplaceScreen from '../screens/MarketplaceScreen';
+import ImportProgressBanner from '../components/ImportProgressBanner';
 import ProfileScreen from '../screens/ProfileScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import ConnectionsScreen from '../screens/ConnectionsScreen';
@@ -48,9 +48,9 @@ import AccountLoginScreen from '../screens/AccountLoginScreen';
 import PoolDetailScreen from '../screens/PoolDetailScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
 import ProductDetailScreen from '../screens/ProductDetail';
-import PhoneAuthScreen from '../screens/PhoneAuthScreen';
 import CreateAccountScreen from '../screens/CreateAccountScreen';
 import AccountSyncIssueScreen from '../screens/AccountSyncIssueScreen';
+// NOTE: PhoneAuthScreen was removed — phone verification now goes through VerifyCodeScreen.
 import PastScansScreen from '../screens/PastScansScreen';
 import TeamScreen from '../screens/TeamScreen';
 import MappingReviewScreen from '../screens/MappingReviewScreen';
@@ -60,7 +60,6 @@ import LoadingScreen from '../screens/LoadingScreen';
 import MatchSelectionScreen, { JobResponse } from '../screens/MatchSelectionScreen';
 import GenerateDetailsScreen from '../screens/GenerateDetailsScreen';
 import VerifyCodeScreen from '../screens/VerifyCodeScreen';
-import MarketplaceChatScreen from '../screens/MarketplaceChatScreen';
 import ActivityFeedScreen from '../screens/ActivityFeedScreen';
 import PublishConfirmationScreen from '../screens/PublishConfirmationScreen';
 import PartnerAcceptScreen from '../screens/PartnerAcceptScreen';
@@ -79,7 +78,6 @@ import BackupsScreen from '../screens/BackupsScreen';
 import BillingScreen from '../screens/BillingScreen';
 import BillingSupportScreen from '../screens/BillingSupportScreen';
 import DeleteAccountInfoScreen from '../screens/DeleteAccountInfoScreen';
-import { isFeatureEnabled } from '../config/features';
 import { SessionContext } from '../context/SessionContext';
 
 // --- Define Param Lists for Type Safety --- //
@@ -329,16 +327,6 @@ export type AppStackParamList = {
     matchJobId?: string,
     focusIndex?: number,
   };
-  GenerateJobOverviewScreen: {
-    /** @deprecated Use GenerateDetailsScreen directly. */
-    jobId: string;
-    matchJobId?: string;
-    items?: Array<{ index: number; title?: string; thumb?: string; matchesCount?: number; matchJobId?: string }>;
-    jobMap?: Record<number, { jobId: string; status?: string }>;
-  };
-  PhotoUpload: {
-    onDone: (uris: string[]) => void;
-  };
   PublishConfirmation: {
     productId?: string;
     variantId?: string;
@@ -413,6 +401,12 @@ const TabNavigator = () => {
         setTimeout(() => {
           navigation.navigate('CampaignThreadScreen', { campaignId: String(data.campaignId) });
         }, 500);
+      } else if (data?.type === 'job_complete') {
+        // Import / sync finished — deep-link the user to their inventory so
+        // they can pick up where they left off.
+        setTimeout(() => {
+          navigation.navigate('Inventory');
+        }, 500);
       }
     }
   }, [lastNotificationResponse]);
@@ -439,6 +433,7 @@ const TabNavigator = () => {
   };
 
   return (
+    <>
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
@@ -516,6 +511,8 @@ const TabNavigator = () => {
         }}
       />
     </Tab.Navigator>
+    <ImportProgressBanner />
+    </>
   );
 };
 
@@ -701,21 +698,27 @@ const AppNavigator = () => {
       console.log("[AuthContext] signOut called, clearing tokens and Clerk session.")
       setUserToken(null);
       AsyncStorage.removeItem('userToken').catch(() => { });
-      try { stopClerkSupabaseBridge(); } catch { }
-      if (clerkSignOut) {
-        try {
-          await clerkSignOut();
-        } catch (e: any) {
-          // Handle common Clerk sign-out errors gracefully
-          // - "You are signed out" means we're already signed out
-          // - "Cannot read property 'origin'" is a web-specific error on React Native
-          const errorMsg = e?.message || String(e);
-          if (errorMsg.includes('signed out') || errorMsg.includes('origin')) {
-            console.log('[AuthContext] Sign out completed (expected error on React Native)');
-          } else {
-            console.error('[AuthContext] Sign out error:', e);
+      try {
+        if (clerkSignOut) {
+          try {
+            await clerkSignOut();
+          } catch (e: any) {
+            // Handle common Clerk sign-out errors gracefully
+            // - "You are signed out" means we're already signed out
+            // - "Cannot read property 'origin'" is a web-specific error on React Native
+            const errorMsg = e?.message || String(e);
+            if (errorMsg.includes('signed out') || errorMsg.includes('origin')) {
+              console.log('[AuthContext] Sign out completed (expected error on React Native)');
+            } else {
+              console.error('[AuthContext] Sign out error:', e);
+            }
           }
         }
+      } finally {
+        // Tear down the Supabase bridge AFTER attempting Clerk sign-out so we don't
+        // clear the bridge while Clerk still holds a session. `finally` guarantees the
+        // bridge (token + refresh timer) is always cleared, even if clerkSignOut throws.
+        try { stopClerkSupabaseBridge(); } catch { }
       }
       return Promise.resolve();
     },

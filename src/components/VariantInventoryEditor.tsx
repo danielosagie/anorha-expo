@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 import VariantInventoryRow from './VariantInventoryRow';
 import { useTheme } from '../context/ThemeContext';
@@ -140,12 +141,13 @@ const AllTabRow: React.FC<{
           </View>
         </View>
 
+        {/* Price Input - Blue for Shopify global */}
         <View style={styles.inputGroup}>
           <Text style={styles.inputLabel}>Price</Text>
           <View style={[styles.priceInputContainer, isShopifyGlobal && styles.priceInputShopify]}>
             <Text style={[styles.currencySymbol, isShopifyGlobal && { color: '#1976D2' }]}>$</Text>
             <TextInput
-              style={[styles.priceInput, isShopifyGlobal && styles.priceInputTextShopify, externalUpdatePrice && { borderColor: '#93C822', borderWidth: 2 }]}
+              style={[styles.priceInput, isShopifyGlobal && styles.priceInputTextShopify, externalUpdatePrice && { borderColor: BRAND_PRIMARY, borderWidth: 2 }]}
               value={localPrice}
               onChangeText={handlePriceChange}
               keyboardType="decimal-pad"

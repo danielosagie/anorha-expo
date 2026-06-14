@@ -26,5 +26,5 @@
     "src/hooks/useVisionCamera.tsx",
     "__tests__"
   ],
-  "include": ["**/*.ts", "**/*.tsx", "../Archive/BarcodeScanner.tsx"]
+  "include": ["**/*.ts", "**/*.tsx"]
 }

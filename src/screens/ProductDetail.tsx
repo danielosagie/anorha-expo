@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, Switch, FlatList, Animated, Easing } from 'react-native';
 import { ChevronLeft, ChevronRight, Copy, Check, Info, Box, AlertTriangle, X } from 'lucide-react-native';
 import BaseModal from '../components/BaseModal';
@@ -874,7 +875,7 @@ const ProductDetailScreen = observer(
             // Use DisplayName first, then fall back to a constructed name
             const platformName = connection.DisplayName || `${connection.PlatformType} Account`;
             // Use DB lookup for location name
-            const locationName = getLocationNameFromDB(level.PlatformLocationId || 'default', level.PlatformConnectionId);
+            const locationName = getLocationNameFromDB(level.PlatformLocationId || 'default', (level.PlatformConnectionId || ''));
 
             if (!grouped[platformName]) {
               grouped[platformName] = {
@@ -899,7 +900,7 @@ const ProductDetailScreen = observer(
                 id: level.Id || `${level.PlatformConnectionId}-${level.PlatformLocationId}`,
                 locationId: level.PlatformLocationId || 'default',
                 locationName,
-                platformConnectionId: level.PlatformConnectionId,
+                platformConnectionId: level.PlatformConnectionId || '',
                 platformName,
                 platformType: connection.PlatformType,
                 quantity: level.Quantity || 0
@@ -1513,7 +1514,7 @@ const ProductDetailScreen = observer(
             PlatformSpecificData: displayedPlatforms,  // ← Ensure platform data is updated
           };
           console.log('[ProductDetail] setDetailedItem merged result:', JSON.stringify(merged, null, 2).slice(0, 300));
-          return merged;
+          return merged as ProductVariant;
         });
 
         if (editVersionRef.current === saveStartEditVersion) {
@@ -2460,7 +2461,7 @@ const ProductDetailScreen = observer(
           .then(({ data, error }) => {
             if (data) {
               console.log('[ProductDetail] Fetched item from Supabase:', data.Id);
-              setDetailedItem(data);
+              setDetailedItem(data as ProductVariant);
               setFormData({
                 Title: data.Title || '',
                 Description: data.Description || '',
@@ -2714,7 +2715,7 @@ const ProductDetailScreen = observer(
 
       // Group inventory levels by platform type using the connection lookup
       rawInventoryLevels?.forEach(level => {
-        const platformType = connectionToPlatform.get(level.PlatformConnectionId);
+        const platformType = connectionToPlatform.get(level.PlatformConnectionId || '');
 
         // Handle pool-based inventory (forked products with PlatformConnectionId = null)
         // These are shared products where PoolId is set but no platform connection yet
@@ -2770,8 +2771,8 @@ const ProductDetailScreen = observer(
           platformLocationState[platformType].locations.push({
             id: locId,
             name: locationName,
-            connectionId: level.PlatformConnectionId,
-            connectionName: connectionToName.get(level.PlatformConnectionId) || platformType,
+            connectionId: level.PlatformConnectionId || '',
+            connectionName: connectionToName.get(level.PlatformConnectionId || '') || platformType,
           });
         }
 
@@ -3000,7 +3001,7 @@ const ProductDetailScreen = observer(
           // Get the LIVE price from InventoryLevels if available
           // Use the first inventory level's price for this platform as the "base" price
           const platformInventory = rawInventoryLevels?.filter(lvl =>
-            connectionToPlatform.get(lvl.PlatformConnectionId) === platformKeyLower
+            connectionToPlatform.get(lvl.PlatformConnectionId || '') === platformKeyLower
           ) || [];
           const livePrice = platformInventory[0]?.Price;
           const liveCompareAtPrice = platformInventory[0]?.CompareAtPrice;
@@ -3686,7 +3687,7 @@ const ProductDetailScreen = observer(
                 styles.notificationBanner,
                 {
                   opacity: bannerOpacity,
-                  backgroundColor: bannerClickable ? '#93C822' + 'E6' : theme.colors.primary + 'E6', // Green for clickable
+                  backgroundColor: bannerClickable ? BRAND_PRIMARY + 'E6' : theme.colors.primary + 'E6', // Green for clickable
                 }
               ]}
             >
@@ -3917,16 +3918,16 @@ const ProductDetailScreen = observer(
                                 {getPlatform(platform) ? (
                                   <PlatformLogo type={platform} size={18} />
                                 ) : (
-                                  <Icon name="store" size={18} color={'#93C822'} />
+                                  <Icon name="store" size={18} color={BRAND_PRIMARY} />
                                 )}
                               </View>
                               <View style={styles.platformDetails}>
                                 <Text style={[styles.platformName, { color: theme.colors.text }]}>{platformLabel}</Text>
-                                <Text style={{ fontSize: 12, color: '#93C822' }}>Ready to publish</Text>
+                                <Text style={{ fontSize: 12, color: BRAND_PRIMARY }}>Ready to publish</Text>
                               </View>
                             </View>
                             <TouchableOpacity
-                              style={[styles.syncButton, { backgroundColor: '#93C822', paddingHorizontal: 16, paddingVertical: 8 }]}
+                              style={[styles.syncButton, { backgroundColor: BRAND_PRIMARY, paddingHorizontal: 16, paddingVertical: 8 }]}
                               onPress={() => handlePublishToPlatform(platform)}
                               disabled={isCurrentlyPublishing}
                             >
@@ -3968,13 +3969,13 @@ const ProductDetailScreen = observer(
                           >
                             <View style={styles.platformInfo}>
                               <View style={styles.platformLogoContainer}>
-                                <Icon name="account-group-outline" size={18} color={partnership.isShared ? '#93C822' : '#FFF'} />
+                                <Icon name="account-group-outline" size={18} color={partnership.isShared ? BRAND_PRIMARY : '#FFF'} />
                               </View>
                               <View style={styles.platformDetails}>
                                 <Text style={[styles.platformName, { color: theme.colors.text }]} numberOfLines={1}>
                                   {partnership.partnerOrgName}
                                 </Text>
-                                <Text style={{ fontSize: 12, color: partnership.isShared ? '#93C822' : theme.colors.textSecondary }}>
+                                <Text style={{ fontSize: 12, color: partnership.isShared ? BRAND_PRIMARY : theme.colors.textSecondary }}>
                                   {partnership.isShared ? 'Shared' : 'Not shared'} • {partnership.poolName}
                                 </Text>
                               </View>
@@ -3993,13 +3994,13 @@ const ProductDetailScreen = observer(
                                 </TouchableOpacity>
                               ) : (
                                 <View style={[styles.delistButton, { backgroundColor: '#E0E7FF', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6 }]}>
-                                  <Icon name="check" size={14} color="#93C822" style={{ marginRight: 4 }} />
+                                  <Icon name="check" size={14} color={BRAND_PRIMARY} style={{ marginRight: 4 }} />
                                   <Text style={{ color: '#ffffffff', fontWeight: '500', fontSize: 13 }}>Shared</Text>
                                 </View>
                               )
                             ) : (
                               <TouchableOpacity
-                                style={[styles.syncButton, { backgroundColor: '#93C822', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6 }]}
+                                style={[styles.syncButton, { backgroundColor: BRAND_PRIMARY, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6 }]}
                                 onPress={() => shareWithPartner(partnership.inviteId)}
                               >
                                 <Icon name="share-variant-outline" size={14} color="#fff" style={{ marginRight: 4 }} />

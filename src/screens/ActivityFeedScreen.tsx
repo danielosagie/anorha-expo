@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useMemo, useContext } from 'react';
-import { API_BASE_URL } from '../config/env';
 import {
   View,
   Text,
@@ -21,7 +20,8 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { observer } from '@legendapp/state/react';
 import { useLegendState } from '../context/LegendStateContext';
-import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import { supabase } from '../../lib/supabase';
+import { apiFetch } from '../../lib/apiClient';
 import { useOrg } from '../context/OrgContext';
 import PlatformFilterChips from '../components/PlatformFilterChips';
 import InventoryListCard from '../components/InventoryListCard';
@@ -226,12 +226,8 @@ const ActivityFeedScreen = observer(() => {
     }
 
     try {
-      const token = await ensureSupabaseJwt();
-
       // Fetch org members from backend (should include Clerk data)
-      const membersRes = await fetch(`${API_BASE_URL}/api/organizations/${currentOrg.id}/members`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const membersRes = await apiFetch(`/api/organizations/${currentOrg.id}/members`);
 
       if (membersRes.ok) {
         const members = await membersRes.json();
@@ -281,12 +277,6 @@ const ActivityFeedScreen = observer(() => {
     }
 
     try {
-      const token = await ensureSupabaseJwt();
-      if (!token) {
-        setLoading(false);
-        return;
-      }
-
       // Build query string with cursor and orgId if provided
       let queryString = `limit=50`;
       if (cursor) {
@@ -297,19 +287,7 @@ const ActivityFeedScreen = observer(() => {
         queryString += `&orgId=${encodeURIComponent(currentOrg.id)}`;
       }
 
-      const base = API_BASE_URL;
-      const fullUrl = `${base}/api/activity?${queryString}`;
-
-      const response = await fetch(
-        fullUrl,
-        {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
+      const response = await apiFetch(`/api/activity?${queryString}`);
 
       if (!response.ok) {
         console.error(`[ActivityFeed] HTTP ${response.status} ${response.statusText}`);
@@ -456,10 +434,7 @@ const ActivityFeedScreen = observer(() => {
       return;
     }
     try {
-      const token = await ensureSupabaseJwt();
-      const response = await fetch(`${API_BASE_URL}/api/liquidation/campaigns`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const response = await apiFetch('/api/liquidation/campaigns');
       if (response.ok) {
         const data = await response.json();
         if (data.success) setCampaigns(data.campaigns || []);
@@ -477,11 +452,9 @@ const ActivityFeedScreen = observer(() => {
     const orgId = currentOrg?.id;
     if (!orgId) return;
     try {
-      const token = await ensureSupabaseJwt();
-      if (!token) throw new Error('Not authenticated');
-      const res = await fetch(
-        `${API_BASE_URL}/api/organizations/${encodeURIComponent(orgId)}/activity/${encodeURIComponent(activityId)}/undo`,
-        { method: 'POST', headers: { Authorization: `Bearer ${token}` } }
+      const res = await apiFetch(
+        `/api/organizations/${encodeURIComponent(orgId)}/activity/${encodeURIComponent(activityId)}/undo`,
+        { method: 'POST' },
       );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || 'Undo failed');

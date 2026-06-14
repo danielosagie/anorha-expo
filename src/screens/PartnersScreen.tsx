@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
     View,
     Text,
@@ -597,7 +598,7 @@ export default function PartnersScreen() {
             <ScrollView
                 contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
                 showsVerticalScrollIndicator={false}
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#93C822" />}
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND_PRIMARY} />}
             >
                 <PageHeader
                     title="Partners"
@@ -680,7 +681,7 @@ export default function PartnersScreen() {
                     </>
                 )}
 
-                {loading && <ActivityIndicator size="large" color="#93C822" style={{ marginTop: 40 }} />}
+                {loading && <ActivityIndicator size="large" color={BRAND_PRIMARY} style={{ marginTop: 40 }} />}
             </ScrollView>
 
 

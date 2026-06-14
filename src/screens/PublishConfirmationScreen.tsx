@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, Image, TouchableOpacity, ScrollView } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes, PackagePlus } from 'lucide-react-native';
@@ -107,7 +108,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
         </View>
 
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 16, justifyContent: "center" }}>
-          <Icon name="check-circle" size={22} color={'#93C822'} />
+          <Icon name="check-circle" size={22} color={BRAND_PRIMARY} />
           <Text style={{ color: '#000', fontWeight: '600', fontSize: 20 }}>
             {savedToInventory ? 'Saved to Inventory' : (origin === 'import' ? 'Import Complete!' : 'Product Published!')}
           </Text>
@@ -250,7 +251,7 @@ const styles = StyleSheet.create({
   value: { color: '#000', fontWeight: '500' },
   chip: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 12, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: '#fff' },
   platformPill: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 12, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, backgroundColor: '#fff' },
-  primaryBtn: { marginTop: 18, backgroundColor: '#93C822', borderRadius: 12, paddingVertical: 14, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8, borderWidth: 0, borderColor: "7EB12D", },
+  primaryBtn: { marginTop: 18, backgroundColor: BRAND_PRIMARY, borderRadius: 12, paddingVertical: 14, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8, borderWidth: 0, borderColor: "7EB12D", },
   primaryText: { color: '#FFF', fontWeight: '800' },
   secondaryBtn: { marginTop: 12, backgroundColor: '#F3F4F6', borderRadius: 12, paddingVertical: 14, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
   secondaryText: { color: '#71717A', fontWeight: '700' },

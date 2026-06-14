@@ -1,12 +1,19 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
+
+// Shared key so the in-progress import survives leaving the flow and can be
+// picked back up (status polling / progress banner) when the user returns.
+export const LAST_IMPORT_STORAGE_KEY = 'anorha:lastImport';
 import {
   MappingSuggestion,
   ProductCreationMode,
   ConnectionLocation,
   ImportSessionCounts,
+  ImportDraft,
+  DraftDecision,
 } from '../types/importSession';
 import type { MappingSuggestion as BackendMappingSuggestion } from '../contracts';
 
@@ -80,6 +87,10 @@ export interface UseImportSessionResult {
   // Core state
   suggestions: MappingSuggestion[] | null;
   setSuggestions: React.Dispatch<React.SetStateAction<MappingSuggestion[] | null>>;
+  importDraft: ImportDraft | null;
+  draftLog: DraftDecision[];
+  recordDecision: (decision: DraftDecision) => void;
+  reopenDecision: (unitId: string) => void;
   loading: boolean;
   error: string | null;
   hasLoadedDraft: boolean;
@@ -153,6 +164,13 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
   } = options;
 
   const [suggestions, setSuggestions] = useState<MappingSuggestion[] | null>(null);
+  // The backend-built decision draft (processed: auto-resolved, clustered,
+  // ordered, with per-unit recommendations). An enhancement layered over the
+  // local pipeline — null until fetched / if the endpoint is unavailable.
+  const [importDraft, setImportDraft] = useState<ImportDraft | null>(null);
+  // The running decision log (the user's choices), held locally and saved to the
+  // server as they go. Seeded from the draft on load so the queue resumes.
+  const [draftLog, setDraftLog] = useState<DraftDecision[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasLoadedDraft, setHasLoadedDraft] = useState(false);
@@ -311,6 +329,11 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
             return {
               action: 'LINK_EXISTING' as const,
               isSelected: true,
+              // These are already linked in the DB — settle them so they never
+              // surface as a pending decision (and carry the idempotency hash).
+              resolved: true,
+              alreadyMapped: true,
+              sourceHash: m.SourceHash ?? undefined,
               platformProduct: {
                 id: m.PlatformProductId || m.Id,
                 sku: m.PlatformSku || pv?.Sku || 'N/A',
@@ -410,7 +433,17 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
                     existing.matchType = item.matchType || existing.matchType;
                     existing.confidence = item.confidence ?? existing.confidence;
                   }
+                  // Don't drop the server's decision signals for known rows: a
+                  // re-scan can newly flag a broken link or a value conflict.
+                  // extractV2Signals normalizes both naming conventions (the
+                  // resolver kit reads the v2 names); layer the server's draft
+                  // ids on top so the queue can still address the row.
                   Object.assign(existing, extractV2Signals(item));
+                  existing.suggestionId = item.suggestionId ?? existing.suggestionId;
+                  // A newly-surfaced conflict or broken link must re-open the row.
+                  if ((item.fieldConflicts && item.fieldConflicts.length > 0) || item.isStaleLink) {
+                    existing.resolved = false;
+                  }
                 }
                 continue;
               }
@@ -478,7 +511,16 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
                   isSelected,
                   matchType: item.matchType,
                   confidence: typeof item.confidence === 'number' ? item.confidence : undefined,
+                  // Normalize the v2 resolver-kit signals (classifyMatch reads
+                  // these) and carry through the server's draft-queue fields that
+                  // extractV2Signals doesn't cover.
                   ...extractV2Signals(item),
+                  suggestionId: item.suggestionId,
+                  familyMemberCount: item.familyMemberCount,
+                  familyResolvedCount: item.familyResolvedCount,
+                  familyUnmatchedCount: item.familyUnmatchedCount,
+                  isDuplicateSuggestedCanonical: item.isDuplicateSuggestedCanonical,
+                  duplicateSuggestedCanonicalSuggestionIds: item.duplicateSuggestedCanonicalSuggestionIds,
                 });
               }
             }
@@ -497,8 +539,30 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         return true;
       });
 
-      console.log(`[useImportSession] 📊 Final: ${deduped.length} total suggestions (${deduped.filter(s => s.action === 'LINK_EXISTING').length} matched, ${deduped.filter(s => s.action === 'UNMATCHED').length} unmatched)`);
+      // Clustering, auto-resolve, ordering — all owned by the backend now. The
+      // app just keeps the raw rows for the lobby's matched/skipped tabs.
       setSuggestions(deduped);
+
+      // The processed plan IS the import flow now (the queue walks it and records
+      // choices locally). Cleared first so a stale draft can't outlive a refresh;
+      // the saved log comes back on the draft so the queue resumes mid-flow.
+      // Reset draft AND log together: a surviving log over a missing/empty draft
+      // would submit stale decisions and drift the lobby counts.
+      setImportDraft(null);
+      setDraftLog([]);
+      try {
+        const draftRes = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/import-draft`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        });
+        if (draftRes.ok) {
+          const draft = (await draftRes.json()) as ImportDraft;
+          setImportDraft(draft);
+          setDraftLog(Array.isArray(draft.decisions) ? draft.decisions : []);
+        }
+      } catch {
+        // ignore — draft fetch failure leaves the queue empty until refresh
+      }
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred.');
       setSuggestions([]);
@@ -508,6 +572,47 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
   }, [connectionId, isCSVImport, importedProducts]);
 
   const refreshSuggestions = useCallback(() => fetchMappingSuggestions(), [fetchMappingSuggestions]);
+
+  // ── The decision log: choices live here, saved to the server as the user goes
+  // (debounced) and pushed once at commit. Reversing is instant — it's a local
+  // edit, no round-trip. The app never derives; it just records taps.
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveDraftLog = useCallback((log: DraftDecision[]) => {
+    if (!connectionId) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      try {
+        const token = await ensureSupabaseJwt();
+        await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/import-draft/decisions`, {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ decisions: log }),
+        });
+      } catch {
+        // best-effort persistence; the in-memory log is still authoritative
+      }
+    }, 700);
+  }, [connectionId]);
+
+  // Record (or replace) a decision. Answers are keyed by unit; drops accumulate.
+  const recordDecision = useCallback((decision: DraftDecision) => {
+    setDraftLog((prev) => {
+      const next = decision.kind === 'answer'
+        ? [...prev.filter((d) => !(d.kind === 'answer' && d.unitId === decision.unitId)), decision]
+        : [...prev, decision];
+      saveDraftLog(next);
+      return next;
+    });
+  }, [saveDraftLog]);
+
+  // Step back into a decision — drop it from the log; the unit returns to the queue.
+  const reopenDecision = useCallback((unitId: string) => {
+    setDraftLog((prev) => {
+      const next = prev.filter((d) => !(d.kind === 'answer' && d.unitId === unitId));
+      saveDraftLog(next);
+      return next;
+    });
+  }, [saveDraftLog]);
 
   // Sync productCreationMode effect - update suggestions selection
   useEffect(() => {
@@ -842,32 +947,8 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
 
   const submitImport = useCallback(async () => {
     if (!connectionId || connectionId === 'csv-import') return;
-    const confirmedMappings = (suggestions || [])
-      .filter((item) => item.isSelected)
-      .map((item) => {
-        let action: string;
-        if (item.direction === 'anorha_to_platform') {
-          action = 'push';
-        } else if (item.action === 'CREATE_NEW') {
-          action = 'create';
-        } else if (item.action === 'LINK_EXISTING') {
-          action = 'link';
-        } else {
-          action = 'ignore';
-        }
-        return {
-          platformProductId: item.platformProduct.id,
-          platformVariantId: item.platformProduct.id,
-          platformProductSku: item.platformProduct.sku,
-          platformProductTitle: item.platformProduct.title,
-          sssyncVariantId:
-            item.direction === 'anorha_to_platform'
-              ? item.anorhaVariant?.id || item.platformProduct.id
-              : item.suggestedCanonicalProduct?.id || null,
-          action: action as 'link' | 'create' | 'ignore' | 'push',
-        };
-      });
-
+    // The server builds the commit items from its own decision log — the app
+    // just sends the sync rules and triggers the commit (POST import-draft/commit).
     setIsSubmitting(true);
     try {
       const token = await ensureSupabaseJwt();
@@ -930,10 +1011,10 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         productCreationMode,
       };
 
-      const confirmRes = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/confirm-mappings`, {
+      const confirmRes = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/import-draft/commit`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ confirmedMatches: confirmedMappings, syncRules: syncRulesPayload }),
+        body: JSON.stringify({ decisions: draftLog, syncRules: syncRulesPayload }),
       });
 
       if (!confirmRes.ok) {
@@ -943,6 +1024,28 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
 
       const result = await confirmRes.json().catch(() => ({}));
       const jobId = result?.jobId;
+      const operationId = result?.operationId;
+
+      // Persist the in-flight import so the user can leave and come back to
+      // accurate, resumable progress (polled via useImportProgress).
+      if (operationId) {
+        try {
+          await AsyncStorage.setItem(
+            LAST_IMPORT_STORAGE_KEY,
+            JSON.stringify({
+              operationId,
+              jobId: jobId || null,
+              connectionId,
+              // Best-effort total for the progress banner: everything the user
+              // decided plus what the server auto-matched.
+              itemsTotal: (importDraft?.completed.length || 0) + (importDraft?.summary.autoResolved || 0),
+              startedAt: new Date().toISOString(),
+            }),
+          );
+        } catch (e) {
+          // non-fatal: progress UI just won't auto-resume
+        }
+      }
 
       setWizardVisible(false);
       if (onNavigate) {
@@ -962,7 +1065,8 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
     }
   }, [
     connectionId,
-    suggestions,
+    draftLog,
+    importDraft,
     selectedPool,
     poolNameInput,
     locationPoolAssignments,
@@ -980,6 +1084,10 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
   return {
     suggestions,
     setSuggestions,
+    importDraft,
+    draftLog,
+    recordDecision,
+    reopenDecision,
     loading,
     error,
     hasLoadedDraft,

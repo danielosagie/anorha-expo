@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../../../design/tokens';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import type { CampaignOverview, CampaignSummary } from '../types';
 
@@ -163,7 +164,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
     backgroundColor: 'rgba(147,200,34,0.12)',
     paddingHorizontal: 12,
     paddingVertical: 10,

@@ -1,4 +1,5 @@
 import React from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Camera, ChevronUp } from 'lucide-react-native';
 import { capture } from '../lib/analytics';
@@ -9,7 +10,7 @@ interface UsageCounterProps {
     onUpgradePress: () => void;
     isSubscriber?: boolean;
 }
-const ANORHA_GREEN = '#93C822';
+const ANORHA_GREEN = BRAND_PRIMARY;
 const ANORHA_CREAM = '#ffffffe4';
 const EXHAUSTED_BG = '#F3F4F6';
 const EXHAUSTED_TEXT = '#6B7280';

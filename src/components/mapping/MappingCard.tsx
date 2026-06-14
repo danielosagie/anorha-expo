@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, AccessibilityRole } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Animated, { FadeInUp, Layout } from 'react-native-reanimated';
-import { tokens } from '../../design/tokens';
+import { tokens, BRAND_PRIMARY} from '../../design/tokens';
 import Badge from '../ui/Badge';
 import { Image as RNImage } from 'react-native';
 // Local brand image fallback
@@ -205,7 +205,7 @@ const MappingCard: React.FC<MappingCardProps> = ({
               onPress={onRestore}
               accessibilityLabel="Restore item"
             >
-              <Icon name="restore" size={18} color="#93C822" style={{ marginRight: 6 }} />
+              <Icon name="restore" size={18} color={BRAND_PRIMARY} style={{ marginRight: 6 }} />
               <Text style={styles.primaryText}>Restore Item</Text>
             </TouchableOpacity>
           ) : isResolvedNew ? (
@@ -259,7 +259,7 @@ const MappingCard: React.FC<MappingCardProps> = ({
                     onPress={onCreate}
                     accessibilityLabel="Create as new"
                   >
-                    <Icon name="plus-box" size={18} color="#93C822" style={{ borderRadius: 6, marginRight: 6 }} />
+                    <Icon name="plus-box" size={18} color={BRAND_PRIMARY} style={{ borderRadius: 6, marginRight: 6 }} />
                     <Text style={styles.primaryText}>Add as New Item</Text>
                   </TouchableOpacity>
                 )}
@@ -468,7 +468,7 @@ const styles = StyleSheet.create({
     bottom: 6,
     left: 6,
     right: 6,
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderRadius: 10,
     paddingVertical: 6,
     alignItems: 'center',
@@ -546,7 +546,7 @@ const styles = StyleSheet.create({
   ignore: {},
   actionWide: { flex: 1 },
   search: { backgroundColor: '#5C9B00' },
-  primaryText: { textAlign: 'center', color: '#93C822', fontWeight: '600' },
+  primaryText: { textAlign: 'center', color: BRAND_PRIMARY, fontWeight: '600' },
   dangerText: { textAlign: 'center', color: '#EF4444', fontWeight: '600' },
   supportingText: {
     fontSize: tokens.fontSizes.sm,
@@ -554,7 +554,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   bannerNew: {
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderRadius: 10,
     paddingVertical: 12,
     paddingHorizontal: 14,
@@ -567,7 +567,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 70,
     borderRadius: 8,
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',

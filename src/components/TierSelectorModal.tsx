@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
     View,
     Text,
@@ -79,7 +80,7 @@ interface TierSelectorModalProps {
     hasSubscription?: boolean;
 }
 
-const ANORHA_GREEN = '#93C822';
+const ANORHA_GREEN = BRAND_PRIMARY;
 const ANORHA_GREEN_TINT = 'rgba(147,200,34,0.12)';
 const WHITE_BG = '#FFFFFF';
 

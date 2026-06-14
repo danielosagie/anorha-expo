@@ -8,7 +8,7 @@ const OrderListItem = ({ order }: { order: any }) => {
   const theme = useTheme();
   
   // Helper function to safely check status
-  const getStatusColor = (status?: string) => {
+  const getStatusColor = (status: string) => {
     if (!status) return '#999'; // Default gray if status is undefined
     
     const statusLower = status.toLowerCase();
@@ -24,7 +24,7 @@ const OrderListItem = ({ order }: { order: any }) => {
   };
   
   // Helper function to get status icon
-  const getStatusIcon = (status?: string) => {
+  const getStatusIcon = (status: string) => {
     if (!status) return 'help-circle-outline'; // Default icon if status is undefined
     
     const statusLower = status.toLowerCase();
@@ -39,8 +39,25 @@ const OrderListItem = ({ order }: { order: any }) => {
     return 'help-circle-outline'; // Default icon
   };
   
+  // Get platform icon
+  const getPlatformIcon = (platform: string) => {
+    if (!platform) return 'store-outline'; // Default icon if platform is undefined
+
+    const platformLower = platform.toLowerCase();
+
+    if (platformLower.includes('shopify')) return 'shopping';
+    if (platformLower.includes('amazon')) return 'cart';
+    if (platformLower.includes('ebay')) return 'tag';
+    if (platformLower.includes('clover')) return 'flower';
+    if (platformLower.includes('square')) return 'square';
+    if (platformLower.includes('etsy')) return 'hand-heart';
+    if (platformLower.includes('facebook')) return 'facebook';
+
+    return 'store-outline'; // Default icon
+  };
+
   // Format date to be more readable
-  const formatDate = (dateString?: string) => {
+  const formatDate = (dateString: string) => {
     if (!dateString) return 'No date';
     
     const date = new Date(dateString);

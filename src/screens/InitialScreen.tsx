@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, Image } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Button from '../components/Button';
@@ -86,7 +87,7 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   container: {
-    backgroundColor: '#F6F7F4',
+    backgroundColor: BRAND_PRIMARY,
     flex: 1,
     justifyContent: 'space-between',
     paddingHorizontal: 24,

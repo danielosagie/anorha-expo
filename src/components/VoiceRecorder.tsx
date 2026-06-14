@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
     View,
     Text,
@@ -313,7 +314,7 @@ const styles = StyleSheet.create({
     waveBar: {
         width: 4,
         height: 40,
-        backgroundColor: '#8BB04F',
+        backgroundColor: BRAND_PRIMARY,
         borderRadius: 2,
     },
     timer: {
@@ -375,7 +376,7 @@ const styles = StyleSheet.create({
     },
     retryButton: {
         flex: 1,
-        backgroundColor: '#8BB04F',
+        backgroundColor: BRAND_PRIMARY,
         paddingHorizontal: 32,
         paddingVertical: 14,
         justifyContent: "center",

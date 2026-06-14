@@ -337,7 +337,12 @@ export const normalizeDisplayName = (raw?: string | null): string => {
 
 // ── Legacy exports (derived from the registry; keep existing consumers working) ─
 
-const DEFAULT_PLATFORM_KEYS: PlatformKey[] = ALL_PLATFORM_KEYS;
+// Default connect picker shows only platforms with a real connect flow (main's
+// fix — Amazon/Whatnot/Depop have no in-app auth yet, so listing them produced
+// dead buttons). They remain in the registry; opt back in via EXPO_PUBLIC_ENABLED_PLATFORMS.
+const DEFAULT_PLATFORM_KEYS: PlatformKey[] = ALL_PLATFORM_KEYS.filter(
+  (k) => !!PLATFORMS[k].connect,
+);
 
 export const PLATFORM_CONFIG: Record<PlatformKey, { label: string; icon: string }> =
   ALL_PLATFORM_KEYS.reduce(
@@ -354,11 +359,11 @@ const parseEnabledPlatforms = (): PlatformKey[] => {
 
   const tokens = raw
     .split(',')
-    .map((p) => p.trim().toLowerCase())
+    .map((p: string) => p.trim().toLowerCase())
     .filter(Boolean) as PlatformKey[];
 
   const valid = tokens.filter((p) =>
-    (DEFAULT_PLATFORM_KEYS as PlatformKey[]).includes(p),
+    (ALL_PLATFORM_KEYS as PlatformKey[]).includes(p),
   );
 
   return valid.length ? valid : DEFAULT_PLATFORM_KEYS;

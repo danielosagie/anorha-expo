@@ -37,7 +37,7 @@ const platforms = [
 
 const PlatformSelector = ({ platforms: selectedPlatforms, onChange }: { platforms: Record<string, boolean>; onChange: (next: Record<string, boolean>) => void }) => {
   const theme = useTheme();
-  
+
   const togglePlatform = (platformId: string) => {
     onChange({
       ...selectedPlatforms,

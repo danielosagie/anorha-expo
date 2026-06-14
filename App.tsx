@@ -5,7 +5,7 @@ import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { LogBox } from 'react-native';
 import 'react-native-get-random-values';
-import { ensureSupabaseJwt, supabase } from './src/lib/supabase';
+import { ensureSupabaseJwt, forceRefreshSupabaseJwt, supabase } from './src/lib/supabase';
 import { LegendStateContext } from './src/context/LegendStateContext';
 import { LegendStateControlContext } from './src/context/LegendStateControlContext';
 import { initializeFallbackLegendState, initializeLegendState, LegendStateObservables } from './src/utils/SupaLegend';
@@ -30,18 +30,34 @@ import { SystemNotificationProvider } from './src/context/SystemNotificationCont
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PostHogProvider, PostHogIdentify } from './src/providers/PostHogProvider';
 import { ConvexProvider } from './src/providers/ConvexProvider';
+import * as Sentry from '@sentry/react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { init as initFlowLogger } from './src/lib/mobileFlowLogger';
 import { LiveActivityProvider } from './src/context/LiveActivityContext';
 import { AppDataProvider } from './src/context/AppDataContext';
 import AppStartupShell from './src/components/AppStartupShell';
-import { OfflineQueueProvider } from './src/context/OfflineQueueContext';
 import {
   ActiveFlowCheckpoint,
   clearActiveFlowCheckpoint,
   loadActiveFlowCheckpoint,
   saveActiveFlowCheckpoint,
 } from './src/utils/activeFlowPersistence';
+
+// Crash visibility. Empty/missing DSN no-ops cleanly so dev builds are
+// unaffected. Must run at module load, before the app renders.
+const SENTRY_DSN = process.env.EXPO_PUBLIC_SENTRY_DSN;
+if (SENTRY_DSN) {
+  try {
+    Sentry.init({
+      dsn: SENTRY_DSN,
+      enableNative: true,
+      environment: process.env.EXPO_PUBLIC_ENV || 'development',
+      tracesSampleRate: 0.1,
+    });
+  } catch (e) {
+    console.warn('[Sentry] init failed:', e);
+  }
+}
 
 // Complete any in-app browser auth session (e.g. OAuth redirect from Google Sign-In)
 WebBrowser.maybeCompleteAuthSession();
@@ -76,8 +92,10 @@ const App: React.FC = () => {
     const { isLoaded: clerkLoaded, isSignedIn } = useAuth();
     const session = useContext(SessionContext);
 
-    // Use process resumption hook properly
-    const processResumption = ENABLE_PROCESS_FEATURES ? useProcessResumption() : null;
+    // Call the hook unconditionally (rules-of-hooks); it has no side effects
+    // until initializeProcessSystem() is invoked, so gating the *result* is safe.
+    const processResumptionApi = useProcessResumption();
+    const processResumption = ENABLE_PROCESS_FEATURES ? processResumptionApi : null;
     const hasAttemptedAutoResumeRef = useRef(false);
 
     const buildFallbackCompleteRoute = useCallback((processType: 'match' | 'generate' | 'match-and-generate', jobId: string) => {
@@ -401,6 +419,11 @@ const App: React.FC = () => {
         appState = nextState;
         if (!(nextState === 'active' && wasBackgrounded)) return;
 
+        // On resume, the OS may have suspended the bridge's refresh timer while
+        // backgrounded, leaving an expired Supabase JWT. Force a re-exchange so
+        // Realtime + API calls don't silently 401 before the next scheduled refresh.
+        void forceRefreshSupabaseJwt();
+
         void (async () => {
           const checkpoint = await loadActiveFlowCheckpoint(userId);
           if (!checkpoint || checkpoint.status === 'completed') return;
@@ -538,7 +561,7 @@ const App: React.FC = () => {
               />
             ) : !isSignedIn ? (
               // If not signed in, don't wait for session/legend state
-              <AppNavigator />
+              <SafeErrorBoundary><AppNavigator /></SafeErrorBoundary>
             ) : !session?.ready ? (
               <AppStartupShell
                 title="Restoring your workspace"
@@ -550,7 +573,7 @@ const App: React.FC = () => {
                 message="Reconnecting shared app state and restoring your last workspace."
               />
             ) : (
-              <AppNavigator />
+              <SafeErrorBoundary><AppNavigator /></SafeErrorBoundary>
             )}
             <FlashMessage position="top" />
             <GlobalPlatformPickerOverlay />
@@ -590,8 +613,7 @@ const App: React.FC = () => {
   const DebugClerkState = () => {
     const { isLoaded, isSignedIn } = useAuth();
     const navigationRef = useRef<NavigationContainerRef<any>>(null);
-    const navKey = `navigation-${isSignedIn ? 'signed-in' : 'signed-out'}-0`;
-    console.log('[App] Clerk state:', { isLoaded, isSignedIn, navKey });
+    console.log('[App] Clerk state:', { isLoaded, isSignedIn });
 
     // Debug what happens when isSignedIn changes
     useEffect(() => {
@@ -619,10 +641,12 @@ const App: React.FC = () => {
       <PlatformConnectionsProvider>
         <PlatformPickerOverlayProvider>
           <NavigationContainer
-            key={navKey}
+            // NOTE: intentionally NOT keyed on isSignedIn. Keying here remounted the entire
+            // container on every auth toggle, destroying nav state and dropping in-flight deep
+            // links. The signed-in/out trees below swap on their own; the container persists.
             ref={navigationRef}
             onReady={() => {
-              console.log('[App] Navigation container ready, key:', navKey, 'isSignedIn:', isSignedIn);
+              console.log('[App] Navigation container ready, isSignedIn:', isSignedIn);
             }}
           >
             <>
@@ -641,7 +665,7 @@ const App: React.FC = () => {
               ) : (
                 <ThemeProvider>
                   <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-                  <AppNavigator />
+                  <SafeErrorBoundary><AppNavigator /></SafeErrorBoundary>
                   <FlashMessage position="top" />
                 </ThemeProvider>
               )}
@@ -659,11 +683,9 @@ const App: React.FC = () => {
       <ConvexProvider>
         <PostHogProvider>
           <SafeAreaProvider>
-            <OfflineQueueProvider>
-              <SystemNotificationProvider>
-                <DebugClerkState />
-              </SystemNotificationProvider>
-            </OfflineQueueProvider>
+            <SystemNotificationProvider>
+              <DebugClerkState />
+            </SystemNotificationProvider>
           </SafeAreaProvider>
         </PostHogProvider>
       </ConvexProvider>
@@ -671,4 +693,4 @@ const App: React.FC = () => {
   );
 };
 
-export default App; 
+export default Sentry.wrap(App);

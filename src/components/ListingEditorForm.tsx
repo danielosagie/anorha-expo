@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle, useRef, useCallback } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Modal, Pressable, FlatList, SectionList, Alert, ActivityIndicator, Dimensions, Linking, Platform } from 'react-native';
 import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
 import { Paths, Directory, File } from 'expo-file-system';
@@ -1668,7 +1669,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 <Text style={styles.fieldLabel}>Category{categoryRequired ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
                 {typeof activeData.taxonomyConfidence === 'number' && activeData.taxonomyConfidence >= 0.5 && (
                   <View style={{ backgroundColor: activeData.taxonomyConfidence > 0.8 ? 'rgba(147, 200, 34, 0.12)' : 'rgba(234, 179, 8, 0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-                    <Text style={{ color: activeData.taxonomyConfidence > 0.8 ? '#93C822' : '#ca8a04', fontSize: 10, fontWeight: '600' }}>
+                    <Text style={{ color: activeData.taxonomyConfidence > 0.8 ? BRAND_PRIMARY : '#ca8a04', fontSize: 10, fontWeight: '600' }}>
                       {['llm', 'groq', 'tree', 'rerank'].includes(activeData.taxonomySource || '') ? '✨ AI Match' : 'Suggested'} {Math.round(activeData.taxonomyConfidence * 100)}%
                     </Text>
                   </View>
@@ -1682,11 +1683,11 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
                 >
                   {taxonomyLoading[activePlatformKeyLower] ? (
-                    <ActivityIndicator size="small" color="#93C822" />
+                    <ActivityIndicator size="small" color={BRAND_PRIMARY} />
                   ) : (
-                    <Sparkles size={14} color="#93C822" />
+                    <Sparkles size={14} color={BRAND_PRIMARY} />
                   )}
-                  <Text style={{ color: '#93C822', fontSize: 13, fontWeight: '600' }}>
+                  <Text style={{ color: BRAND_PRIMARY, fontSize: 13, fontWeight: '600' }}>
                     {taxonomyLoading[activePlatformKeyLower] ? 'Finding...' : 'Auto-Find'}
                   </Text>
                 </TouchableOpacity>
@@ -1842,8 +1843,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                   {showResearchPricing && (
                     <TouchableOpacity onPress={fetchPricingResearch} disabled={pricingResearchLoading} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      {pricingResearchLoading ? <ActivityIndicator size="small" color="#93C822" /> : <Package size={14} color="#93C822" />}
-                      <Text style={{ color: '#93C822', fontSize: 13, fontWeight: '600' }}>{pricingResearchLoading ? 'Researching...' : 'Research Pricing'}</Text>
+                      {pricingResearchLoading ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Package size={14} color={BRAND_PRIMARY} />}
+                      <Text style={{ color: BRAND_PRIMARY, fontSize: 13, fontWeight: '600' }}>{pricingResearchLoading ? 'Researching...' : 'Research Pricing'}</Text>
                     </TouchableOpacity>
                   )}
                   {onOpenFieldPanel && (
@@ -1855,7 +1856,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 style={[
                   styles.input,
                   priceError ? { borderColor: '#ef4444' } : null,
-                  hasExternalUpdate('price') ? { borderColor: '#93C822', borderWidth: 2 } : null,
+                  hasExternalUpdate('price') ? { borderColor: BRAND_PRIMARY, borderWidth: 2 } : null,
                   highlightedField === 'price (either flat or all variants)' ? { borderColor: '#ef4444', borderWidth: 2, backgroundColor: '#FEF2F2' } : null
                 ]}
                 value={String((activeData as any).price ?? '')}
@@ -2478,6 +2479,60 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         })()}
         {supportsVariants ? (
           <>
+            {/* Suggested Price Tag - Apply to All */}
+            {activeTab === 'all' && (() => {
+              // Get suggested price from any platform: prefer aiPriceRecommendation.recommended, else aiRecommendedPrice
+              const suggestedPrice = (() => {
+                for (const pk of platformKeys) {
+                  const pd = platforms[pk] as PlatformState;
+                  if (pd?.aiPriceRecommendation?.recommended) return pd.aiPriceRecommendation!.recommended;
+                  if (pd?.aiRecommendedPrice) return pd.aiRecommendedPrice;
+                }
+                return null;
+              })();
+
+              // Function to apply suggested price to ALL variants across ALL platforms
+              const applySuggestedPriceToAll = () => {
+                if (!suggestedPrice) return;
+                const nextPlatforms = { ...platforms };
+                for (const pk of platformKeys) {
+                  const pd = nextPlatforms[pk] || {};
+                  const isShopify = pk === 'shopify';
+                  const newVariants = (pd.variants || []).map((v: any) => {
+                    if (isShopify) {
+                      // Shopify: set variant.price (global)
+                      return { ...v, price: suggestedPrice };
+                    } else {
+                      // Square/Clover: set price in all inventoryByLocation entries
+                      const updatedInv = { ...(v.inventoryByLocation || {}) };
+                      Object.keys(updatedInv).forEach(locId => {
+                        updatedInv[locId] = { ...updatedInv[locId], price: suggestedPrice };
+                      });
+                      return { ...v, price: suggestedPrice, inventoryByLocation: updatedInv };
+                    }
+                  });
+                  nextPlatforms[pk] = { ...pd, price: suggestedPrice, variants: newVariants };
+                }
+                onChangePlatforms(nextPlatforms);
+              };
+
+              return suggestedPrice ? (
+                <TouchableOpacity
+                  onPress={applySuggestedPriceToAll}
+                  style={{ backgroundColor: '#FFF', borderRadius: 8, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#rgb(201, 204, 210)', flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                >
+                  <Sparkles size={18} color="#000" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 12, fontWeight: '600', color: '#000' }}>Our Suggested Price</Text>
+                    <Text style={{ fontSize: 15, fontWeight: '700', color: '#6B7280' }}>${suggestedPrice.toFixed(2)}</Text>
+                  </View>
+                  <View style={{ backgroundColor: BRAND_PRIMARY, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 }}>
+                    <Text style={{ color: '#FFF', fontWeight: '600', fontSize: 12 }}>Apply to All</Text>
+                  </View>
+                </TouchableOpacity>
+              ) : null;
+            })()}
+
             {/* Use VariantInventoryEditor for both "All" and Specific Platform tabs */}
             {(() => {
               // 1. Build locations list based on active tab
@@ -3073,17 +3128,16 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
 export default forwardRef<ListingEditorFormRef, Props>(ListingEditorFormInner);
 
-
 const styles = StyleSheet.create({
   mediaRow: { paddingVertical: 10, borderBottomColor: '#E5E5E5', borderBottomWidth: 1, paddingBottom: 10, marginBottom: 10, gap: 8 },
   thumbWrap: { width: 86, height: 86, borderRadius: 8, overflow: 'hidden', marginRight: 8, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: '#F5F5F5', alignItems: 'center', justifyContent: 'center' },
   thumb: { width: '100%', height: '100%' },
   addThumb: { borderStyle: 'dashed' },
-  thumbCover: { borderColor: '#93C822', borderWidth: 2 },
+  thumbCover: { borderColor: BRAND_PRIMARY, borderWidth: 2 },
   coverBadge: { position: 'absolute', bottom: 6, left: 6, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2, flexDirection: 'row', alignItems: 'center' },
   mediaHint: { textAlign: 'center', color: '#71717A', marginTop: 6 },
   pill: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, borderColor: '#E5E5E5', marginRight: 8 },
-  pillActive: { backgroundColor: 'rgba(147,200,34,0.12)', borderColor: '#93C822' },
+  pillActive: { backgroundColor: 'rgba(147,200,34,0.12)', borderColor: BRAND_PRIMARY },
   pillText: { color: '#000' },
   pillTextActive: { fontWeight: '700' },
   pillDashed: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: '#E5E5E5' },
@@ -3110,9 +3164,9 @@ const styles = StyleSheet.create({
     minHeight: 58,
   },
   modernInputFocused: {
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
     backgroundColor: '#FFFFFF',
-    shadowColor: '#93C822',
+    shadowColor: BRAND_PRIMARY,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
@@ -3190,7 +3244,7 @@ const styles = StyleSheet.create({
   qtyInput: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, width: 100, color: '#000' },
   variantImgSlot: { width: 120, height: 120, borderWidth: 2, borderStyle: 'dashed', borderColor: '#E5E5E5', borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   btnSecondary: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
-  btnPrimary: { backgroundColor: '#93C822', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
+  btnPrimary: { backgroundColor: BRAND_PRIMARY, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
   optionCard: { marginTop: 10, backgroundColor: '#fff' },
   optionSummaryCard: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, padding: 12, marginTop: 10, backgroundColor: '#fff' },
   platformPill: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 8, paddingHorizontal: 12, margin: 6, flexDirection: 'row', alignItems: 'center' },
@@ -3238,7 +3292,7 @@ const styles = StyleSheet.create({
     color: '#6B7280',
   },
   generatePlatformPill: {
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
     backgroundColor: 'rgba(147,200,34,0.05)',
     marginTop: 4,
   },

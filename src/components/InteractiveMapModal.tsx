@@ -1,4 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Modal, TouchableOpacity, Text, StyleSheet, ActivityIndicator, Alert, TextInput, FlatList } from 'react-native';
 import { WebView } from 'react-native-webview';
 import * as Location from 'expo-location';
@@ -174,8 +175,8 @@ export default function InteractiveMapModal({ visible, onClose, onSelect, initia
 
           // 1-mile radius circle (approx 1609 meters)
           var circle = L.circle(map.getCenter(), {
-            color: '#93C822',
-            fillColor: '#93C822',
+            color: BRAND_PRIMARY,
+            fillColor: BRAND_PRIMARY,
             fillOpacity: 0.2,
             radius: 1609
           }).addTo(map);
@@ -227,7 +228,7 @@ export default function InteractiveMapModal({ visible, onClose, onSelect, initia
 
                 {loadingLocation && (
                     <View style={styles.loaderOverlay}>
-                        <ActivityIndicator size="large" color="#93C822" />
+                        <ActivityIndicator size="large" color={BRAND_PRIMARY} />
                         <Text style={{ marginTop: 10 }}>Locating you...</Text>
                     </View>
                 )}
@@ -311,7 +312,7 @@ const styles = StyleSheet.create({
     title: { fontSize: 17, fontWeight: '600' },
     closeBtn: { padding: 4 },
     confirmBtn: { padding: 4 },
-    confirmText: { color: '#93C822', fontSize: 17, fontWeight: '600' },
+    confirmText: { color: BRAND_PRIMARY, fontSize: 17, fontWeight: '600' },
     loaderOverlay: {
         ...StyleSheet.absoluteFillObject,
         backgroundColor: 'rgba(255,255,255,0.9)',

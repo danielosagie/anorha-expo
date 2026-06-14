@@ -1,7 +1,5 @@
 import { useState, useEffect } from 'react';
-import { io, Socket } from 'socket.io-client';
-import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
-import { API_BASE_URL } from '../config/env';
+import { acquireCollaborationSocket, releaseCollaborationSocket, type Socket } from '../lib/collaborationSocket';
 
 interface SyncProgress {
   connectionId: string;
@@ -13,75 +11,43 @@ interface SyncProgress {
   details?: Record<string, any>;
 }
 
-async function getToken() {
-  return ensureSupabaseJwt();
-}
-
 export function useSyncProgress(connectionId: string) {
   const [progress, setProgress] = useState<SyncProgress | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
 
   useEffect(() => {
-    let newSocket: Socket | null = null;
+    let active = true;
+    let acquiredSocket: Socket | null = null;
 
-    // ✅ Get auth token before connecting to WebSocket
-    const connectWithAuth = async () => {
-      try {
-        const token = await getToken()
-
-        if (!token) {
-          console.warn('[useSyncProgress] No auth token found');
-          return;
-        }
-
-        // ✅ Pass auth token in connection query
-        newSocket = io(`${API_BASE_URL}/collaboration`, {
-          transports: ['websocket'],
-          timeout: 5000,
-          auth: {
-            token: token,
-          },
-          query: {
-            token: token,
-          },
-        });
-
-        newSocket.on('connect', () => {
-          console.log('[useSyncProgress] Connected to WebSocket with auth');
-        });
-
-        newSocket.on('connect_error', (error: any) => {
-          console.error('[useSyncProgress] WebSocket connection error:', error);
-        });
-
-        newSocket.on('disconnect', () => {
-          console.log('[useSyncProgress] Disconnected from WebSocket');
-        });
-
-        newSocket.on('sync:progress', (data: SyncProgress) => {
-          if (data.connectionId === connectionId) {
-            console.log('[useSyncProgress] Received progress update:', data);
-            setProgress(data);
-          }
-        });
-
-        setSocket(newSocket);
-      } catch (error) {
-        console.error('[useSyncProgress] Error connecting to WebSocket:', error);
+    const handleProgress = (data: SyncProgress) => {
+      if (data.connectionId === connectionId) {
+        setProgress(data);
       }
     };
 
-    connectWithAuth();
+    // Share the single /collaboration connection instead of opening our own.
+    acquireCollaborationSocket()
+      .then((s) => {
+        if (!active) {
+          // Effect was cleaned up before the socket resolved — release our hold.
+          releaseCollaborationSocket();
+          return;
+        }
+        acquiredSocket = s;
+        setSocket(s);
+        s?.on('sync:progress', handleProgress);
+      })
+      .catch((error) => {
+        console.error('[useSyncProgress] Error acquiring collaboration socket:', error);
+      });
 
-    // ✅ CLEANUP: Disconnect socket when component unmounts or connectionId changes
     return () => {
-      if (newSocket) {
-        console.log('[useSyncProgress] Cleaning up WebSocket connection');
-        newSocket.disconnect();
-      }
+      active = false;
+      // Detach only our listener; the shared socket lives on for other subscribers.
+      acquiredSocket?.off('sync:progress', handleProgress);
+      releaseCollaborationSocket();
     };
   }, [connectionId]);
 
   return { progress, socket };
 }
-

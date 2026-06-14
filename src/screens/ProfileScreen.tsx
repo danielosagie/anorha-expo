@@ -1,5 +1,6 @@
 import React, { useState, useContext, useEffect, useCallback, useMemo } from 'react';
 import { API_BASE_URL } from '../config/env';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput, Image, Linking, InteractionManager, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
 import Animated, { FadeInUp } from 'react-native-reanimated';
@@ -11,7 +12,6 @@ import Button from '../components/Button';
 import PlaceholderImage from '../components/Placeholder';
 import OrgSwitcher from '../components/OrgSwitcher';
 import PlatformLogo from '../components/PlatformLogo';
-import { PlatformKey } from '../config/platforms';
 import { useNavigation, useFocusEffect, useRoute, RouteProp, useIsFocused } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -40,6 +40,7 @@ import { Zap, ShieldCheck, CheckCircle as LucideCheckCircle, Bell as LucideBell 
 
 import LocationsManagerV2 from '../components/LocationsManagerV2';
 import ConnectedPlatformList from '../components/ConnectedPlatformList';
+import { PLATFORM_CONFIG, PlatformKey } from '../config/platforms';
 import BaseModal from '../components/BaseModal';
 import ConnectDisclosureModal from '../components/ConnectDisclosureModal';
 import { AppDropdown } from '../components/ui/AppDropdown';
@@ -134,7 +135,7 @@ const CONNECTION_STATUS = {
 const getStatusDisplay = (status: string): { label: string, color: string, icon: string } => {
   switch (status?.toLowerCase()) {
     case CONNECTION_STATUS.ACTIVE:
-      return { label: 'Connected', color: '#93C822', icon: 'check-circle' };
+      return { label: 'Connected', color: BRAND_PRIMARY, icon: 'check-circle' };
     case CONNECTION_STATUS.INACTIVE:
       return { label: 'Inactive', color: '#8E8E93', icon: 'pause-circle' };
     case CONNECTION_STATUS.PENDING:
@@ -142,11 +143,11 @@ const getStatusDisplay = (status: string): { label: string, color: string, icon:
     case CONNECTION_STATUS.REVIEW:
       return { label: 'Review Products', color: '#FF9500', icon: 'sync-alert' };
     case CONNECTION_STATUS.READY_TO_SYNC:
-      return { label: 'Ready to Sync', color: '#93C822', icon: 'check-circle' };
+      return { label: 'Ready to Sync', color: BRAND_PRIMARY, icon: 'check-circle' };
     case CONNECTION_STATUS.SCANNING:
       return { label: 'Scanning...', color: '#5856D6', icon: 'loading' };
     case CONNECTION_STATUS.SYNCING:
-      return { label: 'Syncing...', color: '#93C822', icon: 'loading' };
+      return { label: 'Syncing...', color: BRAND_PRIMARY, icon: 'loading' };
     case CONNECTION_STATUS.RECONCILING:
       return { label: 'Reconciling...', color: '#5856D6', icon: 'loading' };
     case CONNECTION_STATUS.ERROR:
@@ -684,7 +685,8 @@ const ProfileScreen = () => {
       setDisclosureError(null);
       setDisclosureTarget({ platform });
     } else {
-      Alert.alert('Connect', `Connect logic for ${platform} not implemented yet.`);
+      const label = PLATFORM_CONFIG[platform as PlatformKey]?.label || platform;
+      Alert.alert(`${label} coming soon`, `Connecting ${label} isn't available yet. We'll let you know when it's ready.`);
     }
   }, [setShopifyFlowStep, setPastedShopifyUrl, setManualShopName, navigation, refreshConnections, currentOrg?.id]);
 
@@ -1721,7 +1723,7 @@ const ProfileScreen = () => {
 
       {item.badge ? (
         <View style={[styles.menuBadge, { backgroundColor: '#93C82220' }]}>
-          <Text style={[styles.menuBadgeText, { color: '#93C822' }]}>{item.badge}</Text>
+          <Text style={[styles.menuBadgeText, { color: BRAND_PRIMARY }]}>{item.badge}</Text>
         </View>
       ) : !item.customComponent && (
         <Icon name="chevron-right" size={20} color="#C7C7CC" />
@@ -1845,7 +1847,7 @@ const ProfileScreen = () => {
                   }}
                   style={{ marginTop: 8 }}
                 >
-                  <Text style={{ fontSize: 12, color: '#93C822', fontWeight: 'bold', textDecorationLine: 'underline' }}>
+                  <Text style={{ fontSize: 12, color: BRAND_PRIMARY, fontWeight: 'bold', textDecorationLine: 'underline' }}>
                     Switch to {availableOrgs.find(o => !o.name.includes('Workspace'))?.name || 'Real Org'}
                   </Text>
                 </TouchableOpacity>
@@ -1923,7 +1925,7 @@ const ProfileScreen = () => {
           </View>
 
           {isLoadingConnections ? (
-            <ActivityIndicator size="large" color={'#93C822'} style={{ marginVertical: 20 }} />
+            <ActivityIndicator size="large" color={BRAND_PRIMARY} style={{ marginVertical: 20 }} />
           ) : (
             <View style={styles.integrationsContainer}>
               {(() => {
@@ -2051,7 +2053,7 @@ const ProfileScreen = () => {
                     {devBundleLoading ? 'Preparing Dev Bundle...' : 'Copy Dev Bundle'}
                   </Text>
                 </View>
-                {devBundleLoading && <ActivityIndicator size="small" color="#93C822" />}
+                {devBundleLoading && <ActivityIndicator size="small" color={BRAND_PRIMARY} />}
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.menuItem} onPress={logCurrentUserToken}>
@@ -2140,44 +2142,10 @@ const ProfileScreen = () => {
               onPlatformToggle={() => { }}
               onGeneratePress={() => { }}
               onStartConnect={(platform) => {
+                // Route through the single source of truth so this picker stays in
+                // sync with every platform (csv/clover were missing here before).
                 setIsAddConnectionModalVisible(false);
-                if (platform === 'shopify') {
-                  setShopifyFlowStep('enterInfo');
-                  setPastedShopifyUrl('');
-                  setManualShopName('');
-                } else if (platform === 'clover') {
-                  handleCloverConnect();
-                } else if (platform === 'square') {
-                  handleSquareConnect();
-                } else if (platform === 'facebook') {
-                  handleFacebookConnect();
-                } else if (platform === 'ebay') {
-                  (async () => {
-                    const { data: { user } } = await supabase.auth.getUser();
-                    if (!user) return;
-                    const finalRedirectUri = 'anorhaapp://auth-callback?platform=ebay';
-                    const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
-                    const url = `${SSSYNC_API_BASE_URL}/api/auth/ebay/login?userId=${user.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}${orgIdParam}`;
-                    const result = await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
-
-                    // Parse result for errors
-                    const parsed = parseOAuthResult(result, 'eBay');
-                    if (!parsed.success && parsed.errorMessage) {
-                      showAlert({
-                        title: 'Connection Failed',
-                        message: parsed.errorMessage,
-                        type: 'error'
-                      });
-                    } else if (parsed.success) {
-                      refreshConnections(); // Refresh connections on success
-                    }
-                  })();
-                } else if (platform === 'depop' || platform === 'whatnot') {
-                  setDisclosureError(null);
-                  setDisclosureTarget({ platform });
-                } else {
-                  Alert.alert('Connect', `Connect logic for ${platform} not implemented yet.`);
-                }
+                handleStartConnectPlatform(platform);
               }}
             />
 
@@ -2213,7 +2181,7 @@ const ProfileScreen = () => {
               {/* Option 1: Guided Setup */}
               <View style={styles.shopifyOption}>
                 <View style={styles.shopifyOptionHeader}>
-                  <View style={[styles.stepNumber, { backgroundColor: '#93C822' }]}>
+                  <View style={[styles.stepNumber, { backgroundColor: BRAND_PRIMARY }]}>
                     <Text style={styles.stepNumberText}>1</Text>
                   </View>
                   <Text style={styles.shopifyOptionTitle}>Guided Setup (Recommended)</Text>
@@ -2247,7 +2215,7 @@ const ProfileScreen = () => {
                     onPress={handlePasteFromClipboard}
                     style={styles.shopifyPasteButton}
                   >
-                    <Icon name="content-paste" size={20} color={'#93C822'} />
+                    <Icon name="content-paste" size={20} color={BRAND_PRIMARY} />
                   </TouchableOpacity>
                 </View>
               </View>
@@ -2407,7 +2375,7 @@ const ProfileScreen = () => {
             This action is permanent and cannot be undone. All your data will be lost.
           </Text>
           <TouchableOpacity onPress={() => navigation.getParent()?.navigate('DeleteAccountInfo')} style={{ marginBottom: 20 }}>
-            <Text style={{ fontSize: 14, color: '#93C822', fontWeight: '500' }}>Learn more about account and data deletion</Text>
+            <Text style={{ fontSize: 14, color: BRAND_PRIMARY, fontWeight: '500' }}>Learn more about account and data deletion</Text>
           </TouchableOpacity>
 
           {/* Reason Dropdown */}

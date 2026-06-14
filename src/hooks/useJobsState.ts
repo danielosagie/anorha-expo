@@ -10,8 +10,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { API_BASE_URL } from '../config/env';
-import { ensureSupabaseJwt } from '../lib/supabase';
+import { fetchGenerateJobStatus } from '../lib/generateJobs';
 
 // Step status types
 export type StepStatus = 'pending' | 'queued' | 'processing' | 'completed' | 'failed' | 'skipped';
@@ -109,7 +108,6 @@ export interface UseJobsStateReturn {
     stopPolling: () => void;
 }
 
-const BASE_URL = API_BASE_URL;
 const STORAGE_KEY = 'jobsState';
 
 // Status color mapping
@@ -295,37 +293,24 @@ export function useJobsState(initParams?: JobsStateInitParams): UseJobsStateRetu
 
         if (processingItems.length === 0) return;
 
-        try {
-            const token = await ensureSupabaseJwt();
-            if (!token) return;
+        for (const item of processingItems) {
+            try {
+                const status = await fetchGenerateJobStatus(item.generate.jobId!);
+                if (!status) continue;
 
-            for (const item of processingItems) {
-                try {
-                    const res = await fetch(
-                        `${BASE_URL}/api/products/generate/jobs/${item.generate.jobId}/status`,
-                        { headers: { Authorization: `Bearer ${token}` } }
-                    );
-
-                    if (!res.ok) continue;
-
-                    const status = await res.json();
-
-                    if (status.status === 'completed') {
-                        markGenerateComplete(item.index);
-                    } else if (status.status === 'failed') {
-                        markGenerateFailed(item.index);
-                    } else {
-                        updateItemGenerate(item.index, {
-                            currentStage: status.currentStage,
-                            progress: status.progress,
-                        });
-                    }
-                } catch (e) {
-                    console.warn(`[useJobsState] Failed to poll job ${item.generate.jobId}:`, e);
+                if (status.status === 'completed') {
+                    markGenerateComplete(item.index);
+                } else if (status.status === 'failed') {
+                    markGenerateFailed(item.index);
+                } else {
+                    updateItemGenerate(item.index, {
+                        currentStage: status.currentStage,
+                        progress: status.progress,
+                    });
                 }
+            } catch (e) {
+                console.warn(`[useJobsState] Failed to poll job ${item.generate.jobId}:`, e);
             }
-        } catch (e) {
-            console.warn('[useJobsState] Polling error:', e);
         }
     }, [items, markGenerateComplete, markGenerateFailed, updateItemGenerate]);
 

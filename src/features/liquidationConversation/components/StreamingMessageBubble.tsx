@@ -1,5 +1,6 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { BRAND_PRIMARY } from '../../../design/tokens';
 import Animated, {
   Easing,
   FadeIn,
@@ -629,7 +630,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   cursor: {
-    color: '#93C822',
+    color: BRAND_PRIMARY,
   },
   // ── Collapsible activity card (reasoning + tool steps) ──────────────
   activityCard: {
@@ -783,7 +784,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   decisionPrimary: {
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
     backgroundColor: 'rgba(147,200,34,0.12)',
   },
   decisionPrimaryText: {

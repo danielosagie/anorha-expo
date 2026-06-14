@@ -66,7 +66,19 @@ cleanup_*.sql
 
 # ───────────────────────────── OS / editor ──────────────────────────────
 .DS_Store
+**/.DS_Store
 *.orig.*
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+
+# Historical review docs — intentionally kept out of the repo (do not un-hide silently)
+ANTI_PATTERNS_FOUND.md
+LISTING_EDITOR_ARCHITECTURE_REVIEW.md
+PHASE_1_IMPLEMENTATION.md
+FRONTEND_SYNC_LESSON.md
+HOOKS_COMPARISON.md
+QUICK_REFERENCE.md
+REACT_TYPESCRIPT_FUNDAMENTALS.md
+SPREAD_OPERATOR_GUIDE.md
+FIX_BARCODE_INVENTORY.md

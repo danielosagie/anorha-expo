@@ -12,6 +12,7 @@
  */
 
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
   Modal, View, Text, TouchableOpacity, ScrollView, Image,
   StyleSheet, ActivityIndicator, Animated, Easing, TextInput
@@ -20,7 +21,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { ItemJobState, StepStatus } from '../hooks/useJobsState';
 
 // Anorha green - same as selected match, done states across the app
-const ANORHA_GREEN = '#93C822';
+const ANORHA_GREEN = BRAND_PRIMARY;
 
 // Step configuration
 const STEPS = [

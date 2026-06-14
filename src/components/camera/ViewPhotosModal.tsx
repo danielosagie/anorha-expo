@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { BRAND_PRIMARY } from '../../design/tokens';
 import {
   View,
   Text,
@@ -16,7 +17,7 @@ import DraggableFlatList, { RenderItemParams, ScaleDecorator } from 'react-nativ
 import { GestureHandlerRootView, PanGestureHandler, State } from 'react-native-gesture-handler';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const ANORHA_GREEN = '#93C822';
+const ANORHA_GREEN = BRAND_PRIMARY;
 
 export interface CapturedPhoto {
   id: string;
@@ -344,7 +345,7 @@ const styles = StyleSheet.create({
   },
   coverPhotoSlot: {
     borderWidth: 2,
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
   },
   photoSlotDragging: {
     opacity: 0.9,

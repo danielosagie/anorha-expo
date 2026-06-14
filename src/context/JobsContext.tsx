@@ -10,8 +10,8 @@
 
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { API_BASE_URL } from '../config/env';
-import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
+import { fetchGenerateJobStatus } from '../lib/generateJobs';
 
 // Types
 export type StepStatus = 'pending' | 'queued' | 'processing' | 'completed' | 'failed' | 'skipped';
@@ -76,7 +76,6 @@ interface JobsContextValue {
 const JobsContext = createContext<JobsContextValue | null>(null);
 
 const STORAGE_PREFIX = 'jobs_state_';
-const BASE_URL = API_BASE_URL;
 
 // Provider component
 export function JobsProvider({ children }: { children: ReactNode }) {
@@ -314,37 +313,25 @@ export function JobsProvider({ children }: { children: ReactNode }) {
 
         if (processing.length === 0) return;
 
-        try {
-            const token = await ensureSupabaseJwt();
-            if (!token) return;
+        for (const [indexStr, job] of processing) {
+            const index = parseInt(indexStr, 10);
+            try {
+                const status = await fetchGenerateJobStatus(job.jobId);
+                if (!status) continue;
 
-            for (const [indexStr, job] of processing) {
-                const index = parseInt(indexStr, 10);
-                try {
-                    const res = await fetch(
-                        `${BASE_URL}/api/products/generate/jobs/${job.jobId}/status`,
-                        { headers: { Authorization: `Bearer ${token}` } }
-                    );
-
-                    if (!res.ok) continue;
-                    const status = await res.json();
-
-                    if (status.status === 'completed') {
-                        markGenerateComplete(index);
-                    } else if (status.status === 'failed') {
-                        markGenerateFailed(index);
-                    } else {
-                        updateGenerateJob(index, {
-                            currentStage: status.currentStage,
-                            progress: status.progress,
-                        });
-                    }
-                } catch (e) {
-                    console.warn(`[JobsContext] Poll failed for job ${job.jobId}:`, e);
+                if (status.status === 'completed') {
+                    markGenerateComplete(index);
+                } else if (status.status === 'failed') {
+                    markGenerateFailed(index);
+                } else {
+                    updateGenerateJob(index, {
+                        currentStage: status.currentStage,
+                        progress: status.progress,
+                    });
                 }
+            } catch (e) {
+                console.warn(`[JobsContext] Poll failed for job ${job.jobId}:`, e);
             }
-        } catch (e) {
-            console.warn('[JobsContext] Polling error:', e);
         }
     }, [state.generateJobs, markGenerateComplete, markGenerateFailed, updateGenerateJob]);
 

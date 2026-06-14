@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { API_BASE_URL } from '../config/env';
+import { BRAND_PRIMARY } from '../design/tokens';
 import type {
   UnicodeSpinnerDefinition,
   CameraMode,
@@ -120,6 +121,7 @@ import {
   FlowEvents,
 } from '../lib/mobileFlowLogger';
 import { buildMatchAnalyzeProducts } from '../utils/buildMatchAnalyzeProducts';
+import { safeJson } from '../utils/safeJson';
 import { openQuickScanStream, QuickScanPhase, QuickScanStreamEvent } from '../lib/quickScanStream';
 import { ShelfScanPlaceholderRow, ShelfScanProgressCard } from '../components/camera/ShelfScanProgressCard';
 import BottomActionBar from '../components/BottomActionBar';
@@ -1681,7 +1683,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         return;
       }
 
-      const data = await response.json();
+      const data = await safeJson<any>(response);
+
+      if (!data) {
+        console.warn('[BARCODE] Non-JSON response from lookup');
+        setCurrentInstruction('ready');
+        return;
+      }
 
       if (data.error) {
         console.log(`[BARCODE] Product not found: ${data.error}`);
@@ -2224,7 +2232,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           throw new Error(`API error: ${response.status}`);
         }
 
-        const data = await response.json();
+        const data = await safeJson<any>(response);
+        if (!data?.jobId) {
+          throw new Error('Invalid response from manifest endpoint');
+        }
         console.log('[MANIFEST] Job started:', data.jobId);
 
         // Show the ManifestReviewSheet with the job ID
@@ -2301,7 +2312,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           throw new Error(`API error: ${response.status}`);
         }
 
-        const data = await response.json();
+        const data = await safeJson<any>(response);
+        if (!data?.jobId) {
+          throw new Error('Invalid response from receipt endpoint');
+        }
         console.log('[RECEIPT] Job started:', data.jobId);
 
         // Show the ReceiptReviewSheet with the job ID
@@ -4421,6 +4435,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   );
 };
 
+// Styles
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -4537,9 +4552,9 @@ const styles = StyleSheet.create({
   },
   activeItemIndicator: {
     width: 72,
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderWidth: 2,
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
     borderRadius: 12,
     paddingHorizontal: 8,
     paddingVertical: 5,
@@ -4577,6 +4592,238 @@ const styles = StyleSheet.create({
     backgroundColor: '#4CAF50',
     opacity: 0.8,
   },
+
+  // Bottom Controls Styles
+  bottomControls: {
+    position: 'absolute',
+    bottom: 100,
+    left: 0,
+    right: 0,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    zIndex: 10,
+  },
+  controlsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+    marginBottom: 20,
+  },
+  galleryButton: {
+    flexDirection: "column",
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  captureButton: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'white',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 4,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  captureButtonInner: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'white',
+  },
+  focusButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  // Mode Selector Styles
+  modeSelectorWrapper: {
+    alignItems: 'center',
+    gap: 4,
+    justifyContent: 'center',
+    zIndex: 100, // Ensure popup is above other elements
+  },
+  modeButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  modePopup: {
+    position: 'absolute',
+    right: -40,
+    bottom: 65, // Position above the button
+    alignItems: 'flex-end',
+    width: 350, // Wide enough for 3 items
+    // Center the popup (280px) over the button (50px).
+    // Button is right aligned in wrapper. Wrapper is 50px.
+    // To center 280 over 50: right = -(280-50)/2 = -115
+    paddingRight: 30,
+  },
+  modePopupContent: {
+    flexDirection: 'row',
+    backgroundColor: '#000',
+    borderRadius: 24,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'space-between',
+    width: '100%',
+    ...Platform.select({
+      ios: { shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.30, shadowRadius: 4.65 },
+      android: { elevation: 8 },
+    }),
+  },
+  modePopupItem: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    gap: 8,
+    flex: 1,
+  },
+  modePopupItemActive: {
+    backgroundColor: 'rgba(147, 200, 34, 0.2)', // Anorha green tint for active
+  },
+  modePopupLabel: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  modePopupLabelActive: {
+    color: '#fff',
+  },
+  modePopupIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+  },
+  modePopupIconContainerActive: {
+    borderColor: '#fff',
+    backgroundColor: BRAND_PRIMARY, // Anorha green for active icon
+  },
+  modePopupArrow: {
+    width: 0,
+    height: 0,
+    backgroundColor: 'transparent',
+    borderStyle: 'solid',
+    borderLeftWidth: 10,
+    borderRightWidth: 10,
+    borderBottomWidth: 0,
+    borderTopWidth: 10,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderBottomColor: 'transparent',
+    borderTopColor: '#000', // Match content background
+    marginTop: -1,
+    // Arrow should be centered on the button. 
+    // Popup is centered on the button.
+    // So arrow should be centered on the popup.
+    // Since alignItems is center on modePopup, just remove margins.
+  },
+  continueButtonContainer: {
+    paddingHorizontal: 20,
+  },
+  barcodeActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  barcodeSecondaryButton: {
+    flex: 1,
+    borderRadius: 22,
+    paddingVertical: 14,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  barcodeSecondaryText: {
+    color: '#E5E7EB',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  itemNavRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  itemNavArrow: {
+    height: 48,
+    flexDirection: "row",
+    paddingHorizontal: 8,
+    gap: 4,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  itemNavArrowMatchBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -4,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: BRAND_PRIMARY,
+  },
+  itemNavArrowDisabled: {
+    opacity: 0.4,
+  },
+  itemNavNewButton: {
+    backgroundColor: 'rgb(127, 127, 127)',
+  },
+  continueButton: {
+    flex: 1,
+    marginHorizontal: 12,
+    backgroundColor: BRAND_PRIMARY,
+    borderRadius: 22,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  continueButtonDisabled: {
+    backgroundColor: 'rgba(255,255,255,0.15)',
+  },
+  continueButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  itemCountBadge: {
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    marginRight: 8,
+  },
+  itemCountBadgeText: {
+    color: 'rgba(0,0,0,0.7)',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  // Sheet Styles
   matchSheet: {
     position: 'absolute',
     bottom: 0,
@@ -4591,6 +4838,903 @@ const styles = StyleSheet.create({
     marginBottom: 0,
     maxHeight: SCREEN_HEIGHT * 0.9,
   },
+  bulkItemsSheet: {
+    position: 'absolute',
+    top: SCREEN_HEIGHT * 0.12,
+    left: 0,
+    right: 0,
+    backgroundColor: 'white',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 20,
+    paddingBottom: 20,
+    marginBottom: 0,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    marginBottom: 10,
+  },
+  sheetTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+  },
+  headerNewItemButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(147, 200, 34, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  reviewItemsHint: {
+    fontSize: 12,
+    color: '#888',
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  matchActionsRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  reviewDetailsButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 25,
+    backgroundColor: '#f5f5f5',
+    gap: 8,
+  },
+  reviewDetailsButtonText: {
+    color: '#666',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  listProductButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 25,
+    backgroundColor: BRAND_PRIMARY,
+    gap: 8,
+  },
+  listProductButtonDisabled: {
+    backgroundColor: '#e0e0e0',
+  },
+  listProductButtonText: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  sheetContent: {
+    flexGrow: 1,
+    paddingHorizontal: 20,
+  },
+
+  // Match Results Styles
+  matchResults: {
+    paddingHorizontal: 20,
+    marginBottom: 20,
+  },
+  matchCard: {
+    flexDirection: 'row',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 2,
+    borderColor: 'transparent',
+    position: 'relative',
+    minHeight: 120,
+  },
+  matchCardSelected: {
+    borderColor: BRAND_PRIMARY,
+    backgroundColor: 'rgba(147, 200, 34, 0.08)',
+  },
+  matchImage: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    marginRight: 12,
+  },
+  matchInfo: {
+    flex: 1,
+  },
+  matchTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+  },
+  matchDescription: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 4,
+  },
+  matchPrice: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#333',
+    marginBottom: 4,
+  },
+  matchShipping: {
+    fontSize: 12,
+    color: '#2563eb',
+    marginBottom: 4,
+  },
+  matchSource: {
+    fontSize: 12,
+    color: '#888',
+    fontStyle: 'italic',
+  },
+  matchSelectionOverlay: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    zIndex: 10,
+  },
+  matchCheckmark: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: BRAND_PRIMARY,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3 },
+      android: { elevation: 4 },
+    }),
+  },
+  selectionHint: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 16,
+    paddingHorizontal: 20,
+  },
+  manualSafetyWrap: {
+    marginBottom: 10,
+  },
+  manualSafetyLabel: {
+    color: '#666',
+    fontSize: 12,
+    marginBottom: 6,
+  },
+  manualSafetyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  manualSafetyInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    color: '#111',
+    backgroundColor: '#FFF',
+    fontSize: 13,
+  },
+  manualSafetyButton: {
+    backgroundColor: '#111',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  manualSafetyButtonText: {
+    color: '#FFF',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  primaryButtonDisabled: {
+    backgroundColor: '#ccc',
+    opacity: 0.6,
+  },
+  sheetActions: {
+    paddingHorizontal: 20,
+  },
+  primaryButton: {
+    backgroundColor: BRAND_PRIMARY,
+    borderRadius: 12,
+    paddingVertical: 15,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  primaryButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  secondaryActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  secondaryButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  secondaryButtonText: {
+    color: '#666',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+
+  // Deep Search Styles
+  searchInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginBottom: 16,
+  },
+  searchIcon: {
+    marginRight: 12,
+  },
+  searchPlaceholder: {
+    flex: 1,
+    fontSize: 16,
+    color: '#666',
+  },
+  searchSubmitButton: {
+    backgroundColor: '#4CAF50',
+    borderRadius: 20,
+    width: 32,
+    height: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  templateOptions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+  templateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 6,
+  },
+  templateButtonText: {
+    fontSize: 14,
+    color: '#666',
+  },
+  broadSearchButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 12,
+    paddingVertical: 12,
+    gap: 8,
+    marginBottom: 20,
+  },
+  broadSearchText: {
+    fontSize: 16,
+    color: '#666',
+  },
+  broadSearchButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#2196F3',
+  },
+  // Green notification indicator styles for quick matches button
+  quickMatchesButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderWidth: 2,
+    borderColor: '#e1e1e1ff',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginTop: 10,
+    gap: 6,
+  },
+  quickMatchesButtonText: {
+    color: BRAND_PRIMARY,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  matchNotificationDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: BRAND_PRIMARY,
+  },
+  photoAttachments: {
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+    paddingTop: 16,
+    marginBottom: 100,
+  },
+  attachmentTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 12,
+  },
+  attachmentPhotos: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  attachmentPhoto: {
+    position: 'relative',
+    width: 50,
+    height: 50,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  attachmentPhotoImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  attachmentPhotoNumber: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    color: 'white',
+    fontSize: 10,
+    fontWeight: 'bold',
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+
+  // Bulk Items Sheet Styles
+  sheetSubtitle: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  bulkItemContainer: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 2,
+    borderColor: '#D9D9D9',
+    minHeight: 100,
+  },
+  photoSlotsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    alignItems: 'center',
+  },
+  photoSlotWrapper: {
+    position: 'relative',
+    width: 60,
+    height: 60,
+  },
+  photoSlot: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    backgroundColor: 'white',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  photoSlotImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  photoSlotNumberBadge: {
+    position: 'absolute',
+    bottom: 36,
+    left: 0,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  photoSlotNumberBadgeText: {
+    color: 'white',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  emptyPhotoSlot: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+  },
+  photoSlotLabel: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingVertical: 2,
+  },
+  photoSlotLabelText: {
+    color: 'white',
+    fontSize: 10,
+    textAlign: 'center',
+    fontWeight: '500',
+  },
+  addPhotoButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    backgroundColor: '#f5f5f5ff',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderStyle: 'dashed',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'column',
+  },
+  editItemButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 36,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  editItemButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  deleteItemButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 36,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  deleteItemButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#DC2626',
+  },
+  newItemButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 12,
+    paddingVertical: 16,
+    marginBottom: 10,
+    gap: 8,
+  },
+  newItemButtonText: {
+    fontSize: 16,
+    color: '#666',
+    fontWeight: '500',
+  },
+  searchForProductButton: {
+    backgroundColor: BRAND_PRIMARY,
+    borderRadius: 12,
+    paddingVertical: 16,
+    marginBottom: 10,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  disabledButton: {
+    backgroundColor: '#e0e0e0',
+    opacity: 0.6,
+  },
+  searchForProductButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+
+  // New Bulk Sheet Styles
+  dragHandle: {
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  dragHandleButton: {
+    alignItems: 'center',
+    paddingVertical: 5,
+    paddingHorizontal: 15,
+  },
+  dragHandleBar: {
+    width: 60,
+    height: 4,
+    backgroundColor: '#ddd',
+    borderRadius: 2,
+  },
+  itemsScrollContainer: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  scrollContent: {
+    paddingBottom: 24,
+    paddingHorizontal: 10,
+  },
+  itemHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  itemLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333333',
+  },
+  itemLabelContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  activeItemContainer: {
+    borderColor: BRAND_PRIMARY,
+    borderWidth: 2,
+    backgroundColor: '#f8fff8',
+  },
+  activeItemLabel: {
+    color: BRAND_PRIMARY,
+    fontWeight: '700',
+  },
+  activeItemBadge: {
+    backgroundColor: BRAND_PRIMARY,
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginLeft: 8,
+  },
+  activeItemBadgeText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  loadingBadge: {
+    backgroundColor: '#f0f8ff',
+    borderColor: BRAND_PRIMARY,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginLeft: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  loadingBadgeText: {
+    color: BRAND_PRIMARY,
+    fontSize: 10,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+  matchSkeletonCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
+    borderWidth: 1,
+    borderRadius: 10,
+    marginTop: 10,
+    gap: 10,
+  },
+  matchSkeletonThumb: {
+    width: 38,
+    height: 38,
+    borderRadius: 8,
+    backgroundColor: '#E2E8F0',
+  },
+  matchSkeletonLineShort: {
+    width: '50%',
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#E2E8F0',
+    marginBottom: 6,
+  },
+  matchSkeletonLineLong: {
+    width: '80%',
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#E2E8F0',
+  },
+  selectedMatchCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
+    borderWidth: 1,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  selectedMatchCardLocalInventory: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#86EFAC',
+  },
+  selectedMatchImage: {
+    width: 38,
+    height: 38,
+    borderRadius: 8,
+    marginRight: 10,
+  },
+  selectedMatchLabel: {
+    fontSize: 10,
+    color: '#64748B',
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  selectedMatchLabelLocalInventory: {
+    color: '#15803D',
+  },
+  selectedMatchTitle: {
+    fontSize: 13,
+    color: '#1E293B',
+    fontWeight: '600',
+  },
+  selectedMatchSubtitle: {
+    marginTop: 3,
+    fontSize: 11,
+    color: '#475569',
+  },
+  noMatchCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 10,
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
+    borderWidth: 1,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  noMatchTitle: {
+    fontSize: 13,
+    color: '#475569',
+    fontWeight: '600',
+  },
+  noMatchHint: {
+    marginTop: 3,
+    fontSize: 11,
+    color: '#64748B',
+  },
+  matchErrorCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+    borderWidth: 1,
+    borderRadius: 10,
+    marginBottom: 10,
+    gap: 10,
+  },
+  matchErrorTitle: {
+    color: '#991B1B',
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  matchErrorText: {
+    color: '#B91C1C',
+    fontSize: 12,
+  },
+  matchActionPill: {
+    backgroundColor: '#E2E8F0',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  matchActionPillText: {
+    fontSize: 11,
+    color: '#334155',
+    fontWeight: '700',
+  },
+  matchActionPillLocalInventory: {
+    backgroundColor: '#DCFCE7',
+  },
+  matchActionPillLocalInventoryText: {
+    color: '#166534',
+  },
+  matchActionPillDisabled: {
+    opacity: 0.55,
+  },
+  matchActionPillDisabledText: {
+    color: '#64748B',
+  },
+  matchActionPillDanger: {
+    backgroundColor: '#DC2626',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  matchActionPillDangerText: {
+    fontSize: 11,
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  itemFooterRow: {
+    marginTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    paddingTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  itemFooterRemoveButton: {
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    backgroundColor: '#FEE2E2',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  itemFooterRemoveText: {
+    color: '#991B1B',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  itemFooterCountBlock: {
+    flex: 1,
+    minHeight: 38,
+    gap: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  itemFooterCountLabel: {
+    color: '#334155',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  itemFooterCountInput: {
+    textAlign: 'right',
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0F172A',
+    paddingVertical: 4,
+  },
+  bulkPhotoDeleteButton: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  coverPhotoSlot: {
+    borderColor: BRAND_PRIMARY,
+    borderWidth: 2,
+  },
+  coverPhotoLabel: {
+    backgroundColor: BRAND_PRIMARY,
+  },
+  addPhotoText: {
+    fontSize: 12,
+    color: '#999',
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  maxPhotosText: {
+    fontSize: 12,
+    color: '#ff6b6b',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  bottomActions: {
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+    paddingTop: 10,
+    marginTop: 10,
+    marginBottom: 10,
+  },
+
+  // Progress Bar Styles
+  progressBarContainer: {
+    position: 'absolute',
+    top: 60,
+    left: 20,
+    right: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    zIndex: 20,
+  },
+  progressBarBackground: {
+    flex: 1,
+    height: 4,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: BRAND_PRIMARY,
+    borderRadius: 2,
+  },
+  progressSpinner: {
+    marginLeft: 12,
+    width: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unicodeSpinnerText: {
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    textAlign: 'center',
+    includeFontPadding: false,
+  },
+
+  // Notification Bar Styles
+  notificationBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0,0,0,0.9)',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    paddingTop: Platform.OS === 'ios' ? 50 : 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+    zIndex: 30,
+  },
+  notificationText: {
+    color: 'white',
+    fontSize: 14,
+    marginLeft: 10,
+    flex: 1,
+    fontWeight: '500',
+  },
+
+  // Permission Styles
   permissionContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -4613,7 +5757,7 @@ const styles = StyleSheet.create({
     marginBottom: 30,
   },
   permissionButton: {
-    backgroundColor: '#93C822',
+    backgroundColor: BRAND_PRIMARY,
     borderRadius: 25,
     paddingHorizontal: 30,
     paddingVertical: 15,
@@ -4652,6 +5796,129 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 4,
     textAlign: 'center',
+  },
+  closeButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    zIndex: 10,
+  },
+  closeButtonInner: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F2F2F7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  exitButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    minHeight: 34,
+    maxHeight: 34,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F2F2F7',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  exitButtonText: {
+    color: '#64748B',
+    fontWeight: '600',
+    marginLeft: 6,
+    fontSize: 15,
+  },
+  sheetHeaderSpacer: {
+    minWidth: 72,
+    minHeight: 34,
+  },
+  sheetHeaderTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 10,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    color: BRAND_PRIMARY,
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 10,
+  },
+  barcodeResultContainer: {
+    padding: 20,
+    backgroundColor: 'white',
+    borderRadius: 10,
+    marginHorizontal: 20,
+    marginBottom: 20,
+  },
+  barcodeProductImage: {
+    width: '100%',
+    height: 200,
+    borderRadius: 10,
+    marginBottom: 20,
+  },
+  barcodeProductDetails: {
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+  },
+  barcodeProductTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 10,
+  },
+  barcodeProductDescription: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 10,
+  },
+  barcodeProductMeta: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  barcodeMetaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  barcodeMetaLabel: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
+  },
+  barcodeMetaValue: {
+    fontSize: 14,
+    color: '#333',
+    fontWeight: '600',
+  },
+  barcodePlatformIndicators: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  barcodePlatformChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  barcodePlatformChipText: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
+  },
+  barcodeActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 20,
   },
 });
 

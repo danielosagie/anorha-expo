@@ -1,4 +1,5 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
   View,
   Text,
@@ -318,13 +319,13 @@ const PartnerWelcomeOverlay: React.FC<{
           <TouchableOpacity
             onPress={onConnect}
             style={{
-              backgroundColor: '#93C822',
+              backgroundColor: BRAND_PRIMARY,
               paddingVertical: 16,
               paddingHorizontal: 32,
               borderRadius: 12,
               width: '100%',
               alignItems: 'center',
-              shadowColor: '#93C822',
+              shadowColor: BRAND_PRIMARY,
               shadowOffset: { width: 0, height: 4 },
               shadowOpacity: 0.3,
               shadowRadius: 8,
@@ -1162,6 +1163,17 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
     return selected;
   }, [draftPools]);
 
+  // Locations already assigned to an existing pool. The backend enforces one
+  // pool per location, so offering these in "New pool" just leads to a rejected
+  // Create — don't show them.
+  const assignedLocationIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const pool of pools) {
+      for (const id of pool.locationIds || []) s.add(id);
+    }
+    return s;
+  }, [pools]);
+
   // Filter available locations to exclude already-selected ones
   const getFilteredAvailableLocations = useCallback((connectionId: string) => {
     const connection = available
@@ -1871,7 +1883,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
                             const allSelectedInCreate = new Set(Object.values(newPoolLocations).flat());
                             const filteredLocs = platformGroup
                               ?.connections.find((c) => c.connectionId === connId)
-                              ?.locations.filter(loc => !allSelectedInCreate.has(loc.platformLocationId)) || [];
+                              ?.locations.filter(loc => !allSelectedInCreate.has(loc.platformLocationId) && !assignedLocationIds.has(loc.platformLocationId)) || [];
 
                             return (
                               <View style={[styles.dropdownContainer, { marginTop: 6 }]}>
@@ -2014,7 +2026,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
                             .flatMap((p) => p.connections)
                             .find((c) => c.connectionId === selectedPlatformForManage.connectionId);
                           const filteredLocs = connection?.locations.filter(
-                            loc => !allSelectedInCreate.has(loc.platformLocationId)
+                            loc => !allSelectedInCreate.has(loc.platformLocationId) && !assignedLocationIds.has(loc.platformLocationId)
                           ) || [];
 
                           return filteredLocs.length === 0 ? (
@@ -2249,7 +2261,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
                             .flatMap((p) => p.connections)
                             .find((c) => c.connectionId === selectedPlatformForManage.connectionId);
                           const filteredLocs = connection?.locations.filter(
-                            loc => !allSelectedInCreate.has(loc.platformLocationId)
+                            loc => !allSelectedInCreate.has(loc.platformLocationId) && !assignedLocationIds.has(loc.platformLocationId)
                           ) || [];
 
                           return filteredLocs.length === 0 ? (

@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import * as Sentry from '@sentry/react-native';
 
 interface Props {
   children: React.ReactNode;
@@ -23,6 +24,13 @@ export class SafeErrorBoundary extends React.Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error('[SafeErrorBoundary] Caught error:', error, errorInfo);
+    try {
+      Sentry.captureException(error, {
+        extra: { componentStack: errorInfo?.componentStack },
+      });
+    } catch {
+      // never let crash reporting itself crash the fallback UI
+    }
   }
 
   render() {

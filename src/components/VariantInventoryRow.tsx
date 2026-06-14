@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, TextInput, TouchableOpacity, Image, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
@@ -137,7 +138,7 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
                                 <View style={styles.priceContainer}>
                                     <Text style={[styles.currencySymbol, { color: '#ffffffff' }]}>$</Text>
                                     <TextInput
-                                        style={[styles.qtyInputSimple, externalUpdateQuantity && { borderColor: '#93C822', borderWidth: 2 }]}
+                                        style={[styles.qtyInputSimple, externalUpdateQuantity && { borderColor: BRAND_PRIMARY, borderWidth: 2 }]}
                                         value={localQty}
                                         onChangeText={handleQtyChange}
                                         keyboardType="number-pad"
@@ -156,7 +157,7 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
                                 <View style={styles.priceContainer}>
                                     <Text style={[styles.currencySymbol, isGlobalPrice && { color: '#1976D2' }]}>$</Text>
                                     <TextInput
-                                        style={[styles.priceInput, priceInputStyle, externalUpdatePrice && { borderColor: '#93C822', borderWidth: 2 }]}
+                                        style={[styles.priceInput, priceInputStyle, externalUpdatePrice && { borderColor: BRAND_PRIMARY, borderWidth: 2 }]}
                                         value={localPrice}
                                         onChangeText={handlePriceChange}
                                         keyboardType="decimal-pad"

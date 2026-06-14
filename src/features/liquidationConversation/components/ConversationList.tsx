@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { BRAND_PRIMARY } from '../../../design/tokens';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -70,7 +71,7 @@ export const ConversationList = ({
   if (loading) {
     return (
       <View style={styles.loadingWrap}>
-        <ActivityIndicator size="small" color="#93C822" />
+        <ActivityIndicator size="small" color={BRAND_PRIMARY} />
         <Text style={styles.loadingText}>Loading messages...</Text>
       </View>
     );

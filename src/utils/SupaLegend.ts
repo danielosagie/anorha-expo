@@ -8,47 +8,32 @@ import 'react-native-get-random-values'; // Polyfill for uuid
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../../lib/supabase'; // Ensure this is the auth-configured client
 import { SupabaseClient } from '@supabase/supabase-js'; // Removed PostgrestQueryBuilder import
-// import { Database } from './database.types'; // We'll generate this later
+import type {
+  ProductVariantsRow,
+  InventoryLevelsRow,
+  PlatformProductMappingsRow,
+  ProductImagesRow,
+  PlatformConnectionsRow,
+} from '../types/database.types';
 
-// export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey);
+// ============================================================================
+// Data model — derived from the generated DB schema (src/types/database.types.ts),
+// which is the SINGLE SOURCE OF TRUTH. Each app type = the DB Row + explicit
+// client-only fields. Column names/types can no longer silently drift from the DB;
+// regenerate types with `npm run db:types` after a migration.
+// ============================================================================
 
-// Interfaces (can remain at top level)
-export interface ProductVariant {
-    Id: string; // uuid
-    ProductId: string; // uuid
-    UserId: string; // uuid
-    Sku: string;
-    Barcode?: string | null;
-    Title: string;
-    Description?: string | null;
-    Price: number; // decimal
-    CompareAtPrice?: number | null; // decimal
-    Weight?: number | null; // decimal
-    WeightUnit?: string | null;
-    Options?: Record<string, any> | null; // jsonb
-    RequiresShipping?: boolean; // Added missing property
-    IsTaxable?: boolean; // Added missing property
-    TaxCode?: string | null; // Added missing property
-    ImageUrls?: string[]; // Added missing property for product images
-    CreatedAt: string; // timestamptz
-    UpdatedAt: string; // timestamptz
-    status?: string | null; // Added from your select query
-    image?: string; // Example: To store a primary image URL
-    quantity?: number; // Example: To store aggregated quantity
-    platforms?: string[]; // Example
-    // Platform boolean flags for fast filtering
-    OnShopify?: boolean;
-    OnSquare?: boolean;
-    OnClover?: boolean;
-    OnAmazon?: boolean;
-    OnEbay?: boolean;
-    OnFacebook?: boolean;
-    // Variant architecture fields
-    VariantType?: 'flat' | 'base' | 'option' | null; // 'flat' = single/no-option, 'base' = parent with options, 'option' = child variant
-    IsArchived?: boolean; // Soft delete flag
-    Tags?: string[]; // Product tags
-    Metadata?: Record<string, any> | null; // jsonb for AI data, platform-specific data, etc.
-    PrimaryImageUrl?: string | null; // Primary image URL
+/**
+ * A ProductVariant as held in the Legend State cache: the DB row plus a few
+ * client-only/derived fields. (The cache select currently fetches a subset of
+ * columns — see initializeLegendState — so non-selected fields are absent at runtime.)
+ */
+export interface ProductVariant extends ProductVariantsRow {
+  // Client-only / derived (NOT database columns):
+  image?: string; // primary image URL convenience
+  quantity?: number; // aggregated quantity convenience
+  platforms?: string[]; // derived from On* flags
+  ImageUrls?: string[]; // hydrated from ProductImages
 }
 
 // Function to generate IDs locally (can remain at top level)
@@ -364,22 +349,8 @@ export function addInventoryLevel(...) { ... }
 export function updateInventoryLevel(...) { ... }
 */
 
-// Define PlatformProductMapping interface based on sssync-db.md
-export interface PlatformProductMapping {
-    Id: string; // uuid
-    PlatformConnectionId: string; // uuid
-    ProductVariantId: string; // uuid
-    PlatformProductId: string;
-    PlatformVariantId?: string | null;
-    PlatformSku?: string | null;
-    PlatformSpecificData?: Record<string, any> | null; // jsonb
-    LastSyncedAt?: string | null; // timestamptz
-    SyncStatus: string; // default 'Pending'
-    SyncErrorMessage?: string | null;
-    IsEnabled: boolean; // default true
-    CreatedAt: string; // timestamptz
-    UpdatedAt: string; // timestamptz
-}
+// Derived from the generated DB schema (single source of truth).
+export type PlatformProductMapping = PlatformProductMappingsRow;
 
 // Create an observable for PlatformProductMappings
 // export const platformProductMappings$ = observable<Record<string, PlatformProductMapping>>(
@@ -397,15 +368,8 @@ export interface PlatformProductMapping {
 // );
 
 // Define ProductImage interface based on sssync-db.md
-export interface ProductImage {
-    Id: string; // uuid
-    ProductVariantId: string; // uuid
-    ImageUrl: string;
-    AltText?: string | null;
-    Position: number; // default 0
-    PlatformMappingId?: string | null; // uuid
-    CreatedAt: string; // timestamptz
-}
+// Derived from the generated DB schema (single source of truth).
+export type ProductImage = ProductImagesRow;
 
 // Create an observable for ProductImages
 // export const productImages$ = observable<Record<string, ProductImage>>(
@@ -422,22 +386,10 @@ export interface ProductImage {
 // );
 
 // Define InventoryLevel interface based on sssync-db.md
-export interface InventoryLevel {
-    Id: string; // uuid
-    ProductVariantId: string; // uuid
-    PlatformConnectionId: string; // uuid
-    PlatformLocationId?: string | null;
-    PoolId?: string | null; // Added for shared inventory
-    OrgId?: string | null; // Added for org-scoped inventory
-    Quantity: number; // default 0
-    Price?: number | null; // decimal
-    CompareAtPrice?: number | null; // decimal
-    Currency?: string | null;
-    Reason?: string | null;
-    SourceId?: string | null;
-    LastDeltaAt?: string | null; // timestamptz
-    UpdatedAt: string; // timestamptz
-}
+// Derived from the generated DB schema (single source of truth). Note: this now
+// includes `Version` (optimistic-concurrency column) which the hand-typed interface
+// had dropped — required to do safe inventory writes.
+export type InventoryLevel = InventoryLevelsRow;
 
 // Create an observable for InventoryLevels
 // export const inventoryLevels$ = observable<Record<string, InventoryLevel>>(
@@ -533,21 +485,5 @@ export interface PlatformLocation {
     id?: string;
 }
 
-// Define PlatformConnection interface (based on sssync-db.md and usage)
-export interface PlatformConnection {
-    Id: string; // uuid
-    UserId: string; // uuid
-    OrgId?: string | null; // uuid
-    PlatformType: string; // e.g., 'Shopify', 'Square', 'Clover'
-    DisplayName: string;
-    Credentials: any; // jsonb - Opaque, store encrypted OAuth credentials or API keys
-    PlatformSpecificData?: Record<string, any> | null; // jsonb - Platform-specific configuration and data
-    Status: string; // e.g., 'Connected', 'NeedsReauth', 'Error'
-    IsEnabled: boolean;
-    LastSyncAttemptAt?: string | null; // timestamptz
-    LastSyncSuccessAt?: string | null; // timestamptz
-    CreatedAt: string; // timestamptz
-    UpdatedAt: string; // timestamptz
-    // Helper field for aliasing, actual DB field is Id
-    id?: string;
-} 
+// Derived from the generated DB schema (single source of truth).
+export type PlatformConnection = PlatformConnectionsRow;

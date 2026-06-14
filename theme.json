@@ -1,11 +1,13 @@
 {
   "colors": {
-    "primary": "#8BB04F",
+    "primary": "#93C822",
     "secondary": "#F17F5F",
     "accent": "#3CAD46",
     "accent2": "#FF9900",
     "background": "#FFFFFF",
     "surface": "#F8F9FB",
+    "card": "#FFFFFF",
+    "border": "#E5E7EB",
     "text": "#333333",
     "textSecondary": "#777777",
     "success": "#28a745",

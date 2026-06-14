@@ -1,4 +1,5 @@
 import React, { createContext, useContext } from 'react';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { Platform } from 'react-native';
 
 // Android-only: font scale 0.9, iOS stays 1
@@ -8,20 +9,20 @@ const getFontSize = (baseSize: number): number => Math.round(baseSize * fontScal
 // Colors based on your dashboard screenshot
 const theme = {
   colors: {
-    primary: '#8BB04F', // The teal/green from your chart
+    primary: BRAND_PRIMARY, // Canonical brand green (was #8BB04F; unified to the de-facto value used across the app)
     secondary: '#F17F5F', // The orange/salmon from Amazon bar
     accent: '#3CAD46', // Green from Clover
     accent2: "#FF9900",
     background: '#FFFFFF',
     surface: '#F8F9FB',
+    card: '#FFFFFF', // elevated surface (cards, sheets) sitting on top of `surface`
+    border: '#E5E7EB', // subtle hairline border / divider
     text: '#333333',
     textSecondary: '#777777',
     success: '#28a745',
     error: '#dc3545',
     warning: '#ffc107',
     info: '#17a2b8',
-    border: '#E5E7EB',
-    card: '#FFFFFF',
   },
   spacing: {
     xs: 4,

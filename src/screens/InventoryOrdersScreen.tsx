@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { API_BASE_URL } from '../config/env';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
   View,
   Text,
@@ -50,6 +51,7 @@ import { useProductVariantRealtime, useInventoryLevelsRealtime } from '../hooks/
 import { useOrg } from '../context/OrgContext';
 import { parseFilterQuery } from '../utils/parseFilterQuery';
 import { logFlowEvent, FlowEvents, startTrace, getTraceHeaders } from '../lib/mobileFlowLogger';
+import { getVariantPlatforms } from '../lib/platforms';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const TAB_BAR_HEIGHT = 84;
@@ -1109,14 +1111,8 @@ const InventoryOrdersScreen = observer(() => {
         maxPrice = variant.Price;
       }
 
-      // Use the actual boolean flags from ProductVariants to determine platform status
-      const platformNames: string[] = [];
-      if (variant.OnShopify) platformNames.push('shopify');
-      if (variant.OnSquare) platformNames.push('square');
-      if (variant.OnClover) platformNames.push('clover');
-      if (variant.OnAmazon) platformNames.push('amazon');
-      if (variant.OnEbay) platformNames.push('ebay');
-      if (variant.OnFacebook) platformNames.push('facebook');
+      // Platforms a variant is listed on (Track B seam — see src/lib/platforms.ts).
+      const platformNames: string[] = getVariantPlatforms(variant);
 
       const variantIdsForSync = [variantId, ...optionVariants.map(ov => ov.id)];
       const syncTimestamps = Object.values(mappings)
@@ -1901,7 +1897,7 @@ const InventoryOrdersScreen = observer(() => {
 
               {bulkPhase === 'planning' && (
                 <View style={{ paddingVertical: 32, alignItems: 'center', gap: 12 }}>
-                  <ActivityIndicator size="large" color="#8BB04F" />
+                  <ActivityIndicator size="large" color={BRAND_PRIMARY} />
                   <Text style={{ color: '#6B7280', fontSize: 14, fontWeight: '500' }}>Planning actions…</Text>
                 </View>
               )}
@@ -1947,7 +1943,7 @@ const InventoryOrdersScreen = observer(() => {
             </Text>
             <View style={{ flexDirection: 'row', gap: 12 }}>
               <TouchableOpacity onPress={() => setPlannedActions(prev => prev.map(a => ({ ...a, approved: true })))}>
-                <Text style={{ fontSize: 13, color: '#8BB04F', fontWeight: '600' }}>Select All</Text>
+                <Text style={{ fontSize: 13, color: BRAND_PRIMARY, fontWeight: '600' }}>Select All</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={() => setPlannedActions(prev => prev.map(a => ({ ...a, approved: false })))}>
                 <Text style={{ fontSize: 13, color: '#9CA3AF', fontWeight: '600' }}>Deselect All</Text>
@@ -1968,7 +1964,7 @@ const InventoryOrdersScreen = observer(() => {
                   backgroundColor: '#fff',
                   borderRadius: 14,
                   borderWidth: 1,
-                  borderColor: item.approved ? '#8BB04F' : '#E5E7EB',
+                  borderColor: item.approved ? BRAND_PRIMARY : '#E5E7EB',
                   padding: 14,
                   opacity: item.approved ? 1 : 0.5,
                   ...Platform.select({
@@ -1981,8 +1977,8 @@ const InventoryOrdersScreen = observer(() => {
                   {/* Checkbox */}
                   <View style={{
                     width: 22, height: 22, borderRadius: 6,
-                    borderWidth: 2, borderColor: item.approved ? '#8BB04F' : '#D1D5DB',
-                    backgroundColor: item.approved ? '#8BB04F' : 'transparent',
+                    borderWidth: 2, borderColor: item.approved ? BRAND_PRIMARY : '#D1D5DB',
+                    backgroundColor: item.approved ? BRAND_PRIMARY : 'transparent',
                     alignItems: 'center', justifyContent: 'center',
                   }}>
                     {item.approved && <Icon name="check" size={14} color="#fff" />}
@@ -2035,10 +2031,10 @@ const InventoryOrdersScreen = observer(() => {
             <TouchableOpacity
               style={{
                 flex: 2, paddingVertical: 14, borderRadius: 12,
-                backgroundColor: plannedActions.some(a => a.approved) ? '#8BB04F' : '#D1D5DB',
+                backgroundColor: plannedActions.some(a => a.approved) ? BRAND_PRIMARY : '#D1D5DB',
                 alignItems: 'center',
                 ...Platform.select({
-                  ios: { shadowColor: '#8BB04F', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 6 },
+                  ios: { shadowColor: BRAND_PRIMARY, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 6 },
                   android: { elevation: 3 },
                 }),
               }}

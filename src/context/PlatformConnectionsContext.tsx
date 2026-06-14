@@ -121,6 +121,9 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
       console.log(`[PlatformConnectionsContext] Refreshing connections (${reason})`);
       fetchConnections();
     }, 600);
+    // NOTE: do NOT add `scheduleRefresh` to its own deps — the self-reference made
+    // this callback's identity change every render, which caused the socket effect
+    // below (deps include scheduleRefresh) to disconnect/reconnect on every render.
   }, [fetchConnections]);
 
   useEffect(() => {
@@ -134,7 +137,9 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
     const setupSubscription = () => {
       // Subscribe to realtime updates for PlatformConnections table
       channel = supabase
-        .channel(`platform-connections-changes-${Date.now()}`)
+        // Stable channel name: a `Date.now()` suffix produced a new, distinctly-named
+        // channel on every (re)subscribe, risking orphaned channels on the server.
+        .channel('platform-connections-changes')
         .on(
           'postgres_changes',
           {

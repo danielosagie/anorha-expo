@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { API_BASE_URL } from '../config/env';
+import { BRAND_PRIMARY } from '../design/tokens';
 import {
   ActivityIndicator,
   Alert,
@@ -504,7 +505,7 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
   if (isLoading) {
     return (
       <View style={styles.centeredContainer}>
-        <ActivityIndicator size="large" color="#93C822" />
+        <ActivityIndicator size="large" color={BRAND_PRIMARY} />
         <Text style={styles.loadingText}>Loading match candidates...</Text>
       </View>
     );
@@ -627,7 +628,7 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
         currentIndex={safeIndex}
         scanColor={() => '#10B981'}
         matchColor={() => '#10B981'}
-        detailsColor={(idx) => (idx === safeIndex ? '#93C822' : '#94A3B8')}
+        detailsColor={(idx) => (idx === safeIndex ? BRAND_PRIMARY : '#94A3B8')}
         detailsEnabled={() => true}
         onPickScan={(idx) => {
           setCurrentProductIndex(idx);
@@ -773,7 +774,7 @@ const styles = StyleSheet.create({
     minHeight: 172,
   },
   cardSelected: {
-    borderColor: '#93C822',
+    borderColor: BRAND_PRIMARY,
     backgroundColor: '#F7FEE7',
   },
   cardImage: {
