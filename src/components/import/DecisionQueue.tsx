@@ -5,7 +5,7 @@
 // group card (N rows → one product with variants). Reversibility lives in the
 // parent: answers patch the suggestion list, nothing commits until "Complete".
 
-import React, { useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Progress from 'react-native-progress';
@@ -61,24 +61,19 @@ function copyFor(unit: DecisionUnit): CardCopy {
   }
 
   const s = unit.item;
+  // SPLIT — one row that's really several products.
   if (s.compositionType === 'bundle') {
-    return { ...base, title: 'This row bundles several products', sub: s.platformProduct.title, primary: 'Add as one', secondary: 'Skip' };
+    const n = s.bundleParts?.length || 2;
+    return { ...base, title: `This row is really ${n} products`, sub: s.platformProduct.title, primary: `Split into ${n}`, secondary: 'Keep as one' };
   }
-  if (s.compositionType === 'kit') {
-    return { ...base, title: 'This set is made of items you stock', sub: s.platformProduct.title, primary: 'Add as new', secondary: 'Skip' };
-  }
-  if (s.isStaleLink) {
-    return { ...base, title: 'This link broke', sub: `${s.platformProduct.title} is gone from the platform`, primary: 'Keep', secondary: 'Unlink' };
-  }
+  // MATCH — confirm or pick (field conflict, if any, is shown inline below).
   if (s.question === 'same' && s.suggestedCanonicalProduct?.id) {
-    if (s.fieldConflicts && s.fieldConflicts.length > 0) {
-      return { ...base, title: 'A detail doesn’t match', sub: s.platformProduct.title, primary: 'Keep yours', secondary: 'Use theirs' };
-    }
     if (s.candidateVariants && s.candidateVariants.length > 0) {
       return { ...base, title: 'Which one is it?', sub: s.platformProduct.title, primary: 'Yes, it’s this', secondary: 'Show others' };
     }
     return { ...base, title: 'Same product?', sub: s.platformProduct.title, primary: 'Yes, link', secondary: 'No' };
   }
+  // NEW / KEEP (kit lands here, components shown as a hint below).
   return { ...base, title: 'Add this product?', sub: s.platformProduct.title, primary: 'Add as new', secondary: 'Skip' };
 }
 
@@ -100,12 +95,15 @@ const DecisionQueue: React.FC<DecisionQueueProps> = ({
   const total = Math.max(initialTotal, remaining);
   const completed = total - remaining;
 
-  if (remaining === 0) {
-    if (!doneFired.current) {
+  // Fire onDone once the queue empties — in an effect, not during render.
+  useEffect(() => {
+    if (remaining === 0 && !doneFired.current) {
       doneFired.current = true;
-      // Defer so we don't setState during render in the parent.
-      setTimeout(onDone, 0);
+      onDone();
     }
+  }, [remaining, onDone]);
+
+  if (remaining === 0) {
     return (
       <View style={[styles.screen, { backgroundColor: theme.colors.background, paddingTop: insets.top + 24 }]}>
         <View style={styles.allClear}>

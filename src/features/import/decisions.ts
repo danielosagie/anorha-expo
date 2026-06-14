@@ -38,26 +38,22 @@ export function deriveQuestion(s: MappingSuggestion): ImportDecisionQuestion | u
   if (s.action === 'IGNORE') return undefined;
   if (isResolved(s)) return undefined;
   if (s.direction === 'anorha_to_platform') return undefined; // push side, handled elsewhere
+  // A broken existing link (the listing vanished from the platform) is a
+  // reconciliation concern, not an import decision — keep it as-is, out of the
+  // queue. (A link that merely re-pointed still has a candidate → SAME below.)
+  if (s.isStaleLink && !s.suggestedCanonicalProduct?.id) return undefined;
 
   // GROUP — structure first: it decides what the units are.
-  if (
-    s.groupId ||
-    s.isDuplicateSuggestedCanonical ||
-    s.compositionType === 'bundle' ||
-    s.compositionType === 'kit' ||
-    !!s.familyDecisionReason
-  ) {
+  // Only three things are genuinely structural: a proposed combine cluster,
+  // many rows pointing at one canonical, or a bundle that splits into several.
+  // (kit folds into KEEP; family-attach folds into SAME.)
+  if (s.groupId || s.isDuplicateSuggestedCanonical || s.compositionType === 'bundle') {
     return 'group';
   }
 
-  // SAME — identity: there's something to confirm/pick/reconcile.
+  // SAME — identity: there's a canonical to confirm or pick.
   const hasCandidate = !!s.suggestedCanonicalProduct?.id;
-  if (
-    s.isStaleLink ||
-    (s.candidateVariants && s.candidateVariants.length > 0) ||
-    (hasCandidate && s.fieldConflicts && s.fieldConflicts.length > 0) ||
-    hasCandidate
-  ) {
+  if (hasCandidate || (s.candidateVariants && s.candidateVariants.length > 0)) {
     return 'same';
   }
 
@@ -214,13 +210,6 @@ export function buildUnits(suggestions: MappingSuggestion[]): DecisionUnit[] {
   return units;
 }
 
-export function countByQuestion(suggestions: MappingSuggestion[]): Record<ImportDecisionQuestion, number> {
-  const units = buildUnits(suggestions);
-  const out: Record<ImportDecisionQuestion, number> = { group: 0, same: 0, keep: 0 };
-  for (const u of units) out[u.question] += 1;
-  return out;
-}
-
 // ── 4. Answers → patches over the suggestion list ────────────────────────────
 // Every answer returns ids + a transform; the hook applies it to state. Nothing
 // is committed until "Complete Import", so any of these can be re-opened/flipped.
@@ -236,13 +225,13 @@ function patchIds(
 }
 
 /**
- * Resolve a unit. Returns the next suggestion list.
- * - group combine:  primary → one variant_family (all members CREATE_NEW under the cover's parentId)
- *                   secondary → keep separate (each its own simple CREATE_NEW)
- * - same/confirm:   primary → LINK_EXISTING ; secondary → drop the guess, becomes a KEEP row
- * - same/stale:     primary → keep link ; secondary → unlink (IGNORE)
- * - keep/new:       primary → CREATE_NEW ; secondary/skip → IGNORE
- * - bundle/kit:     primary → CREATE_NEW (add as its own product) ; secondary/skip → IGNORE
+ * Resolve a unit. Returns the next suggestion list. Four core operations:
+ * - COMBINE (group):  primary → one variant_family (shared groupId→parentId)
+ *                     secondary → keep separate (each its own simple CREATE_NEW)
+ * - SPLIT (bundle):   primary → expand the row into one new product per part
+ *                     secondary → keep as one product
+ * - MATCH (same):     primary → LINK_EXISTING ; secondary → drop the guess (→ KEEP)
+ * - NEW/KEEP:         primary → CREATE_NEW (kit lands here too) ; secondary/skip → IGNORE
  */
 export function applyAnswer(
   suggestions: MappingSuggestion[],
@@ -285,27 +274,40 @@ export function applyAnswer(
     return patchIds(suggestions, id, (s) => ({ ...s, prevAction: s.action, action: 'IGNORE', isSelected: false, resolved: false }));
   }
 
-  // SAME / stale link.
-  if (s0.isStaleLink) {
+  // SPLIT — one row that holds several SKUs. primary expands it into one new
+  // product per part (the real edge-solver); secondary keeps it as one product.
+  if (s0.compositionType === 'bundle' && s0.bundleParts && s0.bundleParts.length > 0) {
     if (answer === 'primary') {
-      return patchIds(suggestions, id, (s) => ({ ...s, action: 'LINK_EXISTING', isSelected: true, resolved: true, isStaleLink: false }));
+      const children: MappingSuggestion[] = s0.bundleParts.map((p, i) => ({
+        ...s0,
+        platformProduct: {
+          ...s0.platformProduct,
+          id: `${s0.platformProduct.id}::part:${i}`,
+          sku: p.sku || '',
+          title: p.title || p.sku || `${s0.platformProduct.title} (part ${i + 1})`,
+          parentId: null,
+        },
+        action: 'CREATE_NEW',
+        productShape: 'simple',
+        compositionType: undefined,
+        bundleParts: undefined,
+        groupId: undefined,
+        isSelected: true,
+        resolved: true,
+      }));
+      return suggestions.flatMap((s) => (s.platformProduct.id === s0.platformProduct.id ? children : [s]));
     }
-    return patchIds(suggestions, id, (s) => ({ ...s, action: 'IGNORE', isSelected: false, resolved: false }));
-  }
-
-  // SAME / value conflict — identity is sure, a field disagrees. Both choices
-  // keep the link; "use theirs" records that the platform value should win.
-  if (s0.question === 'same' && s0.suggestedCanonicalProduct?.id && s0.fieldConflicts && s0.fieldConflicts.length > 0) {
     return patchIds(suggestions, id, (s) => ({
       ...s,
-      action: 'LINK_EXISTING',
+      action: 'CREATE_NEW',
+      compositionType: undefined,
       isSelected: true,
       resolved: true,
-      originalData: { ...(s.originalData || {}), valueOverride: answer === 'secondary' },
     }));
   }
 
-  // SAME / confirm or pick (has a canonical candidate).
+  // MATCH — confirm or pick (has a canonical candidate). A field conflict, if
+  // any, is shown inline on the card; linking keeps your value by default.
   if (s0.question === 'same' && s0.suggestedCanonicalProduct?.id) {
     if (answer === 'primary') {
       return patchIds(suggestions, id, (s) => ({ ...s, action: 'LINK_EXISTING', isSelected: true, resolved: true }));
@@ -323,7 +325,7 @@ export function applyAnswer(
     }));
   }
 
-  // GROUP-question single rows (bundle / kit / lone family) and KEEP / new.
+  // NEW / KEEP — nothing matched (kit lands here too: add the set as a product).
   // primary = bring it in as its own product; secondary = skip.
   if (answer === 'primary') {
     return patchIds(suggestions, id, (s) => ({ ...s, action: 'CREATE_NEW', isSelected: true, resolved: true }));
