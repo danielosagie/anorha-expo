@@ -100,9 +100,9 @@ const AllTabRow: React.FC<{
 
   return (
     <View style={styles.allRowCard}>
-      {/* Platform Logo + Location Name */}
+      {/* Line 1: platform logo + location name + GLOBAL */}
       <View style={styles.allRowHeader}>
-        {getPlatform(platformKey) && <PlatformLogo type={platformKey} size={18} />}
+        {getPlatform(platformKey) && <PlatformLogo type={platformKey} size={22} />}
         <Text style={styles.locationName} numberOfLines={1}>{displayName}</Text>
         {isShopifyGlobal && (
           <View style={styles.globalBadge}>
@@ -111,46 +111,47 @@ const AllTabRow: React.FC<{
         )}
       </View>
 
-      {/* Quantity Input */}
-      <View style={styles.inputGroup}>
-        <Text style={styles.inputLabel}>Qty</Text>
-        <View style={styles.qtyContainer}>
-          <TouchableOpacity
-            onPress={() => handleQtyChange(String(Math.max(0, Number(localQty || 0) - 1)))}
-            style={styles.qtyBtnLeft}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 5 }}
-          >
-            <Icon name="minus" size={14} color="#374151" />
-          </TouchableOpacity>
-          <TextInput
-            style={styles.qtyInput}
-            value={localQty}
-            onChangeText={handleQtyChange}
-            keyboardType="number-pad"
-            selectTextOnFocus
-          />
-          <TouchableOpacity
-            onPress={() => handleQtyChange(String(Number(localQty || 0) + 1))}
-            style={styles.qtyBtnRight}
-            hitSlop={{ top: 10, bottom: 10, left: 5, right: 10 }}
-          >
-            <Icon name="plus" size={14} color="#374151" />
-          </TouchableOpacity>
+      {/* Line 2: Qty stepper (left) + Price (right) */}
+      <View style={styles.allRowControls}>
+        <View style={styles.inputGroup}>
+          <Text style={styles.inputLabel}>Qty</Text>
+          <View style={styles.qtyContainer}>
+            <TouchableOpacity
+              onPress={() => handleQtyChange(String(Math.max(0, Number(localQty || 0) - 1)))}
+              style={styles.qtyBtnLeft}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 5 }}
+            >
+              <Icon name="minus" size={16} color="#374151" />
+            </TouchableOpacity>
+            <TextInput
+              style={styles.qtyInput}
+              value={localQty}
+              onChangeText={handleQtyChange}
+              keyboardType="number-pad"
+              selectTextOnFocus
+            />
+            <TouchableOpacity
+              onPress={() => handleQtyChange(String(Number(localQty || 0) + 1))}
+              style={styles.qtyBtnRight}
+              hitSlop={{ top: 10, bottom: 10, left: 5, right: 10 }}
+            >
+              <Icon name="plus" size={16} color="#374151" />
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
 
-      {/* Price Input - Blue for Shopify global */}
-      <View style={styles.inputGroup}>
-        <Text style={styles.inputLabel}>Price</Text>
-        <View style={[styles.priceInputContainer, isShopifyGlobal && styles.priceInputShopify]}>
-          <Text style={[styles.currencySymbol, isShopifyGlobal && { color: '#1976D2' }]}>$</Text>
-          <TextInput
-            style={[styles.priceInput, isShopifyGlobal && styles.priceInputTextShopify, externalUpdatePrice && { borderColor: '#93C822', borderWidth: 2 }]}
-            value={localPrice}
-            onChangeText={handlePriceChange}
-            keyboardType="decimal-pad"
-            selectTextOnFocus
-          />
+        <View style={styles.inputGroup}>
+          <Text style={styles.inputLabel}>Price</Text>
+          <View style={[styles.priceInputContainer, isShopifyGlobal && styles.priceInputShopify]}>
+            <Text style={[styles.currencySymbol, isShopifyGlobal && { color: '#1976D2' }]}>$</Text>
+            <TextInput
+              style={[styles.priceInput, isShopifyGlobal && styles.priceInputTextShopify, externalUpdatePrice && { borderColor: '#93C822', borderWidth: 2 }]}
+              value={localPrice}
+              onChangeText={handlePriceChange}
+              keyboardType="decimal-pad"
+              selectTextOnFocus
+            />
+          </View>
         </View>
       </View>
     </View>
@@ -318,30 +319,31 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   // All Tab Styles - Editable Rows
+  // Flat 2-line row: name on top, controls below, hairline divider between rows.
   allRowCard: {
+    flexDirection: 'column',
+    gap: 12,
+    paddingHorizontal: 2,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F1F3',
+    backgroundColor: 'transparent',
+  },
+  allRowHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    minWidth: 0,
+  },
+  allRowControls: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 10,
-    paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
-    borderRadius: 10,
-    backgroundColor: '#FFF',
-    marginBottom: 8,
-    gap: 8,
-  },
-  allRowHeader: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    minWidth: 0,
   },
   locationName: {
     fontWeight: '600',
-    fontSize: 12,
-    color: '#000',
+    fontSize: 15,
+    color: '#111827',
     flexShrink: 1,
   },
   globalBadge: {
@@ -355,45 +357,41 @@ const styles = StyleSheet.create({
     color: '#1976D2',
     fontWeight: '600',
   },
-  // Input Groups
+  // Input Groups — label sits inline to the left of the control.
   inputGroup: {
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 10,
   },
   inputLabel: {
-    color: '#6B7280',
-    fontSize: 11,
+    color: '#9CA3AF',
+    fontSize: 12,
     fontWeight: '500',
-    textTransform: 'uppercase',
   },
   qtyContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#F3F4F6',
-    borderRadius: 999, // Pill shape
-    height: 36,
+    borderRadius: 10,
+    height: 40,
     paddingHorizontal: 2,
   },
   qtyBtnLeft: {
-    paddingHorizontal: 10,
+    paddingHorizontal: 14,
     height: '100%',
     justifyContent: 'center',
-    borderRightWidth: 1,
-    borderRightColor: '#E5E7EB',
   },
   qtyBtnRight: {
-    paddingHorizontal: 10,
+    paddingHorizontal: 14,
     height: '100%',
     justifyContent: 'center',
-    borderLeftWidth: 1,
-    borderLeftColor: '#E5E7EB',
   },
   qtyInput: {
     color: '#111827',
-    fontWeight: '600',
-    width: 40,
+    fontWeight: '700',
+    width: 36,
     textAlign: 'center',
-    fontSize: 14,
+    fontSize: 15,
     height: '100%',
     padding: 0,
   },
@@ -402,9 +400,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#E5E7EB',
-    borderRadius: 8,
+    borderRadius: 10,
     backgroundColor: '#FFF',
-    height: 36,
+    height: 40,
   },
   priceInputShopify: {
     borderColor: '#1976D2', // Global Blue 

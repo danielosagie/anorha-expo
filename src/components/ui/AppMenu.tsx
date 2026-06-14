@@ -85,12 +85,13 @@ export const AppMenu: React.FC<Props> = ({ visible, onClose, sections, anchor, w
               >
                 {item.icon ? (
                   <Icon name={item.icon} size={21} color={item.destructive ? '#EF4444' : INK} style={styles.rowIcon} />
-                ) : (
-                  <View style={styles.rowIcon} />
-                )}
+                ) : null}
                 <Text style={[styles.rowLabel, item.destructive && { color: '#EF4444' }]} numberOfLines={1}>
                   {item.label}
                 </Text>
+                {item.active ? (
+                  <Icon name="check" size={20} color="#5C9A1B" style={{ marginLeft: 8 }} />
+                ) : null}
               </Pressable>
             ))}
           </View>

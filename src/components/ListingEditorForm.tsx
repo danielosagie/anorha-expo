@@ -2251,16 +2251,17 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       {/* ── Delivery & Shipping – Trigger card + unified bottom sheet ── */}
       {platformKeys.some(k => ['facebook', 'ebay', 'shopify'].includes(k.toLowerCase())) && (
         <View style={{ marginTop: 16 }}>
-          <Text style={styles.fieldLabel}>Listing Options</Text>
+          <Text style={styles.fieldLabel}>Shipping</Text>
           <TouchableOpacity
             activeOpacity={0.8}
             style={{
               marginTop: 8,
-              padding: 16,
-              backgroundColor: '#fff',
-              borderWidth: 1,
-              borderColor: shippingEstimateResult && !shippingEstimateResult.error ? '#93C822' : '#E5E7EB',
-              borderRadius: 12,
+              padding: 14,
+              backgroundColor: '#F7F8FA',
+              borderRadius: 14,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 12,
             }}
             onPress={() => {
               const dims = (activeData as any).estimatedDimensions;
@@ -2274,74 +2275,30 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               setDeliverySheetVisible(true);
             }}
           >
-            {/* Top row: icon + title + chevron */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(147,200,34,0.08)', alignItems: 'center', justifyContent: 'center' }}>
-                  <Truck size={20} color="#93C822" />
-                </View>
-                <View>
-                  <Text style={{ fontSize: 15, fontWeight: '600', color: '#111827' }}>Delivery & Shipping</Text>
-                  <Text style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }}>
-                    {activePlatformKeyLower === 'facebook'
-                      ? `Handoff: ${activeData.pickupLocation?.deliveryMethod === 'both' ? 'Pickup & Shipping' : activeData.pickupLocation?.deliveryMethod === 'in_person' ? 'Local pickup' : activeData.pickupLocation?.deliveryMethod === 'shipping' ? 'Shipping' : 'Not set'}`
-                      : `Fulfillment: ${activeData.deliveryMethod === 'both' ? 'Pickup & Shipping' : activeData.deliveryMethod === 'in_person' ? 'Local pickup' : activeData.deliveryMethod === 'shipping' ? 'Shipping' : 'Not set'}`
-                    }
-                  </Text>
-                </View>
-              </View>
-              <Icon name="chevron-right" size={20} color="#9CA3AF" />
+            <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(147,200,34,0.10)', alignItems: 'center', justifyContent: 'center' }}>
+              <Truck size={20} color="#5C9A1B" />
             </View>
-
-            {/* Shipping estimate summary row */}
-            {(shippingEstimateLoading || shippingEstimateResult || (activeData.weight != null && Number(activeData.weight) > 0) || (activeData as any).estimatedDimensions) && (
-              <View style={{
-                marginTop: 12,
-                paddingTop: 12,
-                borderTopWidth: 1,
-                borderTopColor: '#F3F4F6',
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 10,
-              }}>
-                <View style={{
-                  width: 32, height: 32, borderRadius: 8,
-                  backgroundColor: shippingEstimateResult && !shippingEstimateResult.error ? 'rgba(147,200,34,0.12)' : '#F3F4F6',
-                  alignItems: 'center', justifyContent: 'center',
-                }}>
-                  <Package size={16} color={shippingEstimateResult && !shippingEstimateResult.error ? '#93C822' : '#6B7280'} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  {shippingEstimateLoading ? (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <ActivityIndicator size="small" color="#93C822" />
-                      <Text style={{ fontSize: 12, color: '#6B7280' }}>Estimating rates…</Text>
-                    </View>
-                  ) : shippingEstimateResult && typeof shippingEstimateResult.estimatedMin === 'number' && !shippingEstimateResult.error ? (
-                    <>
-                      <Text style={{ fontSize: 13, fontWeight: '600', color: '#111827' }}>
-                        {typeof shippingEstimateResult.expectedCost === 'number'
-                          ? `Usually ~$${shippingEstimateResult.expectedCost.toFixed(1)} · Range $${shippingEstimateResult.estimatedMin.toFixed(1)}–$${shippingEstimateResult.estimatedMax.toFixed(1)}`
-                          : `USPS Ground · $${shippingEstimateResult.estimatedMin.toFixed(2)}–$${shippingEstimateResult.estimatedMax.toFixed(2)}`}
-                      </Text>
-                      <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 1 }}>
-                        {(activeData as any).estimatedDimensions
-                          ? `${(activeData as any).estimatedDimensions.length}×${(activeData as any).estimatedDimensions.width}×${(activeData as any).estimatedDimensions.height} in`
-                          : ''}
-                        {(activeData as any).estimatedDimensions && activeData.weight ? ' · ' : ''}
-                        {activeData.weight ? `${activeData.weight} ${activeData.weightUnit || 'lb'}` : ''}
-                      </Text>
-                    </>
-                  ) : (
-                    <Text style={{ fontSize: 12, color: '#9CA3AF' }}>
-                      {!(activeData.weight != null && Number(activeData.weight) > 0)
-                        ? 'Set weight & dimensions to estimate rates'
-                        : (activeData as any).shippingTierReason || 'Tap to configure shipping'}
-                    </Text>
-                  )}
-                </View>
-              </View>
-            )}
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 15, fontWeight: '600', color: '#111827' }} numberOfLines={1}>
+                {(() => {
+                  const dims = (activeData as any).estimatedDimensions;
+                  const dimsStr = dims ? `${dims.length}×${dims.width}×${dims.height} in` : '';
+                  const wStr = activeData.weight ? `${activeData.weight} ${activeData.weightUnit || 'lb'}` : '';
+                  const detail = [dimsStr, wStr].filter(Boolean).join(' · ');
+                  return detail ? `Shipping (${detail})` : 'Shipping';
+                })()}
+              </Text>
+              <Text style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }} numberOfLines={1}>
+                {shippingEstimateLoading
+                  ? 'Estimating rates…'
+                  : (shippingEstimateResult && typeof shippingEstimateResult.estimatedMin === 'number' && !shippingEstimateResult.error)
+                    ? (typeof shippingEstimateResult.expectedCost === 'number'
+                        ? `Usually ~$${shippingEstimateResult.expectedCost.toFixed(1)} · Range $${shippingEstimateResult.estimatedMin.toFixed(1)}–$${shippingEstimateResult.estimatedMax.toFixed(1)}`
+                        : `USPS Ground · $${shippingEstimateResult.estimatedMin.toFixed(2)}–$${shippingEstimateResult.estimatedMax.toFixed(2)}`)
+                    : (activeData.deliveryMethod === 'in_person' ? 'Local pickup' : 'Tap to set up shipping')}
+              </Text>
+            </View>
+            <Icon name="chevron-right" size={20} color="#9CA3AF" />
           </TouchableOpacity>
 
           <DeliveryShippingSheet

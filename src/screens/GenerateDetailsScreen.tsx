@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard, Animated, Easing } from 'react-native';
 import { CameraView } from 'expo-camera';
 import { StackScreenProps } from '@react-navigation/stack';
@@ -10,16 +11,16 @@ import { getPlatformRequirements } from '../utils/platformRequirements';
 import { Boxes, X, Sparkles, Pencil, ArrowLeft, ChevronLeft, History } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
 import { ProgressiveBlurView } from '../components/ProgressiveBlurView';
-import { SwipeBackWheel } from '../components/SwipeBackWheel';
-import { CHAT_COLORS, CHAT_FONT, GLASS, GLASS_HEADER_STYLES } from '../design/chatGlass';
+import { CHAT_COLORS, CHAT_FONT, CHAT_SHADOWS, GLASS, GLASS_HEADER_STYLES } from '../design/chatGlass';
 import KeyboardAwareBottomActionBar from '../components/KeyboardAwareBottomActionBar';
-import { SmartCommandInput, FieldOption } from '../components/SmartCommandInput';
+import { MessageComposer } from '../components/chat/MessageComposer';
 import ListingEditorForm from '../components/ListingEditorForm';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { hydratePlatformsFromBackend, normalizeForListingEditor, isEmpty } from '../utils/platformDataHydration';
 import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
 import { Paths, Directory, File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
+import { captureOrPickImageAssets } from '../utils/imageCapture';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { useJobsOptional } from '../context/JobsContext';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
@@ -100,6 +101,30 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [listingEditorY, setListingEditorY] = useState(0);
   const insets = useSafeAreaInsets();
   const bottomSafePadding = ACTION_BAR_HEIGHT + ACTION_BAR_BOTTOM_OFFSET + insets.bottom + 16;
+
+  // Bottom tray hides on scroll-down, returns on scroll-up.
+  const trayY = useRef(new Animated.Value(0)).current;
+  const trayHidden = useRef(false);
+  const lastScrollY = useRef(0);
+  const setTrayHidden = (hidden: boolean) => {
+    if (trayHidden.current === hidden) return;
+    trayHidden.current = hidden;
+    Animated.timing(trayY, {
+      toValue: hidden ? 260 : 0,
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  };
+  const handleTrayScroll = (e: { nativeEvent: { contentOffset: { y: number } } }) => {
+    const y = e.nativeEvent.contentOffset.y;
+    const dy = y - lastScrollY.current;
+    if (Math.abs(dy) < 6) return; // ignore jitter
+    if (y <= 0) setTrayHidden(false);
+    else if (dy > 0) setTrayHidden(true); // scrolling down → hide
+    else setTrayHidden(false); // scrolling up → show
+    lastScrollY.current = y;
+  };
   // Support both direct props and nested { response: {...} }
   const params: any = (route.params || {}) as any;
   const jobId = params.jobId ?? params.response?.jobId;
@@ -113,6 +138,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [jobData, setJobData] = useState<{ status?: string; results?: GeneratedResult[]; summary?: any; completedAt?: string } | null>(null);
   const [dbImages, setDbImages] = useState<Record<string, string[]>>({});
   const [isInputExpanded, setIsInputExpanded] = useState(false);
+  // Chat-style "wanna change something" composer text (replaces SmartCommandInput).
+  const [quickFixText, setQuickFixText] = useState('');
 
   // Wire up the platform picker overlay so "+ Add Platform" works in ListingEditorForm
   const platformPickerOverlay = usePlatformPickerOverlay();
@@ -257,6 +284,20 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const lastHydratedJobRef = useRef<string | null>(null);
   const lastSavedRef = useRef<string>('');
   const lastScheduledRef = useRef<string | null>(null);
+  // Surfaced in the header so the user can SEE autosave working (it runs silently otherwise).
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  // The save status rides in the header subtitle transiently, then fades so only the item
+  // title remains. Saving…/Save failed persist; Saved auto-hides after a beat.
+  const [saveStatusVisible, setSaveStatusVisible] = useState(false);
+  useEffect(() => {
+    if (saveState === 'saving' || saveState === 'error') { setSaveStatusVisible(true); return; }
+    if (saveState === 'saved') {
+      setSaveStatusVisible(true);
+      const t = setTimeout(() => setSaveStatusVisible(false), 2500);
+      return () => clearTimeout(t);
+    }
+    setSaveStatusVisible(false);
+  }, [saveState]);
 
   // Track active regeneration jobs: jobId -> platformKey
   const activeRegenJobsRef = useRef<Record<string, string>>({});
@@ -476,80 +517,91 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   }, [results, jobId, currentProductIndex]);
 
 
-  // ========== AUTO-SAVE DEBOUNCE: Save to /api/products/drafts every 2s idle ==========
-  // Only run when variantId changes; only schedule save when draft content actually changed (stops spam when nothing changed)
+  // ========== AUTO-SAVE: local-first, backend when possible ==========
+  // Persists every edit to AsyncStorage immediately (so a freshly-generated item that has NO
+  // variantId yet still saves + survives reload), then syncs to /api/products/drafts once a
+  // variantId exists. This is why edits previously "didn't save" — the old effect bailed out
+  // when there was no variantId.
   const variantIdForDraft = (route.params as any)?.variantId || (Array.isArray(results) && results.length > 0 ? ((results as any[]).find((r: any) => r.productIndex === currentProductIndex) || results[0])?.variantId : undefined);
+  const draftKey = variantIdForDraft
+    ? `gen-draft:v:${variantIdForDraft}`
+    : (jobId ? `gen-draft:j:${jobId}:${currentProductIndex}` : null);
   useEffect(() => {
-    const variantId = variantIdForDraft;
-    if (!variantId || !platformsRef.current || Object.keys(platformsRef.current).length === 0) {
+    if (!draftKey || !platformsRef.current || Object.keys(platformsRef.current).length === 0) {
       return;
     }
-
     const currentJson = JSON.stringify(platformsRef.current);
-    if (currentJson === lastSavedRef.current) {
-      return;
-    }
-    if (lastScheduledRef.current !== null && lastScheduledRef.current === currentJson) {
-      return;
-    }
+    if (currentJson === lastSavedRef.current) return;
+    if (lastScheduledRef.current !== null && lastScheduledRef.current === currentJson) return;
     lastScheduledRef.current = currentJson;
 
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-    }
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
 
     debounceTimerRef.current = setTimeout(async () => {
       try {
-        const baseUrl = API_BASE_URL;
-        const token = await ensureSupabaseJwt();
+        setSaveState('saving');
+        // 1) Local-first: always persist so unsaved generations survive a reload.
+        await AsyncStorage.setItem(draftKey, JSON.stringify({ draftData: platformsRef.current, savedAt: Date.now() }));
 
-        if (!baseUrl || !token) {
-          console.log('[GEN-DETAILS AutoSave] Missing baseUrl or token, skipping');
-          lastScheduledRef.current = null;
-          return;
+        // 2) Sync to the backend once we have a real variantId.
+        const variantId = variantIdForDraft;
+        if (variantId) {
+          const baseUrl = API_BASE_URL;
+          const token = await ensureSupabaseJwt();
+          if (baseUrl && token) {
+            const response = await fetch(`${baseUrl}/api/products/drafts/${variantId}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+              body: JSON.stringify({ draftData: platformsRef.current, media: buildPlatformPayload().media }),
+            });
+            if (!response.ok) {
+              const errorText = await response.text();
+              console.error('[GEN-DETAILS AutoSave] ❌ Backend draft failed (local save OK):', response.status, errorText);
+              lastScheduledRef.current = null;
+              setSaveState('error');
+              return;
+            }
+          }
         }
 
-        const currentData = JSON.stringify(platformsRef.current);
-        if (currentData === lastSavedRef.current) {
-          console.log('[GEN-DETAILS AutoSave] No changes, skipping save');
-          lastScheduledRef.current = null;
-          return;
-        }
-
-        const response = await fetch(`${baseUrl}/api/products/drafts/${variantId}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({
-            draftData: platformsRef.current,
-            // Include media so backend validation passes
-            media: buildPlatformPayload().media
-          })
-        });
-
-        if (response.ok) {
-          lastSavedRef.current = currentData;
-          lastScheduledRef.current = null;
-          console.log('[GEN-DETAILS AutoSave] ✅ Draft auto-saved successfully');
-        } else {
-          const errorText = await response.text();
-          console.error('[GEN-DETAILS AutoSave] ❌ Failed to auto-save draft:', response.status, errorText);
-          lastScheduledRef.current = null;
-        }
-      } catch (error) {
-        console.error('[GEN-DETAILS AutoSave] ❌ Error auto-saving draft:', error);
+        lastSavedRef.current = currentJson;
         lastScheduledRef.current = null;
+        setSaveState('saved');
+        console.log('[GEN-DETAILS AutoSave] ✅ Saved', variantId ? '(local + backend)' : '(local)');
+      } catch (error) {
+        console.error('[GEN-DETAILS AutoSave] ❌ Error:', error);
+        lastScheduledRef.current = null;
+        setSaveState('error');
       }
-    }, 2000);
+    }, 1200);
 
     return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     };
-  }, [variantIdForDraft, updateCounter]);
+  }, [draftKey, variantIdForDraft, updateCounter]);
+
+  // Restore a local draft on mount when nothing has hydrated yet (covers unsaved, no-variantId
+  // items that the backend draft-load can't reach).
+  useEffect(() => {
+    if (!draftKey) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        if (platformsRef.current && Object.keys(platformsRef.current).length > 0) return;
+        const raw = await AsyncStorage.getItem(draftKey);
+        if (cancelled || !raw) return;
+        if (platformsRef.current && Object.keys(platformsRef.current).length > 0) return;
+        const parsed = JSON.parse(raw);
+        if (parsed?.draftData && Object.keys(parsed.draftData).length > 0) {
+          platformsRef.current = parsed.draftData;
+          lastSavedRef.current = JSON.stringify(parsed.draftData);
+          forceUpdate({});
+          console.log('[GEN-DETAILS AutoSave] ↩︎ Restored local draft');
+        }
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [draftKey]);
   const platformKeys: string[] = useMemo(() => Object.keys(displayedPlatforms as Record<string, any>), [displayedPlatforms]);
   // Chat-style item switcher dropdown (replaces the old bulk ItemJobsModal here)
   const [itemMenuOpen, setItemMenuOpen] = useState(false);
@@ -889,6 +941,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     return pos >= 0 ? pos + 1 : 1;
   }, [items, currentProductIndex]);
   const currentItemTitle = useMemo(() => {
+    const total = items.length || 1;
+    // Multi-item batch → show position/total ("Item 1/4"); single item → its title.
+    if (total > 1) return `Item ${currentItemPosition}/${total}`;
     const it: any = items.find((i: any) => i.index === currentProductIndex);
     const raw = (it?.title || '').trim();
     return raw && !/^item \d+$/i.test(raw) ? raw : `Item ${currentItemPosition}`;
@@ -2471,8 +2526,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           </View>
         </View>
       )}
-      <ScrollView style={styles.container} contentContainerStyle={[styles.content, { paddingBottom: bottomSafePadding }]}>
-        <ScrollView ref={mainScrollRef}>
+      <ScrollView style={styles.container} contentContainerStyle={[styles.content, { paddingBottom: bottomSafePadding }]} onScroll={handleTrayScroll} scrollEventThrottle={16}>
+        <ScrollView ref={mainScrollRef} onScroll={handleTrayScroll} scrollEventThrottle={16}>
           {effectiveResult ? (
 
             <>
@@ -2540,28 +2595,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                   }}
                   onOpenImageCapture={async (onResult) => {
                     try {
-                      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-                      if (status !== 'granted') {
-                        Alert.alert('Permission Required', 'Please grant photo library access to add images.');
-                        return;
-                      }
-                      const result = await ImagePicker.launchImageLibraryAsync({
-                        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-                        allowsMultipleSelection: true,
-                        quality: 0.8,
-                      });
-                      if (!result.canceled && result.assets) {
-                        // Upload the selected images to Supabase
-                        const uploadedUrls = await uploadLocalImagesToSupabase(
-                          result.assets.map(asset => asset.uri)
-                        );
-                        if (uploadedUrls.length > 0) {
-                          onResult(uploadedUrls);
-                        }
-                      }
+                      const assets = await captureOrPickImageAssets({ multiple: true });
+                      if (!assets.length) return;
+                      // Upload the picked (camera or library) images to Supabase.
+                      const uploadedUrls = await uploadLocalImagesToSupabase(assets.map(asset => asset.uri));
+                      if (uploadedUrls.length > 0) onResult(uploadedUrls);
                     } catch (error) {
                       console.error('Error picking images:', error);
-                      Alert.alert('Error', 'Failed to pick images. Please try again.');
+                      Alert.alert('Error', 'Failed to add images. Please try again.');
                     }
                   }}
                   onAddMissingField={(platformKey: string) => {
@@ -2569,7 +2610,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                     setFieldSearchQuery('');
                     setMissingFieldsModalOpen(true);
                   }}
-                  getMissingFieldsCount={(platformKey: string) => getMissingFields(platformKey).length}
+                  getMissingFieldsCount={(platformKey: string) => getMissingPlatformFields(displayedPlatforms[platformKey] || {}, platformKey).filter(f => f === 'category').length}
+                  allMissingCount={allMissingRequiredFields.filter(m => m.field !== 'category').length}
                   onGeneratePlatform={generatePlatform}
                   generatingPlatformKeys={generatingPlatformKeys}
                   enableAIRefill={ENABLE_AI_REFILL_FEATURES}
@@ -2599,19 +2641,27 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           />
         </View>
         <View style={styles.glassHeaderRow}>
-          {/* Layout slot — the real back control is the SwipeBackWheel overlay below. */}
-          <View style={styles.navCircle} />
+          <TouchableOpacity style={styles.navCircle} onPress={() => navigation.goBack()} activeOpacity={0.85}>
+            <ChevronLeft size={22} color={CHAT_COLORS.ink} />
+          </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.titlePill}
-            activeOpacity={items.length > 1 ? 0.85 : 1}
-            onPress={() => { if (items.length > 1) setItemMenuOpen(open => !open); }}
+            activeOpacity={0.85}
+            onPress={() => setItemMenuOpen(open => !open)}
           >
             <Text style={styles.pillTitle} numberOfLines={1}>{currentItemTitle}</Text>
-            <Text style={styles.pillSub} numberOfLines={1}>
-              {items.length > 1 ? `Item ${currentItemPosition} of ${items.length} · ` : ''}
-              {itemStatusForIndex(currentProductIndex).label}
-            </Text>
+            {(() => {
+              // Save status takes the subtitle slot transiently, then fades to just the
+              // title (multi-item keeps its position there). No separate "Saved" chip.
+              const saveLabel = saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : saveState === 'error' ? 'Save failed' : '';
+              const sub = saveStatusVisible && saveLabel
+                ? saveLabel
+                : (items.length > 1 ? `Item ${currentItemPosition} of ${items.length}` : '');
+              if (!sub) return null;
+              const color = saveStatusVisible && saveState === 'error' ? CHAT_COLORS.error : CHAT_COLORS.dim;
+              return <Text style={[styles.pillSub, { color }]} numberOfLines={1}>{sub}</Text>;
+            })()}
           </TouchableOpacity>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -2628,14 +2678,13 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         </View>
       </View>
 
-      {/* Pull-to-go-back wheel (overlays the header back slot + left-edge gesture). */}
-      <SwipeBackWheel onBack={() => navigation.goBack()} top={insets.top + 6} left={14} tint="light" />
-
       {/* ── Item switcher dropdown (chat-style; replaces the bulk ItemJobsModal) ── */}
       {itemMenuOpen ? (
         <View style={[StyleSheet.absoluteFill, { zIndex: 5500 }]} pointerEvents="box-none">
           <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setItemMenuOpen(false)} />
-          <View style={[styles.itemDropdown, { top: insets.top + 58 }]}>
+          {/* Centered under the title pill (middle of the page), not right-aligned. */}
+          <View pointerEvents="box-none" style={{ position: 'absolute', top: insets.top + 58, left: 0, right: 0, alignItems: 'center' }}>
+          <View style={[styles.itemDropdown, { position: 'relative', right: undefined, top: undefined }]}>
             <ScrollView style={{ maxHeight: 380 }} showsVerticalScrollIndicator={false}>
               {items.map((it: any, i: number) => {
                 const status = itemStatusForIndex(it.index);
@@ -2669,6 +2718,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               })}
             </ScrollView>
           </View>
+          </View>
         </View>
       ) : null}
       <KeyboardAvoidingView
@@ -2680,10 +2730,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           right: 0,
         }}
       >
-        <View style={{
+        <Animated.View style={{
           backgroundColor: 'transparent',
           width: '100%',
           zIndex: 100,
+          transform: [{ translateY: trayY }],
         }}
           pointerEvents="box-none"
         >
@@ -2699,27 +2750,29 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             pointerEvents="none"
           />
 
-          <View style={{ paddingTop: 20, paddingBottom: 24, paddingHorizontal: isInputExpanded ? 0 : 16 }}>
-            <SmartCommandInput
-              mode="quick_fix"
-              disableKeyboardHandling={true}
-              fullWidth={false}
-              onExpand={() => setIsInputExpanded(true)}
-              onCollapse={() => setIsInputExpanded(false)}
-              isLoading={quickFixLoading}
-              apiBaseUrl={API_BASE_URL}
+          <View style={{ paddingTop: 20, paddingBottom: 24, paddingHorizontal: 4 }}>
+            {isInputExpanded ? (
+            <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 4 }}>
+              <TouchableOpacity
+                onPress={() => { setIsInputExpanded(false); setQuickFixText(''); }}
+                activeOpacity={0.85}
+                style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F2EE' }}
+              >
+                <X size={18} color={CHAT_COLORS.ink} />
+              </TouchableOpacity>
+              <View style={{ flex: 1 }}>
+            <MessageComposer
+              autoFocus
+              value={quickFixText}
+              onChangeText={setQuickFixText}
+              placeholder="Wanna change something?"
+              queuedCount={0}
+              isStreaming={quickFixLoading}
               getAuthToken={ensureSupabaseJwt}
-              availableFields={(() => {
-                const fields: FieldOption[] = [];
-                platformKeys.forEach(pk => {
-                  ['title', 'description', 'tags', 'price', 'categorySuggestion', 'brand', 'condition'].forEach(f => {
-                    const label = platformKeys.length > 1 ? `${f.charAt(0).toUpperCase() + f.slice(1)} (${pk})` : f.charAt(0).toUpperCase() + f.slice(1);
-                    fields.push({ key: `${pk}.${f}`, label, platform: pk });
-                  });
-                });
-                return fields;
-              })()}
-              onSubmit={async (text, mentionedFields) => {
+              onSend={async () => {
+                const text = quickFixText.trim();
+                if (!text) return;
+                setQuickFixText('');
                 try {
                   setQuickFixLoading(true);
                   const baseUrl = API_BASE_URL;
@@ -2728,12 +2781,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                   const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
                   if (!baseUrl || !productId || !token) return;
 
-                  // Determine target platform from mentions or default to first
-                  const targetPlatform = mentionedFields.length > 0
-                    ? mentionedFields[0].split('.')[0]
-                    : platformKeys[0];
-
-                  const targetFields = mentionedFields.map(f => f.split('.').slice(1).join('.'));
+                  const targetPlatform = platformKeys[0];
 
                   const res = await fetch(`${baseUrl}/api/products/regenerate/submit`, {
                     method: 'POST',
@@ -2746,7 +2794,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                         variantId,
                         regenerateType: 'specific_fields',
                         targetPlatform,
-                        targetFields: targetFields.length > 0 ? targetFields : undefined,
                         userQuery: text,
                         currentProductData: displayedPlatforms,
                       }],
@@ -2786,6 +2833,18 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                 }
               }}
             />
+              </View>
+            </View>
+            ) : (
+            <TouchableOpacity
+              onPress={() => setIsInputExpanded(true)}
+              activeOpacity={0.85}
+              style={{ alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 22, backgroundColor: '#F4F4F2', borderWidth: 1, borderColor: '#ECECEA', marginBottom: 12 }}
+            >
+              <Sparkles size={15} color={CHAT_COLORS.dim} />
+              <Text style={{ fontSize: 14, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.dim }}>Wanna change something?</Text>
+            </TouchableOpacity>
+            )}
 
             <KeyboardAwareBottomActionBar
               visible={!isInputExpanded}
@@ -2848,7 +2907,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               ) : <View style={{ height: 10 }} />}
             />
           </View>
-        </View>
+        </Animated.View>
       </KeyboardAvoidingView>
 
 
@@ -3293,6 +3352,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           price: buildPlatformPayload().platformDetails?.canonical?.price
         }}
         isPublishing={isPublishing}
+        onSaveToInventory={() => { setPublishModalOpen(false); doSaveToInventory(); }}
       />
       {/* Media Gallery Modal */}
       {mediaModalVisible && (
@@ -3390,8 +3450,10 @@ const styles = StyleSheet.create({
   section: { marginTop: 8 },
   platform: { color: '#000', fontWeight: '700', marginBottom: 4 },
   field: { color: '#000', marginBottom: 2 },
-  versionsBackdrop: { position: 'absolute', top: 0, left: 0, bottom: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.2)' },
-  versionsSheet: { position: 'absolute', top: 0, right: 0, bottom: 0, width: '70%', backgroundColor: '#fff', borderLeftColor: '#E5E5E5', borderLeftWidth: 1, paddingVertical: 70, paddingHorizontal: 20 },
+  // zIndex above the glass header (~5000), the bottom bar (100) and field modals (6000) so the
+  // versions panel sits on top of everything when open.
+  versionsBackdrop: { position: 'absolute', top: 0, left: 0, bottom: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.35)', zIndex: 7000 },
+  versionsSheet: { position: 'absolute', top: 0, right: 0, bottom: 0, width: '78%', backgroundColor: '#fff', borderLeftColor: '#E5E5E5', borderLeftWidth: 1, paddingVertical: 70, paddingHorizontal: 20, zIndex: 7001, ...CHAT_SHADOWS.elevated },
   // Docked scanner close to the notch / bezel
   scannerDock: { position: 'absolute', top: 6, left: 56, right: 56, zIndex: 5000 },
   scannerCard: { backgroundColor: '#000', borderRadius: 18, borderWidth: 2, borderColor: '#111', overflow: 'hidden' },
