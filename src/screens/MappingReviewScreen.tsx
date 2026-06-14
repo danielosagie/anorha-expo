@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
-  FlatList,
   Pressable,
   TextInput,
   Modal,
@@ -28,158 +27,8 @@ import { useImportSession } from '../hooks/useImportSession';
 import { ImportWizardSheet } from '../components/import/ImportWizardSheet';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { MappingSuggestion } from '../types/importSession';
-import Card from '../components/Card';
-import PillTabs from '../components/ui/PillTabs';
 import { tokens, BRAND_PRIMARY} from '../design/tokens';
-
-// ---------------------------------------------------------------------------
-// Reason metadata
-// ---------------------------------------------------------------------------
-
-type ReviewReason = 'no_match_found' | 'low_confidence' | 'duplicate' | 'variant_mismatch' | 'stale_match';
-type ActiveTab = 'review' | 'matched' | 'skipped';
-
-interface ReasonMeta {
-  label: string;
-  sub: string;
-  icon: string;
-  iconColor: string;
-  iconBg: string;
-  badgeBg: string;
-  badgeColor: string;
-  badgeText: string;
-  bulkLabel: string;
-  bulkVariant: 'primary' | 'amber' | 'ghost';
-}
-
-const REASON_META: Record<ReviewReason, ReasonMeta> = {
-  no_match_found: {
-    label: 'No match found',
-    sub: "Couldn't find a likely match",
-    icon: 'magnify',
-    iconColor: '#F59E0B',
-    iconBg: '#FEF3C7',
-    badgeBg: '#DCFCE7',
-    badgeColor: '#15803D',
-    badgeText: 'Add as new',
-    bulkLabel: 'Add all as new',
-    bulkVariant: 'primary',
-  },
-  low_confidence: {
-    label: 'Low confidence match',
-    sub: 'Confirm or change the suggestion',
-    icon: 'alert-outline',
-    iconColor: '#D97706',
-    iconBg: '#FEF3C7',
-    badgeBg: '#FEF3C7',
-    badgeColor: '#92400E',
-    badgeText: 'Needs check',
-    bulkLabel: 'Accept all suggestions',
-    bulkVariant: 'amber',
-  },
-  duplicate: {
-    label: 'Possible duplicate',
-    sub: 'Already exists in another platform',
-    icon: 'set-merge',
-    iconColor: '#7C3AED',
-    iconBg: '#EDE9FE',
-    badgeBg: '#EDE9FE',
-    badgeColor: '#5B21B6',
-    badgeText: 'Duplicate',
-    bulkLabel: 'Merge all duplicates',
-    bulkVariant: 'ghost',
-  },
-  variant_mismatch: {
-    label: 'Variant mismatch',
-    sub: "Variants don't line up",
-    icon: 'layers-outline',
-    iconColor: '#2563EB',
-    iconBg: '#DBEAFE',
-    badgeBg: '#DBEAFE',
-    badgeColor: '#1E40AF',
-    badgeText: 'Variant issue',
-    bulkLabel: 'Review variant mismatches',
-    bulkVariant: 'ghost',
-  },
-  stale_match: {
-    label: 'Suggestion updated',
-    sub: 'A previous match was claimed',
-    icon: 'refresh',
-    iconColor: '#9333EA',
-    iconBg: '#FAE8FF',
-    badgeBg: '#FAE8FF',
-    badgeColor: '#86198F',
-    badgeText: 'Match changed',
-    bulkLabel: 'Re-evaluate all',
-    bulkVariant: 'ghost',
-  },
-};
-
-const REASON_ORDER: ReviewReason[] = [
-  'no_match_found',
-  'low_confidence',
-  'variant_mismatch',
-  'duplicate',
-  'stale_match',
-];
-
-// ---------------------------------------------------------------------------
-// Annotation
-// ---------------------------------------------------------------------------
-
-interface AnnotatedSuggestion extends MappingSuggestion {
-  reviewReason?: ReviewReason;
-  isStaleClaim: boolean;
-}
-
-function annotateSuggestions(suggestions: MappingSuggestion[]): AnnotatedSuggestion[] {
-  const claimedIds = new Set<string>();
-  suggestions.forEach((s) => {
-    if (s.action === 'LINK_EXISTING' && s.resolved && s.suggestedCanonicalProduct?.id) {
-      claimedIds.add(s.suggestedCanonicalProduct.id);
-    }
-  });
-
-  const familyResolvedCanonicalIds = new Map<string, Set<string>>();
-  suggestions.forEach((item) => {
-    const parentId = item.platformProduct.parentId;
-    const canonicalId = item.suggestedCanonicalProduct?.id || null;
-    if (!parentId || !canonicalId || item.resolved !== true || item.action !== 'LINK_EXISTING') return;
-    if (!familyResolvedCanonicalIds.has(parentId)) {
-      familyResolvedCanonicalIds.set(parentId, new Set<string>());
-    }
-    familyResolvedCanonicalIds.get(parentId)!.add(canonicalId);
-  });
-
-  return suggestions.map((item) => {
-    const unresolved = item.action !== 'IGNORE' && item.resolved !== true;
-    const canonicalId = item.suggestedCanonicalProduct?.id || null;
-    const familyResolvedIds = item.platformProduct.parentId
-      ? familyResolvedCanonicalIds.get(item.platformProduct.parentId)
-      : undefined;
-
-    const hasFamilyConflict =
-      unresolved &&
-      !!item.platformProduct.parentId &&
-      !!familyResolvedIds &&
-      familyResolvedIds.size > 0 &&
-      (!canonicalId || !familyResolvedIds.has(canonicalId));
-
-    const isStaleClaim = unresolved && !!canonicalId && claimedIds.has(canonicalId);
-
-    let reviewReason: ReviewReason | undefined;
-    if (unresolved) {
-      if (hasFamilyConflict) reviewReason = 'variant_mismatch';
-      else if (isStaleClaim) reviewReason = 'stale_match';
-      else if (item.action === 'UNMATCHED' && !canonicalId) reviewReason = 'no_match_found';
-      else if (typeof item.confidence === 'number' && item.confidence < 0.7) reviewReason = 'low_confidence';
-      else if (canonicalId) reviewReason = 'low_confidence';
-      else reviewReason = 'no_match_found';
-    }
-
-    return { ...item, reviewReason, isStaleClaim };
-  });
-}
+import DecisionQueue from '../components/import/DecisionQueue';
 
 // ---------------------------------------------------------------------------
 // Main screen
@@ -214,6 +63,10 @@ const MappingReviewScreen: React.FC = () => {
   const {
     suggestions,
     setSuggestions,
+    importDraft,
+    draftLog,
+    recordDecision,
+    reopenDecision,
     loading,
     error,
     counts: hookCounts,
@@ -225,10 +78,6 @@ const MappingReviewScreen: React.FC = () => {
     connection,
   } = session;
 
-  const [activeTab, setActiveTab] = useState<ActiveTab>('review');
-  const [openGroup, setOpenGroup] = useState<ReviewReason | null>(null);
-  const [reviewMode, setReviewMode] = useState<{ reason: ReviewReason; index: number } | null>(null);
-  const [moreOpen, setMoreOpen] = useState(false);
   const [searchSheet, setSearchSheet] = useState<{ visible: boolean; targetId: string | null }>({
     visible: false,
     targetId: null,
@@ -237,34 +86,17 @@ const MappingReviewScreen: React.FC = () => {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [doneVisible, setDoneVisible] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [autoExpanded, setAutoExpanded] = useState(false);
 
-  const annotated = useMemo<AnnotatedSuggestion[]>(
-    () => annotateSuggestions(suggestions || []),
-    [suggestions],
-  );
-
-  const grouped = useMemo<Record<ReviewReason, AnnotatedSuggestion[]>>(() => {
-    const out: Record<ReviewReason, AnnotatedSuggestion[]> = {
-      no_match_found: [],
-      low_confidence: [],
-      duplicate: [],
-      variant_mismatch: [],
-      stale_match: [],
-    };
-    annotated.forEach((s) => {
-      if (s.reviewReason) out[s.reviewReason].push(s);
-    });
-    return out;
-  }, [annotated]);
-
-  const matchedItems = useMemo(
-    () => annotated.filter((s) => s.resolved && (s.action === 'LINK_EXISTING' || s.action === 'CREATE_NEW')),
-    [annotated],
-  );
-  const skippedItems = useMemo(() => annotated.filter((s) => s.action === 'IGNORE'), [annotated]);
-  const reviewCount = annotated.filter((s) => !!s.reviewReason).length;
-  const totalItems = annotated.length;
-  const resolvedItems = matchedItems.length;
+  // Everything the lobby shows is derived from the server-built draft + the
+  // local decision log. No reason taxonomy, no client annotation.
+  const planTotal = importDraft?.units.length ?? 0;
+  const autoMatched = importDraft?.summary.autoResolved ?? 0;
+  const answered = draftLog.filter((d) => d.kind === 'answer').length;
+  const remaining = Math.max(0, planTotal - answered);
+  const answeredSkips = draftLog.filter((d) => d.kind === 'answer' && d.answer === 'skip').length;
+  const broughtInCount = autoMatched + Math.max(0, answered - answeredSkips);
 
   // Polling for scan completion
   useEffect(() => {
@@ -287,7 +119,7 @@ const MappingReviewScreen: React.FC = () => {
       const q = searchQuery.trim().toLowerCase();
       const seen = new Set<string>();
       const results: SearchResult[] = [];
-      annotated.forEach((s) => {
+      (suggestions || []).forEach((s) => {
         const c = s.suggestedCanonicalProduct;
         if (c?.id && !seen.has(c.id)) {
           if (!q || c.title.toLowerCase().includes(q) || (c.sku || '').toLowerCase().includes(q)) {
@@ -319,7 +151,7 @@ const MappingReviewScreen: React.FC = () => {
       setSearchLoading(false);
     }, 150);
     return () => clearTimeout(t);
-  }, [searchQuery, searchSheet.visible, annotated]);
+  }, [searchQuery, searchSheet.visible, suggestions]);
 
   // ---------------------------------------------------------------------------
   // Action helpers
@@ -328,44 +160,15 @@ const MappingReviewScreen: React.FC = () => {
     setSuggestions((prev) => (prev || []).map((s) => (s.platformProduct.id === id ? patch(s) : s)));
   }, [setSuggestions]);
 
-  const updateMany = useCallback((ids: string[], patch: (s: MappingSuggestion) => MappingSuggestion) => {
-    const idSet = new Set(ids);
-    setSuggestions((prev) => (prev || []).map((s) => (idSet.has(s.platformProduct.id) ? patch(s) : s)));
-  }, [setSuggestions]);
-
-  const handleConfirm = useCallback((item: AnnotatedSuggestion) => {
-    if (!item.suggestedCanonicalProduct?.id) return;
-    updateOne(item.platformProduct.id, (s) => ({
-      ...s,
-      action: 'LINK_EXISTING',
-      isSelected: true,
-      resolved: true,
-    }));
-  }, [updateOne]);
-
-  const handleAddNew = useCallback((item: AnnotatedSuggestion) => {
-    updateOne(item.platformProduct.id, (s) => ({
-      ...s,
-      action: 'CREATE_NEW',
-      isSelected: true,
-      resolved: true,
-    }));
-  }, [updateOne]);
-
-  const handleSkip = useCallback((item: AnnotatedSuggestion) => {
-    updateOne(item.platformProduct.id, (s) => ({
-      ...s,
-      prevAction: s.action,
-      action: 'IGNORE',
-      isSelected: false,
-      resolved: false,
-    }));
-  }, [updateOne]);
-
-  const openSearchFor = useCallback((item: AnnotatedSuggestion) => {
+  const openSearchFor = useCallback((item: { platformProduct: { id: string } }) => {
     setSearchSheet({ visible: true, targetId: item.platformProduct.id });
     setSearchQuery('');
   }, []);
+
+  // ── Server-driven decision queue (GROUP → SAME → KEEP) ───────────────────────
+  // Every interaction posts to the backend; the queue renders the draft it
+  // returns. No local derivation, no client-side "alternates".
+  const openQueue = useCallback(() => setQueueOpen(true), []);
 
   const handleSearchSelect = useCallback((result: SearchResult) => {
     if (!searchSheet.targetId) return;
@@ -384,31 +187,6 @@ const MappingReviewScreen: React.FC = () => {
     }));
     setSearchSheet({ visible: false, targetId: null });
   }, [searchSheet.targetId, updateOne]);
-
-  const handleBulkForReason = useCallback((reason: ReviewReason) => {
-    const items = grouped[reason];
-    if (items.length === 0) return;
-    if (reason === 'no_match_found') {
-      updateMany(items.map((i) => i.platformProduct.id), (s) => ({
-        ...s,
-        action: 'CREATE_NEW',
-        isSelected: true,
-        resolved: true,
-      }));
-    } else if (reason === 'low_confidence' || reason === 'duplicate') {
-      updateMany(
-        items.filter((i) => !!i.suggestedCanonicalProduct?.id).map((i) => i.platformProduct.id),
-        (s) => ({
-          ...s,
-          action: 'LINK_EXISTING',
-          isSelected: true,
-          resolved: true,
-        }),
-      );
-    } else {
-      setReviewMode({ reason, index: 0 });
-    }
-  }, [grouped, updateMany]);
 
   const handleConfirmMapping = useCallback(async () => {
     try {
@@ -469,30 +247,20 @@ const MappingReviewScreen: React.FC = () => {
   }
 
   // ---------------------------------------------------------------------------
-  // Render: full-screen REVIEW mode (replaces main content)
+  // Render: full-screen decision queue (GROUP → SAME → KEEP) — server-driven
   // ---------------------------------------------------------------------------
-  if (reviewMode) {
-    const items = grouped[reviewMode.reason];
-    if (items.length === 0) {
-      // nothing to review here — back out
-      setReviewMode(null);
-      return null;
-    }
+  if (queueOpen && importDraft) {
     return (
-      <ReviewView
+      <DecisionQueue
         theme={theme}
         insets={insets}
-        reason={reviewMode.reason}
-        items={items}
-        startIndex={Math.min(reviewMode.index, items.length - 1)}
-        onClose={() => setReviewMode(null)}
-        onConfirm={handleConfirm}
-        onAddNew={handleAddNew}
-        onSkip={handleSkip}
+        draft={importDraft}
+        log={draftLog}
+        onRecord={recordDecision}
+        onReopen={reopenDecision}
         onSearch={openSearchFor}
-        onMoreOpen={() => setMoreOpen(true)}
-        moreOpen={moreOpen}
-        onMoreClose={() => setMoreOpen(false)}
+        onClose={() => { setSearchSheet({ visible: false, targetId: null }); setQueueOpen(false); }}
+        onCommit={() => { setSearchSheet({ visible: false, targetId: null }); setQueueOpen(false); setDoneVisible(true); }}
         searchSheet={
           <SearchSheet
             theme={theme}
@@ -509,138 +277,85 @@ const MappingReviewScreen: React.FC = () => {
     );
   }
 
+
   // ---------------------------------------------------------------------------
-  // Render: main view
+  // Render: main view — a thin lobby over the server's draft
   // ---------------------------------------------------------------------------
   return (
     <View style={[styles.screen, { backgroundColor: theme.colors.background, paddingTop: insets.top + 8 }]}>
       <Header
         title="Match products"
-        count={activeTab === 'review' ? reviewCount : totalItems}
+        count={remaining}
         onClose={() => navigation.goBack()}
         theme={theme}
       />
 
-      <PillTabs
-        tabs={[
-          { key: 'review', label: 'Review', count: reviewCount, tone: 'warning' },
-          { key: 'matched', label: 'Matched', count: matchedItems.length, tone: 'success' },
-          { key: 'skipped', label: 'Skipped', count: skippedItems.length, tone: 'default' },
-        ]}
-        value={activeTab}
-        onChange={(k) => setActiveTab(k as ActiveTab)}
-      />
-
-      {activeTab === 'review' && totalItems > 0 && (
-        <View style={styles.progRow}>
-          <View style={styles.progMeta}>
-            <Text style={[styles.progLabel, { color: theme.colors.textSecondary }]}>
-              {resolvedItems} of {totalItems} done
-            </Text>
-            <Text style={[styles.progPct, { color: theme.colors.primary }]}>
-              {Math.round((resolvedItems / totalItems) * 100)}%
-            </Text>
-          </View>
-          <Progress.Bar
-            progress={resolvedItems / totalItems}
-            width={null}
-            height={4}
-            borderRadius={2}
-            color={theme.colors.primary}
-            unfilledColor="#E5E7EB"
-            borderWidth={0}
-          />
-        </View>
-      )}
-
-      {activeTab === 'review' ? (
-        <ScrollView contentContainerStyle={styles.contentPadding} showsVerticalScrollIndicator={false}>
-          {REASON_ORDER.map((reason) => {
-            const items = grouped[reason];
-            if (items.length === 0) return null;
-            return (
-              <GroupCard
-                key={reason}
-                theme={theme}
-                reason={reason}
-                items={items}
-                isOpen={openGroup === reason}
-                onToggle={() => setOpenGroup(openGroup === reason ? null : reason)}
-                onBulk={() => handleBulkForReason(reason)}
-                onReview={() => setReviewMode({ reason, index: 0 })}
-                onItemPress={(idx) => setReviewMode({ reason, index: idx })}
+      <ScrollView contentContainerStyle={styles.contentPadding} showsVerticalScrollIndicator={false}>
+        {/* Overview — everything comes from the server-built draft */}
+        <View style={styles.overviewCard}>
+          <Icon name={remaining === 0 ? 'check-decagram' : 'view-grid-outline'} size={30} color={theme.colors.primary} />
+          <Text style={[styles.overviewBig, { color: theme.colors.text }]}>
+            {remaining === 0 ? 'All set' : `${remaining} to review`}
+          </Text>
+          <Text style={[styles.overviewSub, { color: theme.colors.textSecondary }]}>
+            {autoMatched > 0
+              ? `${autoMatched} matched automatically${remaining === 0 ? '' : ` · ${answered} of ${planTotal} decided`}`
+              : remaining === 0 ? 'Ready to import' : `${answered} of ${planTotal} decided`}
+          </Text>
+          {planTotal > 0 && (
+            <View style={{ width: '100%', marginTop: 14 }}>
+              <Progress.Bar
+                progress={planTotal ? answered / planTotal : 0}
+                width={null}
+                height={5}
+                borderRadius={3}
+                color={theme.colors.primary}
+                unfilledColor="#E5E7EB"
+                borderWidth={0}
               />
-            );
-          })}
-          {reviewCount === 0 && (
-            <View style={styles.emptyState}>
-              <Icon name="check-circle-outline" size={36} color={theme.colors.primary} />
-              <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>All reviewed</Text>
-              <Text style={[styles.emptySub, { color: theme.colors.textSecondary }]}>
-                Tap Confirm mapping below to finish.
-              </Text>
             </View>
           )}
-        </ScrollView>
-      ) : activeTab === 'matched' ? (
-        <FlatList
-          data={matchedItems}
-          keyExtractor={(item) => item.platformProduct.id}
-          contentContainerStyle={styles.contentPadding}
-          ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Icon name="package-variant-closed" size={32} color="#D1D5DB" />
-              <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>Nothing matched yet</Text>
-              <Text style={[styles.emptySub, { color: theme.colors.textSecondary }]}>
-                Confirmed matches will appear here.
+        </View>
+
+        {/* What the backend handled for you — collapsed; this is done work, not a to-do. */}
+        {importDraft && importDraft.autoResolved.length > 0 && (
+          <View style={styles.autoSection}>
+            <TouchableOpacity
+              style={styles.autoToggle}
+              onPress={() => setAutoExpanded((v) => !v)}
+              activeOpacity={0.7}
+            >
+              <Icon name="check-circle" size={18} color={theme.colors.primary} />
+              <Text style={[styles.autoToggleText, { color: theme.colors.textSecondary }]}>
+                {importDraft.autoResolved.length} matched automatically — nothing to do
               </Text>
-            </View>
-          }
-          renderItem={({ item }) => (
-            <SimpleRow
-              theme={theme}
-              imageUrl={item.platformProduct.imageUrl}
-              title={item.platformProduct.title}
-              subtitle={`→ ${item.suggestedCanonicalProduct?.title || (item.action === 'CREATE_NEW' ? 'New product' : 'Linked')}`}
-              right={<Icon name="check-circle" size={18} color={theme.colors.primary} />}
-            />
-          )}
-        />
-      ) : (
-        <FlatList
-          data={skippedItems}
-          keyExtractor={(item) => item.platformProduct.id}
-          contentContainerStyle={styles.contentPadding}
-          ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Icon name="close-circle-outline" size={32} color="#D1D5DB" />
-              <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>Nothing skipped</Text>
-              <Text style={[styles.emptySub, { color: theme.colors.textSecondary }]}>
-                Skipped items will show up here.
-              </Text>
-            </View>
-          }
-          renderItem={({ item }) => (
-            <SimpleRow
-              theme={theme}
-              imageUrl={item.platformProduct.imageUrl}
-              title={item.platformProduct.title}
-              subtitle="Skipped — won't import"
-              right={
-                <TouchableOpacity
-                  onPress={() => updateOne(item.platformProduct.id, (s) => ({
-                    ...s,
-                    action: s.prevAction || 'UNMATCHED',
-                    resolved: false,
-                  }))}
-                >
-                  <Text style={[styles.undoText, { color: theme.colors.primary }]}>Undo</Text>
-                </TouchableOpacity>
-              }
-            />
-          )}
-        />
-      )}
+              <Icon
+                name={autoExpanded ? 'chevron-up' : 'chevron-down'}
+                size={20}
+                color={theme.colors.textSecondary}
+              />
+            </TouchableOpacity>
+            {autoExpanded &&
+              importDraft.autoResolved.slice(0, 60).map((a) => (
+                <SimpleRow
+                  key={a.id}
+                  theme={theme}
+                  imageUrl={a.imageUrl}
+                  title={a.title}
+                  subtitle={`→ ${a.matchedTo?.title || a.reason}`}
+                  right={<Icon name="check-circle" size={18} color={theme.colors.primary} />}
+                />
+              ))}
+          </View>
+        )}
+
+        {!importDraft && (
+          <View style={styles.emptyState}>
+            <Icon name="cloud-search-outline" size={32} color="#D1D5DB" />
+            <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>Preparing your import…</Text>
+          </View>
+        )}
+      </ScrollView>
 
       {/* Sticky bottom CTA with white-fade gradient — same look as BottomNav */}
       <LinearGradient
@@ -657,26 +372,23 @@ const MappingReviewScreen: React.FC = () => {
             <Icon name="cog-outline" size={18} color={theme.colors.textSecondary} />
             <Text style={[styles.stickySecondaryText, { color: theme.colors.textSecondary }]}>Settings</Text>
           </TouchableOpacity>
-          {reviewCount === 0 ? (
+          {remaining > 0 ? (
+            <TouchableOpacity
+              onPress={openQueue}
+              style={[styles.stickyPrimaryBtn, { backgroundColor: theme.colors.primary }]}
+              activeOpacity={0.85}
+            >
+              <Icon name="play-circle-outline" size={18} color="#FFFFFF" />
+              <Text style={styles.stickyPrimaryText}>Review {remaining} item{remaining === 1 ? '' : 's'}</Text>
+            </TouchableOpacity>
+          ) : (
             <TouchableOpacity
               onPress={() => setDoneVisible(true)}
               style={[styles.stickyPrimaryBtn, { backgroundColor: theme.colors.primary }]}
               activeOpacity={0.85}
             >
               <Icon name="check" size={17} color="#FFFFFF" />
-              <Text style={styles.stickyPrimaryText}>Confirm mapping ({matchedItems.length})</Text>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              onPress={() => {
-                const firstReason = REASON_ORDER.find((r) => grouped[r].length > 0);
-                if (firstReason) setReviewMode({ reason: firstReason, index: 0 });
-              }}
-              style={[styles.stickyPrimaryBtn, { backgroundColor: theme.colors.primary }]}
-              activeOpacity={0.85}
-            >
-              <Icon name="play-circle-outline" size={18} color="#FFFFFF" />
-              <Text style={styles.stickyPrimaryText}>Review {reviewCount} item{reviewCount === 1 ? '' : 's'}</Text>
+              <Text style={styles.stickyPrimaryText}>Complete import</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -697,8 +409,8 @@ const MappingReviewScreen: React.FC = () => {
         <DoneOverlay
           theme={theme}
           insets={insets}
-          linkedCount={matchedItems.length}
-          skippedCount={skippedItems.length}
+          linkedCount={broughtInCount}
+          skippedCount={answeredSkips}
           onConfirm={handleConfirmMapping}
           onBack={() => setDoneVisible(false)}
           isSubmitting={isSubmitting}
@@ -734,133 +446,6 @@ function Header({ title, count, onClose, theme }: { title: string; count: number
   );
 }
 
-// ---------------------------------------------------------------------------
-// Group Card (uses Card component for consistency)
-// ---------------------------------------------------------------------------
-
-interface GroupCardProps {
-  theme: any;
-  reason: ReviewReason;
-  items: AnnotatedSuggestion[];
-  isOpen: boolean;
-  onToggle: () => void;
-  onBulk: () => void;
-  onReview: () => void;
-  onItemPress: (index: number) => void;
-}
-
-function GroupCard({ theme, reason, items, isOpen, onToggle, onBulk, onReview, onItemPress }: GroupCardProps) {
-  const meta = REASON_META[reason];
-  const previewItems = items.slice(0, 6);
-  return (
-    <Card style={styles.groupCardOuter}>
-      <TouchableOpacity onPress={onToggle} style={styles.groupHeader} activeOpacity={0.7}>
-        <View style={[styles.groupIcon, { backgroundColor: meta.iconBg }]}>
-          <Icon name={meta.icon} size={18} color={meta.iconColor} />
-        </View>
-        <View style={styles.groupBody}>
-          <Text style={[styles.groupTitle, { color: theme.colors.text }]} numberOfLines={1}>{meta.label}</Text>
-          <Text style={[styles.groupSub, { color: theme.colors.textSecondary }]} numberOfLines={1}>{meta.sub}</Text>
-        </View>
-        <View style={styles.groupRight}>
-          <Text style={[styles.groupCount, { color: theme.colors.text }]}>{items.length}</Text>
-          <Icon
-            name="chevron-down"
-            size={20}
-            color="#9CA3AF"
-            style={{ transform: [{ rotate: isOpen ? '180deg' : '0deg' }] }}
-          />
-        </View>
-      </TouchableOpacity>
-
-      <View style={styles.groupBulkRow}>
-        <TouchableOpacity
-          onPress={onBulk}
-          style={[
-            styles.groupBulkBtn,
-            meta.bulkVariant === 'primary' && { backgroundColor: '#EEFCE0', borderColor: BRAND_PRIMARY },
-            meta.bulkVariant === 'amber' && { backgroundColor: '#FFFBEB', borderColor: '#FDE68A' },
-            meta.bulkVariant === 'ghost' && { backgroundColor: '#F9FAFB', borderColor: '#E5E7EB' },
-          ]}
-          activeOpacity={0.85}
-        >
-          <Icon
-            name="check"
-            size={14}
-            color={
-              meta.bulkVariant === 'primary'
-                ? '#4A7C00'
-                : meta.bulkVariant === 'amber'
-                  ? '#92400E'
-                  : theme.colors.textSecondary
-            }
-          />
-          <Text
-            style={[
-              styles.groupBulkText,
-              { color: theme.colors.textSecondary },
-              meta.bulkVariant === 'primary' && { color: '#4A7C00' },
-              meta.bulkVariant === 'amber' && { color: '#92400E' },
-            ]}
-          >
-            {meta.bulkLabel}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={onReview}
-          style={[styles.groupBulkBtn, { backgroundColor: '#F9FAFB', borderColor: '#E5E7EB' }]}
-          activeOpacity={0.85}
-        >
-          <Icon name="arrow-right" size={14} color={theme.colors.textSecondary} />
-          <Text style={[styles.groupBulkText, { color: theme.colors.textSecondary }]}>Review</Text>
-        </TouchableOpacity>
-      </View>
-
-      {isOpen && (
-        <View style={styles.groupRows}>
-          {previewItems.map((item, i) => (
-            <TouchableOpacity
-              key={item.platformProduct.id}
-              style={styles.gRow}
-              onPress={() => onItemPress(i)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.gRowIcon}>
-                {item.platformProduct.imageUrl ? (
-                  <Image source={{ uri: item.platformProduct.imageUrl }} style={styles.gRowImage} />
-                ) : (
-                  <Icon name="package-variant" size={16} color="#9CA3AF" />
-                )}
-              </View>
-              <View style={styles.gRowInfo}>
-                <Text style={[styles.gRowName, { color: theme.colors.text }]} numberOfLines={1}>
-                  {item.platformProduct.title || 'Untitled'}
-                </Text>
-                <Text style={[styles.gRowSub, { color: theme.colors.textSecondary }]} numberOfLines={1}>
-                  {item.platformProduct.sku ? `SKU ${item.platformProduct.sku}` : ''}
-                  {item.platformProduct.price
-                    ? `${item.platformProduct.sku ? ' · ' : ''}$${item.platformProduct.price.toFixed(2)}`
-                    : ''}
-                </Text>
-              </View>
-              <View style={[styles.gRowBadge, { backgroundColor: meta.badgeBg }]}>
-                <Text style={[styles.gRowBadgeText, { color: meta.badgeColor }]}>{meta.badgeText}</Text>
-              </View>
-              <Icon name="chevron-right" size={16} color="#D1D5DB" />
-            </TouchableOpacity>
-          ))}
-          {items.length > previewItems.length && (
-            <View style={styles.gRowMore}>
-              <Text style={[styles.gRowMoreText, { color: theme.colors.textSecondary }]}>
-                +{items.length - previewItems.length} more items
-              </Text>
-            </View>
-          )}
-        </View>
-      )}
-    </Card>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Simple row (matched / skipped)
@@ -897,468 +482,6 @@ function SimpleRow({
   );
 }
 
-// ---------------------------------------------------------------------------
-// REVIEW VIEW (full screen — no bottom sheet)
-// ---------------------------------------------------------------------------
-
-interface ReviewViewProps {
-  theme: any;
-  insets: { top: number; bottom: number; left: number; right: number };
-  reason: ReviewReason;
-  items: AnnotatedSuggestion[];
-  startIndex: number;
-  onClose: () => void;
-  onConfirm: (item: AnnotatedSuggestion) => void;
-  onAddNew: (item: AnnotatedSuggestion) => void;
-  onSkip: (item: AnnotatedSuggestion) => void;
-  onSearch: (item: AnnotatedSuggestion) => void;
-  onMoreOpen: () => void;
-  moreOpen: boolean;
-  onMoreClose: () => void;
-  searchSheet: React.ReactNode;
-}
-
-function ReviewView({
-  theme,
-  insets,
-  reason,
-  items,
-  startIndex,
-  onClose,
-  onConfirm,
-  onAddNew,
-  onSkip,
-  onSearch,
-  onMoreOpen,
-  moreOpen,
-  onMoreClose,
-  searchSheet,
-}: ReviewViewProps) {
-  const meta = REASON_META[reason];
-  const [index, setIndex] = useState(startIndex);
-  const filmstripRef = useRef<ScrollView | null>(null);
-
-  useEffect(() => {
-    setIndex(Math.max(0, Math.min(startIndex, items.length - 1)));
-  }, [startIndex, items.length]);
-
-  useEffect(() => {
-    if (filmstripRef.current) {
-      filmstripRef.current.scrollTo({ x: Math.max(0, index * 50 - 100), animated: true });
-    }
-  }, [index]);
-
-  const safeIndex = Math.max(0, Math.min(index, items.length - 1));
-  const item = items[safeIndex];
-  if (!item) {
-    onClose();
-    return null;
-  }
-
-  const hasMatch = !!item.suggestedCanonicalProduct?.id && !item.isStaleClaim;
-  const isStale = !!item.isStaleClaim;
-  const familyVariants = item.platformProduct.parentId
-    ? items.filter((other) => other.platformProduct.parentId === item.platformProduct.parentId)
-    : [];
-
-  const moveNext = () => {
-    if (safeIndex < items.length - 1) setIndex(safeIndex + 1);
-    else onClose();
-  };
-  const movePrev = () => {
-    if (safeIndex > 0) setIndex(safeIndex - 1);
-  };
-
-  return (
-    <View style={[styles.screen, { backgroundColor: theme.colors.background, paddingTop: insets.top + 8 }]}>
-      {/* Header */}
-      <View style={styles.reviewHeader}>
-        <TouchableOpacity onPress={onClose} style={styles.headerBackBtn} hitSlop={8}>
-          <Icon name="arrow-left" size={20} color={theme.colors.text} />
-        </TouchableOpacity>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.reviewHeaderTitle, { color: theme.colors.text }]} numberOfLines={1}>
-            {meta.label}
-          </Text>
-          <Text style={[styles.reviewHeaderSub, { color: theme.colors.textSecondary }]}>
-            Item {safeIndex + 1} of {items.length}
-          </Text>
-        </View>
-      </View>
-
-      {/* Filmstrip */}
-      <ScrollView
-        ref={filmstripRef}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.filmstrip}
-      >
-        {items.map((it, i) => {
-          const isActive = i === safeIndex;
-          const isResolved = it.resolved;
-          return (
-            <TouchableOpacity
-              key={it.platformProduct.id}
-              onPress={() => setIndex(i)}
-              style={[
-                styles.fsItem,
-                isActive && [styles.fsItemActive, { borderColor: theme.colors.text }],
-                isResolved && styles.fsItemResolved,
-              ]}
-            >
-              {isResolved ? (
-                <Icon name="check" size={16} color="#15803D" />
-              ) : it.platformProduct.imageUrl ? (
-                <Image source={{ uri: it.platformProduct.imageUrl }} style={styles.fsImage} />
-              ) : (
-                <Icon name="package-variant" size={16} color={isActive ? theme.colors.text : '#9CA3AF'} />
-              )}
-              <Text
-                style={[styles.fsNum, isActive && { color: theme.colors.text }]}
-              >
-                {i + 1}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-
-      {/* Body */}
-      <ScrollView
-        contentContainerStyle={styles.reviewBody}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* Comparison Card — vertical layout for full breathing room on phones */}
-        <Card style={styles.cmpCard}>
-          {/* Incoming */}
-          <View style={styles.cmpBlock}>
-            <Text style={[styles.cmpLabel, { color: theme.colors.textSecondary }]}>INCOMING</Text>
-            <View style={styles.cmpRow}>
-              <View style={styles.cmpThumb}>
-                {item.platformProduct.imageUrl ? (
-                  <Image source={{ uri: item.platformProduct.imageUrl }} style={styles.cmpThumbImg} />
-                ) : (
-                  <Icon name="package-variant" size={20} color="#9CA3AF" />
-                )}
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.cmpName, { color: theme.colors.text }]} numberOfLines={2}>
-                  {item.platformProduct.title || 'Untitled'}
-                </Text>
-                <Text style={[styles.cmpSub, { color: theme.colors.textSecondary }]} numberOfLines={1}>
-                  {item.platformProduct.sku ? `SKU ${item.platformProduct.sku}` : ''}
-                  {item.platformProduct.price
-                    ? `${item.platformProduct.sku ? ' · ' : ''}$${item.platformProduct.price.toFixed(2)}`
-                    : ''}
-                </Text>
-                {item.platformProduct.parentTitle && (
-                  <View style={styles.cmpTag}>
-                    <Icon name="layers-outline" size={11} color={theme.colors.textSecondary} />
-                    <Text style={[styles.cmpTagText, { color: theme.colors.textSecondary }]}>Variant</Text>
-                  </View>
-                )}
-              </View>
-            </View>
-          </View>
-
-          {/* Direction divider */}
-          <View style={styles.cmpDivider}>
-            <View style={styles.cmpDividerLine} />
-            <View style={[styles.cmpDividerIcon, { backgroundColor: theme.colors.background }]}>
-              <Icon name="arrow-down" size={16} color="#9CA3AF" />
-            </View>
-            <View style={styles.cmpDividerLine} />
-          </View>
-
-          {/* Match / no-match / stale */}
-          {isStale ? (
-            <Pressable onPress={() => onSearch(item)} style={[styles.cmpBlock, styles.cmpStale]}>
-              <Text style={[styles.cmpLabel, { color: '#9333EA' }]}>MATCH WAS REASSIGNED</Text>
-              <View style={styles.cmpRow}>
-                <View style={[styles.cmpThumb, { backgroundColor: '#FAE8FF' }]}>
-                  <Icon name="refresh" size={20} color="#9333EA" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.cmpName, { color: '#7E22CE' }]}>Tap to pick a new match</Text>
-                  <Text style={[styles.cmpSub, { color: '#C084FC' }]}>
-                    The previously suggested product was claimed by another item.
-                  </Text>
-                </View>
-              </View>
-            </Pressable>
-          ) : hasMatch ? (
-            <View style={[styles.cmpBlock, styles.cmpMatch]}>
-              <View style={styles.cmpMatchHeader}>
-                <Text style={[styles.cmpLabel, { color: '#15803D' }]}>MATCH IN ANORHA</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  {typeof item.confidence === 'number' && (
-                    <View style={styles.cmpConfPill}>
-                      <Icon name="check" size={11} color="#15803D" />
-                      <Text style={styles.cmpConfText}>{Math.round(item.confidence * 100)}%</Text>
-                    </View>
-                  )}
-                  <TouchableOpacity onPress={() => onSearch(item)} style={{ marginLeft: 10 }}>
-                    <Text style={[styles.cmpChange, { color: theme.colors.primary }]}>Change</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-              <View style={styles.cmpRow}>
-                <View style={styles.cmpThumb}>
-                  {item.suggestedCanonicalProduct?.imageUrl ? (
-                    <Image source={{ uri: item.suggestedCanonicalProduct.imageUrl }} style={styles.cmpThumbImg} />
-                  ) : (
-                    <Icon name="package-variant" size={20} color="#9CA3AF" />
-                  )}
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.cmpName, { color: '#15803D' }]} numberOfLines={2}>
-                    {item.suggestedCanonicalProduct?.title || 'Untitled'}
-                  </Text>
-                  <Text style={[styles.cmpSub, { color: '#16A34A' }]} numberOfLines={1}>
-                    {item.suggestedCanonicalProduct?.sku ? `SKU ${item.suggestedCanonicalProduct.sku}` : ''}
-                  </Text>
-                </View>
-              </View>
-            </View>
-          ) : (
-            <Pressable onPress={() => onSearch(item)} style={[styles.cmpBlock, styles.cmpEmpty]}>
-              <View style={styles.cmpEmptyContent}>
-                <View style={styles.cmpEmptyIcon}>
-                  <Icon name="magnify" size={22} color="#9CA3AF" />
-                </View>
-                <Text style={[styles.cmpEmptyTitle, { color: theme.colors.text }]}>No match found</Text>
-                <Text style={[styles.cmpEmptySub, { color: theme.colors.textSecondary }]}>
-                  Tap to search inventory{'\n'}or add as new below.
-                </Text>
-              </View>
-            </Pressable>
-          )}
-        </Card>
-
-        {/* Quick action row */}
-        <View style={styles.quickRow}>
-          {hasMatch ? (
-            <>
-              <TouchableOpacity onPress={() => onSearch(item)} style={[styles.quickBtn, styles.quickBtnGhost]}>
-                <Icon name="close" size={14} color={theme.colors.textSecondary} />
-                <Text style={[styles.quickBtnText, { color: theme.colors.textSecondary }]}>No, change</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => {
-                  onConfirm(item);
-                  moveNext();
-                }}
-                style={[styles.quickBtn, { backgroundColor: '#EEFCE0', borderColor: BRAND_PRIMARY }]}
-              >
-                <Icon name="check" size={14} color="#4A7C00" />
-                <Text style={[styles.quickBtnText, { color: '#4A7C00' }]}>Yes, link</Text>
-              </TouchableOpacity>
-            </>
-          ) : (
-            <>
-              <TouchableOpacity onPress={() => onSearch(item)} style={[styles.quickBtn, styles.quickBtnGhost]}>
-                <Icon name="magnify" size={14} color={theme.colors.textSecondary} />
-                <Text style={[styles.quickBtnText, { color: theme.colors.textSecondary }]}>Search</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => {
-                  onAddNew(item);
-                  moveNext();
-                }}
-                style={[styles.quickBtn, { backgroundColor: '#EEFCE0', borderColor: BRAND_PRIMARY }]}
-              >
-                <Icon name="plus" size={14} color="#4A7C00" />
-                <Text style={[styles.quickBtnText, { color: '#4A7C00' }]}>Add new</Text>
-              </TouchableOpacity>
-            </>
-          )}
-        </View>
-
-        {/* Variants section */}
-        {familyVariants.length > 1 && (
-          <View style={styles.variantSection}>
-            <View style={styles.variantSectionHeader}>
-              <Icon name="layers-outline" size={14} color={theme.colors.textSecondary} />
-              <Text style={[styles.variantSectionTitle, { color: theme.colors.textSecondary }]}>
-                Variants in this product
-              </Text>
-            </View>
-            {familyVariants.map((v) => {
-              const matched = !!v.suggestedCanonicalProduct?.id && !v.isStaleClaim;
-              const isCurrent = v.platformProduct.id === item.platformProduct.id;
-              return (
-                <View
-                  key={v.platformProduct.id}
-                  style={[
-                    styles.variantRow,
-                    isCurrent && { borderColor: theme.colors.primary, borderWidth: 1.5 },
-                  ]}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.variantLeft, { color: theme.colors.text }]} numberOfLines={1}>
-                      {v.platformProduct.title || 'Variant'}
-                    </Text>
-                    {v.platformProduct.sku && (
-                      <Text style={[styles.variantSub, { color: theme.colors.textSecondary }]}>
-                        SKU {v.platformProduct.sku}
-                      </Text>
-                    )}
-                  </View>
-                  <Icon name="arrow-right" size={14} color="#D1D5DB" />
-                  <View style={{ flex: 1, alignItems: 'flex-end' }}>
-                    {matched ? (
-                      <Text style={[styles.variantMatch, { color: '#15803D' }]} numberOfLines={1}>
-                        {v.suggestedCanonicalProduct?.title || 'Linked'}
-                      </Text>
-                    ) : (
-                      <>
-                        <Text style={[styles.variantNoMatch, { color: '#D97706' }]}>Needs match</Text>
-                        <TouchableOpacity
-                          onPress={() => {
-                            const nextIdx = items.findIndex((x) => x.platformProduct.id === v.platformProduct.id);
-                            if (nextIdx >= 0) setIndex(nextIdx);
-                            else onSearch(v);
-                          }}
-                        >
-                          <Text style={[styles.variantAction, { color: theme.colors.primary }]}>Open</Text>
-                        </TouchableOpacity>
-                      </>
-                    )}
-                  </View>
-                </View>
-              );
-            })}
-          </View>
-        )}
-      </ScrollView>
-
-      {/* Sticky bottom action bar with white-fade gradient */}
-      <LinearGradient
-        colors={['rgba(255,255,255,0)', 'rgba(255,255,255,1)', 'rgba(255,255,255,1)']}
-        style={[styles.sticky, { paddingBottom: insets.bottom + 14 }]}
-        pointerEvents="box-none"
-      >
-        <View style={styles.actionBar}>
-          <TouchableOpacity
-            onPress={movePrev}
-            disabled={safeIndex === 0}
-            style={[styles.abIconBtn, safeIndex === 0 && { opacity: 0.4 }]}
-          >
-            <Icon name="arrow-left" size={18} color={theme.colors.textSecondary} />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={onMoreOpen} style={styles.abIconBtn}>
-            <Icon name="dots-horizontal" size={18} color={theme.colors.textSecondary} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => {
-              onSkip(item);
-              moveNext();
-            }}
-            style={styles.abSkip}
-          >
-            <Icon name="close" size={15} color={theme.colors.textSecondary} />
-            <Text style={[styles.abSkipText, { color: theme.colors.textSecondary }]}>Skip</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => {
-              if (hasMatch) onConfirm(item);
-              else onAddNew(item);
-              moveNext();
-            }}
-            style={[styles.abDone, { backgroundColor: theme.colors.primary }]}
-          >
-            <Icon name="check" size={16} color="#FFFFFF" />
-            <Text style={styles.abDoneText}>Done</Text>
-          </TouchableOpacity>
-        </View>
-      </LinearGradient>
-
-      {/* More-options sheet */}
-      <Modal visible={moreOpen} transparent animationType="fade" onRequestClose={onMoreClose}>
-        <Pressable style={styles.bsOverlay} onPress={onMoreClose}>
-          <Pressable style={[styles.bs, { paddingBottom: insets.bottom + 8 }]} onPress={(e) => e.stopPropagation()}>
-            <View style={styles.bsHandle} />
-            <View style={{ paddingVertical: 6 }}>
-              <OptionRow
-                theme={theme}
-                icon="magnify"
-                iconColor="#0284C7"
-                iconBg="#E0F2FE"
-                label="Search inventory"
-                sub="Find the right product manually"
-                onPress={() => {
-                  onMoreClose();
-                  onSearch(item);
-                }}
-              />
-              <OptionRow
-                theme={theme}
-                icon="plus"
-                iconColor="#15803D"
-                iconBg="#DCFCE7"
-                label="Add as new item"
-                sub="Create a new product in Anorha"
-                onPress={() => {
-                  onMoreClose();
-                  onAddNew(item);
-                  moveNext();
-                }}
-              />
-              <OptionRow
-                theme={theme}
-                icon="trash-can-outline"
-                iconColor="#DC2626"
-                iconBg="#FEE2E2"
-                label="Skip this item"
-                sub="Move to skipped — undo anytime"
-                onPress={() => {
-                  onMoreClose();
-                  onSkip(item);
-                  moveNext();
-                }}
-                danger
-              />
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      {searchSheet}
-    </View>
-  );
-}
-
-function OptionRow({
-  theme,
-  icon,
-  iconColor,
-  iconBg,
-  label,
-  sub,
-  onPress,
-  danger,
-}: {
-  theme: any;
-  icon: string;
-  iconColor: string;
-  iconBg: string;
-  label: string;
-  sub: string;
-  onPress: () => void;
-  danger?: boolean;
-}) {
-  return (
-    <TouchableOpacity onPress={onPress} style={styles.optRow} activeOpacity={0.7}>
-      <View style={[styles.optIcon, { backgroundColor: iconBg }]}>
-        <Icon name={icon} size={16} color={iconColor} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={[styles.optLabel, { color: danger ? '#DC2626' : theme.colors.text }]}>{label}</Text>
-        <Text style={[styles.optSub, { color: theme.colors.textSecondary }]}>{sub}</Text>
-      </View>
-    </TouchableOpacity>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Search Sheet
@@ -1618,12 +741,57 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  autoMatched: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 6,
+  },
 
   // Content
   contentPadding: {
     paddingHorizontal: tokens.spacing.lg,
     paddingTop: tokens.spacing.md,
     paddingBottom: 140,
+  },
+  overviewCard: {
+    alignItems: 'center',
+    paddingVertical: 28,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+    backgroundColor: '#F9FAFB',
+    marginBottom: 18,
+  },
+  overviewBig: {
+    fontSize: 24,
+    marginTop: 12,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    letterSpacing: -0.3,
+  },
+  overviewSub: {
+    fontSize: 14,
+    marginTop: 4,
+    textAlign: 'center',
+    fontFamily: 'PlusJakartaSans_500Medium',
+  },
+  autoSection: {
+    marginTop: 4,
+  },
+  autoToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 12,
+  },
+  autoToggleText: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+  },
+  sectionTitle: {
+    fontSize: 12,
+    letterSpacing: 0.5,
+    marginBottom: 8,
+    fontFamily: 'PlusJakartaSans_700Bold',
   },
 
   // Group card
