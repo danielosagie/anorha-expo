@@ -504,7 +504,10 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
       // The processed plan IS the import flow now (the queue walks it and records
       // choices locally). Cleared first so a stale draft can't outlive a refresh;
       // the saved log comes back on the draft so the queue resumes mid-flow.
+      // Reset draft AND log together: a surviving log over a missing/empty draft
+      // would submit stale decisions and drift the lobby counts.
       setImportDraft(null);
+      setDraftLog([]);
       try {
         const draftRes = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/import-draft`, {
           method: 'GET',
@@ -1020,7 +1023,8 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
     }
   }, [
     connectionId,
-    suggestions,
+    draftLog,
+    importDraft,
     selectedPool,
     poolNameInput,
     locationPoolAssignments,
