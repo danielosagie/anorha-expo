@@ -326,9 +326,13 @@ export const normalizeDisplayName = (raw?: string | null): string => {
   if (/\.myshopify\.com$/i.test(trimmed)) {
     return trimmed.replace(/\.myshopify\.com$/i, '');
   }
-  const def = getPlatform(trimmed);
-  if (def) return def.label;
-  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  // Collapse to the canonical label ONLY on an exact key/alias match — never the
+  // fuzzy includes() match getPlatform() uses, otherwise a user's free-text
+  // connection name like "Square One Boutique" or "Clover Lane Goods" would be
+  // destroyed and rendered as just "Square"/"Clover". Anything else is returned
+  // verbatim (matches the old shopLabel behavior).
+  const exact = PLATFORM_INDEX[trimmed.toLowerCase()];
+  return exact ? exact.label : trimmed;
 };
 
 // ── Legacy exports (derived from the registry; keep existing consumers working) ─

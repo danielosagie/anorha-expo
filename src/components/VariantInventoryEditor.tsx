@@ -4,6 +4,7 @@ import VariantInventoryRow from './VariantInventoryRow';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PlatformLogo from './PlatformLogo';
+import { getPlatform } from '../config/platforms';
 
 export interface InventoryItemData {
   quantity: number;
@@ -101,7 +102,7 @@ const AllTabRow: React.FC<{
     <View style={styles.allRowCard}>
       {/* Platform Logo + Location Name */}
       <View style={styles.allRowHeader}>
-        <PlatformLogo type={platformKey} size={18} />
+        {getPlatform(platformKey) && <PlatformLogo type={platformKey} size={18} />}
         <Text style={styles.locationName} numberOfLines={1}>{displayName}</Text>
         {isShopifyGlobal && (
           <View style={styles.globalBadge}>
