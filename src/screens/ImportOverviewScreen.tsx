@@ -34,23 +34,11 @@ import {
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 import PlatformLogo from '../components/PlatformLogo';
-import { getPlatform } from '../config/platforms';
+import { getPlatform, getPlatformColor } from '../config/platforms';
 
 type ImportOverviewRouteProp = RouteProp<AppStackParamList, 'ImportOverview'>;
 type ImportOverviewNavProp = StackNavigationProp<AppStackParamList, 'ImportOverview'>;
 
-const getPlatformColor = (name: string): string => {
-  const n = (name || '').toLowerCase();
-  if (n.includes('shopify')) return '#96BF47';
-  if (n.includes('square')) return '#3E4348';
-  if (n.includes('clover')) return '#27AE60';
-  if (n.includes('ebay')) return '#0064D2';
-  if (n.includes('amazon')) return '#FF9900';
-  if (n.includes('facebook')) return '#1877F2';
-  if (n.includes('depop')) return '#FF2300';
-  if (n.includes('whatnot')) return '#FFE406';
-  return '#6B7280';
-};
 
 const ImportOverviewScreen = () => {
   const route = useRoute<ImportOverviewRouteProp>();

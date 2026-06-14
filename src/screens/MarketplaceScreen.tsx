@@ -7,6 +7,7 @@ import Card from '../components/Card';
 import PlaceholderImage from '../components/Placeholder';
 import Button from '../components/Button';
 import EmptyState from '../components/EmptyState';
+import { getPlatformColor } from '../config/platforms';
 import { Platform } from 'react-native';
 
 const MarketplaceItem = ({ item, onAddToInventory, navigation }: { item: any; onAddToInventory: (item: any) => void; navigation: any }) => {
@@ -59,21 +60,6 @@ const MarketplaceItem = ({ item, onAddToInventory, navigation }: { item: any; on
       </Card>
     </TouchableOpacity>
   );
-};
-
-const getPlatformColor = (platform: string) => {
-  switch (platform) {
-    case 'Shopify':
-      return '#0E8F7F';
-    case 'Amazon':
-      return '#F17F5F';
-    case 'Clover':
-      return '#3CAD46';
-    case 'Square':
-      return '#6C757D';
-    default:
-      return '#555555';
-  }
 };
 
 const MarketplaceScreen = ({ navigation }: { navigation: any }) => {

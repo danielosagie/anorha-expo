@@ -18,6 +18,7 @@ import { Sparkles, Link, Unlink, Hammer } from 'lucide-react-native';
 import { useTheme } from '../../context/ThemeContext';
 import Button from '../Button';
 import PlatformLogo from '../PlatformLogo';
+import { getPlatformColor } from '../../config/platforms';
 import type { UseImportSessionResult } from '../../hooks/useImportSession';
 import type { ImportSessionCounts } from '../../types/importSession';
 
@@ -33,16 +34,6 @@ const WIZARD_STEP_CONFIG: Record<number, { title: string; description?: string }
   6: { title: 'Review & Complete', description: 'Confirm mappings and start the import sync.' },
 };
 
-function getPlatformColor(platformType: string): string {
-  const t = (platformType || '').toLowerCase();
-  if (t.includes('shopify')) return '#96C93F';
-  if (t.includes('square')) return '#3E4348';
-  if (t.includes('clover')) return '#28A745';
-  if (t.includes('amazon')) return '#FF9900';
-  if (t.includes('ebay')) return '#0064D2';
-  if (t.includes('facebook')) return '#1877F2';
-  return '#6B7280';
-}
 
 export interface ImportWizardSheetProps {
   visible: boolean;

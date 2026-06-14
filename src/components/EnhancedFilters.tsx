@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, Switch } f
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Button from './Button';
+import { getPlatformColor, getPlatformIcon } from '../config/platforms';
 
 export interface FilterOption {
   id: string;
@@ -152,36 +153,6 @@ const EnhancedFilters: React.FC<EnhancedFiltersProps> = ({
 
   const resetFilters = () => {
     selectAllPlatforms();
-  };
-
-  const getPlatformIcon = (platformType: string) => {
-    switch (platformType.toLowerCase()) {
-      case 'shopify':
-        return 'shopping';
-      case 'square':
-        return 'square';
-      case 'clover':
-        return 'leaf';
-      case 'ebay':
-        return 'earth';
-      default:
-        return 'store';
-    }
-  };
-
-  const getPlatformColor = (platformType: string) => {
-    switch (platformType.toLowerCase()) {
-      case 'shopify':
-        return '#95BF47';
-      case 'square':
-        return '#3E4348';
-      case 'clover':
-        return '#3FA838';
-      case 'ebay':
-        return '#E53238';
-      default:
-        return theme.colors.primary;
-    }
   };
 
   return (

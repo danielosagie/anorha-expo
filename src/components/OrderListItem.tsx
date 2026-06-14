@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
+import PlatformLogo from './PlatformLogo';
 
 const OrderListItem = ({ order }: { order: any }) => {
   const theme = useTheme();
@@ -38,23 +39,6 @@ const OrderListItem = ({ order }: { order: any }) => {
     return 'help-circle-outline'; // Default icon
   };
   
-  // Get platform icon
-  const getPlatformIcon = (platform?: string) => {
-    if (!platform) return 'store-outline'; // Default icon if platform is undefined
-    
-    const platformLower = platform.toLowerCase();
-    
-    if (platformLower.includes('shopify')) return 'shopping';
-    if (platformLower.includes('amazon')) return 'cart';
-    if (platformLower.includes('ebay')) return 'tag';
-    if (platformLower.includes('clover')) return 'flower';
-    if (platformLower.includes('square')) return 'square';
-    if (platformLower.includes('etsy')) return 'hand-heart';
-    if (platformLower.includes('facebook')) return 'facebook';
-    
-    return 'store-outline'; // Default icon
-  };
-  
   // Format date to be more readable
   const formatDate = (dateString?: string) => {
     if (!dateString) return 'No date';
@@ -89,11 +73,11 @@ const OrderListItem = ({ order }: { order: any }) => {
           <View style={styles.orderIdContainer}>
             <Text style={styles.orderId}>#{order.id || 'Unknown'}</Text>
             <View style={styles.platformBadge}>
-              <Icon 
-                name={getPlatformIcon(order.platform)} 
-                size={14} 
-                color="#555" 
-                style={styles.platformIcon} 
+              <PlatformLogo
+                type={order.platform || ''}
+                size={14}
+                fallbackIcon="store-outline"
+                style={styles.platformIcon}
               />
               <Text style={styles.platformName}>{order.platform || 'Unknown'}</Text>
             </View>

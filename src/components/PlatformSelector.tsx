@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, Switch } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import PlaceholderImage from './Placeholder';
+import { getPlatformColor, getPlatformIcon } from '../config/platforms';
 
 const platforms = [
   {
@@ -34,48 +35,6 @@ const platforms = [
   },
 ];
 
-const getPlatformColor = (platformId: string) => {
-  switch (platformId) {
-    case 'shopify':
-      return '#0E8F7F';
-    case 'amazon':
-      return '#F17F5F';
-    case 'ebay':
-      return '#E53238';
-    case 'depop':
-      return '#FF2300';
-    case 'whatnot':
-      return '#FFC107';
-    case 'clover':
-      return '#3CAD46';
-    case 'square':
-      return '#6C757D';
-    default:
-      return '#555555';
-  }
-};
-
-const getIconForPlatform = (platform: string) => {
-  switch (platform) {
-    case 'shopify':
-      return 'shopping';
-    case 'amazon':
-      return 'package';
-    case 'ebay':
-      return 'currency-usd';
-    case 'depop':
-      return 'tshirt-crew';
-    case 'whatnot':
-      return 'collage';
-    case 'clover':
-      return 'leaf';
-    case 'square':
-      return 'square-outline';
-    default:
-      return 'store';
-  }
-};
-
 const PlatformSelector = ({ platforms: selectedPlatforms, onChange }: { platforms: Record<string, boolean>; onChange: (next: Record<string, boolean>) => void }) => {
   const theme = useTheme();
   
@@ -94,9 +53,9 @@ const PlatformSelector = ({ platforms: selectedPlatforms, onChange }: { platform
             <PlaceholderImage 
               size={32} 
               borderRadius={4} 
-              color={getPlatformColor(platform.id)} 
+              color={getPlatformColor(platform.id)}
               type="icon"
-              icon={getIconForPlatform(platform.id)}
+              icon={getPlatformIcon(platform.id)}
             />
             <Text style={styles.platformName}>{platform.name}</Text>
           </View>
