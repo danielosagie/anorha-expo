@@ -150,6 +150,19 @@ export interface ImportDraftSummary {
   byQuestion: { group: number; same: number; keep: number };
 }
 
+export type DraftAnswer = 'primary' | 'secondary' | 'skip';
+export type DraftDecision =
+  | { kind: 'answer'; unitId: string; answer: DraftAnswer; at?: string }
+  | { kind: 'drop'; itemId: string; at?: string };
+
+export interface CompletedDecision {
+  unitId: string;
+  title: string;
+  variant: DraftVariant;
+  choice: DraftAnswer;
+  choiceLabel: string;
+}
+
 export interface ImportDraft {
   connectionId: string;
   version: string;
@@ -157,6 +170,9 @@ export interface ImportDraft {
   units: DraftUnit[];
   autoResolved: AutoResolvedItem[];
   summary: ImportDraftSummary;
+  decisions: DraftDecision[];
+  completed: CompletedDecision[];
+  canUndo: boolean;
 }
 
 export type ProductCreationMode = 'sync_everywhere' | 'pull_only' | 'push_only' | 'do_nothing';

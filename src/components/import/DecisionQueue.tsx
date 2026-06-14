@@ -1,35 +1,34 @@
 // The import review experience: one ordered queue of binary cards.
 //
-// GROUP → SAME → KEEP. Each card has two buttons (plus Skip); answering resolves
-// the unit so it leaves the queue. The only non-trivial card is the COMBINE
-// group card (N rows → one product with variants). Reversibility lives in the
-// parent: answers patch the suggestion list, nothing commits until "Complete".
+// GROUP → SAME → KEEP. The backend owns everything — it sends the ordered units,
+// each with its variant, reason, and recommended choice. This screen is a pure
+// renderer: show the current card, post the answer, render whatever draft comes
+// back. "Back" reopens a decision server-side; nothing is committed until Done.
 
-import React, { useMemo } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Progress from 'react-native-progress';
 
-import { MappingSuggestion, DraftUnit } from '../../types/importSession';
+import { MappingSuggestion, DraftUnit, ImportDraft, DraftAnswer } from '../../types/importSession';
 import { BRAND_PRIMARY } from '../../design/tokens';
-import { DecisionAnswer, DecisionUnit, buildUnits } from '../../features/import/decisions';
 
 interface DecisionQueueProps {
   theme: any;
   insets: { top: number; bottom: number; left: number; right: number };
-  suggestions: MappingSuggestion[];
-  /** Total decision units captured when the queue opened — drives the progress bar. */
-  initialTotal: number;
-  onAnswer: (unit: DecisionUnit, answer: DecisionAnswer) => void;
-  /** Remove one row from a proposed combine group (it falls back to its own card). */
-  onDropFromGroup: (platformProductId: string) => void;
+  /** The whole server-built draft: ordered units, history, summary. */
+  draft: ImportDraft;
+  /** Record a decision (server re-materializes and returns the next draft). */
+  onAnswer: (unitId: string, answer: DraftAnswer) => void;
+  /** Remove one row from a proposed combine group. */
+  onDrop: (itemId: string) => void;
+  /** Step back into the most recent decision. */
+  onReopen: (unitId: string) => void;
   /** Open inventory search to pick a different match ("Show others"). */
   onSearch: (item: MappingSuggestion) => void;
   onClose: () => void;
-  onDone: () => void;
-  /** The backend's processed units, keyed to enrich a card with its reason +
-   *  recommended choice. Optional — cards render fine without it. */
-  draftUnits?: DraftUnit[];
+  /** Queue is empty — commit the import. */
+  onCommit: () => void;
   searchSheet?: React.ReactNode;
 }
 
@@ -42,57 +41,43 @@ interface CardCopy {
   secondary: string;
 }
 
-const QUESTION_BADGE: Record<DecisionUnit['question'], { label: string; color: string }> = {
+const QUESTION_BADGE: Record<'group' | 'same' | 'keep', { label: string; color: string }> = {
   group: { label: 'GROUP', color: '#7C3AED' },
   same: { label: 'SAME', color: '#2563EB' },
   keep: { label: 'KEEP', color: '#15803D' },
 };
 
-function copyFor(unit: DecisionUnit): CardCopy {
+// Presentation only: the server decides the variant; we choose the words.
+function copyFor(unit: DraftUnit): CardCopy {
   const badge = QUESTION_BADGE[unit.question];
   const base = { badge: badge.label, badgeColor: badge.color };
+  const sub = unit.kind === 'group' ? unit.title : unit.item.platformProduct.title;
 
-  if (unit.kind === 'group') {
-    const n = unit.members.length;
-    return {
-      ...base,
-      title: `These ${n} look like one product`,
-      sub: `${unit.title} — in ${n} variants`,
-      primary: 'Combine',
-      secondary: 'Keep separate',
-    };
-  }
-
-  const s = unit.item;
-  // SPLIT — one row that's really several products.
-  if (s.compositionType === 'bundle') {
-    const n = s.bundleParts?.length || 2;
-    return { ...base, title: `This row is really ${n} products`, sub: s.platformProduct.title, primary: `Split into ${n}`, secondary: 'Keep as one' };
-  }
-  // KIT — a set built from singles you already stock.
-  if (s.compositionType === 'kit') {
-    return { ...base, title: 'This set is made of items you stock', sub: s.platformProduct.title, primary: 'Add as new', secondary: 'Skip' };
-  }
-  // FAMILY — an incoming variant that belongs to an existing product family.
-  if (s.familyDecisionReason) {
-    return { ...base, title: 'Part of a product family', sub: s.platformProduct.title, primary: 'Add as new', secondary: 'Skip' };
-  }
-  // MATCH BROKE — an existing link's listing is gone.
-  if (s.isStaleLink) {
-    return { ...base, title: 'This link broke', sub: `${s.platformProduct.title} is gone from the platform`, primary: 'Keep', secondary: 'Unlink' };
-  }
-  // MATCH — confirm, pick, or reconcile a value conflict.
-  if (s.question === 'same' && s.suggestedCanonicalProduct?.id) {
-    if (s.fieldConflicts && s.fieldConflicts.length > 0) {
-      return { ...base, title: 'A detail doesn’t match', sub: s.platformProduct.title, primary: 'Keep yours', secondary: 'Use theirs' };
+  switch (unit.variant) {
+    case 'combine':
+      return { ...base, title: `These ${unit.kind === 'group' ? unit.members.length : 2} look like one product`, sub, primary: 'Combine', secondary: 'Keep separate' };
+    case 'duplicate':
+      return { ...base, title: 'These point at the same product', sub, primary: 'Merge', secondary: 'Keep separate' };
+    case 'family':
+      return { ...base, title: 'Part of a product family', sub, primary: 'Add as new', secondary: 'Skip' };
+    case 'split': {
+      const n = (unit.kind === 'single' ? unit.item.bundleParts?.length : 0) || 2;
+      return { ...base, title: `This row is really ${n} products`, sub, primary: `Split into ${n}`, secondary: 'Keep as one' };
     }
-    if (s.candidateVariants && s.candidateVariants.length > 0) {
-      return { ...base, title: 'Which one is it?', sub: s.platformProduct.title, primary: 'Yes, it’s this', secondary: 'Show others' };
-    }
-    return { ...base, title: 'Same product?', sub: s.platformProduct.title, primary: 'Yes, link', secondary: 'No' };
+    case 'kit':
+      return { ...base, title: 'This set is made of items you stock', sub, primary: 'Add as new', secondary: 'Skip' };
+    case 'collision':
+      return { ...base, title: 'Which one is it?', sub, primary: 'Yes, it’s this', secondary: 'Show others' };
+    case 'value':
+      return { ...base, title: 'A detail doesn’t match', sub, primary: 'Keep yours', secondary: 'Use theirs' };
+    case 'match':
+      return { ...base, title: 'Same product?', sub, primary: 'Yes, link', secondary: 'No' };
+    case 'stale':
+      return { ...base, title: 'This link broke', sub, primary: 'Keep', secondary: 'Unlink' };
+    case 'new':
+    default:
+      return { ...base, title: 'Add this product?', sub, primary: 'Add as new', secondary: 'Skip' };
   }
-  // NEW / KEEP — nothing matched.
-  return { ...base, title: 'Add this product?', sub: s.platformProduct.title, primary: 'Add as new', secondary: 'Skip' };
 }
 
 function Thumb({ uri, size = 44 }: { uri?: string | null; size?: number }) {
@@ -104,28 +89,27 @@ function Thumb({ uri, size = 44 }: { uri?: string | null; size?: number }) {
 }
 
 const DecisionQueue: React.FC<DecisionQueueProps> = ({
-  theme, insets, suggestions, initialTotal, onAnswer, onDropFromGroup, onSearch, onClose, onDone, draftUnits, searchSheet,
+  theme, insets, draft, onAnswer, onDrop, onReopen, onSearch, onClose, onCommit, searchSheet,
 }) => {
-  const units = useMemo(() => buildUnits(suggestions), [suggestions]);
-  // The backend's per-unit reason + recommended choice, looked up by unit id.
-  const draftById = useMemo(() => {
-    const m = new Map<string, DraftUnit>();
-    for (const u of draftUnits || []) m.set(u.id, u);
-    return m;
-  }, [draftUnits]);
+  const units = draft.units;
+  const done = draft.completed.length;
+  const total = done + units.length;
+  const lastDecision = draft.completed[draft.completed.length - 1];
 
-  const remaining = units.length;
-  const total = Math.max(initialTotal, remaining);
-  const completed = total - remaining;
-
-  if (remaining === 0) {
+  if (units.length === 0) {
     return (
       <View style={[styles.screen, { backgroundColor: theme.colors.background, paddingTop: insets.top + 24 }]}>
         <View style={styles.allClear}>
           <Icon name="check-circle-outline" size={40} color={theme.colors.primary} />
           <Text style={[styles.allClearTitle, { color: theme.colors.text }]}>All reviewed</Text>
           <Text style={[styles.allClearSub, { color: theme.colors.textSecondary }]}>Every item has a decision. Tap below to finish.</Text>
-          <TouchableOpacity onPress={onDone} style={[styles.primaryBtn, { backgroundColor: theme.colors.primary, marginTop: 20, paddingHorizontal: 28 }]}>
+          {draft.canUndo && lastDecision ? (
+            <TouchableOpacity onPress={() => onReopen(lastDecision.unitId)} style={styles.undoLink} hitSlop={8}>
+              <Icon name="undo-variant" size={15} color={theme.colors.textSecondary} />
+              <Text style={[styles.undoText, { color: theme.colors.textSecondary }]}>Undo "{lastDecision.choiceLabel}"</Text>
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity onPress={onCommit} style={[styles.primaryBtn, { backgroundColor: theme.colors.primary, marginTop: 20, paddingHorizontal: 28 }]}>
             <Text style={styles.primaryBtnText}>Done</Text>
           </TouchableOpacity>
         </View>
@@ -135,14 +119,13 @@ const DecisionQueue: React.FC<DecisionQueueProps> = ({
 
   const unit = units[0];
   const copy = copyFor(unit);
-  const hint = draftById.get(unit.id);
   const onSecondary = () => {
-    // "Show others" routes to search instead of resolving.
-    if (unit.kind === 'single' && unit.item.candidateVariants && unit.item.candidateVariants.length > 0 && !unit.item.fieldConflicts?.length) {
+    // "Show others" routes to search instead of resolving the collision here.
+    if (unit.variant === 'collision' && unit.kind === 'single') {
       onSearch(unit.item);
       return;
     }
-    onAnswer(unit, 'secondary');
+    onAnswer(unit.id, 'secondary');
   };
 
   return (
@@ -154,23 +137,29 @@ const DecisionQueue: React.FC<DecisionQueueProps> = ({
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
           <Text style={[styles.headerTitle, { color: theme.colors.text }]}>Review</Text>
-          <Text style={[styles.headerSub, { color: theme.colors.textSecondary }]}>{completed} of {total} done</Text>
+          <Text style={[styles.headerSub, { color: theme.colors.textSecondary }]}>{done} of {total} done</Text>
         </View>
+        {draft.canUndo && lastDecision ? (
+          <TouchableOpacity onPress={() => onReopen(lastDecision.unitId)} style={styles.undoLink} hitSlop={8}>
+            <Icon name="undo-variant" size={16} color={theme.colors.textSecondary} />
+            <Text style={[styles.undoText, { color: theme.colors.textSecondary }]}>Back</Text>
+          </TouchableOpacity>
+        ) : null}
         <View style={[styles.qBadge, { backgroundColor: `${copy.badgeColor}14` }]}>
           <Text style={[styles.qBadgeText, { color: copy.badgeColor }]}>{copy.badge}</Text>
         </View>
       </View>
       <View style={styles.progWrap}>
-        <Progress.Bar progress={total ? completed / total : 0} width={null} height={4} borderRadius={2} color={theme.colors.primary} unfilledColor="#E5E7EB" borderWidth={0} />
+        <Progress.Bar progress={total ? done / total : 0} width={null} height={4} borderRadius={2} color={theme.colors.primary} unfilledColor="#E5E7EB" borderWidth={0} />
       </View>
 
       <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
         <Text style={[styles.cardTitle, { color: theme.colors.text }]}>{copy.title}</Text>
         {copy.sub ? <Text style={[styles.cardSub, { color: theme.colors.textSecondary }]}>{copy.sub}</Text> : null}
-        {hint?.reason ? (
+        {unit.reason ? (
           <View style={styles.reasonRow}>
             <Icon name="information-outline" size={13} color={theme.colors.textSecondary} />
-            <Text style={[styles.reasonText, { color: theme.colors.textSecondary }]}>{hint.reason}</Text>
+            <Text style={[styles.reasonText, { color: theme.colors.textSecondary }]}>{unit.reason}</Text>
           </View>
         ) : null}
 
@@ -181,7 +170,7 @@ const DecisionQueue: React.FC<DecisionQueueProps> = ({
                 <View>
                   <Thumb uri={m.platformProduct.imageUrl} size={56} />
                   {!m.groupCover && (
-                    <TouchableOpacity style={styles.dropBtn} onPress={() => onDropFromGroup(m.platformProduct.id)} hitSlop={6}>
+                    <TouchableOpacity style={styles.dropBtn} onPress={() => onDrop(m.platformProduct.id)} hitSlop={6}>
                       <Icon name="close" size={12} color="#fff" />
                     </TouchableOpacity>
                   )}
@@ -202,21 +191,21 @@ const DecisionQueue: React.FC<DecisionQueueProps> = ({
 
       {/* Two buttons + Skip */}
       <View style={[styles.actions, { paddingBottom: insets.bottom + 14 }]}>
-        {hint?.recommended ? (
+        {unit.recommended ? (
           <Text style={[styles.suggestText, { color: theme.colors.primary }]}>
-            ★ Suggested: {hint.recommended === 'primary' ? copy.primary : copy.secondary}
+            ★ Suggested: {unit.recommended === 'primary' ? copy.primary : copy.secondary}
           </Text>
         ) : null}
         <View style={styles.actionRow}>
           <TouchableOpacity onPress={onSecondary} style={[styles.secondaryBtn]} activeOpacity={0.85}>
             <Text style={[styles.secondaryBtnText, { color: theme.colors.textSecondary }]}>{copy.secondary}</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => onAnswer(unit, 'primary')} style={[styles.primaryBtn, { backgroundColor: theme.colors.primary }]} activeOpacity={0.85}>
+          <TouchableOpacity onPress={() => onAnswer(unit.id, 'primary')} style={[styles.primaryBtn, { backgroundColor: theme.colors.primary }]} activeOpacity={0.85}>
             <Icon name="check" size={16} color="#fff" />
             <Text style={styles.primaryBtnText}>{copy.primary}</Text>
           </TouchableOpacity>
         </View>
-        <TouchableOpacity onPress={() => onAnswer(unit, 'skip')} style={styles.skipBtn} hitSlop={6}>
+        <TouchableOpacity onPress={() => onAnswer(unit.id, 'skip')} style={styles.skipBtn} hitSlop={6}>
           <Text style={[styles.skipText, { color: theme.colors.textSecondary }]}>Skip for now</Text>
         </TouchableOpacity>
       </View>
@@ -300,6 +289,8 @@ const styles = StyleSheet.create({
   reasonRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
   reasonText: { fontSize: 13, flex: 1, fontFamily: 'PlusJakartaSans_400Regular' },
   suggestText: { fontSize: 12, textAlign: 'center', marginBottom: 8, fontFamily: 'PlusJakartaSans_600SemiBold' },
+  undoLink: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, paddingVertical: 4 },
+  undoText: { fontSize: 13, fontFamily: 'PlusJakartaSans_600SemiBold' },
 
   groupGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, marginTop: 22 },
   groupChip: { width: 72, alignItems: 'center', gap: 6 },

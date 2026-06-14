@@ -12,8 +12,8 @@ import {
   ConnectionLocation,
   ImportSessionCounts,
   ImportDraft,
+  DraftAnswer,
 } from '../types/importSession';
-import { buildCombineGroups } from '../features/import/decisions';
 
 const SSSYNC_API_BASE_URL = (
   process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL ||
@@ -38,6 +38,10 @@ export interface UseImportSessionResult {
   suggestions: MappingSuggestion[] | null;
   setSuggestions: React.Dispatch<React.SetStateAction<MappingSuggestion[] | null>>;
   importDraft: ImportDraft | null;
+  answerDecision: (unitId: string, answer: DraftAnswer) => Promise<void>;
+  dropFromGroup: (itemId: string) => Promise<void>;
+  reopenDecision: (unitId: string) => Promise<void>;
+  undoDecision: () => Promise<void>;
   loading: boolean;
   error: string | null;
   hasLoadedDraft: boolean;
@@ -491,17 +495,13 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         return true;
       });
 
-      // Propose COMBINE clusters among the no-match pile (e.g. 3 separate soap
-      // rows → one product in 3 scents). Conservative; only ever proposes.
-      const grouped = buildCombineGroups(deduped);
+      // Clustering, auto-resolve, ordering — all owned by the backend now. The
+      // app just keeps the raw rows for the lobby's matched/skipped tabs.
+      setSuggestions(deduped);
 
-      console.log(`[useImportSession] 📊 Final: ${grouped.length} total suggestions (${grouped.filter(s => s.action === 'LINK_EXISTING').length} matched, ${grouped.filter(s => s.action === 'UNMATCHED').length} unmatched)`);
-      setSuggestions(grouped);
-
-      // Pull the backend's processed draft (recommendations, reasons, the
-      // "done automatically" panel). Non-fatal: the queue still works from the
-      // local pipeline if the endpoint isn't there yet. Cleared first so a stale
-      // draft can never outlive a refresh that fails to produce a fresh one.
+      // The processed, reversible draft IS the import flow now (the queue renders
+      // it and posts answers back). Cleared first so a stale draft can't outlive
+      // a refresh.
       setImportDraft(null);
       try {
         const draftRes = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/import-draft`, {
@@ -510,7 +510,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         });
         if (draftRes.ok) setImportDraft((await draftRes.json()) as ImportDraft);
       } catch {
-        // ignore — draft is an enhancement, not a dependency (stays null)
+        // ignore — draft fetch failure leaves the queue empty until refresh
       }
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred.');
@@ -521,6 +521,27 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
   }, [connectionId, isCSVImport, importedProducts]);
 
   const refreshSuggestions = useCallback(() => fetchMappingSuggestions(), [fetchMappingSuggestions]);
+
+  // ── Reversible draft actions: every one posts to the backend (the single
+  // source of truth) and renders the draft it sends back. The app never derives.
+  const postDraft = useCallback(async (path: string, body?: any): Promise<void> => {
+    if (!connectionId) return;
+    const token = await ensureSupabaseJwt();
+    const res = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/import-draft/${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    if (res.ok) setImportDraft((await res.json()) as ImportDraft);
+  }, [connectionId]);
+
+  const answerDecision = useCallback(
+    (unitId: string, answer: DraftAnswer) => postDraft('answer', { unitId, answer }),
+    [postDraft],
+  );
+  const dropFromGroup = useCallback((itemId: string) => postDraft('drop', { itemId }), [postDraft]);
+  const reopenDecision = useCallback((unitId: string) => postDraft('reopen', { unitId }), [postDraft]);
+  const undoDecision = useCallback(() => postDraft('undo'), [postDraft]);
 
   // Sync productCreationMode effect - update suggestions selection
   useEffect(() => {
@@ -855,53 +876,8 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
 
   const submitImport = useCallback(async () => {
     if (!connectionId || connectionId === 'csv-import') return;
-    // v2 commit contract: structured items[] (productShape + parentId + nested
-    // variant families). A COMBINE answer carries a shared groupId → parentId so
-    // the backend nests the rows as variants of one product. The /confirm-mappings
-    // endpoint routes to persistCommitForConnection when items[] is non-empty.
-    const commitAction = (item: MappingSuggestion): 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE' | 'PUSH_TO_PLATFORM' => {
-      if (item.direction === 'anorha_to_platform') return 'PUSH_TO_PLATFORM';
-      if (item.action === 'CREATE_NEW') return 'CREATE_NEW';
-      if (item.action === 'LINK_EXISTING') return 'LINK_EXISTING';
-      return 'IGNORE';
-    };
-    const items = (suggestions || [])
-      .filter((item) => item.isSelected)
-      .map((item) => {
-        const parentId = item.groupId || item.platformProduct.parentId || null;
-        return {
-          platformProduct: {
-            id: item.platformProduct.id,
-            sku: item.platformProduct.sku || null,
-            title: item.platformProduct.title || null,
-            price: item.platformProduct.price ?? null,
-            imageUrl: item.platformProduct.imageUrl ?? null,
-            parentId,
-          },
-          action: commitAction(item),
-          direction: item.direction || 'platform_to_anorha',
-          productShape: item.productShape || (parentId ? 'variant_family' : 'simple'),
-          parentId,
-          // VALUE-conflict resolution: true = the user chose "use theirs" (adopt
-          // the canonical's field over the incoming platform value). Carried so the
-          // decision is durable in the commit record; undefined keeps the default.
-          valueOverride: item.originalData?.valueOverride === true ? true : undefined,
-          sourceHash: item.sourceHash,
-          suggestedCanonicalProduct:
-            item.direction === 'anorha_to_platform'
-              ? null
-              : item.suggestedCanonicalProduct?.id
-                ? {
-                    id: item.suggestedCanonicalProduct.id,
-                    sku: item.suggestedCanonicalProduct.sku || null,
-                    title: item.suggestedCanonicalProduct.title || null,
-                    price: item.suggestedCanonicalProduct.price ?? null,
-                    imageUrl: item.suggestedCanonicalProduct.imageUrl ?? null,
-                  }
-                : null,
-        };
-      });
-
+    // The server builds the commit items from its own decision log — the app
+    // just sends the sync rules and triggers the commit (POST import-draft/commit).
     setIsSubmitting(true);
     try {
       const token = await ensureSupabaseJwt();
@@ -964,10 +940,10 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         productCreationMode,
       };
 
-      const confirmRes = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/confirm-mappings`, {
+      const confirmRes = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/import-draft/commit`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items, syncRules: syncRulesPayload }),
+        body: JSON.stringify({ syncRules: syncRulesPayload }),
       });
 
       if (!confirmRes.ok) {
@@ -989,7 +965,9 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
               operationId,
               jobId: jobId || null,
               connectionId,
-              itemsTotal: items?.length || 0,
+              // Best-effort total for the progress banner: everything the user
+              // decided plus what the server auto-matched.
+              itemsTotal: (importDraft?.completed.length || 0) + (importDraft?.summary.autoResolved || 0),
               startedAt: new Date().toISOString(),
             }),
           );
@@ -1035,6 +1013,10 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
     suggestions,
     setSuggestions,
     importDraft,
+    answerDecision,
+    dropFromGroup,
+    reopenDecision,
+    undoDecision,
     loading,
     error,
     hasLoadedDraft,

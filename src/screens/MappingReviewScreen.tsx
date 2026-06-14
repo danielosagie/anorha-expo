@@ -32,7 +32,6 @@ import Card from '../components/Card';
 import PillTabs from '../components/ui/PillTabs';
 import { tokens, BRAND_PRIMARY} from '../design/tokens';
 import DecisionQueue from '../components/import/DecisionQueue';
-import { applyAnswer, buildUnits, DecisionAnswer, DecisionUnit } from '../features/import/decisions';
 
 // ---------------------------------------------------------------------------
 // Reason metadata
@@ -217,6 +216,9 @@ const MappingReviewScreen: React.FC = () => {
     suggestions,
     setSuggestions,
     importDraft,
+    answerDecision,
+    dropFromGroup,
+    reopenDecision,
     loading,
     error,
     counts: hookCounts,
@@ -239,7 +241,6 @@ const MappingReviewScreen: React.FC = () => {
   const [searchLoading, setSearchLoading] = useState(false);
   const [doneVisible, setDoneVisible] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
-  const [queueTotal, setQueueTotal] = useState(0);
 
   const annotated = useMemo<AnnotatedSuggestion[]>(
     () => annotateSuggestions(suggestions || []),
@@ -341,19 +342,10 @@ const MappingReviewScreen: React.FC = () => {
     setSearchQuery('');
   }, []);
 
-  // ── Three-question decision queue (GROUP → SAME → KEEP) ──────────────────────
-  const openQueue = useCallback(() => {
-    setQueueTotal(buildUnits(suggestions || []).length);
-    setQueueOpen(true);
-  }, [suggestions]);
-
-  const handleAnswer = useCallback((unit: DecisionUnit, answer: DecisionAnswer) => {
-    setSuggestions((prev) => applyAnswer(prev || [], unit, answer));
-  }, [setSuggestions]);
-
-  const handleDropFromGroup = useCallback((id: string) => {
-    updateOne(id, (s) => ({ ...s, groupId: undefined, groupCover: undefined, groupTitle: undefined }));
-  }, [updateOne]);
+  // ── Server-driven decision queue (GROUP → SAME → KEEP) ───────────────────────
+  // Every interaction posts to the backend; the queue renders the draft it
+  // returns. No local derivation, no client-side "alternates".
+  const openQueue = useCallback(() => setQueueOpen(true), []);
 
   const handleSearchSelect = useCallback((result: SearchResult) => {
     if (!searchSheet.targetId) return;
@@ -457,21 +449,20 @@ const MappingReviewScreen: React.FC = () => {
   }
 
   // ---------------------------------------------------------------------------
-  // Render: full-screen decision queue (GROUP → SAME → KEEP)
+  // Render: full-screen decision queue (GROUP → SAME → KEEP) — server-driven
   // ---------------------------------------------------------------------------
-  if (queueOpen) {
+  if (queueOpen && importDraft) {
     return (
       <DecisionQueue
         theme={theme}
         insets={insets}
-        suggestions={suggestions || []}
-        initialTotal={queueTotal}
-        draftUnits={importDraft?.units}
-        onAnswer={handleAnswer}
-        onDropFromGroup={handleDropFromGroup}
+        draft={importDraft}
+        onAnswer={answerDecision}
+        onDrop={dropFromGroup}
+        onReopen={reopenDecision}
         onSearch={openSearchFor}
         onClose={() => { setSearchSheet({ visible: false, targetId: null }); setQueueOpen(false); }}
-        onDone={() => { setSearchSheet({ visible: false, targetId: null }); setQueueOpen(false); setDoneVisible(true); }}
+        onCommit={() => { setSearchSheet({ visible: false, targetId: null }); setQueueOpen(false); setDoneVisible(true); }}
         searchSheet={
           <SearchSheet
             theme={theme}
