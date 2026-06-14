@@ -87,6 +87,7 @@ const MappingReviewScreen: React.FC = () => {
   const [searchLoading, setSearchLoading] = useState(false);
   const [doneVisible, setDoneVisible] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
+  const [autoExpanded, setAutoExpanded] = useState(false);
 
   // Everything the lobby shows is derived from the server-built draft + the
   // local decision log. No reason taxonomy, no client annotation.
@@ -316,20 +317,35 @@ const MappingReviewScreen: React.FC = () => {
           )}
         </View>
 
-        {/* What the backend handled for you */}
+        {/* What the backend handled for you — collapsed; this is done work, not a to-do. */}
         {importDraft && importDraft.autoResolved.length > 0 && (
           <View style={styles.autoSection}>
-            <Text style={[styles.sectionTitle, { color: theme.colors.textSecondary }]}>Matched automatically</Text>
-            {importDraft.autoResolved.slice(0, 60).map((a) => (
-              <SimpleRow
-                key={a.id}
-                theme={theme}
-                imageUrl={a.imageUrl}
-                title={a.title}
-                subtitle={`→ ${a.matchedTo?.title || a.reason}`}
-                right={<Icon name="check-circle" size={18} color={theme.colors.primary} />}
+            <TouchableOpacity
+              style={styles.autoToggle}
+              onPress={() => setAutoExpanded((v) => !v)}
+              activeOpacity={0.7}
+            >
+              <Icon name="check-circle" size={18} color={theme.colors.primary} />
+              <Text style={[styles.autoToggleText, { color: theme.colors.textSecondary }]}>
+                {importDraft.autoResolved.length} matched automatically — nothing to do
+              </Text>
+              <Icon
+                name={autoExpanded ? 'chevron-up' : 'chevron-down'}
+                size={20}
+                color={theme.colors.textSecondary}
               />
-            ))}
+            </TouchableOpacity>
+            {autoExpanded &&
+              importDraft.autoResolved.slice(0, 60).map((a) => (
+                <SimpleRow
+                  key={a.id}
+                  theme={theme}
+                  imageUrl={a.imageUrl}
+                  title={a.title}
+                  subtitle={`→ ${a.matchedTo?.title || a.reason}`}
+                  right={<Icon name="check-circle" size={18} color={theme.colors.primary} />}
+                />
+              ))}
           </View>
         )}
 
@@ -759,6 +775,17 @@ const styles = StyleSheet.create({
   },
   autoSection: {
     marginTop: 4,
+  },
+  autoToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 12,
+  },
+  autoToggleText: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
   },
   sectionTitle: {
     fontSize: 12,
