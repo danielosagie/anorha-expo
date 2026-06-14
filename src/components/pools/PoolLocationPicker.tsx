@@ -30,15 +30,27 @@ interface PoolLocationPickerProps {
  * the pool). Connections left with no locations are omitted.
  */
 export const groupAvailableLocations = (
-  record: Record<string, { platformType?: string; connectionName?: string; locations?: Array<{ id: string; name: string }> }>,
+  record: Record<string, {
+    platformType?: string;
+    connectionName?: string;
+    locations?: Array<{ platformLocationId?: string; locationName?: string; id?: string; name?: string }>;
+  }>,
   excludeIds?: Set<string>,
 ): GroupedPlatform[] => {
   const byPlatform = new Map<string, GroupedPlatform>();
   for (const [connectionId, conn] of Object.entries(record || {})) {
     if (!conn) continue;
+    // The API returns locations as { platformLocationId, locationName }; normalize to
+    // { id, name }. Dropping any without a real id is what keeps each checkbox
+    // independent — an empty id would be shared across every row, so selecting one
+    // would mark them all.
     const locations = (conn.locations || [])
-      .filter((loc) => loc && !excludeIds?.has(loc.id))
-      .map((loc) => ({ id: loc.id, name: loc.name || loc.id }));
+      .map((loc) => {
+        const id = loc?.platformLocationId ?? loc?.id ?? '';
+        const name = loc?.locationName ?? loc?.name ?? '';
+        return { id, name: name || id };
+      })
+      .filter((loc) => loc.id && !excludeIds?.has(loc.id));
     if (locations.length === 0) continue;
     const platformType = (conn.platformType || 'platform').toLowerCase();
     let group = byPlatform.get(platformType);
@@ -74,7 +86,7 @@ const PoolLocationPicker: React.FC<PoolLocationPickerProps> = ({ available, pick
             return (
               <TouchableOpacity
                 key={loc.id}
-                style={styles.locationRow}
+                style={[styles.locationRow, picked && styles.locationRowOn]}
                 activeOpacity={0.7}
                 onPress={() => onToggle(loc.id)}
               >
@@ -97,7 +109,8 @@ const styles = StyleSheet.create({
   groupTitle: { flex: 1, fontSize: 14, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
   groupSub: { fontSize: 13, color: '#71717A', fontFamily: 'Inter_400Regular' },
 
-  locationRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11, paddingLeft: 4 },
+  locationRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11, paddingHorizontal: 10, borderRadius: 12 },
+  locationRowOn: { backgroundColor: '#F4F9E8' },
   checkbox: {
     width: 24, height: 24, borderRadius: 8, borderWidth: 1.5, borderColor: '#D4D4D8',
     alignItems: 'center', justifyContent: 'center',

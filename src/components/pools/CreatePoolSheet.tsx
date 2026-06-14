@@ -108,7 +108,6 @@ const CreatePoolSheet: React.FC<CreatePoolSheetProps> = ({ visible, orgId, onClo
             placeholderTextColor="#C7C7CC"
             autoFocus
           />
-          <Text style={styles.subtext}>Locations in a pool sync inventory & pricing automatically.</Text>
           {loading ? (
             <View style={styles.loadingRow}><ActivityIndicator color="#93C822" /></View>
           ) : available.length === 0 ? (
@@ -145,8 +144,8 @@ const styles = StyleSheet.create({
   input: {
     borderWidth: 1, borderColor: '#ECEBE6', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 11,
     fontSize: 15, color: '#18181B', fontFamily: 'Inter_400Regular', backgroundColor: '#FAFAF8',
+    marginBottom: 10,
   },
-  subtext: { fontSize: 13, color: '#9CA3AF', fontFamily: 'Inter_400Regular', lineHeight: 18, marginTop: 8, marginBottom: 6 },
 
   loadingRow: { paddingVertical: 26, alignItems: 'center' },
   empty: {
