@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
-  FlatList,
   Pressable,
   TextInput,
   Modal,
@@ -28,159 +27,8 @@ import { useImportSession } from '../hooks/useImportSession';
 import { ImportWizardSheet } from '../components/import/ImportWizardSheet';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { MappingSuggestion } from '../types/importSession';
-import Card from '../components/Card';
-import PillTabs from '../components/ui/PillTabs';
 import { tokens, BRAND_PRIMARY} from '../design/tokens';
 import DecisionQueue from '../components/import/DecisionQueue';
-
-// ---------------------------------------------------------------------------
-// Reason metadata
-// ---------------------------------------------------------------------------
-
-type ReviewReason = 'no_match_found' | 'low_confidence' | 'duplicate' | 'variant_mismatch' | 'stale_match';
-type ActiveTab = 'review' | 'matched' | 'skipped';
-
-interface ReasonMeta {
-  label: string;
-  sub: string;
-  icon: string;
-  iconColor: string;
-  iconBg: string;
-  badgeBg: string;
-  badgeColor: string;
-  badgeText: string;
-  bulkLabel: string;
-  bulkVariant: 'primary' | 'amber' | 'ghost';
-}
-
-const REASON_META: Record<ReviewReason, ReasonMeta> = {
-  no_match_found: {
-    label: 'No match found',
-    sub: "Couldn't find a likely match",
-    icon: 'magnify',
-    iconColor: '#F59E0B',
-    iconBg: '#FEF3C7',
-    badgeBg: '#DCFCE7',
-    badgeColor: '#15803D',
-    badgeText: 'Add as new',
-    bulkLabel: 'Add all as new',
-    bulkVariant: 'primary',
-  },
-  low_confidence: {
-    label: 'Low confidence match',
-    sub: 'Confirm or change the suggestion',
-    icon: 'alert-outline',
-    iconColor: '#D97706',
-    iconBg: '#FEF3C7',
-    badgeBg: '#FEF3C7',
-    badgeColor: '#92400E',
-    badgeText: 'Needs check',
-    bulkLabel: 'Accept all suggestions',
-    bulkVariant: 'amber',
-  },
-  duplicate: {
-    label: 'Possible duplicate',
-    sub: 'Already exists in another platform',
-    icon: 'set-merge',
-    iconColor: '#7C3AED',
-    iconBg: '#EDE9FE',
-    badgeBg: '#EDE9FE',
-    badgeColor: '#5B21B6',
-    badgeText: 'Duplicate',
-    bulkLabel: 'Merge all duplicates',
-    bulkVariant: 'ghost',
-  },
-  variant_mismatch: {
-    label: 'Variant mismatch',
-    sub: "Variants don't line up",
-    icon: 'layers-outline',
-    iconColor: '#2563EB',
-    iconBg: '#DBEAFE',
-    badgeBg: '#DBEAFE',
-    badgeColor: '#1E40AF',
-    badgeText: 'Variant issue',
-    bulkLabel: 'Review variant mismatches',
-    bulkVariant: 'ghost',
-  },
-  stale_match: {
-    label: 'Suggestion updated',
-    sub: 'A previous match was claimed',
-    icon: 'refresh',
-    iconColor: '#9333EA',
-    iconBg: '#FAE8FF',
-    badgeBg: '#FAE8FF',
-    badgeColor: '#86198F',
-    badgeText: 'Match changed',
-    bulkLabel: 'Re-evaluate all',
-    bulkVariant: 'ghost',
-  },
-};
-
-const REASON_ORDER: ReviewReason[] = [
-  'no_match_found',
-  'low_confidence',
-  'variant_mismatch',
-  'duplicate',
-  'stale_match',
-];
-
-// ---------------------------------------------------------------------------
-// Annotation
-// ---------------------------------------------------------------------------
-
-interface AnnotatedSuggestion extends MappingSuggestion {
-  reviewReason?: ReviewReason;
-  isStaleClaim: boolean;
-}
-
-function annotateSuggestions(suggestions: MappingSuggestion[]): AnnotatedSuggestion[] {
-  const claimedIds = new Set<string>();
-  suggestions.forEach((s) => {
-    if (s.action === 'LINK_EXISTING' && s.resolved && s.suggestedCanonicalProduct?.id) {
-      claimedIds.add(s.suggestedCanonicalProduct.id);
-    }
-  });
-
-  const familyResolvedCanonicalIds = new Map<string, Set<string>>();
-  suggestions.forEach((item) => {
-    const parentId = item.platformProduct.parentId;
-    const canonicalId = item.suggestedCanonicalProduct?.id || null;
-    if (!parentId || !canonicalId || item.resolved !== true || item.action !== 'LINK_EXISTING') return;
-    if (!familyResolvedCanonicalIds.has(parentId)) {
-      familyResolvedCanonicalIds.set(parentId, new Set<string>());
-    }
-    familyResolvedCanonicalIds.get(parentId)!.add(canonicalId);
-  });
-
-  return suggestions.map((item) => {
-    const unresolved = item.action !== 'IGNORE' && item.resolved !== true;
-    const canonicalId = item.suggestedCanonicalProduct?.id || null;
-    const familyResolvedIds = item.platformProduct.parentId
-      ? familyResolvedCanonicalIds.get(item.platformProduct.parentId)
-      : undefined;
-
-    const hasFamilyConflict =
-      unresolved &&
-      !!item.platformProduct.parentId &&
-      !!familyResolvedIds &&
-      familyResolvedIds.size > 0 &&
-      (!canonicalId || !familyResolvedIds.has(canonicalId));
-
-    const isStaleClaim = unresolved && !!canonicalId && claimedIds.has(canonicalId);
-
-    let reviewReason: ReviewReason | undefined;
-    if (unresolved) {
-      if (hasFamilyConflict) reviewReason = 'variant_mismatch';
-      else if (isStaleClaim) reviewReason = 'stale_match';
-      else if (item.action === 'UNMATCHED' && !canonicalId) reviewReason = 'no_match_found';
-      else if (typeof item.confidence === 'number' && item.confidence < 0.7) reviewReason = 'low_confidence';
-      else if (canonicalId) reviewReason = 'low_confidence';
-      else reviewReason = 'no_match_found';
-    }
-
-    return { ...item, reviewReason, isStaleClaim };
-  });
-}
 
 // ---------------------------------------------------------------------------
 // Main screen
@@ -230,8 +78,6 @@ const MappingReviewScreen: React.FC = () => {
     connection,
   } = session;
 
-  const [activeTab, setActiveTab] = useState<ActiveTab>('review');
-  const [openGroup, setOpenGroup] = useState<ReviewReason | null>(null);
   const [searchSheet, setSearchSheet] = useState<{ visible: boolean; targetId: string | null }>({
     visible: false,
     targetId: null,
@@ -242,33 +88,14 @@ const MappingReviewScreen: React.FC = () => {
   const [doneVisible, setDoneVisible] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
 
-  const annotated = useMemo<AnnotatedSuggestion[]>(
-    () => annotateSuggestions(suggestions || []),
-    [suggestions],
-  );
-
-  const grouped = useMemo<Record<ReviewReason, AnnotatedSuggestion[]>>(() => {
-    const out: Record<ReviewReason, AnnotatedSuggestion[]> = {
-      no_match_found: [],
-      low_confidence: [],
-      duplicate: [],
-      variant_mismatch: [],
-      stale_match: [],
-    };
-    annotated.forEach((s) => {
-      if (s.reviewReason) out[s.reviewReason].push(s);
-    });
-    return out;
-  }, [annotated]);
-
-  const matchedItems = useMemo(
-    () => annotated.filter((s) => s.resolved && (s.action === 'LINK_EXISTING' || s.action === 'CREATE_NEW')),
-    [annotated],
-  );
-  const skippedItems = useMemo(() => annotated.filter((s) => s.action === 'IGNORE'), [annotated]);
-  const reviewCount = annotated.filter((s) => !!s.reviewReason).length;
-  const totalItems = annotated.length;
-  const resolvedItems = matchedItems.length;
+  // Everything the lobby shows is derived from the server-built draft + the
+  // local decision log. No reason taxonomy, no client annotation.
+  const planTotal = importDraft?.units.length ?? 0;
+  const autoMatched = importDraft?.summary.autoResolved ?? 0;
+  const answered = draftLog.filter((d) => d.kind === 'answer').length;
+  const remaining = Math.max(0, planTotal - answered);
+  const answeredSkips = draftLog.filter((d) => d.kind === 'answer' && d.answer === 'skip').length;
+  const broughtInCount = autoMatched + Math.max(0, answered - answeredSkips);
 
   // Polling for scan completion
   useEffect(() => {
@@ -291,7 +118,7 @@ const MappingReviewScreen: React.FC = () => {
       const q = searchQuery.trim().toLowerCase();
       const seen = new Set<string>();
       const results: SearchResult[] = [];
-      annotated.forEach((s) => {
+      (suggestions || []).forEach((s) => {
         const c = s.suggestedCanonicalProduct;
         if (c?.id && !seen.has(c.id)) {
           if (!q || c.title.toLowerCase().includes(q) || (c.sku || '').toLowerCase().includes(q)) {
@@ -323,18 +150,13 @@ const MappingReviewScreen: React.FC = () => {
       setSearchLoading(false);
     }, 150);
     return () => clearTimeout(t);
-  }, [searchQuery, searchSheet.visible, annotated]);
+  }, [searchQuery, searchSheet.visible, suggestions]);
 
   // ---------------------------------------------------------------------------
   // Action helpers
   // ---------------------------------------------------------------------------
   const updateOne = useCallback((id: string, patch: (s: MappingSuggestion) => MappingSuggestion) => {
     setSuggestions((prev) => (prev || []).map((s) => (s.platformProduct.id === id ? patch(s) : s)));
-  }, [setSuggestions]);
-
-  const updateMany = useCallback((ids: string[], patch: (s: MappingSuggestion) => MappingSuggestion) => {
-    const idSet = new Set(ids);
-    setSuggestions((prev) => (prev || []).map((s) => (idSet.has(s.platformProduct.id) ? patch(s) : s)));
   }, [setSuggestions]);
 
   const openSearchFor = useCallback((item: { platformProduct: { id: string } }) => {
@@ -364,31 +186,6 @@ const MappingReviewScreen: React.FC = () => {
     }));
     setSearchSheet({ visible: false, targetId: null });
   }, [searchSheet.targetId, updateOne]);
-
-  const handleBulkForReason = useCallback((reason: ReviewReason) => {
-    const items = grouped[reason];
-    if (items.length === 0) return;
-    if (reason === 'no_match_found') {
-      updateMany(items.map((i) => i.platformProduct.id), (s) => ({
-        ...s,
-        action: 'CREATE_NEW',
-        isSelected: true,
-        resolved: true,
-      }));
-    } else if (reason === 'low_confidence' || reason === 'duplicate') {
-      updateMany(
-        items.filter((i) => !!i.suggestedCanonicalProduct?.id).map((i) => i.platformProduct.id),
-        (s) => ({
-          ...s,
-          action: 'LINK_EXISTING',
-          isSelected: true,
-          resolved: true,
-        }),
-      );
-    } else {
-      openQueue();
-    }
-  }, [grouped, updateMany, openQueue]);
 
   const handleConfirmMapping = useCallback(async () => {
     try {
@@ -481,142 +278,68 @@ const MappingReviewScreen: React.FC = () => {
 
 
   // ---------------------------------------------------------------------------
-  // Render: main view
+  // Render: main view — a thin lobby over the server's draft
   // ---------------------------------------------------------------------------
   return (
     <View style={[styles.screen, { backgroundColor: theme.colors.background, paddingTop: insets.top + 8 }]}>
       <Header
         title="Match products"
-        count={activeTab === 'review' ? reviewCount : totalItems}
+        count={remaining}
         onClose={() => navigation.goBack()}
         theme={theme}
       />
 
-      <PillTabs
-        tabs={[
-          { key: 'review', label: 'Review', count: reviewCount, tone: 'warning' },
-          { key: 'matched', label: 'Matched', count: matchedItems.length, tone: 'success' },
-          { key: 'skipped', label: 'Skipped', count: skippedItems.length, tone: 'default' },
-        ]}
-        value={activeTab}
-        onChange={(k) => setActiveTab(k as ActiveTab)}
-      />
-
-      {activeTab === 'review' && totalItems > 0 && (
-        <View style={styles.progRow}>
-          <View style={styles.progMeta}>
-            <Text style={[styles.progLabel, { color: theme.colors.textSecondary }]}>
-              {resolvedItems} of {totalItems} done
-            </Text>
-            <Text style={[styles.progPct, { color: theme.colors.primary }]}>
-              {Math.round((resolvedItems / totalItems) * 100)}%
-            </Text>
-          </View>
-          <Progress.Bar
-            progress={resolvedItems / totalItems}
-            width={null}
-            height={4}
-            borderRadius={2}
-            color={theme.colors.primary}
-            unfilledColor="#E5E7EB"
-            borderWidth={0}
-          />
-          {importDraft && importDraft.summary.autoResolved > 0 && (
-            <Text style={[styles.autoMatched, { color: theme.colors.textSecondary }]}>
-              ✓ {importDraft.summary.autoResolved} matched automatically
-            </Text>
+      <ScrollView contentContainerStyle={styles.contentPadding} showsVerticalScrollIndicator={false}>
+        {/* Overview — everything comes from the server-built draft */}
+        <View style={styles.overviewCard}>
+          <Icon name={remaining === 0 ? 'check-decagram' : 'view-grid-outline'} size={30} color={theme.colors.primary} />
+          <Text style={[styles.overviewBig, { color: theme.colors.text }]}>
+            {remaining === 0 ? 'All set' : `${remaining} to review`}
+          </Text>
+          <Text style={[styles.overviewSub, { color: theme.colors.textSecondary }]}>
+            {autoMatched > 0
+              ? `${autoMatched} matched automatically${remaining === 0 ? '' : ` · ${answered} of ${planTotal} decided`}`
+              : remaining === 0 ? 'Ready to import' : `${answered} of ${planTotal} decided`}
+          </Text>
+          {planTotal > 0 && (
+            <View style={{ width: '100%', marginTop: 14 }}>
+              <Progress.Bar
+                progress={planTotal ? answered / planTotal : 0}
+                width={null}
+                height={5}
+                borderRadius={3}
+                color={theme.colors.primary}
+                unfilledColor="#E5E7EB"
+                borderWidth={0}
+              />
+            </View>
           )}
         </View>
-      )}
 
-      {activeTab === 'review' ? (
-        <ScrollView contentContainerStyle={styles.contentPadding} showsVerticalScrollIndicator={false}>
-          {REASON_ORDER.map((reason) => {
-            const items = grouped[reason];
-            if (items.length === 0) return null;
-            return (
-              <GroupCard
-                key={reason}
+        {/* What the backend handled for you */}
+        {importDraft && importDraft.autoResolved.length > 0 && (
+          <View style={styles.autoSection}>
+            <Text style={[styles.sectionTitle, { color: theme.colors.textSecondary }]}>Matched automatically</Text>
+            {importDraft.autoResolved.slice(0, 60).map((a) => (
+              <SimpleRow
+                key={a.id}
                 theme={theme}
-                reason={reason}
-                items={items}
-                isOpen={openGroup === reason}
-                onToggle={() => setOpenGroup(openGroup === reason ? null : reason)}
-                onBulk={() => handleBulkForReason(reason)}
-                onReview={openQueue}
-                onItemPress={() => openQueue()}
+                imageUrl={a.imageUrl}
+                title={a.title}
+                subtitle={`→ ${a.matchedTo?.title || a.reason}`}
+                right={<Icon name="check-circle" size={18} color={theme.colors.primary} />}
               />
-            );
-          })}
-          {reviewCount === 0 && (
-            <View style={styles.emptyState}>
-              <Icon name="check-circle-outline" size={36} color={theme.colors.primary} />
-              <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>All reviewed</Text>
-              <Text style={[styles.emptySub, { color: theme.colors.textSecondary }]}>
-                Tap Confirm mapping below to finish.
-              </Text>
-            </View>
-          )}
-        </ScrollView>
-      ) : activeTab === 'matched' ? (
-        <FlatList
-          data={matchedItems}
-          keyExtractor={(item) => item.platformProduct.id}
-          contentContainerStyle={styles.contentPadding}
-          ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Icon name="package-variant-closed" size={32} color="#D1D5DB" />
-              <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>Nothing matched yet</Text>
-              <Text style={[styles.emptySub, { color: theme.colors.textSecondary }]}>
-                Confirmed matches will appear here.
-              </Text>
-            </View>
-          }
-          renderItem={({ item }) => (
-            <SimpleRow
-              theme={theme}
-              imageUrl={item.platformProduct.imageUrl}
-              title={item.platformProduct.title}
-              subtitle={`→ ${item.suggestedCanonicalProduct?.title || (item.action === 'CREATE_NEW' ? 'New product' : 'Linked')}`}
-              right={<Icon name="check-circle" size={18} color={theme.colors.primary} />}
-            />
-          )}
-        />
-      ) : (
-        <FlatList
-          data={skippedItems}
-          keyExtractor={(item) => item.platformProduct.id}
-          contentContainerStyle={styles.contentPadding}
-          ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Icon name="close-circle-outline" size={32} color="#D1D5DB" />
-              <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>Nothing skipped</Text>
-              <Text style={[styles.emptySub, { color: theme.colors.textSecondary }]}>
-                Skipped items will show up here.
-              </Text>
-            </View>
-          }
-          renderItem={({ item }) => (
-            <SimpleRow
-              theme={theme}
-              imageUrl={item.platformProduct.imageUrl}
-              title={item.platformProduct.title}
-              subtitle="Skipped — won't import"
-              right={
-                <TouchableOpacity
-                  onPress={() => updateOne(item.platformProduct.id, (s) => ({
-                    ...s,
-                    action: s.prevAction || 'UNMATCHED',
-                    resolved: false,
-                  }))}
-                >
-                  <Text style={[styles.undoText, { color: theme.colors.primary }]}>Undo</Text>
-                </TouchableOpacity>
-              }
-            />
-          )}
-        />
-      )}
+            ))}
+          </View>
+        )}
+
+        {!importDraft && (
+          <View style={styles.emptyState}>
+            <Icon name="cloud-search-outline" size={32} color="#D1D5DB" />
+            <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>Preparing your import…</Text>
+          </View>
+        )}
+      </ScrollView>
 
       {/* Sticky bottom CTA with white-fade gradient — same look as BottomNav */}
       <LinearGradient
@@ -633,23 +356,23 @@ const MappingReviewScreen: React.FC = () => {
             <Icon name="cog-outline" size={18} color={theme.colors.textSecondary} />
             <Text style={[styles.stickySecondaryText, { color: theme.colors.textSecondary }]}>Settings</Text>
           </TouchableOpacity>
-          {reviewCount === 0 ? (
-            <TouchableOpacity
-              onPress={() => setDoneVisible(true)}
-              style={[styles.stickyPrimaryBtn, { backgroundColor: theme.colors.primary }]}
-              activeOpacity={0.85}
-            >
-              <Icon name="check" size={17} color="#FFFFFF" />
-              <Text style={styles.stickyPrimaryText}>Confirm mapping ({matchedItems.length})</Text>
-            </TouchableOpacity>
-          ) : (
+          {remaining > 0 ? (
             <TouchableOpacity
               onPress={openQueue}
               style={[styles.stickyPrimaryBtn, { backgroundColor: theme.colors.primary }]}
               activeOpacity={0.85}
             >
               <Icon name="play-circle-outline" size={18} color="#FFFFFF" />
-              <Text style={styles.stickyPrimaryText}>Review {reviewCount} item{reviewCount === 1 ? '' : 's'}</Text>
+              <Text style={styles.stickyPrimaryText}>Review {remaining} item{remaining === 1 ? '' : 's'}</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              onPress={() => setDoneVisible(true)}
+              style={[styles.stickyPrimaryBtn, { backgroundColor: theme.colors.primary }]}
+              activeOpacity={0.85}
+            >
+              <Icon name="check" size={17} color="#FFFFFF" />
+              <Text style={styles.stickyPrimaryText}>Complete import</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -670,8 +393,8 @@ const MappingReviewScreen: React.FC = () => {
         <DoneOverlay
           theme={theme}
           insets={insets}
-          linkedCount={matchedItems.length}
-          skippedCount={skippedItems.length}
+          linkedCount={broughtInCount}
+          skippedCount={answeredSkips}
           onConfirm={handleConfirmMapping}
           onBack={() => setDoneVisible(false)}
           isSubmitting={isSubmitting}
@@ -707,133 +430,6 @@ function Header({ title, count, onClose, theme }: { title: string; count: number
   );
 }
 
-// ---------------------------------------------------------------------------
-// Group Card (uses Card component for consistency)
-// ---------------------------------------------------------------------------
-
-interface GroupCardProps {
-  theme: any;
-  reason: ReviewReason;
-  items: AnnotatedSuggestion[];
-  isOpen: boolean;
-  onToggle: () => void;
-  onBulk: () => void;
-  onReview: () => void;
-  onItemPress: (index: number) => void;
-}
-
-function GroupCard({ theme, reason, items, isOpen, onToggle, onBulk, onReview, onItemPress }: GroupCardProps) {
-  const meta = REASON_META[reason];
-  const previewItems = items.slice(0, 6);
-  return (
-    <Card style={styles.groupCardOuter}>
-      <TouchableOpacity onPress={onToggle} style={styles.groupHeader} activeOpacity={0.7}>
-        <View style={[styles.groupIcon, { backgroundColor: meta.iconBg }]}>
-          <Icon name={meta.icon} size={18} color={meta.iconColor} />
-        </View>
-        <View style={styles.groupBody}>
-          <Text style={[styles.groupTitle, { color: theme.colors.text }]} numberOfLines={1}>{meta.label}</Text>
-          <Text style={[styles.groupSub, { color: theme.colors.textSecondary }]} numberOfLines={1}>{meta.sub}</Text>
-        </View>
-        <View style={styles.groupRight}>
-          <Text style={[styles.groupCount, { color: theme.colors.text }]}>{items.length}</Text>
-          <Icon
-            name="chevron-down"
-            size={20}
-            color="#9CA3AF"
-            style={{ transform: [{ rotate: isOpen ? '180deg' : '0deg' }] }}
-          />
-        </View>
-      </TouchableOpacity>
-
-      <View style={styles.groupBulkRow}>
-        <TouchableOpacity
-          onPress={onBulk}
-          style={[
-            styles.groupBulkBtn,
-            meta.bulkVariant === 'primary' && { backgroundColor: '#EEFCE0', borderColor: BRAND_PRIMARY },
-            meta.bulkVariant === 'amber' && { backgroundColor: '#FFFBEB', borderColor: '#FDE68A' },
-            meta.bulkVariant === 'ghost' && { backgroundColor: '#F9FAFB', borderColor: '#E5E7EB' },
-          ]}
-          activeOpacity={0.85}
-        >
-          <Icon
-            name="check"
-            size={14}
-            color={
-              meta.bulkVariant === 'primary'
-                ? '#4A7C00'
-                : meta.bulkVariant === 'amber'
-                  ? '#92400E'
-                  : theme.colors.textSecondary
-            }
-          />
-          <Text
-            style={[
-              styles.groupBulkText,
-              { color: theme.colors.textSecondary },
-              meta.bulkVariant === 'primary' && { color: '#4A7C00' },
-              meta.bulkVariant === 'amber' && { color: '#92400E' },
-            ]}
-          >
-            {meta.bulkLabel}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={onReview}
-          style={[styles.groupBulkBtn, { backgroundColor: '#F9FAFB', borderColor: '#E5E7EB' }]}
-          activeOpacity={0.85}
-        >
-          <Icon name="arrow-right" size={14} color={theme.colors.textSecondary} />
-          <Text style={[styles.groupBulkText, { color: theme.colors.textSecondary }]}>Review</Text>
-        </TouchableOpacity>
-      </View>
-
-      {isOpen && (
-        <View style={styles.groupRows}>
-          {previewItems.map((item, i) => (
-            <TouchableOpacity
-              key={item.platformProduct.id}
-              style={styles.gRow}
-              onPress={() => onItemPress(i)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.gRowIcon}>
-                {item.platformProduct.imageUrl ? (
-                  <Image source={{ uri: item.platformProduct.imageUrl }} style={styles.gRowImage} />
-                ) : (
-                  <Icon name="package-variant" size={16} color="#9CA3AF" />
-                )}
-              </View>
-              <View style={styles.gRowInfo}>
-                <Text style={[styles.gRowName, { color: theme.colors.text }]} numberOfLines={1}>
-                  {item.platformProduct.title || 'Untitled'}
-                </Text>
-                <Text style={[styles.gRowSub, { color: theme.colors.textSecondary }]} numberOfLines={1}>
-                  {item.platformProduct.sku ? `SKU ${item.platformProduct.sku}` : ''}
-                  {item.platformProduct.price
-                    ? `${item.platformProduct.sku ? ' · ' : ''}$${item.platformProduct.price.toFixed(2)}`
-                    : ''}
-                </Text>
-              </View>
-              <View style={[styles.gRowBadge, { backgroundColor: meta.badgeBg }]}>
-                <Text style={[styles.gRowBadgeText, { color: meta.badgeColor }]}>{meta.badgeText}</Text>
-              </View>
-              <Icon name="chevron-right" size={16} color="#D1D5DB" />
-            </TouchableOpacity>
-          ))}
-          {items.length > previewItems.length && (
-            <View style={styles.gRowMore}>
-              <Text style={[styles.gRowMoreText, { color: theme.colors.textSecondary }]}>
-                +{items.length - previewItems.length} more items
-              </Text>
-            </View>
-          )}
-        </View>
-      )}
-    </Card>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Simple row (matched / skipped)
@@ -1140,6 +736,35 @@ const styles = StyleSheet.create({
     paddingHorizontal: tokens.spacing.lg,
     paddingTop: tokens.spacing.md,
     paddingBottom: 140,
+  },
+  overviewCard: {
+    alignItems: 'center',
+    paddingVertical: 28,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+    backgroundColor: '#F9FAFB',
+    marginBottom: 18,
+  },
+  overviewBig: {
+    fontSize: 24,
+    marginTop: 12,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    letterSpacing: -0.3,
+  },
+  overviewSub: {
+    fontSize: 14,
+    marginTop: 4,
+    textAlign: 'center',
+    fontFamily: 'PlusJakartaSans_500Medium',
+  },
+  autoSection: {
+    marginTop: 4,
+  },
+  sectionTitle: {
+    fontSize: 12,
+    letterSpacing: 0.5,
+    marginBottom: 8,
+    fontFamily: 'PlusJakartaSans_700Bold',
   },
 
   // Group card
