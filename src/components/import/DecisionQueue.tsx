@@ -66,14 +66,29 @@ function copyFor(unit: DecisionUnit): CardCopy {
     const n = s.bundleParts?.length || 2;
     return { ...base, title: `This row is really ${n} products`, sub: s.platformProduct.title, primary: `Split into ${n}`, secondary: 'Keep as one' };
   }
-  // MATCH — confirm or pick (field conflict, if any, is shown inline below).
+  // KIT — a set built from singles you already stock.
+  if (s.compositionType === 'kit') {
+    return { ...base, title: 'This set is made of items you stock', sub: s.platformProduct.title, primary: 'Add as new', secondary: 'Skip' };
+  }
+  // FAMILY — an incoming variant that belongs to an existing product family.
+  if (s.familyDecisionReason) {
+    return { ...base, title: 'Part of a product family', sub: s.platformProduct.title, primary: 'Add as new', secondary: 'Skip' };
+  }
+  // MATCH BROKE — an existing link's listing is gone.
+  if (s.isStaleLink) {
+    return { ...base, title: 'This link broke', sub: `${s.platformProduct.title} is gone from the platform`, primary: 'Keep', secondary: 'Unlink' };
+  }
+  // MATCH — confirm, pick, or reconcile a value conflict.
   if (s.question === 'same' && s.suggestedCanonicalProduct?.id) {
+    if (s.fieldConflicts && s.fieldConflicts.length > 0) {
+      return { ...base, title: 'A detail doesn’t match', sub: s.platformProduct.title, primary: 'Keep yours', secondary: 'Use theirs' };
+    }
     if (s.candidateVariants && s.candidateVariants.length > 0) {
       return { ...base, title: 'Which one is it?', sub: s.platformProduct.title, primary: 'Yes, it’s this', secondary: 'Show others' };
     }
     return { ...base, title: 'Same product?', sub: s.platformProduct.title, primary: 'Yes, link', secondary: 'No' };
   }
-  // NEW / KEEP (kit lands here, components shown as a hint below).
+  // NEW / KEEP — nothing matched.
   return { ...base, title: 'Add this product?', sub: s.platformProduct.title, primary: 'Add as new', secondary: 'Skip' };
 }
 
