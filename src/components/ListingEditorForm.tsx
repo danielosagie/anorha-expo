@@ -6,16 +6,13 @@ import * as ImagePicker from 'expo-image-picker';
 import VariantInventoryEditor, { InventoryItemData, VariantInventoryEditorProps } from './VariantInventoryEditor';
 import BaseModal from './BaseModal';
 import DeliveryShippingSheet from './DeliveryShippingSheet';
-import ShopifySvg from '../assets/shopify.svg';
-import AmazonSvg from '../assets/amazon.svg';
-import FacebookSvg from '../assets/facebook.svg';
-import EbaySvg from '../assets/ebay.svg';
-import CloverSvg from '../assets/clover.svg';
-import SquareSvg from '../assets/square.svg';
+import PlatformLogo from './PlatformLogo';
+import { getPlatform } from '../config/platforms';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes, X, Sparkles, Car, Package, MapPin, Truck, Scale, RefreshCw } from 'lucide-react-native';
 import { Dropdown as ElementDropdown } from 'react-native-element-dropdown';
 import { AppDropdown } from './ui/AppDropdown';
+import { AppMenuSelect } from './ui/AppMenuSelect';
 import { CollapsibleSection, StickyActionBar, ModernInput, SectionHeader, SimpleQuantityInput, Field, ChipsField, LocationDropdown } from './ListingEditor';
 import InteractiveMapModal from './InteractiveMapModal';
 import { black, grey400 } from 'react-native-paper/lib/typescript/styles/themes/v2/colors';
@@ -24,6 +21,7 @@ import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { PricingGuidanceCard } from './pricing/PricingGuidanceCard';
+import { CHAT_COLORS, CHAT_FONT } from '../design/chatGlass';
 import { logger } from 'react-native-reanimated/lib/typescript/common';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
@@ -64,6 +62,8 @@ type Props = {
   highlightedField?: string;
   highlightedPlatform?: string;
   onScrollToOffset?: (y: number) => void;
+  /** Total deduped required-missing fields across platforms — shown as a badge on the All pill. */
+  allMissingCount?: number;
 };
 
 export type ListingEditorFormRef = { openPlatformPicker: () => void };
@@ -198,7 +198,7 @@ export const PRESET_OPTIONS = [
   }
 ];
 
-function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset }: Props, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount }: Props, ref: React.Ref<ListingEditorFormRef>) {
   const isFocused = useIsFocused();
   const fieldYOffsets = useRef<Record<string, number>>({});
   const platformKeys = useMemo(() => {
@@ -251,6 +251,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [ebayConditionsLoading, setEbayConditionsLoading] = useState<boolean>(false);
   const [pricingResearchLoading, setPricingResearchLoading] = useState<boolean>(false);
   const [pricingResearchModalVisible, setPricingResearchModalVisible] = useState<boolean>(false);
+  // Suggested-price pills only appear once the price field is focused (not always-on).
+  const [priceFocused, setPriceFocused] = useState<boolean>(false);
   const [pricingResearchResult, setPricingResearchResult] = useState<{
     low?: number; median?: number; high?: number; recommended?: number;
     samples?: Array<{ title: string; price: number; url?: string; quantitySold?: number; watchers?: number; estimatedDaysToSell?: number }>;
@@ -1546,9 +1548,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               <TouchableOpacity
                 key={key}
                 onPress={() => setActiveTab(key)}
-                style={[styles.pill, activeTab === key && styles.pillActive]}
+                style={[styles.pill, activeTab === key && styles.pillActive, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}
               >
                 <Text style={[styles.pillText, activeTab === key && styles.pillTextActive]}>All</Text>
+                {allMissingCount && allMissingCount > 0 ? (
+                  <View style={{ height: 16, minWidth: 16, paddingHorizontal: 4, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#ef4444' }}>{allMissingCount}</Text>
+                  </View>
+                ) : null}
               </TouchableOpacity>
             );
           }
@@ -1587,29 +1594,19 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   <Icon name="loading" size={12} color="#6B7280" />
                 </View>
               ) : (
-                (() => {
-                  const map: Record<string, any> = { shopify: ShopifySvg, amazon: AmazonSvg, facebook: FacebookSvg, ebay: EbaySvg, clover: CloverSvg, square: SquareSvg };
-                  const SVG = map[key];
-                  return SVG ? <SVG width={12} height={12} /> : null;
-                })()
+                getPlatform(key) ? <PlatformLogo type={key} size={12} /> : null
               )}
               <Text style={[styles.pillText, activeTab === key && styles.pillTextActive, generatingPlatforms.has(key) && styles.pillTextGenerating]}>
                 {PLATFORM_META[key]?.label || key}
                 {generatingPlatforms.has(key) && ' (Generating...)'}
               </Text>
               
-              {/* Readiness Indicator */}
-              {!generatingPlatforms.has(key) && (
-                isReady ? (
-                  <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: '#dcfce7', alignItems: 'center', justifyContent: 'center', marginLeft: 2 }}>
-                    <Icon name="check" size={10} color="#93C822" />
-                  </View>
-                ) : missingCount > 0 ? (
-                  <View style={{ height: 16, minWidth: 16, paddingHorizontal: 4, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center', marginLeft: 2 }}>
-                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#ef4444' }}>{missingCount}</Text>
-                  </View>
-                ) : null
-              )}
+              {/* Only a needs-attention badge — no "complete" checkmark when done. */}
+              {!generatingPlatforms.has(key) && missingCount > 0 ? (
+                <View style={{ height: 16, minWidth: 16, paddingHorizontal: 4, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center', marginLeft: 2 }}>
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#ef4444' }}>{missingCount}</Text>
+                </View>
+              ) : null}
             </TouchableOpacity>
           );
         })}
@@ -1697,7 +1694,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             </View>
 
             <AppDropdown
-              style={[styles.input, { height: 50, paddingHorizontal: 12, borderColor: categoryMissing ? '#ef4444' : '#E5E7EB', borderWidth: 1 }]}
+              style={[styles.input, { height: 54, paddingHorizontal: 14, borderColor: categoryMissing ? '#ef4444' : '#E5E7EB', borderWidth: 1 }]}
               data={taxonomyDropdownData.slice(0, 12)}
               maxHeight={280}
               value={selectedCategoryId}
@@ -1809,61 +1806,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           </View>
         )}
 
-        {/* AI Price with Confidence Bands - 3 pills: low (fast sale), recommended, high (max profit) */}
-        {(() => {
-          const apr = (activeData as any).aiPriceRecommendation;
-          const legacy = (activeData as any).aiRecommendedPrice;
-          const band = apr && typeof apr.low === 'number' && typeof apr.recommended === 'number' && typeof apr.high === 'number'
-            ? { low: apr.low, recommended: apr.recommended, high: apr.high }
-            : (typeof legacy === 'number' && legacy > 0
-              ? { low: Math.round(legacy * 0.85 * 100) / 100, recommended: legacy, high: Math.round(legacy * 1.15 * 100) / 100 }
-              : null);
-          const currentPrice = Number((activeData as any).price) || 0;
-          if (!band || band.recommended <= 0) return null;
-
-          const applyPrice = (p: number) => {
-            patchField('price', String(p.toFixed(2)));
-          };
-
-          const pillStyle = (isSelected: boolean) => ({
-            flex: 1,
-            paddingVertical: 10,
-            paddingHorizontal: 12,
-            borderRadius: 8,
-            borderWidth: 1,
-            borderColor: isSelected ? '#93C822' : '#E5E7EB',
-            backgroundColor: isSelected ? '#F0FFF4' : '#FFF',
-            alignItems: 'center' as const,
-          });
-
-          return (
-            <View style={{ backgroundColor: '#F0FFF4', borderRadius: 8, padding: 10, marginBottom: 8, borderLeftWidth: 3, borderLeftColor: '#93C822' }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                <Sparkles size={16} color="#93C822" />
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#3f6212' }}>Suggested Price</Text>
-                  <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>
-                    ${band.low.toFixed(0)} – ${band.high.toFixed(0)} (recommended ${band.recommended.toFixed(0)})
-                  </Text>
-                </View>
-              </View>
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                <TouchableOpacity style={pillStyle(Math.abs(currentPrice - band.low) < 0.02)} onPress={() => applyPrice(band.low)}>
-                  <Text style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>Fast sale</Text>
-                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#1F2937' }}>${band.low.toFixed(2)}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={pillStyle(Math.abs(currentPrice - band.recommended) < 0.02)} onPress={() => applyPrice(band.recommended)}>
-                  <Text style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>Recommended</Text>
-                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#1F2937' }}>${band.recommended.toFixed(2)}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={pillStyle(Math.abs(currentPrice - band.high) < 0.02)} onPress={() => applyPrice(band.high)}>
-                  <Text style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>Max profit</Text>
-                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#1F2937' }}>${band.high.toFixed(2)}</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          );
-        })()}
+        {/* Suggested-price pills moved BELOW the price field and gated on focus — see below. */}
 
         {/* Price field - custom row so Research Pricing sits on same line as label + (i) */}
         {(() => {
@@ -1917,10 +1860,53 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 ]}
                 value={String((activeData as any).price ?? '')}
                 onChangeText={(t) => patchField('price', t)}
+                onFocus={() => setPriceFocused(true)}
+                onBlur={() => setTimeout(() => setPriceFocused(false), 200)}
                 placeholder=""
                 placeholderTextColor="#999999"
                 keyboardType="decimal-pad"
               />
+
+              {/* Suggested-price pills — only while the price field is focused. */}
+              {priceFocused && (() => {
+                const apr = (activeData as any).aiPriceRecommendation;
+                const legacy = (activeData as any).aiRecommendedPrice;
+                const band = apr && typeof apr.low === 'number' && typeof apr.recommended === 'number' && typeof apr.high === 'number'
+                  ? { low: apr.low, recommended: apr.recommended, high: apr.high }
+                  : (typeof legacy === 'number' && legacy > 0
+                    ? { low: Math.round(legacy * 0.85 * 100) / 100, recommended: legacy, high: Math.round(legacy * 1.15 * 100) / 100 }
+                    : null);
+                const currentPrice = Number((activeData as any).price) || 0;
+                if (!band || band.recommended <= 0) {
+                  return showResearchPricing ? (
+                    <Text style={styles.priceHint}>Tap “Research Pricing” above for sold comps & a suggested range.</Text>
+                  ) : null;
+                }
+                const applyPrice = (p: number) => patchField('price', String(p.toFixed(2)));
+                const opts = [
+                  { label: 'Fast sale', price: band.low },
+                  { label: 'Recommended', price: band.recommended, hi: true },
+                  { label: 'Max profit', price: band.high },
+                ];
+                return (
+                  <View style={styles.suggestRow}>
+                    {opts.map((o) => {
+                      const sel = Math.abs(currentPrice - o.price) < 0.02;
+                      return (
+                        <TouchableOpacity
+                          key={o.label}
+                          style={[styles.suggestChip, (sel || o.hi) && styles.suggestChipHi]}
+                          activeOpacity={0.8}
+                          onPress={() => applyPrice(o.price)}
+                        >
+                          <Text style={styles.suggestChipLabel}>{o.label}</Text>
+                          <Text style={styles.suggestChipPrice}>${o.price.toFixed(2)}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                );
+              })()}
             </View>
           );
         })()}
@@ -1930,12 +1916,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             <Field label="Shipping Weight" value={String(activeData.weight ?? '')} onChangeText={(t) => patchField('weight', t)} onInfo={() => onOpenFieldPanel?.('weight')} />
           </View>
           <View style={{ width: 140, marginBottom: 12 }}>
-            <AppDropdown
-              style={[styles.input, { height: 50, paddingHorizontal: 12 }]}
-              data={["oz", "lb", "g", "kg"].map(u => ({ label: u, value: u }))}
+            <AppMenuSelect
+              options={["oz", "lb", "g", "kg"].map(u => ({ label: u, value: u }))}
               placeholder="oz"
               value={activeData.weightUnit || 'oz'}
-              onChange={(item) => patchField('weightUnit', item.value)}
+              onChange={(value) => patchField('weightUnit', value)}
+              menuWidth={160}
             />
           </View>
         </View>
@@ -1966,14 +1952,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         <View style={{ marginBottom: 16 }}>
           <Text style={styles.fieldLabel}>Condition</Text>
           {activePlatformKeyLower === 'ebay' && ebayConditions.length > 0 ? (
-            <AppDropdown
-              style={[styles.modernInputWrapper, { paddingHorizontal: 12, height: 48, borderWidth: 1 }]}
-              data={ebayConditionsLoading ? [] : ebayConditions.map(c => ({ label: c.conditionName, value: c.conditionId }))}
+            <AppMenuSelect
+              options={ebayConditionsLoading ? [] : ebayConditions.map(c => ({ label: c.conditionName, value: c.conditionId }))}
               placeholder={ebayConditionsLoading ? "Loading conditions..." : "Select condition..."}
               value={activeData.conditionID ? String(activeData.conditionID) : (ebayConditions[0]?.conditionId ?? '')}
-              onChange={(item) => {
-                const condId = parseInt(item.value, 10);
-                const generic = mapEbayConditionIdToGeneric(item.value) as PlatformState['condition'];
+              onChange={(value) => {
+                const condId = parseInt(value, 10);
+                const generic = mapEbayConditionIdToGeneric(value) as PlatformState['condition'];
                 patchPlatform(prev => ({
                   ...prev,
                   conditionID: Number.isFinite(condId) ? condId : undefined,
@@ -1982,9 +1967,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               }}
             />
           ) : (
-            <AppDropdown
-              style={[styles.modernInputWrapper, { paddingHorizontal: 12, height: 48, borderWidth: 1 }]}
-              data={[
+            <AppMenuSelect
+              options={[
                 { label: 'New', value: 'new' },
                 { label: 'Like New', value: 'like_new' },
                 { label: 'Good', value: 'good' },
@@ -1995,7 +1979,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               ]}
               placeholder="Select condition..."
               value={activeData.condition || 'good'}
-              onChange={item => patchField('condition', item.value)}
+              onChange={(value) => patchField('condition', value)}
             />
           )}
         </View>
@@ -2537,60 +2521,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         })()}
         {supportsVariants ? (
           <>
-            {/* Suggested Price Tag - Apply to All */}
-            {activeTab === 'all' && (() => {
-              // Get suggested price from any platform: prefer aiPriceRecommendation.recommended, else aiRecommendedPrice
-              const suggestedPrice = (() => {
-                for (const pk of platformKeys) {
-                  const pd = platforms[pk] as PlatformState;
-                  if (pd?.aiPriceRecommendation?.recommended) return pd.aiPriceRecommendation!.recommended;
-                  if (pd?.aiRecommendedPrice) return pd.aiRecommendedPrice;
-                }
-                return null;
-              })();
-
-              // Function to apply suggested price to ALL variants across ALL platforms
-              const applySuggestedPriceToAll = () => {
-                if (!suggestedPrice) return;
-                const nextPlatforms = { ...platforms };
-                for (const pk of platformKeys) {
-                  const pd = nextPlatforms[pk] || {};
-                  const isShopify = pk === 'shopify';
-                  const newVariants = (pd.variants || []).map((v: any) => {
-                    if (isShopify) {
-                      // Shopify: set variant.price (global)
-                      return { ...v, price: suggestedPrice };
-                    } else {
-                      // Square/Clover: set price in all inventoryByLocation entries
-                      const updatedInv = { ...(v.inventoryByLocation || {}) };
-                      Object.keys(updatedInv).forEach(locId => {
-                        updatedInv[locId] = { ...updatedInv[locId], price: suggestedPrice };
-                      });
-                      return { ...v, price: suggestedPrice, inventoryByLocation: updatedInv };
-                    }
-                  });
-                  nextPlatforms[pk] = { ...pd, price: suggestedPrice, variants: newVariants };
-                }
-                onChangePlatforms(nextPlatforms);
-              };
-
-              return suggestedPrice ? (
-                <TouchableOpacity
-                  onPress={applySuggestedPriceToAll}
-                  style={{ backgroundColor: '#FFF', borderRadius: 8, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#rgb(201, 204, 210)', flexDirection: 'row', alignItems: 'center', gap: 8 }}
-                >
-                  <Sparkles size={18} color="#000" />
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 12, fontWeight: '600', color: '#000' }}>Our Suggested Price</Text>
-                    <Text style={{ fontSize: 15, fontWeight: '700', color: '#6B7280' }}>${suggestedPrice.toFixed(2)}</Text>
-                  </View>
-                  <View style={{ backgroundColor: '#93C822', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 }}>
-                    <Text style={{ color: '#FFF', fontWeight: '600', fontSize: 12 }}>Apply to All</Text>
-                  </View>
-                </TouchableOpacity>
-              ) : null;
-            })()}
-
             {/* Use VariantInventoryEditor for both "All" and Specific Platform tabs */}
             {(() => {
               // 1. Build locations list based on active tab
@@ -3200,13 +3130,14 @@ const styles = StyleSheet.create({
   pillText: { color: '#000' },
   pillTextActive: { fontWeight: '700' },
   pillDashed: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: '#E5E5E5' },
-  card: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 12 },
-  darkerCard: { borderWidth: 1, backgroundColor: '#F8F9FB', borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 12 },
+  // Flattened: sections are borderless now (stripped-down look).
+  card: { marginTop: 16 },
+  darkerCard: { marginTop: 16 },
   // --- STYLES REFACTOR ---
   fieldLabel: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#374151',
+    fontFamily: CHAT_FONT.semibold,
+    color: CHAT_COLORS.dim,
     marginBottom: 6,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
@@ -3214,12 +3145,12 @@ const styles = StyleSheet.create({
   modernInputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#ffffffff',
+    backgroundColor: CHAT_COLORS.white,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    minHeight: 48,
+    borderColor: CHAT_COLORS.border,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    minHeight: 58,
   },
   modernInputFocused: {
     borderColor: '#93C822',
@@ -3237,8 +3168,9 @@ const styles = StyleSheet.create({
   modernTextInput: {
     flex: 1,
     fontSize: 15,
-    color: '#111827',
-    paddingVertical: 12, // Ensure good touch target
+    fontFamily: CHAT_FONT.regular,
+    color: CHAT_COLORS.ink,
+    paddingVertical: 14, // Ensure good touch target
     height: '100%',
   },
   sectionHeaderContainer: {
@@ -3258,28 +3190,39 @@ const styles = StyleSheet.create({
   },
   sectionHeaderTitle: {
     fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
+    fontFamily: CHAT_FONT.bold,
+    color: CHAT_COLORS.ink,
   },
   // Keep existing styles but update where needed
   input: {
-    // Deprecated in favor of modernInputWrapper but keeping for legacy
+    // Shared input/dropdown surface — chat-input feel (rounded, roomy).
     borderWidth: 1,
-    borderColor: '#ddd',
-    padding: 12,
-    borderRadius: 8,
-    fontSize: 14,
-    backgroundColor: '#fff',
-    color: '#000',
+    borderColor: CHAT_COLORS.border,
+    paddingVertical: 19,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    fontSize: 15,
+    fontFamily: CHAT_FONT.regular,
+    backgroundColor: CHAT_COLORS.white,
+    color: CHAT_COLORS.ink,
   },
+  // Suggested-price pills (focus-gated, below the price field).
+  priceHint: { color: CHAT_COLORS.dim, fontSize: 12, fontFamily: CHAT_FONT.regular, marginTop: 8 },
+  suggestRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  suggestChip: { flex: 1, paddingVertical: 9, paddingHorizontal: 8, borderRadius: 12, borderWidth: 1, borderColor: CHAT_COLORS.border, backgroundColor: CHAT_COLORS.white, alignItems: 'center' },
+  suggestChipHi: { borderColor: CHAT_COLORS.brand, backgroundColor: CHAT_COLORS.brandSoft },
+  suggestChipLabel: { fontSize: 10.5, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.semibold },
+  suggestChipPrice: { fontSize: 14, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.bold, marginTop: 2 },
   addTagBtn: { alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center' },
   tagChip: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
   optionChip: { backgroundColor: '#E5E5E5', borderRadius: 6, paddingVertical: 6, paddingHorizontal: 10 },
-  dropdown: { backgroundColor: 'white', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  dropdownMenu: { backgroundColor: 'white', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, marginTop: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 3 },
-  dropdownItem: { padding: 10, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
-  scanBtn: { backgroundColor: '#93C822', width: 38, height: 38, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: -18 },
-  sectionTitle: { color: '#000', fontWeight: '700' },
+  dropdown: { backgroundColor: CHAT_COLORS.white, borderWidth: 1, borderColor: CHAT_COLORS.border, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 19, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  dropdownMenu: { backgroundColor: CHAT_COLORS.white, borderWidth: 1, borderColor: CHAT_COLORS.border, borderRadius: 16, marginTop: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 3 },
+  dropdownItem: { paddingVertical: 14, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  scanBtn: { backgroundColor: CHAT_COLORS.brand, width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: -18 },
+  // Unified with fieldLabel so section headers (Variants / Inventory) match the
+  // rest of the field labels — one consistent size.
+  sectionTitle: { fontSize: 12, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.dim, textTransform: 'uppercase', letterSpacing: 0.5 },
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 18 },
   subtle: { color: '#71717A', marginTop: 4 },
   addOption: { borderWidth: 1, borderColor: '#E5E5E5', borderStyle: 'dashed', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 12, alignSelf: 'stretch', marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },

@@ -21,7 +21,7 @@ export const styles = StyleSheet.create({
     borderColor: '#E5E7EB',
     borderRadius: 12,
     paddingHorizontal: 12,
-    minHeight: 48,
+    minHeight: 52,
   },
   modernInputFocused: {
     borderColor: '#93C822',
@@ -40,7 +40,7 @@ export const styles = StyleSheet.create({
     flex: 1,
     fontSize: 15,
     color: '#111827',
-    paddingVertical: 12,
+    paddingVertical: 16,
     height: '100%',
   },
   sectionHeaderContainer: {
@@ -65,10 +65,11 @@ export const styles = StyleSheet.create({
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ddd',
-    padding: 12,
-    borderRadius: 8,
-    fontSize: 14,
+    borderColor: '#E5E7EB',
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    fontSize: 15,
     backgroundColor: '#fff',
     color: '#000',
   },
