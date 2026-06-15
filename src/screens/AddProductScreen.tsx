@@ -61,6 +61,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
   PanResponder,
+  AppState,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
@@ -810,7 +811,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   useEffect(() => {
     if (genJobs.length === 0) return;
     let cancelled = false;
+    let inFlight = false; // dedup: don't stack overlapping polls if a tick runs >1.5s
+    let interval: ReturnType<typeof setInterval> | null = null;
     const poll = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
       const token = await ensureSupabaseJwt();
       if (!token || cancelled) return;
       for (const job of genJobs) {
@@ -862,10 +868,31 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           /* transient — keep polling */
         }
       }
+      } finally {
+        inFlight = false;
+      }
+    };
+    const startInterval = () => {
+      if (!interval && !cancelled) interval = setInterval(() => { void poll(); }, 1500);
+    };
+    const stopInterval = () => {
+      if (interval) { clearInterval(interval); interval = null; }
     };
     void poll();
-    const interval = setInterval(() => { void poll(); }, 1500);
-    return () => { cancelled = true; clearInterval(interval); };
+    startInterval();
+    // Pause polling while the app is backgrounded; resume + poll immediately on foreground.
+    let prevAppState = AppState.currentState;
+    const sub = AppState.addEventListener('change', (next) => {
+      const wasBackground = /inactive|background/.test(prevAppState);
+      prevAppState = next;
+      if (next === 'active') { startInterval(); if (wasBackground) void poll(); }
+      else if (/inactive|background/.test(next)) stopInterval();
+    });
+    return () => {
+      cancelled = true;
+      stopInterval();
+      sub.remove();
+    };
   }, [genJobs, setItemStageById]);
 
   // Click → GenerateDetailsScreen for a queued/generated item: per-item finalize + the built-in
