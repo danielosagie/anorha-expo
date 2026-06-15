@@ -67,15 +67,33 @@ export default [
           message:
             'Avoid raw fetch(); use the typed apiClient (src/lib/apiClient) or tRPC so auth + retries are handled.',
         },
+        {
+          selector: "CallExpression[callee.object.name='supabase'][callee.property.name='channel']",
+          message:
+            'Do not open Supabase realtime channels in screens/contexts — subscribe via the Legend State data layer (src/utils/SupaLegend). Ad-hoc channels caused the InventoryLevels retry storm.',
+        },
+        {
+          selector: "CallExpression[callee.object.name='supabase'][callee.property.name='from']",
+          message:
+            'Do not query Supabase tables directly outside the data layer. Read/write via Legend State observables (src/utils/SupaLegend) or the apiClient.',
+        },
       ],
     },
   },
   {
-    // The data layer is the sanctioned home for sockets and low-level fetch.
-    files: ['src/lib/**/*.{ts,tsx}'],
+    // The data layer is the sanctioned home for sockets, low-level fetch, and
+    // direct Supabase access (the client, SupaLegend observables, activity log).
+    files: ['src/lib/**/*.{ts,tsx}', 'src/utils/SupaLegend.ts', 'src/utils/logger.ts'],
     rules: {
       'no-restricted-imports': 'off',
       'no-restricted-syntax': 'off',
+    },
+  },
+  {
+    // The logger facade is the one sanctioned caller of console.*.
+    files: ['src/utils/logger.ts'],
+    rules: {
+      'no-console': 'off',
     },
   },
 ];

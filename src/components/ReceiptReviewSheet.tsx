@@ -15,6 +15,7 @@ import Animated, { FadeIn, FadeInDown, SlideInDown } from 'react-native-reanimat
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
+import { useJobStatus } from '../hooks/useJobStatus';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -102,24 +103,14 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
         }
     }, [jobId]);
 
-    // Poll every 2 seconds while processing
-    useEffect(() => {
-        let intervalId: ReturnType<typeof setInterval> | null = null;
-
-        const poll = async () => {
-            const status = await fetchJobStatus();
-            if (status === 'completed' || status === 'failed') {
-                if (intervalId) clearInterval(intervalId);
-            }
-        };
-
-        poll();
-        intervalId = setInterval(poll, 2000);
-
-        return () => {
-            if (intervalId) clearInterval(intervalId);
-        };
-    }, [fetchJobStatus]);
+    // Poll job status via the shared hook: AppState-aware (pauses while
+    // backgrounded, polls on resume), de-duplicated, and auto-stops on a terminal
+    // status. fetchJobStatus already owns the state side-effects and never throws,
+    // so this is a behaviour-preserving timing-only swap.
+    useJobStatus(jobId, fetchJobStatus, {
+        intervalMs: 2000,
+        getStatus: (status) => status,
+    });
 
     // Toggle item selection
     const toggleItemSelection = (itemId: string) => {

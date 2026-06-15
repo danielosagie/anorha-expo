@@ -45,9 +45,17 @@ function resolveApiBaseUrl(): string {
 
 export const API_BASE_URL = resolveApiBaseUrl();
 
+/**
+ * Realtime / websocket host. The socket server mounts namespaces at the root
+ * (e.g. `/collaboration`), so this is the API host WITHOUT any `/api` suffix.
+ * Derive it ONCE here so socket consumers stop re-implementing the strip.
+ */
+export const SOCKET_BASE_URL = API_BASE_URL.replace(/\/api$/, '');
+
 /** Grouped public config. Prefer the named exports for hot paths. */
 export const ENV = {
   apiBaseUrl: API_BASE_URL,
+  socketBaseUrl: SOCKET_BASE_URL,
   convexUrl: process.env.EXPO_PUBLIC_CONVEX_URL ?? '',
   clerkPublishableKey: process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ?? '',
   clerkJwtTemplate: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase',

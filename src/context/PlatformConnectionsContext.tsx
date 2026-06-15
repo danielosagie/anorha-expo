@@ -1,7 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { API_BASE_URL } from '../config/env';
-import { io, Socket } from 'socket.io-client';
+import { acquireCollaborationSocket, releaseCollaborationSocket, type Socket } from '../lib/collaborationSocket';
+import { TABLES } from '../constants/tableNames';
 
 export type PlatformKey = 'shopify' | 'square' | 'clover' | 'ebay' | 'facebook' | 'amazon' | 'depop' | 'whatnot' | 'etsy';
 
@@ -43,7 +44,6 @@ type ContextValue = {
 const PlatformConnectionsContext = createContext<ContextValue | undefined>(undefined);
 
 const API_BASE = API_BASE_URL;
-const SOCKET_BASE = API_BASE.endsWith('/api') ? API_BASE.replace(/\/api$/, '') : API_BASE;
 const CONNECTION_STATUS_SET = new Set(['active', 'inactive', 'pending', 'review', 'ready_to_sync', 'scanning', 'syncing', 'reconciling', 'error']);
 const TERMINAL_STATUS_SET = new Set(['active', 'review', 'error']);
 const PROGRESS_OVERRIDE_TTL_MS = 2 * 60 * 1000;
@@ -58,7 +58,6 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
   const [progressByConnectionId, setProgressByConnectionId] = useState<Record<string, SyncProgressUpdate>>({});
   const [authReady, setAuthReady] = useState(false);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const socketRef = useRef<Socket | null>(null);
 
   const fetchConnections = useCallback(async () => {
     setLoading(true);
@@ -145,7 +144,11 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
           {
             event: '*', // Listen for INSERT, UPDATE, DELETE
             schema: 'public',
-            table: 'PlatformConnections',
+            table: TABLES.PlatformConnections,
+            // Row scoping is enforced by RLS (the client only receives its own
+            // connections). A server-side `UserId=eq.<id>` filter is a follow-up:
+            // this provider currently mounts ABOVE the session provider, so the
+            // user id isn't available here yet — unblocked by the session-spine work.
           },
           (payload) => {
             console.log('[PlatformConnectionsContext] Realtime update received:', payload.eventType);
@@ -185,84 +188,74 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
   }, [fetchConnections]);
 
   useEffect(() => {
+    if (!authReady) return;
+
     let isCancelled = false;
-    if (!authReady) {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-        socketRef.current = null;
-      }
-      return;
-    }
-
-    const connectSocket = async () => {
-      try {
-        const token = await ensureSupabaseJwt();
-        if (!token || isCancelled) return;
-
-        if (socketRef.current) {
-          socketRef.current.disconnect();
-          socketRef.current = null;
-        }
-
-        const socket = io(`${SOCKET_BASE}/collaboration`, {
-          transports: ['websocket'],
-          timeout: 5000,
-          auth: { token },
-          query: { token },
-        });
-
-        socket.on('connect', () => {
-          console.log('[PlatformConnectionsContext] Socket connected');
-        });
-
-        socket.on('connect_error', (err: any) => {
-          console.error('[PlatformConnectionsContext] Socket connection error:', err);
-        });
-
-        socket.on('disconnect', () => {
-          console.log('[PlatformConnectionsContext] Socket disconnected');
-        });
-
-        socket.on('sync:progress', (data: Omit<SyncProgressUpdate, 'receivedAt'>) => {
-          if (!data?.connectionId) return;
-          const receivedAt = Date.now();
-          setProgressByConnectionId(prev => ({
-            ...prev,
-            [data.connectionId]: { ...data, receivedAt },
-          }));
-
-          const status = normalizeStatus(data.status);
-          if (TERMINAL_STATUS_SET.has(status) || (typeof data.progress === 'number' && data.progress >= 100)) {
-            scheduleRefresh('progress-terminal');
-          }
-        });
-
-        socket.on('connection:status', (data: { connectionId: string; status: string; platformType?: string; timestamp?: string }) => {
-          if (!data?.connectionId) return;
-          const status = normalizeStatus(data.status);
-          if (!status) return;
-          setConnections(prev =>
-            prev.map(conn => (conn.Id === data.connectionId ? { ...conn, Status: status } : conn))
-          );
-          if (TERMINAL_STATUS_SET.has(status)) {
-            scheduleRefresh('connection-status');
-          }
-        });
-
-        socketRef.current = socket;
-      } catch (error) {
-        console.error('[PlatformConnectionsContext] Failed to connect socket:', error);
+    let socket: Socket | null = null;
+    // Exactly-once release: acquireCollaborationSocket() bumps the refcount
+    // synchronously, so every acquire must be balanced by one release regardless
+    // of how this effect resolves or unmounts.
+    let released = false;
+    const releaseOnce = () => {
+      if (!released) {
+        released = true;
+        releaseCollaborationSocket();
       }
     };
 
-    connectSocket();
+    // Stable handler refs so cleanup off()s exactly these — the shared socket is
+    // also used by useSyncProgress/useCollaboration, so never blanket-remove.
+    const onSyncProgress = (data: Omit<SyncProgressUpdate, 'receivedAt'>) => {
+      if (!data?.connectionId) return;
+      const receivedAt = Date.now();
+      setProgressByConnectionId(prev => ({
+        ...prev,
+        [data.connectionId]: { ...data, receivedAt },
+      }));
+
+      const status = normalizeStatus(data.status);
+      if (TERMINAL_STATUS_SET.has(status) || (typeof data.progress === 'number' && data.progress >= 100)) {
+        scheduleRefresh('progress-terminal');
+      }
+    };
+
+    const onConnectionStatus = (data: { connectionId: string; status: string; platformType?: string; timestamp?: string }) => {
+      if (!data?.connectionId) return;
+      const status = normalizeStatus(data.status);
+      if (!status) return;
+      setConnections(prev =>
+        prev.map(conn => (conn.Id === data.connectionId ? { ...conn, Status: status } : conn))
+      );
+      if (TERMINAL_STATUS_SET.has(status)) {
+        scheduleRefresh('connection-status');
+      }
+    };
+
+    // Use the ONE shared, ref-counted /collaboration socket instead of opening a
+    // second io() connection to the same namespace.
+    acquireCollaborationSocket()
+      .then((s) => {
+        if (isCancelled || !s) {
+          releaseOnce();
+          return;
+        }
+        socket = s;
+        s.on('sync:progress', onSyncProgress);
+        s.on('connection:status', onConnectionStatus);
+      })
+      .catch((error) => {
+        console.error('[PlatformConnectionsContext] Failed to acquire collaboration socket:', error);
+        releaseOnce();
+      });
 
     return () => {
       isCancelled = true;
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-        socketRef.current = null;
+      if (socket) {
+        socket.off('sync:progress', onSyncProgress);
+        socket.off('connection:status', onConnectionStatus);
+        socket = null;
       }
+      releaseOnce();
     };
   }, [authReady, scheduleRefresh]);
 
