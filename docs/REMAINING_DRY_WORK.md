@@ -6,15 +6,17 @@ Status as of branch `refactor/realtime-dry-systems`. The items below were
 a regression the red-team caught in the blind-implementation spec. The corrections
 are baked in so each is ready to execute once a device/simulator is available.
 
-> **UPDATE — most of the deferred work is now IMPLEMENTED** (tsc-clean, pushed), per
+> **UPDATE — ALL implementable deferred work is now DONE** (tsc-clean, pushed), per
 > explicit request. These still NEED a device smoke-test before merge:
 > - ✅ console→logger codemod — 975 sites (`648a1c62`) + logger module-cycle fix (`6924f5ca`).
 > - ✅ AddProduct multi-job poll — inFlight dedup + AppState background-pause (`df3ff42f`).
-> - ✅ ProductDetail 3-channel re-plumb onto Legend State onChange (`28bb0a7e`) — channel-ban 4→1.
+> - ✅ ProductDetail 3-channel re-plumb onto Legend State onChange (`28bb0a7e`).
+> - ✅ MappingReview forever-poll → reactive + bounded 20s fallback (`c1984d0e`).
+> - ✅ PlatformConnections realtime channel → src/lib data-layer helper (`43a80661`).
 >
-> Still genuinely deferred: **MappingReview interval** (a socket safety-net — left as-is on
-> purpose, §3) and **Track A / D / F** (strategic / security — "Out of scope" below).
-> The detailed specs below remain as the reference for what each change does + how to verify.
+> **channel-ban lint warnings: 0** — no raw `supabase.channel()` left in any screen/context.
+> Only **Track A / D / F** remain — genuinely strategic / security (see "Out of scope"),
+> NOT auto-implementable. The specs below stay as the reference for verifying each change.
 
 ## Already shipped on this branch (tsc-clean, lint-ratchet-clean)
 - Foundations: `src/hooks/useJobStatus.ts`, `src/lib/withRetry.ts`,
