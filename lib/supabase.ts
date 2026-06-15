@@ -3,6 +3,7 @@ export {
   configureClerkSupabaseBridge,
   getUserLike,
   ensureSupabaseJwt,
+  getSupabaseUserId,
   getCurrentSupabaseJwt,
   getSupabaseJwtState,
   subscribeToSupabaseJwtState,

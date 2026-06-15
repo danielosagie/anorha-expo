@@ -19,6 +19,9 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { CameraView } from 'expo-camera';
 import { supabase } from '../lib/supabase';
 import { useLegendState } from '../context/LegendStateContext';
+import { createLogger } from '../utils/logger';
+const log = createLogger('GlobalSearchScreen');
+
 
 const SCANNER_GROW_HEIGHT = 240;
 const SCANNER_CLOSE_DURATION = 220;
@@ -173,7 +176,7 @@ const GlobalSearchScreen: React.FC = () => {
           setResults(aggregated);
         }
       } catch (e) {
-        console.warn('[GlobalSearch] error', e);
+        log.warn('[GlobalSearch] error', e);
         if (reqId === requestIdRef.current) setResults([]);
       } finally {
         if (reqId === requestIdRef.current) setLoading(false);

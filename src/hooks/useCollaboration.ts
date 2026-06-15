@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useUser } from '@clerk/clerk-expo';
 import { acquireCollaborationSocket, releaseCollaborationSocket, type Socket } from '../lib/collaborationSocket';
+import { createLogger } from '../utils/logger';
+const log = createLogger('useCollaboration');
+
 
 interface ProductUpdate {
   productId: string;
@@ -39,7 +42,7 @@ export function useCollaboration() {
     const handleConnect = () => setIsConnected(true);
     const handleDisconnect = () => setIsConnected(false);
     const handleConnectError = (error: Error) => {
-      console.error('[Collaboration] Connection error:', error.message);
+      log.error('[Collaboration] Connection error:', error.message);
     };
     const handlePresence = ({ users }: { users: PresenceUser[] }) => {
       setOnlineUsers(users.filter((u) => u.status === 'online'));
@@ -62,7 +65,7 @@ export function useCollaboration() {
         s.on('presence:update', handlePresence);
       })
       .catch((error) => {
-        console.error('[Collaboration] Failed to initialize socket:', error);
+        log.error('[Collaboration] Failed to initialize socket:', error);
       });
 
     return () => {
@@ -90,7 +93,7 @@ export function useCollaboration() {
         }
 
         socketRef.current.emit('product:startEdit', { productId }, (response: any) => {
-          console.log('[Collaboration] Edit lock response:', response);
+          log.debug('[Collaboration] Edit lock response:', response);
           resolve(response);
         });
       });
@@ -133,7 +136,7 @@ export function useCollaboration() {
     if (!socketRef.current) return () => { };
 
     const handler = (data: any) => {
-      console.log('[Collaboration] Field updated by teammate:', data);
+      log.debug('[Collaboration] Field updated by teammate:', data);
       callback(data);
     };
 
@@ -151,7 +154,7 @@ export function useCollaboration() {
     if (!socketRef.current) return () => { };
 
     const handler = (data: ProductUpdate) => {
-      console.log('[Collaboration] Product updated:', data);
+      log.debug('[Collaboration] Product updated:', data);
       callback(data);
     };
 
@@ -169,7 +172,7 @@ export function useCollaboration() {
     if (!socketRef.current) return () => { };
 
     const handler = (data: ProductEditEvent) => {
-      console.log('[Collaboration] Edit started:', data);
+      log.debug('[Collaboration] Edit started:', data);
       callback(data);
     };
 
@@ -187,7 +190,7 @@ export function useCollaboration() {
     if (!socketRef.current) return () => { };
 
     const handler = (data: { productId: string; userId: string }) => {
-      console.log('[Collaboration] Edit ended:', data);
+      log.debug('[Collaboration] Edit ended:', data);
       callback(data);
     };
 

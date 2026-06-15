@@ -15,6 +15,9 @@ import Button from '../Button';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { API_BASE_URL } from '../../config/env';
 import { showMessage } from 'react-native-flash-message';
+import { createLogger } from '../../utils/logger';
+const log = createLogger('LocationAccessRequestModal');
+
 
 const SSSYNC_API_BASE_URL = API_BASE_URL;
 
@@ -83,7 +86,7 @@ export default function LocationAccessRequestModal({ visible, orgId, onClose }: 
         );
       }
     } catch (error) {
-      console.error('[LocationAccessRequestModal] Error loading locations:', error);
+      log.error('[LocationAccessRequestModal] Error loading locations:', error);
     } finally {
       setLoading(false);
     }

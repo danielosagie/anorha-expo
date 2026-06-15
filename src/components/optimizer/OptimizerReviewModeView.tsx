@@ -16,6 +16,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useAuth } from '@clerk/clerk-expo';
 import { ensureSupabaseJwt, supabase } from '../../lib/supabase';
+import { createLogger } from '../../utils/logger';
+const log = createLogger('OptimizerReviewModeView');
+
 
 const { width } = Dimensions.get('window');
 
@@ -85,7 +88,7 @@ export function OptimizerReviewModeView({ onBack, queueProducts }: OptimizerRevi
             setPendingItems(mockedDrafts);
             setLoading(false);
         } catch (err) {
-            console.error('[ReviewMode] Error loading reviews', err);
+            log.error('[ReviewMode] Error loading reviews', err);
             setLoading(false);
         }
     };

@@ -61,6 +61,9 @@ type GeneratedResult = {
 // Platform field schema for hierarchical structure
 // Platform field schema extracted to separate file for maintainability
 import { PLATFORM_FIELD_SCHEMA } from '../utils/platformSchemas';
+import { createLogger } from '../utils/logger';
+const log = createLogger('GenerateDetailsScreen');
+
 // NOTE: Schema currently not used in this file - UI uses ListingEditorForm which has its own logic
 
 // Helper function to group versions by match job ID, showing latest as primary
@@ -204,7 +207,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   useEffect(() => {
     if (socketJobState && socketJobState.jobId === jobId) {
-      console.log('[GEN-DETAILS] Socket update:', socketJobState.status);
+      log.debug('[GEN-DETAILS] Socket update:', socketJobState.status);
 
       setJobData(prev => {
         // Only update if we have new meaningful data or status change
@@ -260,11 +263,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         });
 
         if (!canceled) {
-          console.log('[GEN-DETAILS] Loaded ProductImages from DB:', imageMap);
+          log.debug('[GEN-DETAILS] Loaded ProductImages from DB:', imageMap);
           setDbImages(imageMap);
         }
       } catch (err) {
-        console.error('[GEN-DETAILS] Failed to load ProductImages:', err);
+        log.error('[GEN-DETAILS] Failed to load ProductImages:', err);
       }
     })();
     return () => { canceled = true };
@@ -272,9 +275,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   // Debug logs moved to useEffect to prevent spam on every render
   useEffect(() => {
-    console.log('[GEN-DETAILS] route.params keys:', Object.keys((route.params || {}) as any));
-    console.log('[GEN-DETAILS] jobId:', jobId, 'status:', status);
-    console.log('[GEN-DETAILS] results raw:', Array.isArray(results) ? `len=${results.length}` : typeof results);
+    log.debug('[GEN-DETAILS] route.params keys:', Object.keys((route.params || {}) as any));
+    log.debug('[GEN-DETAILS] jobId:', jobId, 'status:', status);
+    log.debug('[GEN-DETAILS] results raw:', Array.isArray(results) ? `len=${results.length}` : typeof results);
   }, [jobId, status, results, route.params]);
 
   // ========== CRITICAL FIX: useRef for data persistence + auto-save ==========
@@ -316,7 +319,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const platformKey = activeRegenJobsRef.current[data.jobId];
       if (!platformKey) return; // Not a job we care about
 
-      console.log(`[GEN-DETAILS] Socket update for platform ${platformKey} (job ${data.jobId}): ${data.status}`);
+      log.debug(`[GEN-DETAILS] Socket update for platform ${platformKey} (job ${data.jobId}): ${data.status}`);
 
       if (data.status === 'completed') {
         try {
@@ -344,13 +347,13 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           if (generatedPlatforms && generatedPlatforms[platformKey]) {
             // Update displayed platforms with the new generated data
             const normalized = normalizeForListingEditor(generatedPlatforms[platformKey]);
-            console.log(`[GEN-DETAILS] Hydrating generated data for ${platformKey}`);
+            log.debug(`[GEN-DETAILS] Hydrating generated data for ${platformKey}`);
             updatePlatforms(prev =>
               hydratePlatformsFromBackend({ [platformKey]: normalized }, prev)
             );
           }
         } catch (err) {
-          console.error(`[GEN-DETAILS] Error processing completion for ${platformKey}:`, err);
+          log.error(`[GEN-DETAILS] Error processing completion for ${platformKey}:`, err);
         } finally {
           // Cleanup
           delete activeRegenJobsRef.current[data.jobId];
@@ -361,7 +364,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           });
         }
       } else if (data.status === 'failed' || data.status === 'cancelled') {
-        console.warn(`[GEN-DETAILS] Generation failed for ${platformKey}`);
+        log.warn(`[GEN-DETAILS] Generation failed for ${platformKey}`);
         delete activeRegenJobsRef.current[data.jobId];
         setGeneratingPlatformKeys(prev => {
           const next = new Set(prev);
@@ -379,7 +382,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     platformsRef.current = updater(platformsRef.current);
     forceUpdate({}); // Trigger re-render
     setUpdateCounter(c => c + 1); // Signal content change
-    console.log('[GEN-DETAILS] Updated platforms, triggering auto-save...');
+    log.debug('[GEN-DETAILS] Updated platforms, triggering auto-save...');
   };
 
   // Get displayedPlatforms from ref (for render)
@@ -407,7 +410,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         const validImgs = filterValidImages(imgs as any[]);
         if (!isNaN(idx) && validImgs.length > 0) {
           map[idx] = validImgs;
-          console.log(`[userImagesByIndex] P0: Using params images for index ${idx}:`, validImgs.length);
+          log.debug(`[userImagesByIndex] P0: Using params images for index ${idx}:`, validImgs.length);
         }
       });
     }
@@ -422,7 +425,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           if (dbImgs.length > 0) {
             // DB images replace local params images since they are the same photos uploaded
             map[idx] = dbImgs;
-            console.log(`[userImagesByIndex] P1: Replaced with DB images for index ${idx}:`, dbImgs.length);
+            log.debug(`[userImagesByIndex] P1: Replaced with DB images for index ${idx}:`, dbImgs.length);
           }
         }
       });
@@ -442,7 +445,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           const existing = map[idx] || [];
           const merged = Array.from(new Set([...existing, ...draftImages]));
           map[idx] = merged;
-          console.log(`[userImagesByIndex] P2: Merged draft images for index ${idx}:`, draftImages.length, 'Total:', merged.length);
+          log.debug(`[userImagesByIndex] P2: Merged draft images for index ${idx}:`, draftImages.length, 'Total:', merged.length);
         }
       }
     }
@@ -458,13 +461,13 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     // Only hydrate if this is new data (different jobId or product index)
     const currentJobId = `${jobId || 'job'}-${currentProductIndex}` + (res.platforms ? JSON.stringify(res.platforms).slice(0, 50) : '');
     if (lastHydratedJobRef.current === currentJobId) {
-      console.log('[GEN-DETAILS] Skipping re-hydration - same job/item');
+      log.debug('[GEN-DETAILS] Skipping re-hydration - same job/item');
       return;
     }
 
     const rawPlatforms = res.platforms;
-    console.log('[GEN-DETAILS] Hydrating new data. JobId:', currentJobId);
-    console.log('[GEN-DETAILS] Raw platforms from backend:', rawPlatforms);
+    log.debug('[GEN-DETAILS] Hydrating new data. JobId:', currentJobId);
+    log.debug('[GEN-DETAILS] Raw platforms from backend:', rawPlatforms);
 
     // Normalize each platform for ListingEditorForm compatibility
     const normalized: Record<string, any> = {};
@@ -472,14 +475,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       normalized[key] = normalizeForListingEditor(value);
     }
 
-    console.log('[GEN-DETAILS] Normalized platforms:', Object.keys(normalized));
+    log.debug('[GEN-DETAILS] Normalized platforms:', Object.keys(normalized));
 
     // CRITICAL: If backend didn't send shopify, create it from first available platform
     // This ensures canonicalKey (which prefers shopify) has data to display
     if (!normalized.shopify && Object.keys(normalized).length > 0) {
       const firstPlatformKey = Object.keys(normalized)[0];
       const firstPlatformData = normalized[firstPlatformKey];
-      console.log('[GEN-DETAILS] Backend missing shopify - creating canonical from:', firstPlatformKey);
+      log.debug('[GEN-DETAILS] Backend missing shopify - creating canonical from:', firstPlatformKey);
 
       // Create shopify with core fields from first platform
       // Handle various image field names across platforms
@@ -511,7 +514,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
     // Hydrate into platformsRef (preserves user edits)
     const hydrated = hydratePlatformsFromBackend(normalized, platformsRef.current);
-    console.log('[GEN-DETAILS] Hydrated platforms:', Object.keys(hydrated));
+    log.debug('[GEN-DETAILS] Hydrated platforms:', Object.keys(hydrated));
     updatePlatforms(() => hydrated);
 
     lastHydratedJobRef.current = currentJobId;
@@ -557,7 +560,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             });
             if (!response.ok) {
               const errorText = await response.text();
-              console.error('[GEN-DETAILS AutoSave] ❌ Backend draft failed (local save OK):', response.status, errorText);
+              log.error('[GEN-DETAILS AutoSave] ❌ Backend draft failed (local save OK):', response.status, errorText);
               lastScheduledRef.current = null;
               setSaveState('error');
               return;
@@ -568,9 +571,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         lastSavedRef.current = currentJson;
         lastScheduledRef.current = null;
         setSaveState('saved');
-        console.log('[GEN-DETAILS AutoSave] ✅ Saved', variantId ? '(local + backend)' : '(local)');
+        log.debug('[GEN-DETAILS AutoSave] ✅ Saved', variantId ? '(local + backend)' : '(local)');
       } catch (error) {
-        console.error('[GEN-DETAILS AutoSave] ❌ Error:', error);
+        log.error('[GEN-DETAILS AutoSave] ❌ Error:', error);
         lastScheduledRef.current = null;
         setSaveState('error');
       }
@@ -597,7 +600,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           platformsRef.current = parsed.draftData;
           lastSavedRef.current = JSON.stringify(parsed.draftData);
           forceUpdate({});
-          console.log('[GEN-DETAILS AutoSave] ↩︎ Restored local draft');
+          log.debug('[GEN-DETAILS AutoSave] ↩︎ Restored local draft');
         }
       } catch { /* ignore */ }
     })();
@@ -703,11 +706,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         setAllConnections(connections);
 
         // ⚡ OPTIMIZED: Query PlatformLocations directly from DB instead of calling sync endpoint
-        console.log('[GenerateDetails] ⚡ Loading locations directly from PlatformLocations table...');
+        log.debug('[GenerateDetails] ⚡ Loading locations directly from PlatformLocations table...');
 
         const connectionIds = connections.map((c: any) => c.Id);
         if (connectionIds.length === 0) {
-          console.log('[GenerateDetails] No connections found');
+          log.debug('[GenerateDetails] No connections found');
           setPlatformLocations({});
           return;
         }
@@ -719,12 +722,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           .in('PlatformConnectionId', connectionIds);
 
         if (error) {
-          console.error('[GenerateDetails] Failed to query PlatformLocations:', error);
+          log.error('[GenerateDetails] Failed to query PlatformLocations:', error);
           setPlatformLocations({});
           return;
         }
 
-        console.log('[GenerateDetails] ✅ Retrieved', platformLocs?.length || 0, 'locations from DB in <1s');
+        log.debug('[GenerateDetails] ✅ Retrieved', platformLocs?.length || 0, 'locations from DB in <1s');
 
         // Build map: connectionId -> location objects
         const locsByConnection = new Map<string, Array<{ id: string; name: string }>>();
@@ -757,7 +760,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           }
         }
 
-        console.log('[GenerateDetails] Built platform locations:', Object.keys(locsByPlatform).map(p => `${p}: ${locsByPlatform[p].length} locs`));
+        log.debug('[GenerateDetails] Built platform locations:', Object.keys(locsByPlatform).map(p => `${p}: ${locsByPlatform[p].length} locs`));
         setPlatformLocations(locsByPlatform);
 
         // ⚡ FIX: Ensure ALL enabled platforms appear in displayedPlatforms for publishing
@@ -768,7 +771,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             .map((c: any) => c.PlatformType?.toLowerCase())
         )];
 
-        console.log('[GenerateDetails] Enabled platforms from connections:', enabledPlatformTypes);
+        log.debug('[GenerateDetails] Enabled platforms from connections:', enabledPlatformTypes);
 
         // ONLY add platform entries for platforms that don't already exist in displayedPlatforms
         // (via hydration from generate job results). This prevents empty columns for unselected platforms.
@@ -787,7 +790,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                 ...updatedPlatforms[pt],
                 locations: platformLocs,
               };
-              console.log(`[GenerateDetails] Hydrated locations for existing platform: ${pt}`);
+              log.debug(`[GenerateDetails] Hydrated locations for existing platform: ${pt}`);
               added = true;
             }
           }
@@ -797,7 +800,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           updatePlatforms(() => updatedPlatforms);
         }
       } catch (e) {
-        console.error('Failed to fetch connections/locations:', e);
+        log.error('Failed to fetch connections/locations:', e);
       }
     })();
   }, []);
@@ -1154,7 +1157,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           setVersions(groupedVersions);
         }
       } catch (e) {
-        console.error('Error fetching versions:', e);
+        log.error('Error fetching versions:', e);
       }
     })();
   }, [versionsSheetOpen, first, route.params, matchJobId]);
@@ -1197,7 +1200,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             }
           });
 
-          console.log('[GenerateDetails] Updated jobsByIndex:', jobsByIndex);
+          log.debug('[GenerateDetails] Updated jobsByIndex:', jobsByIndex);
           setItemGenerateJobs(jobsByIndex);
         }
       } catch { }
@@ -1454,7 +1457,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               if (v.optionValues && typeof v.optionValues === 'object') {
                 // Modern format: { Size: '2TB', Color: 'Black' }
                 // Convert to legacy format for backend
-                console.log('[buildPlatformPayload] Converting modern optionValues to legacy format:', v.optionValues);
+                log.debug('[buildPlatformPayload] Converting modern optionValues to legacy format:', v.optionValues);
                 const entries = Object.entries(v.optionValues);
                 entries.forEach(([name, value], idx) => {
                   if (idx === 0) {
@@ -1534,7 +1537,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         });
 
         const imageUris = Array.from(imgs);
-        console.log('[buildPlatformPayload] Using user images (DB + params):', imageUris);
+        log.debug('[buildPlatformPayload] Using user images (DB + params):', imageUris);
         return { imageUris, coverImageIndex: 0 };
       })(),
       selectedPlatformsToPublish: Object.keys(displayedPlatforms || {}),
@@ -1573,7 +1576,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const data = await res.json();
       const gen = (data?.generatedDetails || data || {}) as any;
       const genPlatforms = (gen || {}) as Record<string, any>;
-      console.log('[GEN-DETAILS] fillTheRest generated platform keys:', Object.keys(genPlatforms));
+      log.debug('[GEN-DETAILS] fillTheRest generated platform keys:', Object.keys(genPlatforms));
 
       const mergeFields = ['title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode', 'images', 'options', 'seoTitle', 'seoDescription'];
       const next = { ...displayedPlatforms } as any;
@@ -1695,21 +1698,21 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }));
       }
     } catch (e) {
-      console.error('Regenerate field failed:', e);
+      log.error('Regenerate field failed:', e);
     } finally {
       setRegenSubmitting(false);
     }
   };
 
   const doSaveToInventory = async () => {
-    console.log('[doSaveToInventory] Starting inventory save...');
+    log.debug('[doSaveToInventory] Starting inventory save...');
     try {
       const baseUrl = API_BASE_URL;
       const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || effectiveResult?.productId;
       const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
       if (!baseUrl || !productId || !variantId || !token) {
-        console.log('[doSaveToInventory] Missing required data');
+        log.debug('[doSaveToInventory] Missing required data');
         return;
       }
 
@@ -1720,7 +1723,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (!finalSku || finalSku.startsWith('DRAFT-')) {
         const randomSuffix = Math.random().toString(36).substring(2, 10).toUpperCase();
         finalSku = `INV-${randomSuffix}`;
-        console.log('[doSaveToInventory] Generated permanent SKU:', finalSku);
+        log.debug('[doSaveToInventory] Generated permanent SKU:', finalSku);
 
         // Update payload with new SKU
         payload.platformDetails.canonical.sku = finalSku;
@@ -1738,7 +1741,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
       }
 
-      console.log('[doSaveToInventory] Saving payload:', JSON.stringify(payload, null, 2));
+      log.debug('[doSaveToInventory] Saving payload:', JSON.stringify(payload, null, 2));
 
       const res = await fetch(`${baseUrl}/api/products/publish`, {
         method: 'POST',
@@ -1754,7 +1757,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       });
 
       if (res.ok) {
-        console.log('[doSaveToInventory] Saved to inventory successfully');
+        log.debug('[doSaveToInventory] Saved to inventory successfully');
 
         // Navigate to confirmation screen
         // We construct the params similar to doPublish
@@ -1775,33 +1778,33 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
       } else {
         const errorText = await res.text();
-        console.error('[doSaveToInventory] Save failed:', errorText);
+        log.error('[doSaveToInventory] Save failed:', errorText);
         Alert.alert('Error', `Failed to save to inventory: ${errorText}`);
       }
     } catch (err) {
-      console.error('[doSaveToInventory] Error saving:', err);
+      log.error('[doSaveToInventory] Error saving:', err);
       Alert.alert('Error', 'An unexpected error occurred while saving.');
     }
   };
 
   const doPublish = async () => {
-    console.log('doPublish - Starting publish flow');
-    console.log('displayedPlatforms:', JSON.stringify(displayedPlatforms, null, 2));
-    console.log('readyPlatforms:', readyPlatforms);
-    console.log('platformKeys:', platformKeys);
+    log.debug('doPublish - Starting publish flow');
+    log.debug('displayedPlatforms:', JSON.stringify(displayedPlatforms, null, 2));
+    log.debug('readyPlatforms:', readyPlatforms);
+    log.debug('platformKeys:', platformKeys);
 
     try {
       const baseUrl = API_BASE_URL;
       const token = await ensureSupabaseJwt();
       if (!baseUrl || !token) {
-        console.log('doPublish - Missing baseUrl or token');
+        log.debug('doPublish - Missing baseUrl or token');
         return;
       }
 
       // Check if connections are loaded, if not fetch them now
       let connectionsToUse = allConnections;
       if (!connectionsToUse || connectionsToUse.length === 0) {
-        console.log('[doPublish] Connections not loaded yet, fetching now...');
+        log.debug('[doPublish] Connections not loaded yet, fetching now...');
         const connRes = await fetch(`${baseUrl}/api/platform-connections`, {
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -1809,12 +1812,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         setAllConnections(connectionsToUse);
       }
 
-      console.log('[doPublish] Using connections:', connectionsToUse);
-      console.log('[doPublish] Connections count:', connectionsToUse?.length);
+      log.debug('[doPublish] Using connections:', connectionsToUse);
+      log.debug('[doPublish] Connections count:', connectionsToUse?.length);
 
       const payload = buildPlatformPayload();
       const canonical = payload.platformDetails?.canonical || {};
-      console.log('doPublish - Canonical payload:', canonical);
+      log.debug('doPublish - Canonical payload:', canonical);
 
       // Validate readiness with flexible pricing
       const missingByPlatform: Record<string, string[]> = {};
@@ -1825,16 +1828,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         const missing = getMissingPlatformFields(platformData, platformKey);
 
         if (missing.length > 0) {
-          console.log(`doPublish - ${platformKey} missing fields:`, missing);
+          log.debug(`doPublish - ${platformKey} missing fields:`, missing);
           missingByPlatform[platformKey] = missing;
         } else {
-          console.log(`doPublish - ${platformKey} is ready to publish`);
+          log.debug(`doPublish - ${platformKey} is ready to publish`);
         }
       }
-      console.log('doPublish - Missing by platform:', missingByPlatform);
+      log.debug('doPublish - Missing by platform:', missingByPlatform);
 
-      console.log('[doPublish] Using already-fetched connections:', allConnections);
-      console.log('[doPublish] Connections count:', allConnections?.length);
+      log.debug('[doPublish] Using already-fetched connections:', allConnections);
+      log.debug('[doPublish] Connections count:', allConnections?.length);
 
       if (Object.keys(missingByPlatform).length) {
         const lines = Object.entries(missingByPlatform).map(([plat, fields]) =>
@@ -1871,11 +1874,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       setSelectedConnectionIds({});
 
       // Show modal - connections are already in allConnections state from mount
-      console.log('[doPublish] About to show modal with', connectionsToUse.length, 'connections');
+      log.debug('[doPublish] About to show modal with', connectionsToUse.length, 'connections');
       setPublishModalOpen(true);
 
     } catch (err) {
-      console.error('Error in doPublish:', err);
+      log.error('Error in doPublish:', err);
       alert('Failed to prepare publish. Please try again.');
     }
   };
@@ -1895,7 +1898,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
 
         try {
-          console.log('[UPLOAD] Uploading image:', localUri);
+          log.debug('[UPLOAD] Uploading image:', localUri);
           // Light compression before upload (0.9 quality, max 1920px) - reduces size with minimal quality loss
           const compressed = await ImageManipulator.manipulateAsync(
             localUri,
@@ -1916,7 +1919,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             });
 
           if (error) {
-            console.error('[UPLOAD] Supabase upload error:', error);
+            log.error('[UPLOAD] Supabase upload error:', error);
             continue; // Skip this image but continue with others
           }
 
@@ -1925,14 +1928,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             .getPublicUrl(fileName);
 
           const publicUrl = urlData.publicUrl;
-          console.log('[UPLOAD] Successfully uploaded to:', publicUrl);
+          log.debug('[UPLOAD] Successfully uploaded to:', publicUrl);
           publicUrls.push(publicUrl);
         } catch (err) {
-          console.error('[UPLOAD] Failed to upload image:', localUri, err);
+          log.error('[UPLOAD] Failed to upload image:', localUri, err);
         }
       }
     } catch (err) {
-      console.error('[UPLOAD] Upload batch failed:', err);
+      log.error('[UPLOAD] Upload batch failed:', err);
     }
     return publicUrls;
   };
@@ -1940,7 +1943,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const confirmAndPublish = async () => {
     let facebookRequested = false;
     try {
-      console.log('[confirmAndPublish] Starting publish...');
+      log.debug('[confirmAndPublish] Starting publish...');
       setPublishModalOpen(false);
       setIsPublishing(true); // Show publishing indicator immediately
 
@@ -1948,9 +1951,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const token = await ensureSupabaseJwt();
       const productId = (route.params as any)?.productId || effectiveResult?.productId;
       const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
-      console.log('[confirmAndPublish] Got IDs:', { productId, variantId, baseUrl: !!baseUrl, token: !!token });
+      log.debug('[confirmAndPublish] Got IDs:', { productId, variantId, baseUrl: !!baseUrl, token: !!token });
       if (!baseUrl || !productId || !variantId || !token) {
-        console.log('[confirmAndPublish] Missing required data, aborting');
+        log.debug('[confirmAndPublish] Missing required data, aborting');
         setIsPublishing(false);
         return;
       }
@@ -1958,9 +1961,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const rawPayload = buildPlatformPayload();
 
       // Upload local images to Supabase before publishing
-      console.log('[confirmAndPublish] Uploading local images...');
+      log.debug('[confirmAndPublish] Uploading local images...');
       const uploadedImageUris = await uploadLocalImagesToSupabase(rawPayload.media.imageUris || []);
-      console.log('[confirmAndPublish] Uploaded images:', uploadedImageUris);
+      log.debug('[confirmAndPublish] Uploaded images:', uploadedImageUris);
 
       // Replace local URIs with uploaded public URLs
       const payload = {
@@ -2004,10 +2007,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         connectionIds: actualConnectionIds,
       };
 
-      console.log('[confirmAndPublish] Publishing to:', platformsToPublish);
-      console.log('[confirmAndPublish] Connection IDs:', actualConnectionIds);
-      console.log('[confirmAndPublish] Canonical data being sent:', JSON.stringify(payload.platformDetails.canonical, null, 2));
-      console.log('[confirmAndPublish] Full payload:', JSON.stringify(publishPayload, null, 2));
+      log.debug('[confirmAndPublish] Publishing to:', platformsToPublish);
+      log.debug('[confirmAndPublish] Connection IDs:', actualConnectionIds);
+      log.debug('[confirmAndPublish] Canonical data being sent:', JSON.stringify(payload.platformDetails.canonical, null, 2));
+      log.debug('[confirmAndPublish] Full payload:', JSON.stringify(publishPayload, null, 2));
 
       // Prepare navigation params ahead of time for optimistic navigation
       const imageUrl = (() => {
@@ -2038,11 +2041,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         body: JSON.stringify(publishPayload),
       });
 
-      console.log('[confirmAndPublish] Response status:', publishRes.status);
+      log.debug('[confirmAndPublish] Response status:', publishRes.status);
 
       if (!publishRes.ok) {
         const errorText = await publishRes.text();
-        console.error('Publish failed:', errorText);
+        log.error('Publish failed:', errorText);
         setIsPublishing(false);
 
         // Parse error for better user messaging
@@ -2097,7 +2100,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
         if (lastPending > 0) {
           setFacebookSyncMeta({ status: 'pending', lastSyncAt: null, lastError: null });
-          console.log('[confirmAndPublish] Facebook publish still pending after 10s; background sync will continue.');
+          log.debug('[confirmAndPublish] Facebook publish still pending after 10s; background sync will continue.');
         }
       }
 
@@ -2116,7 +2119,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       } as any);
 
     } catch (err) {
-      console.error('Error in confirmAndPublish:', err);
+      log.error('Error in confirmAndPublish:', err);
       setIsPublishing(false);
       if (facebookRequested) {
         setFacebookSyncMeta({
@@ -2143,7 +2146,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           return null;
         }
         if (s?.status === 'failed' || s?.status === 'cancelled') return null;
-      } catch (e) { console.log('Poll check failed, retrying...', e); }
+      } catch (e) { log.debug('Poll check failed, retrying...', e); }
       // Backoff: start at 3s, increase slightly
       const delay = 3000 + (i * 500);
       await new Promise(res => setTimeout(res, delay));
@@ -2193,7 +2196,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const regenJobId = submitJson?.jobId;
 
       if (regenJobId) {
-        console.log(`[GEN-DETAILS] Started regeneration for ${platformKey}, jobId: ${regenJobId}`);
+        log.debug(`[GEN-DETAILS] Started regeneration for ${platformKey}, jobId: ${regenJobId}`);
         activeRegenJobsRef.current[regenJobId] = platformKey;
         // We return here and let the socket listener handle the rest!
       } else {
@@ -2205,7 +2208,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       }
 
     } catch (error) {
-      console.error('Platform generation failed:', error);
+      log.error('Platform generation failed:', error);
       setGeneratingPlatformKeys(prev => {
         const next = new Set(prev);
         next.delete(platformKey);
@@ -2259,7 +2262,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }));
       }
     } catch (e) {
-      console.error('Suggest variants failed:', e);
+      log.error('Suggest variants failed:', e);
     }
   };
 
@@ -2310,7 +2313,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         hydratePlatformsFromBackend({ [platformKey]: normalized }, prev)
       );
     } catch (e) {
-      console.error('Boost listing failed:', e);
+      log.error('Boost listing failed:', e);
     }
   };
 
@@ -2358,7 +2361,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             });
 
           if (error) {
-            console.error('[Phase2 Media] Upload error:', error);
+            log.error('[Phase2 Media] Upload error:', error);
             Alert.alert('Failed to upload image to storage');
             return;
           }
@@ -2369,18 +2372,18 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             .getPublicUrl(fileName);
 
           const publicUrl = urlData.publicUrl;
-          console.log('[Phase2 Media] Image uploaded:', publicUrl);
+          log.debug('[Phase2 Media] Image uploaded:', publicUrl);
 
           // Add to media gallery
           setMediaGallery(prev => [...prev, publicUrl]);
 
         } catch (uploadError) {
-          console.error('[Phase2 Media] Failed to upload image:', uploadError);
+          log.error('[Phase2 Media] Failed to upload image:', uploadError);
           Alert.alert('Failed to upload image');
         }
       }
     } catch (error) {
-      console.error('[Phase2 Media] Error picking image:', error);
+      log.error('[Phase2 Media] Error picking image:', error);
       Alert.alert('Failed to pick image');
     }
   };
@@ -2388,7 +2391,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const handleRemoveMedia = (index: number) => {
     const removedUrl = mediaGallery[index];
     setMediaGallery(prev => prev.filter((_, i) => i !== index));
-    console.log('[Phase2 Media] Image removed at index:', index, 'URL:', removedUrl);
+    log.debug('[Phase2 Media] Image removed at index:', index, 'URL:', removedUrl);
   };
 
   const handleSetVariantPhoto = (imageUrl: string) => {
@@ -2397,7 +2400,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       return;
     }
 
-    console.log('[Phase2 Media] Set variant', selectedVariantForMedia, 'photo to:', imageUrl);
+    log.debug('[Phase2 Media] Set variant', selectedVariantForMedia, 'photo to:', imageUrl);
     setSelectedVariantForMedia(null);
   };
 
@@ -2412,7 +2415,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     // 2. platformsRef is still empty (not already hydrated from results or previous load)
     // NOTE: We now load draft even if results exist, because user might have edited after generation
     if (!variantId || hasPlatformData) {
-      console.log('[GEN-DETAILS DraftLoad] Skipping - variantId:', !!variantId, 'hasPlatformData:', hasPlatformData);
+      log.debug('[GEN-DETAILS DraftLoad] Skipping - variantId:', !!variantId, 'hasPlatformData:', hasPlatformData);
       return;
     }
 
@@ -2423,11 +2426,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         const token = await ensureSupabaseJwt();
 
         if (!baseUrl || !token) {
-          console.log('[GEN-DETAILS DraftLoad] Missing baseUrl or token, skipping');
+          log.debug('[GEN-DETAILS DraftLoad] Missing baseUrl or token, skipping');
           return;
         }
 
-        console.log('[GEN-DETAILS DraftLoad] ⏳ Loading draft for variant:', variantId);
+        log.debug('[GEN-DETAILS DraftLoad] ⏳ Loading draft for variant:', variantId);
         const response = await fetch(`${baseUrl}/api/products/drafts/${variantId}`, {
           method: 'GET',
           headers: {
@@ -2437,7 +2440,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.warn('[GEN-DETAILS DraftLoad] ❌ Failed to load draft:', response.status, errorText);
+          log.warn('[GEN-DETAILS DraftLoad] ❌ Failed to load draft:', response.status, errorText);
           return;
         }
 
@@ -2445,12 +2448,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         const currentDraft = draftResponse?.currentDraft;
 
         if (!currentDraft || !currentDraft.DraftData) {
-          console.log('[GEN-DETAILS DraftLoad] No draft data found');
+          log.debug('[GEN-DETAILS DraftLoad] No draft data found');
           return;
         }
 
         if (!canceled) {
-          console.log('[GEN-DETAILS DraftLoad] ✅ Loaded draft:', currentDraft.DraftData);
+          log.debug('[GEN-DETAILS DraftLoad] ✅ Loaded draft:', currentDraft.DraftData);
           // Restore the draft data into platformsRef
           platformsRef.current = currentDraft.DraftData;
           lastSavedRef.current = JSON.stringify(currentDraft.DraftData);
@@ -2458,7 +2461,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           forceUpdate({}); // Trigger re-render with restored data
         }
       } catch (error) {
-        console.error('[GEN-DETAILS DraftLoad] ❌ Error loading draft:', error);
+        log.error('[GEN-DETAILS DraftLoad] ❌ Error loading draft:', error);
       }
     })();
 
@@ -2467,7 +2470,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
 
   const handleImagesChange = (newImages: string[]) => {
-    console.log('[GEN-DETAILS] handleImagesChange:', newImages.length, newImages);
+    log.debug('[GEN-DETAILS] handleImagesChange:', newImages.length, newImages);
     if (!effectiveResult?.variantId) return;
 
     setDbImages(prev => ({
@@ -2478,7 +2481,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     // Also update the 'images' field in the canonical platform data so it saves correctly
     updatePlatforms(prev => {
       const canonicalKey = platformKeys.includes('shopify') ? 'shopify' : platformKeys[0];
-      console.log('[GEN-DETAILS] handleImagesChange updating canonical:', canonicalKey);
+      log.debug('[GEN-DETAILS] handleImagesChange updating canonical:', canonicalKey);
       if (!canonicalKey) return prev;
 
       const updated = {
@@ -2554,7 +2557,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                   onChangeImages={handleImagesChange}
                   platformLocations={platformLocations}
                   onChangePlatforms={(next) => {
-                    console.log('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
+                    log.debug('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
                     // DEEP merge: preserve all existing fields while updating changed ones
                     // This preserves user edits AND keeps all loaded backend data
                     updatePlatforms(prev => {
@@ -2585,7 +2588,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                           });
                         }
                       }
-                      console.log('[GEN-DETAILS] Deep merged platforms, keys:', Object.keys(merged));
+                      log.debug('[GEN-DETAILS] Deep merged platforms, keys:', Object.keys(merged));
                       return merged;
                     });
                   }}
@@ -2602,7 +2605,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                       const uploadedUrls = await uploadLocalImagesToSupabase(assets.map(asset => asset.uri));
                       if (uploadedUrls.length > 0) onResult(uploadedUrls);
                     } catch (error) {
-                      console.error('Error picking images:', error);
+                      log.error('Error picking images:', error);
                       Alert.alert('Error', 'Failed to add images. Please try again.');
                     }
                   }}
@@ -2822,10 +2825,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                       return updated;
                     });
 
-                    console.log('[QuickFix] Applied fixes to fields:', changedFields);
+                    log.debug('[QuickFix] Applied fixes to fields:', changedFields);
                   }
                 } catch (e) {
-                  console.error('[QuickFix] Error:', e);
+                  log.error('[QuickFix] Error:', e);
                   Alert.alert('Fix failed', 'Could not apply the AI fix. Please try again.');
                 } finally {
                   setQuickFixLoading(false);

@@ -53,6 +53,9 @@ import { parseFilterQuery } from '../utils/parseFilterQuery';
 import { logFlowEvent, FlowEvents, startTrace, getTraceHeaders } from '../lib/mobileFlowLogger';
 import { getVariantPlatforms } from '../lib/platforms';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { createLogger } from '../utils/logger';
+const log = createLogger('InventoryOrdersScreen');
+
 
 const TAB_BAR_HEIGHT = 84;
 const TAB_BAR_BOTTOM_OFFSET = 18;
@@ -169,7 +172,7 @@ const InventoryOrdersScreen = observer(() => {
   useEffect(() => {
     const p = route.params;
     if (p) {
-      console.log('[InventoryOrdersScreen] applying params:', p);
+      log.debug('[InventoryOrdersScreen] applying params:', p);
       if (typeof p.initialSearch === 'string') setSearchQuery(p.initialSearch);
       if (p.initialSortBy) setSortBy(p.initialSortBy);
       if (p.initialLocationIds) setSelectedLocationIds(p.initialLocationIds);
@@ -330,7 +333,7 @@ const InventoryOrdersScreen = observer(() => {
         Alert.alert('No slow movers', 'No slow-moving products data right now. Try again later.');
       }
     } catch (err) {
-      console.error('[InventoryOrdersScreen] fetchSlowMovers failed', err);
+      log.error('[InventoryOrdersScreen] fetchSlowMovers failed', err);
       Alert.alert('Error', err instanceof Error ? err.message : 'Failed to load slow movers.');
     } finally {
       setLoadingSlowMovers(false);
@@ -496,7 +499,7 @@ const InventoryOrdersScreen = observer(() => {
       setBulkActionModalVisible(false);
       handleExitSelectionMode();
     } catch (err) {
-      console.error('Bulk delete failed', err);
+      log.error('Bulk delete failed', err);
       Alert.alert('Error', 'Failed to delete items. Please try again.');
     }
   }, []);
@@ -524,7 +527,7 @@ const InventoryOrdersScreen = observer(() => {
       setBulkActionModalVisible(false);
       handleExitSelectionMode();
     } catch (err) {
-      console.error('Bulk archive failed', err);
+      log.error('Bulk archive failed', err);
       Alert.alert('Error', 'Failed to archive items. Please try again.');
     }
   }, []);
@@ -546,7 +549,7 @@ const InventoryOrdersScreen = observer(() => {
           .eq('UserId', legendState.userId);
 
         if (connectionsError) {
-          console.error('[InventoryScreen] Error fetching platform connections:', connectionsError);
+          log.error('[InventoryScreen] Error fetching platform connections:', connectionsError);
         } else {
           const normalizedConnections: PlatformConnection[] = (connectionsData || []).map((conn: any) => ({
             ...conn,
@@ -563,7 +566,7 @@ const InventoryOrdersScreen = observer(() => {
             .in('PlatformConnectionId', connectionIds);
 
           if (locationsError) {
-            console.error('[InventoryScreen] Error fetching platform locations:', locationsError);
+            log.error('[InventoryScreen] Error fetching platform locations:', locationsError);
           } else {
             const normalizedLocations: PlatformLocation[] = (locationsData || []).map((location: any) => ({
               Id: location.Id,
@@ -577,7 +580,7 @@ const InventoryOrdersScreen = observer(() => {
           }
         }
       } catch (error) {
-        console.error('[InventoryScreen] Exception fetching platform data:', error);
+        log.error('[InventoryScreen] Exception fetching platform data:', error);
       } finally {
         setIsLoadingConnections(false);
       }
@@ -626,9 +629,9 @@ const InventoryOrdersScreen = observer(() => {
           const data = await fetchAllProductVariants(legendState.userId);
 
           if (!data) {
-            console.error('[InventoryScreen - Direct Fetch] Error fetching products: empty response');
+            log.error('[InventoryScreen - Direct Fetch] Error fetching products: empty response');
           } else {
-            console.log('[InventoryScreen - Direct Fetch] Successfully fetched products:', data?.length);
+            log.debug('[InventoryScreen - Direct Fetch] Successfully fetched products:', data?.length);
             // Store in fallback state, keyed by Id
             if (data && data.length > 0) {
               const variantMap: Record<string, ProductVariantData> = {};
@@ -648,7 +651,7 @@ const InventoryOrdersScreen = observer(() => {
                   .eq('Status', 'active');
 
                 if (linksError) {
-                  console.warn('[InventoryScreen - Direct Fetch] Error fetching shared links:', linksError);
+                  log.warn('[InventoryScreen - Direct Fetch] Error fetching shared links:', linksError);
                 } else {
                   const linkMap: Record<string, { quantity: number; poolId?: string }> = {};
                   (linksData || []).forEach((link: any) => {
@@ -671,9 +674,9 @@ const InventoryOrdersScreen = observer(() => {
                   .in('ProductVariantId', variantIds);
 
                 if (levelsError) {
-                  console.error('[InventoryScreen - Direct Fetch] Error fetching inventory levels:', levelsError);
+                  log.error('[InventoryScreen - Direct Fetch] Error fetching inventory levels:', levelsError);
                 } else {
-                  console.log('[InventoryScreen - Direct Fetch] Successfully fetched inventory levels:', levelsData?.length);
+                  log.debug('[InventoryScreen - Direct Fetch] Successfully fetched inventory levels:', levelsData?.length);
                   if (levelsData && levelsData.length > 0) {
                     const levelsMap: Record<string, InventoryLevel> = {};
                     levelsData.forEach((l: any) => {
@@ -686,7 +689,7 @@ const InventoryOrdersScreen = observer(() => {
             }
           }
         } catch (e) {
-          console.error('[InventoryScreen - Direct Fetch] Exception during direct fetch:', e);
+          log.error('[InventoryScreen - Direct Fetch] Exception during direct fetch:', e);
         }
       }
     };
@@ -713,7 +716,7 @@ const InventoryOrdersScreen = observer(() => {
       const refreshOnFocus = async () => {
         if (!legendState?.userId) return;
 
-        console.log('[InventoryOrdersScreen] Screen focused - refreshing products...');
+        log.debug('[InventoryOrdersScreen] Screen focused - refreshing products...');
 
         try {
           // Always refetch products to get latest data (covers both new AND updated products)
@@ -737,7 +740,7 @@ const InventoryOrdersScreen = observer(() => {
                 .eq('Status', 'active');
 
               if (linksError) {
-                console.warn('[InventoryOrdersScreen] Error refreshing shared links:', linksError);
+                log.warn('[InventoryOrdersScreen] Error refreshing shared links:', linksError);
               } else {
                 const linkMap: Record<string, { quantity: number; poolId?: string }> = {};
                 (linksData || []).forEach((link: any) => {
@@ -767,10 +770,10 @@ const InventoryOrdersScreen = observer(() => {
                 setDirectFetchLevels(levelsMap);
               }
             }
-            console.log('[InventoryOrdersScreen] Refresh complete, now showing', data.length, 'products');
+            log.debug('[InventoryOrdersScreen] Refresh complete, now showing', data.length, 'products');
           }
         } catch (e) {
-          console.error('[InventoryOrdersScreen] Error during focus refresh:', e);
+          log.error('[InventoryOrdersScreen] Error during focus refresh:', e);
         }
       };
 
@@ -804,7 +807,7 @@ const InventoryOrdersScreen = observer(() => {
 
   // Debug: Log when observables update (helps diagnose real-time issues)
   useEffect(() => {
-    console.log('[InventoryOrdersScreen] Observable state updated:', {
+    log.debug('[InventoryOrdersScreen] Observable state updated:', {
       variantCount: Object.keys(activeProductVariants).length,
       legendCount: Object.keys(legendProductVariants).length,
       fallbackCount: Object.keys(directFetchVariants).length,
@@ -941,20 +944,20 @@ const InventoryOrdersScreen = observer(() => {
 
       // Filter out archived variants (soft delete)
       if (variantWithType.IsArchived === true) {
-        console.log(`[InventoryScreen] Filtering out archived variant: ${variant.Title} (${variantId})`);
+        log.debug(`[InventoryScreen] Filtering out archived variant: ${variant.Title} (${variantId})`);
         return false;
       }
 
       // Filter out DRAFT variants (safety check)
       if (variant.Sku && variant.Sku.startsWith('DRAFT-')) {
-        console.log(`[InventoryScreen] Filtering out DRAFT variant: ${variant.Title} (${variant.Sku})`);
+        log.debug(`[InventoryScreen] Filtering out DRAFT variant: ${variant.Title} (${variant.Sku})`);
         return false;
       }
 
       // Filter out 'option' variants - these should not appear as separate list items
       // They are aggregated into their base variant
       if (variantWithType.VariantType === 'option') {
-        console.log(`[InventoryScreen] Filtering out option variant: ${variant.Sku} (parent: ${variant.ProductId})`);
+        log.debug(`[InventoryScreen] Filtering out option variant: ${variant.Sku} (parent: ${variant.ProductId})`);
         return false;
       }
 
@@ -1102,7 +1105,7 @@ const InventoryOrdersScreen = observer(() => {
           minPrice = Math.min(...optionPrices);
           maxPrice = Math.max(...optionPrices);
         }
-        console.log(`[InventoryScreen] Base variant ${variant.Sku}: aggregated ${totalQuantity} qty (base + ${optionVariants.length} options), price range: $${minPrice} - $${maxPrice}`);
+        log.debug(`[InventoryScreen] Base variant ${variant.Sku}: aggregated ${totalQuantity} qty (base + ${optionVariants.length} options), price range: $${minPrice} - $${maxPrice}`);
       } else {
         // For flat variants (no options), use getPrimaryPlatformInventory to avoid cross-platform duplication
         totalQuantity = getPrimaryPlatformInventory(variantId);
@@ -1330,7 +1333,7 @@ const InventoryOrdersScreen = observer(() => {
     startTrace();
     try {
       setBarcodeSearchError(null);
-      console.log(`[InventoryOrdersScreen] Searching backend for barcode: ${barcode}`);
+      log.debug(`[InventoryOrdersScreen] Searching backend for barcode: ${barcode}`);
 
       const token = await ensureSupabaseJwt();
       if (!token) {
@@ -1374,11 +1377,11 @@ const InventoryOrdersScreen = observer(() => {
         barcode,
         variantId: data.variant?.Id ?? data.variant?.id ?? null,
       });
-      console.log(`[InventoryOrdersScreen] Backend found variant:`, data.variant);
+      log.debug(`[InventoryOrdersScreen] Backend found variant:`, data.variant);
       // Result will be used in filteredInventory below
       // Don't clear the scannedBarcode - it's already set and will filter the list
     } catch (error) {
-      console.error(`[InventoryOrdersScreen] Barcode search error:`, error);
+      log.error(`[InventoryOrdersScreen] Barcode search error:`, error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       logFlowEvent(FlowEvents.BARCODE_SCAN_FAILED, { barcode, error: errorMessage });
       setBarcodeSearchError(`Error searching for barcode: ${errorMessage}`);
@@ -1486,7 +1489,7 @@ const InventoryOrdersScreen = observer(() => {
       {/* Tappable header title → AppMenu (Inventory / Orders / Scan inventory). */}
       <View style={[styles.titleBar, { top: insets.top + 6 }]} pointerEvents="box-none">
         <TouchableOpacity style={styles.titleTap} onPress={() => setHeaderMenuOpen(true)} activeOpacity={0.7}>
-          <Text style={styles.titleText}>{activeTab === 'inventory' ? 'Inventory' : 'Orders'}</Text> {/*Page Title*/}
+          <Text style={styles.titleText}>{activeTab === 'inventory' ? 'Inventory' : 'Orders'}</Text>
           <ChevronsUpDownIcon color="#2c2c2c" fontWeight={500}/>
         </TouchableOpacity>
       </View>
@@ -1685,7 +1688,7 @@ const InventoryOrdersScreen = observer(() => {
               />
               <TouchableOpacity
                 onPress={() => {
-                  console.log('[InventoryOrdersScreen] Scanner close button pressed');
+                  log.debug('[InventoryOrdersScreen] Scanner close button pressed');
                   closeScanner();
                 }}
                 style={styles.scannerCloseButton}
@@ -1880,7 +1883,7 @@ const InventoryOrdersScreen = observer(() => {
                         setBulkActionModalVisible(false);
                         setReviewModalVisible(true);
                       } catch (err) {
-                        console.error('[BulkAction] Planning failed:', err);
+                        log.error('[BulkAction] Planning failed:', err);
                         Alert.alert('Error', 'Failed to plan bulk actions. Please try again.');
                         setBulkPhase('command');
                       } finally {
@@ -2075,7 +2078,7 @@ const InventoryOrdersScreen = observer(() => {
                   setPlannedActions([]);
                   handleExitSelectionMode();
                 } catch (err) {
-                  console.error('[BulkAction] Execute failed:', err);
+                  log.error('[BulkAction] Execute failed:', err);
                   Alert.alert('Error', 'Failed to execute bulk actions. Please try again.');
                 } finally {
                   setExecuteLoading(false);
@@ -2165,7 +2168,7 @@ const InventoryOrdersScreen = observer(() => {
 
           <View style={{ gap: 12 }}>
             <TouchableOpacity style={styles.modalOption} onPress={() => {
-              console.log('[Analytics] Print low stock');
+              log.debug('[Analytics] Print low stock');
               setMoreMenuVisible(false);
               Alert.alert("Coming Soon", "Low stock report will be generated as PDF");
             }}>
@@ -2176,7 +2179,7 @@ const InventoryOrdersScreen = observer(() => {
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.modalOption} onPress={() => {
-              console.log('[Analytics] Fastest movers');
+              log.debug('[Analytics] Fastest movers');
               setMoreMenuVisible(false);
               Alert.alert("Coming Soon", "Velocity analysis across platforms/locations");
             }}>
@@ -2187,7 +2190,7 @@ const InventoryOrdersScreen = observer(() => {
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.modalOption} onPress={() => {
-              console.log('[BulkDraft] Setting as draft');
+              log.debug('[BulkDraft] Setting as draft');
               setMoreMenuVisible(false);
             }}>
               <View style={styles.modalOptionIconBg}>
@@ -2248,7 +2251,7 @@ const InventoryOrdersScreen = observer(() => {
           <TouchableOpacity
             style={[styles.modalButton, styles.confirmButton]}
             onPress={() => {
-              console.log('[BulkTags] Adding tag:', tagInput, 'to', Array.from(selectedItems));
+              log.debug('[BulkTags] Adding tag:', tagInput, 'to', Array.from(selectedItems));
               setTagInput("");
               setTagsModalVisible(false);
               handleExitSelectionMode();
@@ -2339,7 +2342,7 @@ const InventoryOrdersScreen = observer(() => {
                   aggressiveness: liquidationStrategy === 'moderate' ? 'balanced' : liquidationStrategy,
                 };
 
-                console.log('[BulkLiquidate] Starting campaign with:', requestBody);
+                log.debug('[BulkLiquidate] Starting campaign with:', requestBody);
 
                 // Call the actual API
                 const response = await fetch(`${API_BASE_URL}/api/agent/quick/liquidation`, {
@@ -2357,7 +2360,7 @@ const InventoryOrdersScreen = observer(() => {
                 }
 
                 const result = await response.json();
-                console.log('[BulkLiquidate] Campaign created:', result);
+                log.debug('[BulkLiquidate] Campaign created:', result);
 
                 setLiquidationModalVisible(false);
                 handleExitSelectionMode();
@@ -2368,7 +2371,7 @@ const InventoryOrdersScreen = observer(() => {
                 });
 
               } catch (error: any) {
-                console.error('[BulkLiquidate] Failed:', error);
+                log.error('[BulkLiquidate] Failed:', error);
                 Alert.alert('Error', error.message || 'Failed to start liquidation campaign');
               }
             }}

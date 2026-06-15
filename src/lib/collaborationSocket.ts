@@ -1,5 +1,9 @@
 import { io, Socket } from 'socket.io-client';
 import { ensureSupabaseJwt } from './supabase';
+import { SOCKET_BASE_URL } from '../config/env';
+import { createLogger } from '../utils/logger';
+const log = createLogger('collaborationSocket');
+
 
 // Re-exported so consumers get the Socket type without importing socket.io-client
 // directly (the lint guardrail funnels all socket usage through src/lib).
@@ -28,7 +32,9 @@ export type { Socket } from 'socket.io-client';
  * sockets to 1. Verify on a device (sync progress + presence + team edit locks)
  * before merging.
  */
-const COLLABORATION_URL = 'https://api.sssync.app/collaboration';
+// Env-aware: derive from the configured host so dev/staging don't silently hit
+// the production socket server (the old hardcoded URL ignored env overrides).
+const COLLABORATION_URL = `${SOCKET_BASE_URL}/collaboration`;
 const RELEASE_GRACE_MS = 3000;
 
 let sharedSocket: Socket | null = null;
@@ -40,7 +46,7 @@ let currentUserName: string | undefined;
 async function createSocket(): Promise<Socket | null> {
   const token = await ensureSupabaseJwt();
   if (!token) {
-    console.warn('[collaborationSocket] No auth token available; not connecting');
+    log.warn('[collaborationSocket] No auth token available; not connecting');
     return null;
   }
   return io(COLLABORATION_URL, {

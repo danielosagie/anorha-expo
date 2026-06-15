@@ -6,6 +6,9 @@ import { Platform } from 'react-native';
 import { useAuth, useUser } from '@clerk/clerk-expo';
 import { API_BASE_URL } from '../config/env';
 import { getActiveThread } from '../lib/activeThread';
+import { createLogger } from '../utils/logger';
+const log = createLogger('usePushNotifications');
+
 
 // Configure how notifications appear when app is in foreground
 Notifications.setNotificationHandler({
@@ -82,7 +85,7 @@ export function usePushNotifications() {
 
         // Listen for notification responses (user tapped notification)
         responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
-            console.log('[PushNotifications] Tapped:', response);
+            log.debug('[PushNotifications] Tapped:', response);
             if (isMounted) setLastNotificationResponse(response);
         });
 
@@ -100,7 +103,7 @@ export function usePushNotifications() {
             const authToken = await getToken({ template: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase' });
             const base = API_BASE_URL;
             if (!base) {
-                console.warn('[PushNotifications] No API base URL found');
+                log.warn('[PushNotifications] No API base URL found');
                 return;
             }
 
@@ -122,10 +125,10 @@ export function usePushNotifications() {
             });
             if (!res.ok) {
                 const text = await res.text();
-                console.error('[PushNotifications] Backend rejected device registration:', res.status, text);
+                log.error('[PushNotifications] Backend rejected device registration:', res.status, text);
             }
         } catch (err) {
-            console.error('[PushNotifications] Failed to save token:', err);
+            log.error('[PushNotifications] Failed to save token:', err);
         }
     };
 
@@ -135,7 +138,7 @@ export function usePushNotifications() {
 async function registerForPushNotificationsAsync(): Promise<string | null> {
     // Push notifications often need a physical device
     if (!Device.isDevice) {
-        console.log('[PushNotifications] Must use physical device for push notifications (simulators may not work)');
+        log.debug('[PushNotifications] Must use physical device for push notifications (simulators may not work)');
         // We can return null, but sometimes simulators do support it for testing, 
         // though usually Expo Go on simulator fails.
         // carrying on to try anyway or just return null
@@ -152,7 +155,7 @@ async function registerForPushNotificationsAsync(): Promise<string | null> {
     }
 
     if (finalStatus !== 'granted') {
-        console.log('[PushNotifications] Permission not granted');
+        log.debug('[PushNotifications] Permission not granted');
         return null;
     }
 
@@ -180,7 +183,7 @@ async function registerForPushNotificationsAsync(): Promise<string | null> {
 
         return token.data;
     } catch (error) {
-        console.error('[PushNotifications] Error getting token:', error);
+        log.error('[PushNotifications] Error getting token:', error);
         return null;
     }
 }

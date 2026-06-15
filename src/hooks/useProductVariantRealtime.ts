@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { supabase } from '../../lib/supabase';
 import { getLegendStateObservables } from '../utils/SupaLegend';
-import { ProductVariant } from '../utils/SupaLegend';
 
 /**
  * Re-render signal for screens that read Legend State observables imperatively
@@ -76,52 +74,4 @@ export function useProductVariantRealtime(): { updateCounter: number } {
  */
 export function useInventoryLevelsRealtime(): { updateCounter: number } {
   return useObservableChangeCounter((o) => o.inventoryLevels$);
-}
-
-/**
- * Subscribe to realtime changes for a SINGLE product's variants.
- *
- * NOTE: This is largely redundant with Legend State's user-scoped ProductVariants
- * subscription and is currently unused. It opens a narrowly-filtered
- * (`ProductId=eq.<id>`) channel, so it is cheap, but prefer reading from the
- * Legend State observable directly. Kept for explicit per-product use cases.
- */
-export function useProductVariantRealtimeForProduct(productId?: string) {
-  useEffect(() => {
-    if (!productId) return;
-
-    const subscription = supabase
-      .channel(`product-variants-${productId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'ProductVariants',
-          filter: `ProductId=eq.${productId}`,
-        },
-        (payload) => {
-          let observables: ReturnType<typeof getLegendStateObservables>;
-          try {
-            observables = getLegendStateObservables();
-          } catch {
-            return;
-          }
-          if (!observables?.productVariants$) return;
-
-          if (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT') {
-            const variant = payload.new as ProductVariant;
-            observables.productVariants$[variant.Id].set(variant);
-          } else if (payload.eventType === 'DELETE') {
-            const variant = payload.old as ProductVariant;
-            observables.productVariants$[variant.Id].delete();
-          }
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(subscription);
-    };
-  }, [productId]);
 }

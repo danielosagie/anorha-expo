@@ -1,5 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppStackParamList } from '../navigation/AppNavigator';
+import { createLogger } from './logger';
+const log = createLogger('activeFlowPersistence');
+
 
 const ACTIVE_FLOW_KEY_PREFIX = 'sssync_active_loading_flow';
 const CHECKPOINT_VERSION = 1;
@@ -92,7 +95,7 @@ export async function loadActiveFlowCheckpoint(userId: string): Promise<ActiveFl
 
       return checkpoint;
     } catch (e) {
-      console.warn('[activeFlowPersistence] Failed to load checkpoint:', e);
+      log.warn('[activeFlowPersistence] Failed to load checkpoint:', e);
       return null;
     }
   });
@@ -115,7 +118,7 @@ export async function saveActiveFlowCheckpoint(
       await AsyncStorage.setItem(keyForUser(userId), JSON.stringify(payload));
     } catch (e) {
       // Surface storage failures (e.g. quota) instead of silently losing the checkpoint.
-      console.warn('[activeFlowPersistence] Failed to save checkpoint:', e);
+      log.warn('[activeFlowPersistence] Failed to save checkpoint:', e);
     }
   });
 }
@@ -126,7 +129,7 @@ export async function clearActiveFlowCheckpoint(userId: string): Promise<void> {
     try {
       await AsyncStorage.removeItem(keyForUser(userId));
     } catch (e) {
-      console.warn('[activeFlowPersistence] Failed to clear checkpoint:', e);
+      log.warn('[activeFlowPersistence] Failed to clear checkpoint:', e);
     }
   });
 }

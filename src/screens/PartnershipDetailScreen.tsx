@@ -16,6 +16,9 @@ import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { Partnership } from './PartnersScreen';
+import { createLogger } from '../utils/logger';
+const log = createLogger('PartnershipDetailScreen');
+
 
 const SSSYNC_API_BASE_URL = API_BASE_URL;
 
@@ -74,7 +77,7 @@ export default function PartnershipDetailScreen() {
                 }
             }
         } catch (error) {
-            console.error(error);
+            log.error(error);
             Alert.alert('Error', 'Failed to load shared products');
         } finally {
             setLoading(false);
@@ -103,7 +106,7 @@ export default function PartnershipDetailScreen() {
                 headers: { Authorization: `Bearer ${token}` }
             });
         } catch (e) {
-            console.error(e);
+            log.error(e);
             loadProducts(); // revert
         }
     };

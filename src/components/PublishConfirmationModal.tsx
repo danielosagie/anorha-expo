@@ -12,6 +12,9 @@ import {
 import { BlurView } from 'expo-blur';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { PLATFORM_META } from '../utils/platformConstants';
+import { createLogger } from '../utils/logger';
+const log = createLogger('PublishConfirmationModal');
+
 
 interface PublishConfirmationModalProps {
     visible: boolean;
@@ -50,9 +53,9 @@ export default function PublishConfirmationModal({
     // Auto-select "ALL" for platforms that haven't been selected yet - use allConnections, not readyPlatforms
     useEffect(() => {
         if (visible && allConnections.length > 0) {
-            console.log('[PublishModal] Modal opened');
-            console.log('[PublishModal] allConnections:', allConnections);
-            console.log('[PublishModal] allConnections.length:', allConnections?.length);
+            log.debug('[PublishModal] Modal opened');
+            log.debug('[PublishModal] allConnections:', allConnections);
+            log.debug('[PublishModal] allConnections.length:', allConnections?.length);
 
             // Group connections by platform
             const platformGroups: Record<string, any[]> = {};
@@ -181,8 +184,8 @@ export default function PublishConfirmationModal({
                                 platformGroups[platform].push(conn);
                             });
 
-                            console.log('[PublishModal] platformGroups:', Object.keys(platformGroups));
-                            console.log('[PublishModal] allConnections count:', allConnections.length);
+                            log.debug('[PublishModal] platformGroups:', Object.keys(platformGroups));
+                            log.debug('[PublishModal] allConnections count:', allConnections.length);
 
                             if (Object.keys(platformGroups).length === 0) {
                                 return (

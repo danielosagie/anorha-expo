@@ -6,6 +6,9 @@ import { useOrg } from '../../context/OrgContext';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 import { API_BASE_URL } from '../../config/env';
 import InventoryListCard from '../InventoryListCard';
+import { createLogger } from '../../utils/logger';
+const log = createLogger('QuickSellCard');
+
 
 interface QuickSellCardProps {
     onRefreshed?: () => void;
@@ -84,7 +87,7 @@ export const QuickSellCard: React.FC<QuickSellCardProps> = ({ onRefreshed }) => 
             setPlan(mockPlan);
             setStep('plan');
         } catch (e) {
-            console.error(e);
+            log.error(e);
             setStep('setup');
         } finally {
             setLoading(false);
@@ -117,7 +120,7 @@ export const QuickSellCard: React.FC<QuickSellCardProps> = ({ onRefreshed }) => 
                 onRefreshed?.();
             }, 2000);
         } catch (e) {
-            console.error(e);
+            log.error(e);
             setStep('success'); // Fallback demo
             setTimeout(() => {
                 setModalVisible(false);

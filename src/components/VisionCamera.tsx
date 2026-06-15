@@ -6,6 +6,9 @@ import { Ionicons } from '@expo/vector-icons';
 import type { CameraCapturedPicture } from 'expo-camera';
 import type { CapturedMediaItem } from '../screens/AddListingScreen';
 import { useProductDetection } from './ProductDetectionProcessor';
+import { createLogger } from '../utils/logger';
+const log = createLogger('VisionCamera');
+
 
 interface VisionCameraProps {
   onCapture: (media: CapturedMediaItem[]) => void;
@@ -52,7 +55,7 @@ const VisionCamera: React.FC<VisionCameraProps> = ({ onCapture, onClose, styles:
     onCodeScanned: (codes) => {
       if (codes.length > 0) {
         const code = codes[0];
-        console.log(`Barcode detected: ${code.value} (${code.type})`);
+        log.debug(`Barcode detected: ${code.value} (${code.type})`);
         setBarcodeValue(code.value);
         setShowBarcodeInfo(true);
       }
@@ -84,7 +87,7 @@ const VisionCamera: React.FC<VisionCameraProps> = ({ onCapture, onClose, styles:
         // Hide barcode info after capturing an image
         setShowBarcodeInfo(false);
       } catch (error) {
-        console.error('Error taking picture:', error);
+        log.error('Error taking picture:', error);
       } finally {
         setIsProcessingCapture(false);
       }

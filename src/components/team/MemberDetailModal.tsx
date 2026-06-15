@@ -15,6 +15,9 @@ import Button from '../Button';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { API_BASE_URL } from '../../config/env';
 import { showMessage } from 'react-native-flash-message';
+import { createLogger } from '../../utils/logger';
+const log = createLogger('MemberDetailModal');
+
 
 const SSSYNC_API_BASE_URL = API_BASE_URL;
 
@@ -138,7 +141,7 @@ export default function MemberDetailModal({
         setPlatforms(platformsData);
       }
     } catch (error) {
-      console.error('[MemberDetailModal] Error loading member details:', error);
+      log.error('[MemberDetailModal] Error loading member details:', error);
       showMessage({
         message: 'Error',
         description: 'Failed to load member details',

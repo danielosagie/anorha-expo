@@ -1,5 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { View, Text, Dimensions, TouchableOpacity, StyleSheet, Image, LayoutChangeEvent, StyleProp, ViewStyle } from 'react-native';
+import { createLogger } from '../utils/logger';
+const log = createLogger('PyramidGrid');
+
 
 // It's better to define the shape of the objects you expect.
 // This gives you type safety and autocomplete.
@@ -68,7 +71,7 @@ const PyramidGrid = ( { items, style }: { items: GridItem[], style?: StyleProp<V
             const calculatedWidth = (availableWidth / (maxItemsInAnyRow + 1)) * 0.9;
             const itemWidth = Math.max(calculatedWidth, 80); // Minimum 80px width
             
-            console.log(`[PYRAMID] Row ${rowIndex}, Item ${colIndex}: width=${itemWidth}, availableWidth=${availableWidth}, maxItems=${maxItemsInAnyRow}`);
+            log.debug(`[PYRAMID] Row ${rowIndex}, Item ${colIndex}: width=${itemWidth}, availableWidth=${availableWidth}, maxItems=${maxItemsInAnyRow}`);
 
             return (
               <View
@@ -81,8 +84,8 @@ const PyramidGrid = ( { items, style }: { items: GridItem[], style?: StyleProp<V
                   <Image 
                     source={{ uri: item.uri }} 
                     style={styles.itemImage}
-                    onError={() => console.log(`[PYRAMID] Failed to load image: ${item.uri}`)}
-                    onLoad={() => console.log(`[PYRAMID] Successfully loaded image: ${item.uri?.substring(0, 50)}`)}
+                    onError={() => log.debug(`[PYRAMID] Failed to load image: ${item.uri}`)}
+                    onLoad={() => log.debug(`[PYRAMID] Successfully loaded image: ${item.uri?.substring(0, 50)}`)}
                   />
                 ) : (
                   <View style={[styles.itemImage, { backgroundColor: '#f0f0f0', justifyContent: 'center', alignItems: 'center' }]}>

@@ -6,6 +6,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ensureSupabaseJwt, getSupabaseJwtState, isSupabaseBridgeWarmingUp } from '../lib/supabase';
 import { SessionContext } from './SessionContext';
 import { API_BASE_URL } from '../config/env';
+import { createLogger } from '../utils/logger';
+const log = createLogger('OrgContext');
+
 
 export interface UserOrgAccess {
   id: string;
@@ -94,7 +97,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCurrentOrg(parsed.currentOrg || parsed.availableOrgs?.find((org) => org.isActive) || null);
       return true;
     } catch (error) {
-      console.warn('[OrgContext] Failed to hydrate org cache:', error);
+      log.warn('[OrgContext] Failed to hydrate org cache:', error);
       return false;
     }
   }, []);
@@ -106,7 +109,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         availableOrgs: nextAvailableOrgs,
       }));
     } catch (error) {
-      console.warn('[OrgContext] Failed to persist org cache:', error);
+      log.warn('[OrgContext] Failed to persist org cache:', error);
     }
   }, []);
 
@@ -122,23 +125,23 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!token) {
         throw createHttpError(401, 'Missing session token for organization fetch');
       }
-      console.log('[OrgContext] Fetching orgs with token prefix:', token?.substring(0, 20) + '...');
+      log.debug('[OrgContext] Fetching orgs with token prefix:', token?.substring(0, 20) + '...');
 
       // Fetch user's organizations from /api/organizations
       const orgsResponse = await fetch(`${API_BASE}/api/organizations`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
 
-      console.log('[OrgContext] Response status:', orgsResponse.status, orgsResponse.statusText);
+      log.debug('[OrgContext] Response status:', orgsResponse.status, orgsResponse.statusText);
 
       if (!orgsResponse.ok) {
         const errorBody = await orgsResponse.text();
-        console.error('[OrgContext] API error response:', { status: orgsResponse.status, body: errorBody });
+        log.error('[OrgContext] API error response:', { status: orgsResponse.status, body: errorBody });
         throw createHttpError(orgsResponse.status, `Failed to fetch orgs: ${orgsResponse.status} - ${errorBody}`);
       }
 
       let orgsData = await orgsResponse.json();
-      console.log('[OrgContext] Orgs data:', orgsData);
+      log.debug('[OrgContext] Orgs data:', orgsData);
 
       // Parse response format: [{ Role, Organizations: { Id, Name, ... } }, ...]
       const formattedOrgs: UserOrgAccess[] = (orgsData || []).map((membership: any) => ({
@@ -148,7 +151,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         assignedPoolIds: membership.assigned_pool_ids || [],
         isActive: false,
       }));
-      console.log('[OrgContext] Formatted orgs:', formattedOrgs);
+      log.debug('[OrgContext] Formatted orgs:', formattedOrgs);
 
       // Fetch active organization
       const activeResponse = await fetch(`${API_BASE}/api/organizations/me/active`, {
@@ -159,7 +162,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (activeResponse.ok) {
         const activeData = await activeResponse.json();
         activeOrgId = activeData.orgId;
-        console.log('[OrgContext] Active data:', activeData);
+        log.debug('[OrgContext] Active data:', activeData);
       } else if (activeResponse.status === 401 || activeResponse.status === 403) {
         const errorBody = await activeResponse.text().catch(() => '');
         throw createHttpError(activeResponse.status, `Failed to fetch active org: ${activeResponse.status} - ${errorBody}`);
@@ -170,18 +173,18 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ...org,
         isActive: org.id === activeOrgId,
       }));
-      console.log('[OrgContext] Set available orgs, count:', orgsWithActive.length);
+      log.debug('[OrgContext] Set available orgs, count:', orgsWithActive.length);
 
       setAvailableOrgs(orgsWithActive);
 
       // Set current org
       const active = orgsWithActive.find((org) => org.id === activeOrgId);
       if (active) {
-        console.log('[OrgContext] Set current org:', active);
+        log.debug('[OrgContext] Set current org:', active);
         setCurrentOrg(active);
         await persistOrgCache(active, orgsWithActive);
       } else if (orgsWithActive.length > 0) {
-        console.log('[OrgContext] Set current org to first:', orgsWithActive[0]);
+        log.debug('[OrgContext] Set current org to first:', orgsWithActive[0]);
         setCurrentOrg(orgsWithActive[0]);
         await persistOrgCache(orgsWithActive[0], orgsWithActive);
       } else {
@@ -190,14 +193,14 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setError(null);
     } catch (err) {
-      console.error('[OrgContext] Load orgs error:', err);
+      log.error('[OrgContext] Load orgs error:', err);
       const status = getErrorStatus(err);
       const hydrated = await hydrateFromCache();
       const authError = status === 401 || status === 403;
       const networkError = isConnectivityError(err);
 
       if (hydrated) {
-        console.log('[OrgContext] Using cached organization state after load failure');
+        log.debug('[OrgContext] Using cached organization state after load failure');
         if (networkError) {
           setError('No internet connection. Continuing with cached workspace data.');
         } else if (authError) {
@@ -208,7 +211,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return;
       }
 
-      console.log('[OrgContext] No org cache found, clearing organization state');
+      log.debug('[OrgContext] No org cache found, clearing organization state');
       setAvailableOrgs([]);
       setCurrentOrg(null);
       if (networkError) {
@@ -256,10 +259,10 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       setError(null);
-      console.log('[OrgContext] Switched to org:', orgId);
+      log.debug('[OrgContext] Switched to org:', orgId);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Switch failed';
-      console.error('[OrgContext] Switch org error:', errMsg);
+      log.error('[OrgContext] Switch org error:', errMsg);
       setError(errMsg);
       throw err;
     }
@@ -271,7 +274,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const refreshOrgs = useCallback(async () => {
     if (!session?.bridgeReady) {
       const jwtState = getSupabaseJwtState().state;
-      console.log('[OrgContext] Skipping org refresh until auth bridge is ready:', jwtState);
+      log.debug('[OrgContext] Skipping org refresh until auth bridge is ready:', jwtState);
       await hydrateFromCache();
       setError(
         isSupabaseBridgeWarmingUp(jwtState)
@@ -286,7 +289,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       await loadAvailableOrgs();
     } catch (err) {
-      console.error('[OrgContext] Refresh error:', err);
+      log.error('[OrgContext] Refresh error:', err);
     } finally {
       setIsLoading(false);
     }
@@ -306,12 +309,12 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Wait for SessionProvider to configure the Supabase bridge
     if (!session?.ready) {
-      console.log('[OrgContext] Waiting for session.ready before loading orgs...');
+      log.debug('[OrgContext] Waiting for session.ready before loading orgs...');
       return;
     }
 
     if (!session?.bridgeReady) {
-      console.log('[OrgContext] Session ready but auth bridge is not ready. Hydrating cached org state...');
+      log.debug('[OrgContext] Session ready but auth bridge is not ready. Hydrating cached org state...');
       hydrateFromCache().finally(() => {
         setError(session?.bootstrapError || 'Refreshing your live session. Using cached workspace data for now.');
         setIsLoading(false);
@@ -319,7 +322,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    console.log('[OrgContext] Session ready, loading orgs...');
+    log.debug('[OrgContext] Session ready, loading orgs...');
     refreshOrgs();
   }, [hydrateFromCache, isSignedIn, session?.bridgeReady, session?.bootstrapError, session?.ready, refreshOrgs]);
 

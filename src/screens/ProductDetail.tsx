@@ -10,6 +10,7 @@ import PlatformLogo from '../components/PlatformLogo';
 import { getPlatform } from '../config/platforms';
 import ListingEditorForm, { ListingEditorFormRef } from '../components/ListingEditorForm';
 import BottomActionBar from '../components/BottomActionBar';
+import { PageHeader } from '../components/ui/PageHeader';
 import { CameraView } from 'expo-camera';
 import Card from '../components/Card';
 import PlaceholderImage from '../components/PlaceholderImage';
@@ -34,6 +35,9 @@ import { useOrg } from '../context/OrgContext';
 import LoadingOverlay from '../components/LoadingOverlay';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { createLogger } from '../utils/logger';
+const log = createLogger('ProductDetail');
+
 
 const ACTION_BAR_HEIGHT = 80;
 const ACTION_BAR_BOTTOM_OFFSET = 24;
@@ -150,7 +154,7 @@ function cleanPlatformDataForSave(displayedPlatforms: Record<string, any>): Reco
             if (locId === 'default' || platformLocationIds.has(locId)) {
               filteredInventory[locId] = locData;
             } else {
-              console.log(`[cleanPlatformDataForSave] Filtered out location ${locId} from ${platformKey} - not in platform's locations`);
+              log.debug(`[cleanPlatformDataForSave] Filtered out location ${locId} from ${platformKey} - not in platform's locations`);
             }
             continue;
           }
@@ -167,7 +171,7 @@ function cleanPlatformDataForSave(displayedPlatforms: Record<string, any>): Reco
             if (locConnectionId === platformConnectionId) {
               filteredInventory[locId] = locData;
             } else {
-              console.log(`[cleanPlatformDataForSave] Filtered location ${locId} from ${platformKey} - connectionId mismatch`);
+              log.debug(`[cleanPlatformDataForSave] Filtered location ${locId} from ${platformKey} - connectionId mismatch`);
             }
             continue;
           }
@@ -179,15 +183,15 @@ function cleanPlatformDataForSave(displayedPlatforms: Record<string, any>): Reco
 
           // Cross-contamination check
           if (platformKey === 'shopify' && (isSquareLoc || isCloverLoc) && !isShopifyLoc) {
-            console.log(`[cleanPlatformDataForSave] Filtered non-Shopify location ${locId} from Shopify platform`);
+            log.debug(`[cleanPlatformDataForSave] Filtered non-Shopify location ${locId} from Shopify platform`);
             continue;
           }
           if (platformKey === 'square' && (isShopifyLoc || isCloverLoc)) {
-            console.log(`[cleanPlatformDataForSave] Filtered non-Square location ${locId} from Square platform`);
+            log.debug(`[cleanPlatformDataForSave] Filtered non-Square location ${locId} from Square platform`);
             continue;
           }
           if (platformKey === 'clover' && (isShopifyLoc || isSquareLoc)) {
-            console.log(`[cleanPlatformDataForSave] Filtered non-Clover location ${locId} from Clover platform`);
+            log.debug(`[cleanPlatformDataForSave] Filtered non-Clover location ${locId} from Clover platform`);
             continue;
           }
 
@@ -220,12 +224,12 @@ const ProductDetailScreen = observer(
       window.fetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
         const url = input?.toString() || '';
         if (url.includes('sync-locations')) {
-          console.error('[ProductDetail] 🚨 DETECTED sync-locations call from ProductDetail:', url, init);
+          log.error('[ProductDetail] 🚨 DETECTED sync-locations call from ProductDetail:', url, init);
           // Don't actually make the call - this is forbidden in ProductDetail
           return Promise.reject(new Error('sync-locations calls are forbidden in ProductDetail'));
         }
         if (url.includes('/api/platform-connections/') && url.includes('/sync')) {
-          console.warn('[ProductDetail] ⚠️ Platform sync call detected:', url);
+          log.warn('[ProductDetail] ⚠️ Platform sync call detected:', url);
         }
         return originalFetch.call(this, input as RequestInfo, init);
       };
@@ -331,7 +335,7 @@ const ProductDetailScreen = observer(
       const timeSinceSave = now - justSavedTimestampRef.current;
       const isBlocking = timeSinceSave < SAVE_BLOCK_WINDOW_MS;
       if (isBlocking) {
-        console.log('[ProductDetail] In save blocking window, time since save:', timeSinceSave, 'ms');
+        log.debug('[ProductDetail] In save blocking window, time since save:', timeSinceSave, 'ms');
       }
       return isBlocking;
     }, []);
@@ -433,7 +437,7 @@ const ProductDetailScreen = observer(
       const targetY = fieldPositions[firstField] || 200;
       scrollViewRef.current?.scrollTo({ y: targetY, animated: true });
 
-      console.log(`[ProductDetail] 📍 Scrolled to field: ${firstField} at y: ${targetY}`);
+      log.debug(`[ProductDetail] 📍 Scrolled to field: ${firstField} at y: ${targetY}`);
     }, [externalUpdates]);
 
     // Auto-clear external update highlights after 5 seconds
@@ -479,7 +483,7 @@ const ProductDetailScreen = observer(
       setDisplayedPlatforms(updater);
       forceUpdate({}); // Trigger re-render
       setUpdateCounter(c => c + 1); // Signal content change
-      console.log('[ProductDetail] Updated platforms, triggering auto-save...');
+      log.debug('[ProductDetail] Updated platforms, triggering auto-save...');
     };
 
     // Collaboration state
@@ -523,13 +527,14 @@ const ProductDetailScreen = observer(
       try {
         await campaignAdapter.addCampaignItems(campaignId, [detailedItem.Id]);
         setClearoutVisible(false);
-        Alert.alert('Added to clearout', `This product is now in "${title}".`);
+        // Drop straight into the clearout so the user sees the product in it.
+        (navigation as any).navigate('LiquidationCampaignScreen', { campaignId, entryPoint: 'detail' });
       } catch (e: any) {
         Alert.alert('Could not add', e?.message || 'Please try again.');
       } finally {
         setClearoutBusy(null);
       }
-    }, [campaignAdapter, detailedItem?.Id, clearoutBusy]);
+    }, [campaignAdapter, detailedItem?.Id, clearoutBusy, navigation]);
 
     const createClearoutWithProduct = useCallback(async () => {
       if (!detailedItem?.Id || clearoutBusy) return;
@@ -624,27 +629,27 @@ const ProductDetailScreen = observer(
       if (!detailedItem) return;
 
       try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
+        if (!currentOrg?.id) return;
 
-        console.log('[ProductDetail] Loading platform data for variant:', detailedItem.Id, 'ProductId:', detailedItem.ProductId);
+        log.debug('[ProductDetail] Loading platform data for variant:', detailedItem.Id, 'ProductId:', detailedItem.ProductId);
 
-        // Load all ACTIVE platform connections for the user
-        // Connections in 'review', 'scanning', or 'error' status shouldn't show their locations
+        // Load all ACTIVE platform connections for the org. (Clerk-native auth configures
+        // the Supabase client with an accessToken, which blocks supabase.auth.getUser();
+        // connections are org-owned, so scope by OrgId — matches Connections/Settings.)
         const { data: connectionsData, error: connectionsError } = await supabase
           .from('PlatformConnections')
           .select('Id, UserId, OrgId, PlatformType, DisplayName, Status, IsEnabled, LastSyncAttemptAt, LastSyncSuccessAt, CreatedAt, UpdatedAt')
-          .eq('UserId', user.id)
+          .eq('OrgId', currentOrg.id)
           .eq('IsEnabled', true)
           .eq('Status', 'active'); // Only show active connections
 
         if (connectionsError) {
-          console.error('Error loading platform connections:', connectionsError);
+          log.error('Error loading platform connections:', connectionsError);
           return;
         }
 
         const platformConnections = connectionsData as PlatformConnection[];
-        console.log('[ProductDetail] Loaded platform connections:', platformConnections.length);
+        log.debug('[ProductDetail] Loaded platform connections:', platformConnections.length);
 
         setConnections(platformConnections);
 
@@ -657,11 +662,11 @@ const ProductDetailScreen = observer(
           .eq('ProductId', detailedItem.ProductId);
 
         if (variantsError) {
-          console.error('[ProductDetail] Error loading product variants:', variantsError);
+          log.error('[ProductDetail] Error loading product variants:', variantsError);
         }
 
         const allVariantIds = allProductVariantsData?.map(v => v.Id) || [detailedItem.Id];
-        console.log('[ProductDetail] Found', allVariantIds.length, 'variants for product');
+        log.debug('[ProductDetail] Found', allVariantIds.length, 'variants for product');
 
         // Load inventory levels for ALL variants of this product (base + options)
         const { data: inventoryData, error: inventoryError } = await supabase
@@ -670,7 +675,7 @@ const ProductDetailScreen = observer(
           .in('ProductVariantId', allVariantIds);
 
         if (inventoryError) {
-          console.error('Error loading inventory levels:', inventoryError);
+          log.error('Error loading inventory levels:', inventoryError);
         }
 
         // Load shared inventory quantities for partner items
@@ -683,7 +688,7 @@ const ProductDetailScreen = observer(
             .eq('Status', 'active');
 
           if (sharedError) {
-            console.warn('[ProductDetail] Error loading CrossOrgProductLinks:', sharedError);
+            log.warn('[ProductDetail] Error loading CrossOrgProductLinks:', sharedError);
           } else if (sharedLinks && sharedLinks.length > 0) {
             isSharedProductRef.current = true;
             const poolQtyByVariant = new Map<string, number>();
@@ -718,16 +723,16 @@ const ProductDetailScreen = observer(
             isSharedProductRef.current = false;
           }
         } catch (sharedErr) {
-          console.warn('[ProductDetail] Failed to merge shared inventory:', sharedErr);
+          log.warn('[ProductDetail] Failed to merge shared inventory:', sharedErr);
         }
 
-        console.log('[ProductDetail] Loaded inventory levels:', mergedInventory?.length || 0, 'for', allVariantIds.length, 'variants');
+        log.debug('[ProductDetail] Loaded inventory levels:', mergedInventory?.length || 0, 'for', allVariantIds.length, 'variants');
         // ⚡ CRITICAL: Store raw inventory levels for displayedPlatforms hydration
         setRawInventoryLevels(mergedInventory || []);
 
         // ⚡ Store all variants for hydration
         if (allProductVariantsData) {
-          console.log('[ProductDetail] Storing', allProductVariantsData.length, 'variants in state for hydration');
+          log.debug('[ProductDetail] Storing', allProductVariantsData.length, 'variants in state for hydration');
           setAllProductVariants(allProductVariantsData);
         }
 
@@ -742,14 +747,14 @@ const ProductDetailScreen = observer(
             .in('PlatformConnectionId', connectionIds);
 
           if (locError) {
-            console.error('Error loading platform locations:', locError);
+            log.error('Error loading platform locations:', locError);
           } else {
             platformLocs?.forEach(loc => {
               // Store by both full ID and just the location ID for flexible lookup
               locationNameMap.set(loc.PlatformLocationId, loc.Name || 'Unnamed Location');
               locationNameMap.set(`${loc.PlatformConnectionId}-${loc.PlatformLocationId}`, loc.Name || 'Unnamed Location');
             });
-            console.log('[ProductDetail] ✅ Loaded', platformLocs?.length || 0, 'location names from DB');
+            log.debug('[ProductDetail] ✅ Loaded', platformLocs?.length || 0, 'location names from DB');
             // ⚡ Store in state for access by buildPlatformLocations
             setPlatformLocationNames(new Map(locationNameMap));
             // ⚡ CRITICAL FIX: Also store full location records for building locations list
@@ -764,9 +769,9 @@ const ProductDetailScreen = observer(
           .in('ProductVariantId', allVariantIds);
 
         if (mappingsError) {
-          console.error('Error loading platform mappings:', mappingsError);
+          log.error('Error loading platform mappings:', mappingsError);
         } else {
-          console.log('[ProductDetail] Loaded platform mappings:', mappingsData?.length || 0);
+          log.debug('[ProductDetail] Loaded platform mappings:', mappingsData?.length || 0);
         }
 
         setMappings(mappingsData as PlatformProductMapping[] || []);
@@ -796,7 +801,7 @@ const ProductDetailScreen = observer(
           // Square location IDs are alphanumeric like "LY3ETP80S0CFK"
           // These should have been synced to PlatformLocations - log warning if not found
           if (locationId && locationId.length >= 10 && /^[A-Z0-9]+$/.test(locationId)) {
-            console.warn(`[ProductDetail] Square location ${locationId} not found in PlatformLocations. May need to re-sync locations.`);
+            log.warn(`[ProductDetail] Square location ${locationId} not found in PlatformLocations. May need to re-sync locations.`);
             return `Square Location (${locationId.substring(0, 6)}...)`;
           }
 
@@ -830,7 +835,7 @@ const ProductDetailScreen = observer(
             if (!connection && (level as any).PoolId) {
               // Only add Shared Stock if there are NO real platform locations available
               if (hasRealPlatformLocations) {
-                console.log('[ProductDetail] Skipping Shared Stock - valid platform connection exists');
+                log.debug('[ProductDetail] Skipping Shared Stock - valid platform connection exists');
                 return; // Skip adding the virtual location
               }
 
@@ -868,7 +873,7 @@ const ProductDetailScreen = observer(
             // CRITICAL FIX: Filter out "Ghost" locations where connection is missing and no PoolId
             // This happens if a connection was deleted but inventory level remains stapled
             if (!connection) {
-              console.warn('[ProductDetail] 👻 Ghost inventory detected (No Connection, No PoolId):', level.PlatformConnectionId);
+              log.warn('[ProductDetail] 👻 Ghost inventory detected (No Connection, No PoolId):', level.PlatformConnectionId);
               return;
             }
 
@@ -894,7 +899,7 @@ const ProductDetailScreen = observer(
             if (existingLocation) {
               // Aggregate quantity for same location (from different option variants)
               existingLocation.quantity += (level.Quantity || 0);
-              console.log(`[ProductDetail] Aggregated inventory for ${locationName}: now ${existingLocation.quantity}`);
+              log.debug(`[ProductDetail] Aggregated inventory for ${locationName}: now ${existingLocation.quantity}`);
             } else {
               grouped[platformName].locations.push({
                 id: level.Id || `${level.PlatformConnectionId}-${level.PlatformLocationId}`,
@@ -931,9 +936,9 @@ const ProductDetailScreen = observer(
           });
         }
 
-        console.log('[ProductDetail] Grouped inventory:', Object.keys(grouped).length, 'platforms');
+        log.debug('[ProductDetail] Grouped inventory:', Object.keys(grouped).length, 'platforms');
         Object.entries(grouped).forEach(([platform, data]) => {
-          console.log(`[ProductDetail]   ${platform}: ${data.locations.length} locations, total qty: ${data.locations.reduce((sum, l) => sum + l.quantity, 0)}`);
+          log.debug(`[ProductDetail]   ${platform}: ${data.locations.length} locations, total qty: ${data.locations.reduce((sum, l) => sum + l.quantity, 0)}`);
         });
         setGroupedInventory(grouped);
 
@@ -941,9 +946,9 @@ const ProductDetailScreen = observer(
         setMappings(mappingsData as PlatformProductMapping[] || []);
 
       } catch (error) {
-        console.error('Error loading platform data:', error);
+        log.warn('Error loading platform data:', error);
       }
-    }, [detailedItem]);
+    }, [detailedItem, currentOrg?.id]);
 
     // ========== PARTNERSHIP FUNCTIONS ==========
     // Load partnerships where this org is the SOURCE (we sent the invite)
@@ -961,7 +966,7 @@ const ProductDetailScreen = observer(
         });
 
         if (!res.ok) {
-          console.error('[ProductDetail] Failed to load partnerships:', res.status);
+          log.error('[ProductDetail] Failed to load partnerships:', res.status);
           return;
         }
 
@@ -1013,7 +1018,7 @@ const ProductDetailScreen = observer(
 
         setPartnerships(enrichedPartnerships);
       } catch (error) {
-        console.error('[ProductDetail] Error loading partnerships:', error);
+        log.error('[ProductDetail] Error loading partnerships:', error);
       } finally {
         setIsLoadingPartnerships(false);
       }
@@ -1043,13 +1048,13 @@ const ProductDetailScreen = observer(
         }
 
         const result = await res.json();
-        console.log('[ProductDetail] Shared with partner:', result);
+        log.debug('[ProductDetail] Shared with partner:', result);
 
         // Refresh partnerships to update share status
         await loadPartnerships();
         Alert.alert('Shared!', 'Product has been shared with the partner.');
       } catch (error: any) {
-        console.error('[ProductDetail] Error sharing with partner:', error);
+        log.error('[ProductDetail] Error sharing with partner:', error);
         Alert.alert('Error', error.message || 'Failed to share product');
       } finally {
         setPartnershipActionLoading(null);
@@ -1082,13 +1087,13 @@ const ProductDetailScreen = observer(
                   throw new Error(errText || 'Failed to revoke');
                 }
 
-                console.log('[ProductDetail] Revoked from partner');
+                log.debug('[ProductDetail] Revoked from partner');
 
                 // Refresh partnerships to update share status
                 await loadPartnerships();
                 Alert.alert('Removed', 'Product has been removed from the partner.');
               } catch (error: any) {
-                console.error('[ProductDetail] Error revoking from partner:', error);
+                log.error('[ProductDetail] Error revoking from partner:', error);
                 Alert.alert('Error', error.message || 'Failed to remove product');
               } finally {
                 setPartnershipActionLoading(null);
@@ -1114,12 +1119,12 @@ const ProductDetailScreen = observer(
 
       // Don't overwrite if user has unsaved changes
       if (hasUnsavedChanges) {
-        console.log('[ProductDetail] Skipping reload - user has unsaved changes');
+        log.debug('[ProductDetail] Skipping reload - user has unsaved changes');
         return;
       }
 
       try {
-        console.log('[ProductDetail] Loading consolidated product details for variant:', detailedItem.Id);
+        log.debug('[ProductDetail] Loading consolidated product details for variant:', detailedItem.Id);
 
         // Load full product with all variants, tags, and images
         const { data: { user } } = await supabase.auth.getUser();
@@ -1165,12 +1170,12 @@ const ProductDetailScreen = observer(
           .single();
 
         if (variantError) {
-          console.error('[ProductDetail] Error loading variant details:', variantError);
+          log.error('[ProductDetail] Error loading variant details:', variantError);
           return;
         }
 
         if (!variantData) {
-          console.warn('[ProductDetail] No variant data found');
+          log.warn('[ProductDetail] No variant data found');
           return;
         }
 
@@ -1179,7 +1184,7 @@ const ProductDetailScreen = observer(
           ?.sort((a: any, b: any) => (a.Position || 0) - (b.Position || 0))
           ?.map((img: any) => img.ImageUrl) || [];
 
-        console.log('[ProductDetail] Loaded variant with', sortedImages.length, 'images, options:', variant.Options, 'tags:', variant.Tags);
+        log.debug('[ProductDetail] Loaded variant with', sortedImages.length, 'images, options:', variant.Options, 'tags:', variant.Tags);
 
         // Now load ALL variants for this product
         const { data: allVariants, error: allVariantsError } = await supabase
@@ -1199,16 +1204,16 @@ const ProductDetailScreen = observer(
           .order('CreatedAt', { ascending: true });
 
         if (allVariantsError) {
-          console.warn('[ProductDetail] Error loading all variants:', allVariantsError);
+          log.warn('[ProductDetail] Error loading all variants:', allVariantsError);
         } else {
-          console.log('[ProductDetail] Loaded all variants for product:', allVariants?.length || 0);
+          log.debug('[ProductDetail] Loaded all variants for product:', allVariants?.length || 0);
         }
 
 
 
         // ⚡ NOTE: VariantPricing table no longer exists - pricing is stored in InventoryLevels.Price
         // Variants and inventory are loaded in loadPlatformData() instead
-        console.log('[ProductDetail] Variants loaded via loadPlatformData, not VariantPricing table');
+        log.debug('[ProductDetail] Variants loaded via loadPlatformData, not VariantPricing table');
 
         // Update detailedItem with full data
         const enrichedItem = {
@@ -1252,10 +1257,10 @@ const ProductDetailScreen = observer(
           inventoryByLocation: {} // Will be populated by inventory loading
         }));
 
-        console.log('[ProductDetail] Built display variants:', displayVariants.length);
+        log.debug('[ProductDetail] Built display variants:', displayVariants.length);
 
       } catch (error) {
-        console.error('[ProductDetail] Error in loadProductDetails:', error);
+        log.error('[ProductDetail] Error in loadProductDetails:', error);
       }
     }, [detailedItem]);
 
@@ -1270,7 +1275,7 @@ const ProductDetailScreen = observer(
       allPlatformLocations.forEach(loc => {
         const connection = connections.find(c => c.Id === loc.PlatformConnectionId);
         if (!connection) {
-          console.warn('[ProductDetail] No connection found for location:', loc.PlatformConnectionId);
+          log.warn('[ProductDetail] No connection found for location:', loc.PlatformConnectionId);
           return;
         }
 
@@ -1286,13 +1291,13 @@ const ProductDetailScreen = observer(
           // Shopify IDs are either numeric string or GID
           const isLikeSquare = /^[A-Z0-9]{8,}$/.test(locationId) && !/^\d+$/.test(locationId);
           if (isLikeSquare) {
-            console.warn(`[ProductDetail] Filtered out likely-Square location from Shopify list: ${locationId}`);
+            log.warn(`[ProductDetail] Filtered out likely-Square location from Shopify list: ${locationId}`);
             return;
           }
         } else if (platform === 'square') {
           // Square IDs shouldn't look like Shopify GIDs
           if (locationId.includes('gid://shopify/')) {
-            console.warn(`[ProductDetail] Filtered out likely-Shopify location from Square list: ${locationId}`);
+            log.warn(`[ProductDetail] Filtered out likely-Shopify location from Square list: ${locationId}`);
             return;
           }
         }
@@ -1351,19 +1356,19 @@ const ProductDetailScreen = observer(
           if (platform === 'shopify') {
             const isLikeSquare = /^[A-Z0-9]{8,}$/.test(locationId) && !/^\d+$/.test(locationId);
             if (isLikeSquare) {
-              console.warn(`[ProductDetail] Fallback: Filtered out likely-Square location from Shopify: ${locationId}`);
+              log.warn(`[ProductDetail] Fallback: Filtered out likely-Square location from Shopify: ${locationId}`);
               return;
             }
           } else if (platform === 'square') {
             if (locationId.includes('gid://shopify/')) {
-              console.warn(`[ProductDetail] Fallback: Filtered out likely-Shopify location from Square: ${locationId}`);
+              log.warn(`[ProductDetail] Fallback: Filtered out likely-Shopify location from Square: ${locationId}`);
               return;
             }
           }
 
           const exists = locsByPlatform[platform].some(l => l.id === locationId);
           if (!exists) {
-            console.log('[ProductDetail] Adding location from inventory that was missing from PlatformLocations:', locationId);
+            log.debug('[ProductDetail] Adding location from inventory that was missing from PlatformLocations:', locationId);
             locsByPlatform[platform].push({
               id: locationId,
               name: loc.locationName,
@@ -1407,11 +1412,11 @@ const ProductDetailScreen = observer(
             platformType: platform
           }];
 
-          console.log(`[ProductDetail] Added virtual default location for ${platform}: ${defaultLocationId}`);
+          log.debug(`[ProductDetail] Added virtual default location for ${platform}: ${defaultLocationId}`);
         }
       });
 
-      console.log('[ProductDetail] buildPlatformLocations result:',
+      log.debug('[ProductDetail] buildPlatformLocations result:',
         Object.entries(locsByPlatform).map(([p, locs]) => `${p}: ${locs.length} locations`).join(', '));
 
       return locsByPlatform;
@@ -1422,21 +1427,21 @@ const ProductDetailScreen = observer(
     // This allows: Shopify with variants at different prices, Square with flat price, etc.
     const performAutoSave = useCallback(async () => {
       if (!detailedItem || !hasUnsavedChanges) {
-        console.log('[ProductDetail] Skipping auto-save: no item or no changes');
+        log.debug('[ProductDetail] Skipping auto-save: no item or no changes');
         return;
       }
       const saveStartEditVersion = editVersionRef.current;
 
-      console.log('[ProductDetail] ========== SAVE START ==========');
-      console.log('[ProductDetail] detailedItem BEFORE save:', JSON.stringify(detailedItem, null, 2).slice(0, 500));
-      console.log('[ProductDetail] displayedPlatforms BEFORE save:', JSON.stringify(displayedPlatforms, null, 2).slice(0, 500));
-      console.log('[ProductDetail] Starting auto-save for product:', detailedItem.Id);
+      log.debug('[ProductDetail] ========== SAVE START ==========');
+      log.debug('[ProductDetail] detailedItem BEFORE save:', JSON.stringify(detailedItem, null, 2).slice(0, 500));
+      log.debug('[ProductDetail] displayedPlatforms BEFORE save:', JSON.stringify(displayedPlatforms, null, 2).slice(0, 500));
+      log.debug('[ProductDetail] Starting auto-save for product:', detailedItem.Id);
       setIsSaving(true);
       try {
         const token = await ensureSupabaseJwt();
 
         if (!token) {
-          console.error('No authentication token available');
+          log.error('No authentication token available');
           return;
         }
 
@@ -1469,7 +1474,7 @@ const ProductDetailScreen = observer(
           ProductType: canonical.productType,
         };
 
-        console.log('Auto-saving product with full platform data:', detailedItem.Id, updateData);
+        log.debug('Auto-saving product with full platform data:', detailedItem.Id, updateData);
 
         // Update in our API
         const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
@@ -1489,7 +1494,7 @@ const ProductDetailScreen = observer(
         // ✅ Platform syncing is handled automatically by the backend via syncCoordinatorService
         // The PUT /api/products/:id endpoint automatically enqueues platform sync jobs
         // No manual platform push needed - backend handles it in the background
-        console.log('[ProductDetail] Product updated successfully. Platform sync will happen automatically in the background.');
+        log.debug('[ProductDetail] Product updated successfully. Platform sync will happen automatically in the background.');
 
         // Do NOT update Supabase directly - the real-time subscription will handle it
         // The backend automatically triggers updates via database triggers
@@ -1498,29 +1503,29 @@ const ProductDetailScreen = observer(
         // ✅ CRITICAL FIX: Set timestamp BEFORE updating state to prevent realtime from overwriting during save
         // Using timestamp-based blocking (2 second window) instead of boolean to prevent race conditions
         justSavedTimestampRef.current = Date.now();
-        console.log('[ProductDetail] Set save blocking timestamp:', justSavedTimestampRef.current);
+        log.debug('[ProductDetail] Set save blocking timestamp:', justSavedTimestampRef.current);
 
-        console.log('[ProductDetail] updateData being set:', JSON.stringify(updateData, null, 2).slice(0, 500));
-        console.log('[ProductDetail] displayedPlatforms being set:', JSON.stringify(displayedPlatforms, null, 2).slice(0, 500));
+        log.debug('[ProductDetail] updateData being set:', JSON.stringify(updateData, null, 2).slice(0, 500));
+        log.debug('[ProductDetail] displayedPlatforms being set:', JSON.stringify(displayedPlatforms, null, 2).slice(0, 500));
 
         // ✅ CRITICAL FIX: Use a function to merge state properly
         // This prevents losing data like ImageUrls, Options, Metadata that aren't in updateData
         setDetailedItem(prev => {
-          console.log('[ProductDetail] setDetailedItem called with prev:', JSON.stringify(prev, null, 2).slice(0, 300));
+          log.debug('[ProductDetail] setDetailedItem called with prev:', JSON.stringify(prev, null, 2).slice(0, 300));
           if (!prev) return prev;
           const merged = {
             ...prev,              // ← Keep ALL existing fields (ImageUrls, Options, Metadata, etc.)
             ...updateData,        // ← Override only the fields that changed
             PlatformSpecificData: displayedPlatforms,  // ← Ensure platform data is updated
           };
-          console.log('[ProductDetail] setDetailedItem merged result:', JSON.stringify(merged, null, 2).slice(0, 300));
+          log.debug('[ProductDetail] setDetailedItem merged result:', JSON.stringify(merged, null, 2).slice(0, 300));
           return merged as ProductVariant;
         });
 
         if (editVersionRef.current === saveStartEditVersion) {
           setHasUnsavedChanges(false);
         } else {
-          console.log('[ProductDetail] Save completed but local edits changed during request; keeping unsaved state');
+          log.debug('[ProductDetail] Save completed but local edits changed during request; keeping unsaved state');
           setHasUnsavedChanges(true);
         }
         setLastSaveTime(Date.now());
@@ -1529,10 +1534,10 @@ const ProductDetailScreen = observer(
         // This fixes the "Changes not published" message persisting
         setDraftData(null);
 
-        console.log('[ProductDetail] ========== SAVE END ==========');
+        log.debug('[ProductDetail] ========== SAVE END ==========');
 
       } catch (error) {
-        console.error('Auto-save failed:', error);
+        log.error('Auto-save failed:', error);
         // Don't show alert for auto-save failures, just log them
       } finally {
         setIsSaving(false);
@@ -1582,7 +1587,7 @@ const ProductDetailScreen = observer(
         const platformKey = activeRegenJobsRef.current[data.jobId];
         if (!platformKey) return; // Not a job we care about
 
-        console.log(`[ProductDetail] Socket update for platform ${platformKey} (job ${data.jobId}): ${data.status}`);
+        log.debug(`[ProductDetail] Socket update for platform ${platformKey} (job ${data.jobId}): ${data.status}`);
 
         if (data.status === 'completed') {
           try {
@@ -1607,7 +1612,7 @@ const ProductDetailScreen = observer(
             const platformData = productResult?.platforms?.[platformKey];
 
             if (platformData) {
-              console.log(`[ProductDetail] Got generated data for ${platformKey}:`, Object.keys(platformData));
+              log.debug(`[ProductDetail] Got generated data for ${platformKey}:`, Object.keys(platformData));
 
               // Smart Merge: Don't overwrite existing values with empty strings
               const safePlatformData = { ...platformData };
@@ -1639,7 +1644,7 @@ const ProductDetailScreen = observer(
               showBanner(`✨ Generated ${platformKey} listing data`);
             }
           } catch (err) {
-            console.error(`[ProductDetail] Error processing completion for ${platformKey}:`, err);
+            log.error(`[ProductDetail] Error processing completion for ${platformKey}:`, err);
             Alert.alert('Generation Error', 'Failed to process generated results.');
           } finally {
             // Cleanup
@@ -1651,7 +1656,7 @@ const ProductDetailScreen = observer(
             });
           }
         } else if (data.status === 'failed' || data.status === 'cancelled') {
-          console.warn(`[ProductDetail] Generation failed for ${platformKey}`);
+          log.warn(`[ProductDetail] Generation failed for ${platformKey}`);
           delete activeRegenJobsRef.current[data.jobId];
           setGeneratingPlatformKeys(prev => {
             const next = new Set(prev);
@@ -1668,22 +1673,22 @@ const ProductDetailScreen = observer(
     // Generate platform-specific data when adding a new platform tab
     const handleGeneratePlatform = useCallback(async (platformKey: string) => {
       if (!detailedItem?.Id) {
-        console.warn('[ProductDetail] Cannot generate platform - no item ID');
+        log.warn('[ProductDetail] Cannot generate platform - no item ID');
         return;
       }
 
-      console.log(`[ProductDetail] Generating AI data for platform: ${platformKey}`);
+      log.debug(`[ProductDetail] Generating AI data for platform: ${platformKey}`);
 
       try {
         // 1. Auto-save first to ensure DB matches UI (prevents state loss on refresh)
         if (hasUnsavedChanges) {
-          console.log('[ProductDetail] Auto-saving before generation...');
+          log.debug('[ProductDetail] Auto-saving before generation...');
           await performAutoSave();
         }
 
         const token = await ensureSupabaseJwt();
         if (!token) {
-          console.error('[ProductDetail] No auth token for platform generation');
+          log.error('[ProductDetail] No auth token for platform generation');
           return;
         }
 
@@ -1720,7 +1725,7 @@ const ProductDetailScreen = observer(
           throw new Error('No job ID returned from regenerate submit');
         }
 
-        console.log(`[ProductDetail] Regenerate job submitted: ${jobId}`);
+        log.debug(`[ProductDetail] Regenerate job submitted: ${jobId}`);
 
         // Track the job
         activeRegenJobsRef.current[jobId] = platformKey;
@@ -1728,7 +1733,7 @@ const ProductDetailScreen = observer(
         // NOTE: We don't poll here anymore. The useEffect socket listener handles completion.
 
       } catch (error) {
-        console.error('[ProductDetail] Platform generation failed:', error);
+        log.error('[ProductDetail] Platform generation failed:', error);
         Alert.alert('Generation Failed', 'Could not generate platform data. Please try again.');
 
         // Cleanup on immediate error
@@ -1783,7 +1788,7 @@ const ProductDetailScreen = observer(
     const handlePublishToPlatform = useCallback(async (platformKey: string) => {
       if (!detailedItem?.Id || isPublishing) return;
 
-      console.log(`[ProductDetail] Publishing to platform: ${platformKey}`);
+      log.debug(`[ProductDetail] Publishing to platform: ${platformKey}`);
       setIsPublishing(platformKey);
       let targetConnection: any = null;
 
@@ -1791,7 +1796,7 @@ const ProductDetailScreen = observer(
         // 1. Auto-save first to ensure DB matches UI
         // This prevents "state loss" if the page refreshes from DB after publish
         if (hasUnsavedChanges) {
-          console.log('[ProductDetail] Auto-saving before publish...');
+          log.debug('[ProductDetail] Auto-saving before publish...');
           await performAutoSave();
         }
 
@@ -1846,7 +1851,7 @@ const ProductDetailScreen = observer(
           : (platformData.categoryId || platformData.category);
 
         if ((isShopify || isEbay) && !hasCategory) {
-          console.log('[ProductDetail] Missing category for publish, attempting auto-detect...');
+          log.debug('[ProductDetail] Missing category for publish, attempting auto-detect...');
           showBanner(`Detecting ${platformKey} category...`);
 
           try {
@@ -1874,13 +1879,13 @@ const ProductDetailScreen = observer(
 
             if (taxData?.suggested) {
               const best = taxData.suggested;
-              console.log(`[ProductDetail] Auto-detected category: ${best.path || best.name}`);
+              log.debug(`[ProductDetail] Auto-detected category: ${best.path || best.name}`);
 
               // Apply to platformData
               const bestScore = typeof taxData?.confidence === 'number' ? taxData.confidence : (typeof best.score === 'number' ? best.score : 0);
               const minAutoScore = 0.7;
               if (bestScore < minAutoScore) {
-                console.log(`[ProductDetail] Auto-detect score too low (${bestScore}). Skipping auto-apply.`);
+                log.debug(`[ProductDetail] Auto-detect score too low (${bestScore}). Skipping auto-apply.`);
                 return;
               }
 
@@ -1906,7 +1911,7 @@ const ProductDetailScreen = observer(
               showBanner(`Auto-assigned category: ${best.path || best.name}`);
             }
           } catch (e) {
-            console.error('[ProductDetail] Auto-detect taxonomy failed:', e);
+            log.error('[ProductDetail] Auto-detect taxonomy failed:', e);
           }
         }
 
@@ -2019,7 +2024,7 @@ const ProductDetailScreen = observer(
         await loadPlatformData();
 
       } catch (error: any) {
-        console.error('[ProductDetail] Publish failed:', error);
+        log.error('[ProductDetail] Publish failed:', error);
         if (platformKey.toLowerCase() === 'facebook') {
           setFacebookSyncMeta({
             status: 'error',
@@ -2122,7 +2127,7 @@ const ProductDetailScreen = observer(
               // Refresh data to remove it from the list
               await loadPlatformData();
             } catch (e: any) {
-              console.error('Delist failed:', e);
+              log.error('Delist failed:', e);
               Alert.alert('Error', 'Could not delete listing. Please try again.');
             }
           }
@@ -2187,11 +2192,11 @@ const ProductDetailScreen = observer(
           return updated;
         });
 
-        console.log('Inventory updated successfully');
+        log.debug('Inventory updated successfully');
         capture(AnalyticsEvents.INVENTORY_UPDATED, { product_id: detailedItem?.ProductId });
 
       } catch (error) {
-        console.error('Failed to update inventory:', error);
+        log.error('Failed to update inventory:', error);
         Alert.alert('Error', 'Failed to update inventory. Please try again.');
       }
     }, [detailedItem]);
@@ -2219,7 +2224,7 @@ const ProductDetailScreen = observer(
           setIsUploadingImages(false);
         }
       } catch (error) {
-        console.error('Error picking images:', error);
+        log.error('Error picking images:', error);
         setIsUploadingImages(false);
         Alert.alert('Error', 'Failed to pick images. Please try again.');
       }
@@ -2243,10 +2248,10 @@ const ProductDetailScreen = observer(
           const orgId = currentOrg?.id || connections.find(c => c.OrgId)?.OrgId || detailedItem?.UserId;
           const variantId = detailedItem?.Id;
 
-          console.log(`[uploadImagesToSupabase] Resolved orgId: ${orgId}, variantId: ${variantId}`);
+          log.debug(`[uploadImagesToSupabase] Resolved orgId: ${orgId}, variantId: ${variantId}`);
 
           if (!orgId || !variantId) {
-            console.error('Missing OrgId or VariantId for upload', { orgId, variantId });
+            log.error('Missing OrgId or VariantId for upload', { orgId, variantId });
             continue;
           }
 
@@ -2265,7 +2270,7 @@ const ProductDetailScreen = observer(
             });
 
           if (error) {
-            console.error('Upload error:', error);
+            log.error('Upload error:', error);
             continue;
           }
 
@@ -2275,7 +2280,7 @@ const ProductDetailScreen = observer(
 
           uploadedUrls.push(publicUrlData.publicUrl);
         } catch (error) {
-          console.error('Error uploading image:', error);
+          log.error('Error uploading image:', error);
         }
       }
 
@@ -2315,7 +2320,7 @@ const ProductDetailScreen = observer(
 
         Alert.alert('Success', `Added ${imageUrls.length} image(s) to product`);
       } catch (error) {
-        console.error('Error adding images to product:', error);
+        log.error('Error adding images to product:', error);
         Alert.alert('Error', 'Failed to add images to product. Please try again.');
       }
     };
@@ -2352,7 +2357,7 @@ const ProductDetailScreen = observer(
 
         Alert.alert('Success', 'Image removed from product');
       } catch (error) {
-        console.error('Error removing image:', error);
+        log.error('Error removing image:', error);
         Alert.alert('Error', 'Failed to remove image. Please try again.');
       }
     };
@@ -2378,7 +2383,7 @@ const ProductDetailScreen = observer(
         // displayImages will refresh from productImages$ after sync
         setHasUnsavedChanges(false);
       } catch (error) {
-        console.error('Error reordering images:', error);
+        log.error('Error reordering images:', error);
       }
     };
 
@@ -2417,7 +2422,7 @@ const ProductDetailScreen = observer(
     // Load initial data
     useEffect(() => {
       if (!productId) {
-        console.error('No Product ID found');
+        log.error('No Product ID found');
         setIsLoading(false);
         setDetailedItem(null);
         return;
@@ -2425,7 +2430,7 @@ const ProductDetailScreen = observer(
 
       const observables = getLegendStateObservables();
       if (!observables?.productVariants$) {
-        console.error("[ProductDetailScreen] Legend-State observables not available.");
+        log.error("[ProductDetailScreen] Legend-State observables not available.");
         setIsLoading(false);
         setDetailedItem(null);
         return;
@@ -2460,7 +2465,7 @@ const ProductDetailScreen = observer(
           .maybeSingle()  // Use maybeSingle to avoid error when product doesn't exist
           .then(({ data, error }) => {
             if (data) {
-              console.log('[ProductDetail] Fetched item from Supabase:', data.Id);
+              log.debug('[ProductDetail] Fetched item from Supabase:', data.Id);
               setDetailedItem(data as ProductVariant);
               setFormData({
                 Title: data.Title || '',
@@ -2476,12 +2481,12 @@ const ProductDetailScreen = observer(
                 TaxCode: data.TaxCode || '',
               });
             } else if (error) {
-              console.error('[ProductDetail] Database error fetching item:', error);
+              log.error('[ProductDetail] Database error fetching item:', error);
               setDetailedItem(null);
               Alert.alert('Error', 'Failed to load product details. Please try again.');
             } else {
               // No data and no error means product doesn't exist
-              console.warn('[ProductDetail] Product not found with ID:', productId);
+              log.warn('[ProductDetail] Product not found with ID:', productId);
               setDetailedItem(null);
               Alert.alert('Product Not Found', 'This product may still be syncing or no longer exists.');
             }
@@ -2497,14 +2502,14 @@ const ProductDetailScreen = observer(
 
       // 1. Load details if not done yet (gets us the ProductId if missing)
       if (!hasLoadedInitialData.current) {
-        console.log('[ProductDetail] Loading initial details for:', detailedItem.Id);
+        log.debug('[ProductDetail] Loading initial details for:', detailedItem.Id);
         loadProductDetails();
         hasLoadedInitialData.current = true;
       }
 
       // 2. Load platform variants & inventory ONLY when we have the ProductId
       if (detailedItem.ProductId && !hasLoadedPlatformData.current) {
-        console.log('[ProductDetail] ProductId available, loading platform data:', detailedItem.ProductId);
+        log.debug('[ProductDetail] ProductId available, loading platform data:', detailedItem.ProductId);
         loadPlatformData();
         hasLoadedPlatformData.current = true;
       }
@@ -2514,14 +2519,14 @@ const ProductDetailScreen = observer(
     // ⚡ CRITICAL FIX: Use ProductVariants directly, not VariantPricing (which doesn't exist)
     const hydrateInventoryFromDB = useCallback((variants: any[], invLevels: InventoryLevel[]): any[] => {
       if (!variants || variants.length === 0) {
-        console.log('[ProductDetail] hydrateInventoryFromDB: No variants to hydrate');
+        log.debug('[ProductDetail] hydrateInventoryFromDB: No variants to hydrate');
         return [];
       }
       if (!invLevels || invLevels.length === 0) {
-        console.log('[ProductDetail] hydrateInventoryFromDB: No inventory levels, returning variants without inventory');
+        log.debug('[ProductDetail] hydrateInventoryFromDB: No inventory levels, returning variants without inventory');
       }
 
-      console.log('[ProductDetail] hydrateInventoryFromDB: Hydrating', variants.length, 'variants with', invLevels?.length || 0, 'inventory levels');
+      log.debug('[ProductDetail] hydrateInventoryFromDB: Hydrating', variants.length, 'variants with', invLevels?.length || 0, 'inventory levels');
 
       return variants.map((v: any) => {
         const inventoryByLocation: Record<string, any> = {};
@@ -2540,7 +2545,7 @@ const ProductDetailScreen = observer(
           };
         });
 
-        console.log('[ProductDetail] Hydrated variant', v.Sku || v.Id, 'with', Object.keys(inventoryByLocation).length, 'locations, total qty:',
+        log.debug('[ProductDetail] Hydrated variant', v.Sku || v.Id, 'with', Object.keys(inventoryByLocation).length, 'locations, total qty:',
           Object.values(inventoryByLocation).reduce((sum: number, loc: any) => sum + (loc.quantity || 0), 0));
 
         // Build optionValues from Options object
@@ -2573,7 +2578,7 @@ const ProductDetailScreen = observer(
       // The save already updated displayedPlatforms correctly, no need to re-derive from metadata
       // Using timestamp-based blocking to prevent race conditions (2 second window)
       if (isInSaveBlockingWindow()) {
-        console.log('[ProductDetail] Skipping useEffect - in save blocking window, preserving displayedPlatforms');
+        log.debug('[ProductDetail] Skipping useEffect - in save blocking window, preserving displayedPlatforms');
         return; // Don't reset anything - let the blocking window expire naturally
       }
 
@@ -2597,7 +2602,7 @@ const ProductDetailScreen = observer(
       const mappingsAddNewPlatform = [...mappedPlatformTypesFromMappings].some((k) => !currentDisplayedKeys.includes(k));
 
       if (alreadyHydrated && !inventoryChanged && !locationNamesChanged && !mappingsAddNewPlatform) {
-        console.log('[ProductDetail] ⚠️ Already hydrated for product', detailedItem.Id, '- skipping to preserve data');
+        log.debug('[ProductDetail] ⚠️ Already hydrated for product', detailedItem.Id, '- skipping to preserve data');
         return; // Exit early - don't even update formData again
       }
 
@@ -2611,11 +2616,11 @@ const ProductDetailScreen = observer(
 
       // Wait for at least variant data before hydrating (inventory might be legitimately empty)
       if (!hasVariantData) {
-        console.log('[ProductDetail] Waiting for variant data before hydrating displayedPlatforms');
+        log.debug('[ProductDetail] Waiting for variant data before hydrating displayedPlatforms');
         return;
       }
 
-      console.log('[ProductDetail] Data ready for hydration - variants:', allProductVariants?.length, 'inventory:', rawInventoryLevels?.length);
+      log.debug('[ProductDetail] Data ready for hydration - variants:', allProductVariants?.length, 'inventory:', rawInventoryLevels?.length);
 
       // Populate formData
       setFormData(prev => ({
@@ -2671,7 +2676,7 @@ const ProductDetailScreen = observer(
         };
       }
 
-      console.log('[ProductDetail] Setting displayedPlatforms with tags:', canonicalBase.tags,
+      log.debug('[ProductDetail] Setting displayedPlatforms with tags:', canonicalBase.tags,
         'allProductVariants:', allProductVariants?.length,
         'rawInventoryLevels:', rawInventoryLevels?.length,
         'aiPrice:', canonicalBase.aiRecommendedPrice);
@@ -2690,12 +2695,12 @@ const ProductDetailScreen = observer(
         if (v.VariantType === 'flat' || !v.VariantType) return true;
         // Filter out 'base' variants (no inventory, just a container)
         if (v.VariantType === 'base') {
-          console.log('[ProductDetail] Filtering out base variant:', v.Sku || v.Id);
+          log.debug('[ProductDetail] Filtering out base variant:', v.Sku || v.Id);
           return false;
         }
         return true;
       });
-      console.log('[ProductDetail] Filtered variants: all=', allProductVariants?.length, 'displayable=', displayableVariants.length);
+      log.debug('[ProductDetail] Filtered variants: all=', allProductVariants?.length, 'displayable=', displayableVariants.length);
 
       // Hydrate variants with inventory data from REAL database data
       const hydratedVariants = hydrateInventoryFromDB(displayableVariants, rawInventoryLevels || []);
@@ -2781,10 +2786,10 @@ const ProductDetailScreen = observer(
           (platformLocationState[platformType].locationQuantities[locId] || 0) + (level.Quantity || 0);
       });
 
-      console.log('[ProductDetail] Built platformLocationState from rawInventoryLevels:',
+      log.debug('[ProductDetail] Built platformLocationState from rawInventoryLevels:',
         Object.entries(platformLocationState).map(([k, v]) => `${k}: ${v.locations.length} locs`).join(', '));
 
-      console.log('[ProductDetail] Hydrated variants:', hydratedVariants.length,
+      log.debug('[ProductDetail] Hydrated variants:', hydratedVariants.length,
         'with inventory:', hydratedVariants.map(v => `${v.sku || v.id}: ${Object.keys(v.inventoryByLocation || {}).length} locs`).join(', '));
 
       // FIX: Populate ALL platforms from metadata.platformSpecificData, not just shopify
@@ -2868,7 +2873,7 @@ const ProductDetailScreen = observer(
           mappedPlatformTypes.add(conn.PlatformType.toLowerCase());
         }
       });
-      console.log('[ProductDetail] Platforms with mappings:', Array.from(mappedPlatformTypes));
+      log.debug('[ProductDetail] Platforms with mappings:', Array.from(mappedPlatformTypes));
 
       // Combine: platforms from metadata + platforms from mappings + platforms from inventory
       const allPlatformKeysSet = new Set<string>([
@@ -2881,7 +2886,7 @@ const ProductDetailScreen = observer(
       const platformKeys = Array.from(allPlatformKeysSet).filter(keyLower => {
         // Always include if we have actual mappings for this platform
         if (mappedPlatformTypes.has(keyLower)) {
-          console.log(`[ProductDetail] Including platform '${keyLower}' - has mappings`);
+          log.debug(`[ProductDetail] Including platform '${keyLower}' - has mappings`);
           return true;
         }
 
@@ -2896,11 +2901,11 @@ const ProductDetailScreen = observer(
           );
 
           if (mappedPlatformTypes.size > 0 || hasRealConnections) {
-            console.log(`[ProductDetail] Force-excluding platform 'pool' because real connections/mappings exist`);
+            log.debug(`[ProductDetail] Force-excluding platform 'pool' because real connections/mappings exist`);
             return false;
           }
 
-          console.log(`[ProductDetail] Including platform 'pool' - no real connections/mappings`);
+          log.debug(`[ProductDetail] Including platform 'pool' - no real connections/mappings`);
           return true;
         }
 
@@ -2913,17 +2918,17 @@ const ProductDetailScreen = observer(
           platformData.variants?.length > 0
         );
         if (!isSharedProduct && hasMeaningfulData) {
-          console.log(`[ProductDetail] Including platform '${keyLower}' - has data but no active connection (for future publishing)`);
+          log.debug(`[ProductDetail] Including platform '${keyLower}' - has data but no active connection (for future publishing)`);
           return true;
         }
 
         if (isSharedProduct) {
-          console.log(`[ProductDetail] Filtering out platform '${keyLower}' - shared product with no mapping/connection`);
+          log.debug(`[ProductDetail] Filtering out platform '${keyLower}' - shared product with no mapping/connection`);
           return false;
         }
 
         // Skip truly empty platforms
-        console.log(`[ProductDetail] Filtering out empty platform '${keyLower}' - no data and no connection`);
+        log.debug(`[ProductDetail] Filtering out empty platform '${keyLower}' - no data and no connection`);
         return false;
       });
 
@@ -2959,7 +2964,7 @@ const ProductDetailScreen = observer(
           // filtering out 'base' variants. Just use hydratedVariants directly.
           // 
           // NOTE: The old filter caused ALL variants to disappear when optionValues wasn't populated
-          console.log('[ProductDetail] Using', hydratedVariants.length, 'freshVariants for platforms. First variant optionValues:',
+          log.debug('[ProductDetail] Using', hydratedVariants.length, 'freshVariants for platforms. First variant optionValues:',
             JSON.stringify(hydratedVariants[0]?.optionValues || {}));
 
           // ⚡ ROOT CAUSE FIX: Build a Set of valid location IDs for THIS platform
@@ -3020,7 +3025,7 @@ const ProductDetailScreen = observer(
             locationQuantities: perPlatformLocQty,
           };
         });
-        console.log('[ProductDetail] Built platforms from metadata:', platformKeys, 'with per-platform locations:',
+        log.debug('[ProductDetail] Built platforms from metadata:', platformKeys, 'with per-platform locations:',
           Object.entries(platformLocationState).map(([k, v]) => `${k}: ${v.locations.length} locs`).join(', '));
       } else {
         // Fallback: If no platformSpecificData, use shopify as default
@@ -3037,7 +3042,7 @@ const ProductDetailScreen = observer(
           locations: shopifyLocs,
           locationQuantities: shopifyLocQty,
         };
-        console.log('[ProductDetail] No platformSpecificData, using shopify as default with', shopifyLocs.length, 'locations');
+        log.debug('[ProductDetail] No platformSpecificData, using shopify as default with', shopifyLocs.length, 'locations');
       }
 
       // ⚡ Set displayedPlatforms - this only runs on FIRST load for this product
@@ -3047,7 +3052,7 @@ const ProductDetailScreen = observer(
       // Mark as hydrated for this product AFTER setting state
       hasHydratedPlatformsRef.current = detailedItem.Id;
       lastHydratedInventoryCountRef.current = currentInventoryCount;
-      console.log('[ProductDetail] ✅ Initial hydration complete for product', detailedItem.Id,
+      log.debug('[ProductDetail] ✅ Initial hydration complete for product', detailedItem.Id,
         'with', Object.keys(allPlatforms).length, 'platforms');
     }, [detailedItem?.Id, allProductVariants, rawInventoryLevels, hydrateInventoryFromDB, hasUnsavedChanges, isInSaveBlockingWindow, connections, platformLocationNames, mappings]); // Depend on real inventory data + connections + location names + mappings
 
@@ -3061,13 +3066,13 @@ const ProductDetailScreen = observer(
 
       // GUARD 2: Don't re-fetch if we already fetched for this product
       if (hasFetchedDraftRef.current === detailedItem.Id) {
-        console.log('[ProductDetail] Draft already fetched for product', detailedItem.Id, '- skipping');
+        log.debug('[ProductDetail] Draft already fetched for product', detailedItem.Id, '- skipping');
         return;
       }
 
       // GUARD 3: Don't fetch if user has unsaved changes (this would overwrite them!)
       if (hasUnsavedChanges) {
-        console.log('[ProductDetail] User has unsaved changes - skipping draft fetch');
+        log.debug('[ProductDetail] User has unsaved changes - skipping draft fetch');
         return;
       }
 
@@ -3080,7 +3085,7 @@ const ProductDetailScreen = observer(
           const baseUrl = API_BASE_URL;
 
           if (!token) {
-            console.log('[ProductDetail] No auth token for draft loading');
+            log.debug('[ProductDetail] No auth token for draft loading');
             return;
           }
 
@@ -3095,7 +3100,7 @@ const ProductDetailScreen = observer(
           if (response.ok) {
             const data = await response.json();
             if (!canceled) {
-              console.log('[ProductDetail] ✅ Loaded draft data:', data);
+              log.debug('[ProductDetail] ✅ Loaded draft data:', data);
               setDraftData(data.currentDraft?.DraftData || null);
               setDraftVersions(data.versions || []);
 
@@ -3109,7 +3114,7 @@ const ProductDetailScreen = observer(
               const coreFieldsEmpty = !formData.Title || formData.Title.trim() === '' || formData.Price === 0;
 
               if (draft && coreFieldsEmpty) {
-                console.log('[ProductDetail] Core fields empty — hydrating from draft data');
+                log.debug('[ProductDetail] Core fields empty — hydrating from draft data');
 
                 // Find canonical platform data (prefer shopify, else first key)
                 const draftKeys = Object.keys(draft);
@@ -3144,18 +3149,18 @@ const ProductDetailScreen = observer(
                     return merged;
                   });
 
-                  console.log('[ProductDetail] Draft hydration complete — Title:', canonicalDraft.title?.substring(0, 50), 'Price:', canonicalDraft.price);
+                  log.debug('[ProductDetail] Draft hydration complete — Title:', canonicalDraft.title?.substring(0, 50), 'Price:', canonicalDraft.price);
                 }
               } else {
-                console.log('[ProductDetail] Draft loaded for reference only — core fields already populated');
+                log.debug('[ProductDetail] Draft loaded for reference only — core fields already populated');
               }
             }
           } else {
-            console.log('[ProductDetail] Draft data not found (expected for new products)');
+            log.debug('[ProductDetail] Draft data not found (expected for new products)');
             hasFetchedDraftRef.current = detailedItem.Id; // Mark as fetched even if empty
           }
         } catch (error) {
-          console.error('[ProductDetail] Error loading draft:', error);
+          log.error('[ProductDetail] Error loading draft:', error);
         } finally {
           if (!canceled) {
             setIsLoadingDraft(false);
@@ -3190,7 +3195,7 @@ const ProductDetailScreen = observer(
         }
         if (!pendingExternalReloadRef.current) return;
         pendingExternalReloadRef.current = false;
-        console.log(`[ProductDetail] Applying deferred external reload (${reason})`);
+        log.debug(`[ProductDetail] Applying deferred external reload (${reason})`);
         loadPlatformData();
       }, delayMs);
     }, [isInSaveBlockingWindow, loadPlatformData]);
@@ -3198,45 +3203,55 @@ const ProductDetailScreen = observer(
     useEffect(() => {
       if (!detailedItem) return;
 
-      console.log('[ProductDetail] Setting up realtime subscriptions for product:', detailedItem.Id);
+      log.debug('[ProductDetail] Setting up Legend-State realtime subscriptions for product:', detailedItem.Id);
 
-      // Subscribe to product variant changes
-      const productSubscription = supabase
-        .channel(`product-${detailedItem.Id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'ProductVariants',
-            filter: `Id=eq.${detailedItem.Id}`,
-          },
-          (payload) => {
-            console.log('[ProductDetail] REALTIME EVENT FIRED:', payload.eventType);
-            console.log('[ProductDetail] hasUnsavedChangesRef.current:', hasUnsavedChangesRef.current);
+      let obs;
+      try {
+        obs = getLegendStateObservables();
+      } catch {
+        return;
+      }
 
-            // ✅ CRITICAL FIX: Check timestamp-based blocking window FIRST
-            // This prevents realtime from overwriting data right after a save
-            if (isInSaveBlockingWindow()) {
-              console.log('[ProductDetail] ⚠️ BLOCKING REALTIME - in save blocking window (2s after save)');
-              scheduleDeferredExternalReload('product_update_block_window');
-              return;
-            }
+      const disposers: Array<() => void> = [];
+      const track = (d: unknown) => {
+        if (typeof d === 'function') disposers.push(d as () => void);
+      };
 
-            // CRITICAL: Never update if user has unsaved changes
-            if (hasUnsavedChangesRef.current) {
-              console.log('[ProductDetail] ⚠️ BLOCKING REALTIME - user has unsaved changes');
-              showBanner('External update available. Save your changes first.', false);
-              scheduleDeferredExternalReload('product_update_unsaved');
-              return;
-            }
+      // Subscribe to product variant changes (was channel `product-${detailedItem.Id}`)
+      track(obs?.productVariants$?.onChange?.(({ value, getPrevious, isFromSync }) => {
+        if (!isFromSync) return;
+        const detailId = detailedItem?.Id;
+        if (!detailId) return;
+        const prev = (getPrevious() || {})[detailId];
+        const next = (value || {})[detailId];
+        if (!next || !prev) return;
+        if (JSON.stringify(next) === JSON.stringify(prev)) return;
 
-            if (payload.eventType === 'UPDATE' && payload.new) {
-              const updatedProduct = payload.new as ProductVariant;
-              console.log('[ProductDetail] Processing realtime update for:', updatedProduct.Title);
+        const updatedProduct = next as ProductVariant;
+        log.debug('[ProductDetail] REALTIME EVENT FIRED: UPDATE');
+        log.debug('[ProductDetail] hasUnsavedChangesRef.current:', hasUnsavedChangesRef.current);
 
-              // ✅ CRITICAL FIX: Merge instead of replacing to preserve nested data
-              setDetailedItem((prev) => {
+        // ✅ CRITICAL FIX: Check timestamp-based blocking window FIRST
+        // This prevents realtime from overwriting data right after a save
+        if (isInSaveBlockingWindow()) {
+          log.debug('[ProductDetail] ⚠️ BLOCKING REALTIME - in save blocking window (2s after save)');
+          scheduleDeferredExternalReload('product_update_block_window');
+          return;
+        }
+
+        // CRITICAL: Never update if user has unsaved changes
+        if (hasUnsavedChangesRef.current) {
+          log.debug('[ProductDetail] ⚠️ BLOCKING REALTIME - user has unsaved changes');
+          showBanner('External update available. Save your changes first.', false);
+          scheduleDeferredExternalReload('product_update_unsaved');
+          return;
+        }
+
+        {
+          log.debug('[ProductDetail] Processing realtime update for:', updatedProduct.Title);
+
+          // ✅ CRITICAL FIX: Merge instead of replacing to preserve nested data
+          setDetailedItem((prev) => {
                 if (!prev) return prev;
 
                 // Check all user-facing scalar fields for meaningful changes.
@@ -3263,12 +3278,12 @@ const ProductDetailScreen = observer(
                 }
                 const hasRealChanges = Object.keys(fieldChanges).length > 0;
                 if (!hasRealChanges) {
-                  console.log('[ProductDetail] No meaningful changes, skipping realtime update');
+                  log.debug('[ProductDetail] No meaningful changes, skipping realtime update');
                   return prev;
                 }
 
                 if (Object.keys(fieldChanges).length > 0) {
-                  console.log('[ProductDetail] 🟢 External field changes detected:', Object.keys(fieldChanges));
+                  log.debug('[ProductDetail] 🟢 External field changes detected:', Object.keys(fieldChanges));
                   setExternalUpdates(prevUpdates => ({ ...prevUpdates, ...fieldChanges }));
 
                   // 🔄 UPDATE displayedPlatforms to reflect external changes in fields
@@ -3320,8 +3335,8 @@ const ProductDetailScreen = observer(
                   showBanner('Product updated from external source', true);
                 }
 
-                console.log('[ProductDetail] ✅ Applying realtime update (merging to preserve nested data)');
-                console.log('[ProductDetail] REALTIME CHANGES:', {
+                log.debug('[ProductDetail] ✅ Applying realtime update (merging to preserve nested data)');
+                log.debug('[ProductDetail] REALTIME CHANGES:', {
                   title: { old: prev.Title, new: updatedProduct.Title },
                   price: { old: prev.Price, new: updatedProduct.Price },
                   sku: { old: prev.Sku, new: updatedProduct.Sku },
@@ -3375,53 +3390,52 @@ const ProductDetailScreen = observer(
                     taxCode: updatedProduct.TaxCode ?? updated[platformKey].taxCode,
                   };
                 }
-                console.log('[ProductDetail] ✅ REALTIME: Also updated displayedPlatforms for UI refresh');
+                log.debug('[ProductDetail] ✅ REALTIME: Also updated displayedPlatforms for UI refresh');
                 return updated;
               });
             }
-          }
-        )
-        .subscribe();
+      }));
 
-      // Subscribe to inventory level changes - but DON'T trigger full reload if user is editing
-      // CRITICAL FIX: Don't filter by ProductVariantId in the subscription because:
+      // Subscribe to inventory level changes (was UNFILTERED channel `inventory-product-${detailedItem.ProductId}`)
+      // - but DON'T trigger full reload if user is editing
+      // CRITICAL FIX: We don't filter by ProductVariantId on the source because:
       // - detailedItem.Id is often the BASE variant
       // - Inventory is stored against OPTION variants (different IDs)
       // - Instead, we filter in the callback using allProductVariantsRef
-      const inventorySubscription = supabase
-        .channel(`inventory-product-${detailedItem.ProductId}`)
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'InventoryLevels',
-            // No filter here - we check in callback if it's for our product
-          },
-          (payload) => {
-            const updatedLevel = payload.new as InventoryLevel | undefined;
-            const deletedLevel = payload.old as InventoryLevel | undefined;
-            const affectedVariantId = updatedLevel?.ProductVariantId || deletedLevel?.ProductVariantId;
+      track(obs?.inventoryLevels$?.onChange?.(({ value, getPrevious, isFromSync }) => {
+        if (!isFromSync) return;
+        if (!detailedItem?.Id) return;
+        const prevMap = getPrevious() || {};
+        const nextMap = value || {};
+        // Skip the initial / repopulation sync (empty prev): those rows are already on
+        // screen via loadPlatformData(); treating them as INSERTs would storm reloads.
+        if (Object.keys(prevMap).length === 0) return;
+        for (const levelId of new Set([...Object.keys(prevMap), ...Object.keys(nextMap)])) {
+          const updatedLevel = nextMap[levelId] as InventoryLevel | undefined;
+          const deletedLevel = prevMap[levelId] as InventoryLevel | undefined;
+          const isUpdate = !!updatedLevel && !!deletedLevel;
+          if (isUpdate && JSON.stringify(updatedLevel) === JSON.stringify(deletedLevel)) continue;
+          const affectedVariantId = updatedLevel?.ProductVariantId || deletedLevel?.ProductVariantId;
 
             // CRITICAL: Check if this inventory update is for one of our product's variants
             const ourVariantIds = allProductVariantsRef.current.map(v => v.Id);
             if (!affectedVariantId || !ourVariantIds.includes(affectedVariantId)) {
               // Not our product - ignore
-              return;
+              continue;
             }
 
-            console.log('[ProductDetail] Inventory level updated:', payload.eventType, 'for variant:', affectedVariantId);
+            log.debug('[ProductDetail] Inventory level updated:', isUpdate ? 'UPDATE' : 'INSERT/DELETE', 'for variant:', affectedVariantId);
 
             // CRITICAL: Don't reload if user has unsaved changes - it will overwrite their edits
             if (hasUnsavedChangesRef.current) {
-              console.log('[ProductDetail] ⚠️ Skipping inventory reload - user has unsaved changes');
+              log.debug('[ProductDetail] ⚠️ Skipping inventory reload - user has unsaved changes');
               showBanner('Inventory changed externally. Save your changes first.');
               scheduleDeferredExternalReload('inventory_unsaved');
-              return;
+              continue;
             }
 
             // Update inventory in place without full page reload
-            if (payload.eventType === 'UPDATE' && updatedLevel) {
+            if (isUpdate && updatedLevel) {
               // Update raw inventory levels and trigger re-render
               setRawInventoryLevels(prev => {
                 const updated = prev.map(level =>
@@ -3495,7 +3509,7 @@ const ProductDetailScreen = observer(
                     resolvedConnId = data?.Id;
                     applyDisplayedPlatformsUpdate(resolvedKey);
                   } else {
-                    console.log('[ProductDetail] Inventory update for variant', affectedVariantId, '- could not resolve connection, refetching platform data');
+                    log.debug('[ProductDetail] Inventory update for variant', affectedVariantId, '- could not resolve connection, refetching platform data');
                     loadPlatformData();
                   }
                 })();
@@ -3512,63 +3526,60 @@ const ProductDetailScreen = observer(
                 [`inventory_${affectedVariantId}_${compositeId}_price`]: { price: updatedLevel.Price, updatedAt: Date.now() },
               }));
 
-              console.log('[ProductDetail] ✅ Inventory updated in place for variant', affectedVariantId);
+              log.debug('[ProductDetail] ✅ Inventory updated in place for variant', affectedVariantId);
               if (!isInSaveBlockingWindow()) {
                 showBanner('Inventory updated from external source');
               }
             } else {
               // For INSERT/DELETE, do a full reload only if not in blocking window
               if (isInSaveBlockingWindow()) {
-                console.log('[ProductDetail] Inventory INSERT/DELETE while save-blocked - deferring reload');
+                log.debug('[ProductDetail] Inventory INSERT/DELETE while save-blocked - deferring reload');
                 scheduleDeferredExternalReload('inventory_insert_delete_blocked');
               } else {
-                console.log('[ProductDetail] Inventory INSERT/DELETE - triggering full reload');
+                log.debug('[ProductDetail] Inventory INSERT/DELETE - triggering full reload');
                 loadPlatformData();
               }
             }
-          }
-        )
-        .subscribe();
+        }
+      }));
 
-      // Subscribe to platform mapping changes
-      const mappingSubscription = supabase
-        .channel(`mappings-${detailedItem.Id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'PlatformProductMappings',
-            filter: `ProductVariantId=eq.${detailedItem.Id}`,
-          },
-          (payload) => {
-            console.log('[ProductDetail] Platform mapping updated:', payload.eventType);
+      // Subscribe to platform mapping changes (was channel `mappings-${detailedItem.Id}`, filter ProductVariantId=eq)
+      track(obs?.platformProductMappings$?.onChange?.(({ value, getPrevious, isFromSync }) => {
+        if (!isFromSync) return;
+        const detailId = detailedItem?.Id;
+        if (!detailId) return;
+        const prevMappings = getPrevious() || {};
+        // Skip the initial / repopulation sync (empty prev) — not a real per-row change.
+        if (Object.keys(prevMappings).length === 0) return;
+        const before = Object.values(prevMappings).filter((m: any) => m?.ProductVariantId === detailId);
+        const after = Object.values(value || {}).filter((m: any) => m?.ProductVariantId === detailId);
+        if (JSON.stringify(before) === JSON.stringify(after)) return;
 
-            // ✅ CRITICAL: Block during save window
-            if (isInSaveBlockingWindow()) {
-              console.log('[ProductDetail] ⚠️ Skipping mapping reload - in save blocking window');
-              scheduleDeferredExternalReload('mapping_blocked');
-              return;
-            }
+        log.debug('[ProductDetail] Platform mapping updated');
 
-            // Mapping changes are less disruptive - reload if no unsaved changes
-            if (!hasUnsavedChangesRef.current) {
-              loadPlatformData();
-            } else {
-              showBanner('Platform mapping changed. Save your changes first.');
-              scheduleDeferredExternalReload('mapping_unsaved');
-            }
-          }
-        )
-        .subscribe();
+        // ✅ CRITICAL: Block during save window
+        if (isInSaveBlockingWindow()) {
+          log.debug('[ProductDetail] ⚠️ Skipping mapping reload - in save blocking window');
+          scheduleDeferredExternalReload('mapping_blocked');
+          return;
+        }
+
+        // Mapping changes are less disruptive - reload if no unsaved changes
+        if (!hasUnsavedChangesRef.current) {
+          loadPlatformData();
+        } else {
+          showBanner('Platform mapping changed. Save your changes first.');
+          scheduleDeferredExternalReload('mapping_unsaved');
+        }
+      }));
 
       return () => {
-        console.log('[ProductDetail] Cleaning up realtime subscriptions');
-        productSubscription.unsubscribe();
-        inventorySubscription.unsubscribe();
-        mappingSubscription.unsubscribe();
+        log.debug('[ProductDetail] Cleaning up Legend-State realtime subscriptions');
+        disposers.forEach(d => {
+          try { d(); } catch {}
+        });
       };
-    }, [detailedItem?.Id, loadPlatformData, showBanner, isInSaveBlockingWindow, scheduleDeferredExternalReload]);
+    }, [detailedItem?.Id, detailedItem?.ProductId, loadPlatformData, showBanner, isInSaveBlockingWindow, scheduleDeferredExternalReload]);
 
     // Collaboration: Request edit lock and listen for team updates
     useEffect(() => {
@@ -3596,11 +3607,11 @@ const ProductDetailScreen = observer(
         // This prevents the page from "switching" to a different variant when 
         // a webhook updates another variant in the same product
         if (update.variantId !== detailedItem.Id) {
-          console.log('[ProductDetail] Ignoring collaboration update for different variant:', update.variantId, '(current:', detailedItem.Id, ')');
+          log.debug('[ProductDetail] Ignoring collaboration update for different variant:', update.variantId, '(current:', detailedItem.Id, ')');
           return;
         }
 
-        console.log('[ProductDetail] Received update from teammate for current variant:', update);
+        log.debug('[ProductDetail] Received update from teammate for current variant:', update);
 
         // Refresh product data from Supabase (single source of truth)
         const observables = getLegendStateObservables();
@@ -3705,53 +3716,46 @@ const ProductDetailScreen = observer(
           ref={scrollViewRef}
           contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomSafePadding }]}
         >
-          {/* Header with auto-save indicator */}
-          <View style={[styles.header, { backgroundColor: theme.colors.surface }]}>
-            <TouchableOpacity onPress={navigation.goBack} style={styles.backButton}>
-              <Icon name="arrow-left" size={24} color={theme.colors.text} />
-            </TouchableOpacity>
-            <View style={styles.headerCenter}>
-              <Text style={[styles.headerTitle, { color: theme.colors.text }]}>Product Details</Text>
-              {isSaving && (
-                <View style={styles.savingIndicator}>
-                  <ActivityIndicator size="small" color={theme.colors.primary} />
-                  <Text style={[styles.savingText, { color: theme.colors.primary }]}>Saving...</Text>
-                </View>
-              )}
-              {hasUnsavedChanges && (
-                <Text style={{ color: 'orange', fontSize: 12 }}>Unsaved changes</Text>
-              )}
-
-              {!isSaving && lastSaveTime > 0 && (
-                <Text style={[styles.savedText, { color: theme.colors.success }]}>
-                  Saved {new Date(lastSaveTime).toLocaleTimeString()}
-                </Text>
-              )}
-            </View>
-            <View style={styles.headerActions}>
-              <TouchableOpacity
-                onPress={() => setActionMenuVisible(true)}
-                style={styles.refreshButton}
-              >
-                <Icon name="dots-horizontal" size={24} color={theme.colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
+          {/* Header — shared PageHeader (matches Connections/Settings/etc.) */}
+          <View style={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: 4, backgroundColor: theme.colors.surface }}>
+            <PageHeader
+              title="Product Details"
+              onBack={navigation.goBack}
+              right={
+                <>
+                  {isSaving ? (
+                    <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '600' }}>Saving…</Text>
+                  ) : hasUnsavedChanges ? (
+                    <Text style={{ color: '#D97706', fontSize: 12, fontWeight: '600' }}>Unsaved</Text>
+                  ) : lastSaveTime > 0 ? (
+                    <Text style={{ color: theme.colors.success, fontSize: 12, fontWeight: '600' }}>Saved</Text>
+                  ) : null}
+                  <TouchableOpacity
+                    onPress={() => setActionMenuVisible(true)}
+                    activeOpacity={0.85}
+                    style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 }}
+                  >
+                    <Icon name="dots-horizontal" size={22} color="#18181B" />
+                  </TouchableOpacity>
+                </>
+              }
+            />
           </View>
 
 
 
           {/* Listing editor (edit mode) */}
-          <Card style={styles.basicSection}>
+          <Card shadow="none" style={styles.basicSection}>
             <ListingEditorForm
               ref={listingEditorRef}
               platforms={displayedPlatforms}
               images={editorImages}
               platformLocations={buildPlatformLocations()}
               onChangePlatforms={(next) => {
-                console.log('[ProductDetail] ListingEditorForm onChange:', Object.keys(next));
+                log.debug('[ProductDetail] ListingEditorForm onChange:', Object.keys(next));
                 setDisplayedPlatforms(next);
                 setHasUnsavedChanges(true)
-                console.log('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
+                log.debug('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
                 // DEEP merge: preserve all existing fields while updating changed ones
                 // This preserves user edits AND keeps all loaded backend data
                 updatePlatforms(prev => {
@@ -3811,7 +3815,7 @@ const ProductDetailScreen = observer(
                       });
                     }
                   }
-                  console.log('[GEN-DETAILS] Deep merged platforms, keys:', Object.keys(merged));
+                  log.debug('[GEN-DETAILS] Deep merged platforms, keys:', Object.keys(merged));
                   return merged;
                 });
               }}
@@ -3839,7 +3843,7 @@ const ProductDetailScreen = observer(
                     setIsUploadingImages(false);
                   }
                 } catch (error) {
-                  console.error('Error picking images:', error);
+                  log.error('Error picking images:', error);
                   setIsUploadingImages(false);
                   Alert.alert('Error', 'Failed to add images. Please try again.');
                 }
@@ -3859,7 +3863,7 @@ const ProductDetailScreen = observer(
             />
 
             {/* Active Listings */}
-            <Card style={styles.platformsSection}>
+            <Card shadow="none" style={styles.platformsSection}>
               <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Active Listings</Text>
 
               {mappings.length > 0 ? (
@@ -4084,7 +4088,7 @@ const ProductDetailScreen = observer(
                   'Are you sure you want to archive this product? It will be hidden from your active listings.',
                   [
                     { text: 'Cancel', style: 'cancel' },
-                    { text: 'Archive', style: 'default', onPress: () => console.log('Archive (Placeholder)') }
+                    { text: 'Archive', style: 'default', onPress: () => log.debug('Archive (Placeholder)') }
                   ]
                 );
               }}

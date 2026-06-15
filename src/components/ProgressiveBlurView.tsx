@@ -1,8 +1,15 @@
 import React from 'react';
-import { StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
+import { StyleProp, StyleSheet, UIManager, View, ViewStyle } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import MaskedView from '@react-native-masked-view/masked-view';
+
+// The progressive-blur effect needs the native RNCMaskedView view manager. In an
+// Expo Go / un-rebuilt dev client that module isn't registered, and mounting
+// MaskedView throws "View config not found for component RNCMaskedView" — which
+// surfaces as a fatal redbox before the error boundary can swap in the fallback.
+// Detect availability up front and skip MaskedView entirely when it's missing.
+const MASKED_VIEW_AVAILABLE = !!(UIManager.getViewManagerConfig && UIManager.getViewManagerConfig('RNCMaskedView'));
 
 type Props = {
   /** Max blur intensity (at the strong edge). expo-blur scale 0-100. */
@@ -73,6 +80,18 @@ class BlurBoundary extends React.Component<
  * boundary renders the previous uniform BlurView instead of crashing the screen.
  */
 export function ProgressiveBlurView(props: Props) {
+  // No native masked-view in this runtime → render a plain uniform blur and never
+  // mount MaskedView (avoids the fatal "View config not found" redbox).
+  if (!MASKED_VIEW_AVAILABLE) {
+    return (
+      <BlurView
+        intensity={props.intensity ?? 24}
+        tint={props.tint ?? 'light'}
+        style={[StyleSheet.absoluteFill, props.style]}
+        pointerEvents="none"
+      />
+    );
+  }
   return (
     <BlurBoundary
       fallback={

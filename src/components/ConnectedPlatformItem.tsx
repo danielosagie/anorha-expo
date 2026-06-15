@@ -12,6 +12,9 @@ import * as Sharing from 'expo-sharing';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import BaseModal from './BaseModal';
 import { useOrg } from '../context/OrgContext';
+import { createLogger } from '../utils/logger';
+const log = createLogger('ConnectedPlatformItem');
+
 // --- Types ---
 export type PlatformId = 'shopify' | 'amazon' | 'clover' | 'square' | 'ebay' | 'facebook' | 'depop' | 'whatnot' | 'etsy';
 
@@ -225,7 +228,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
             setManageMenuVisible(false);
 
         } catch (err: any) {
-            console.error('Export Error:', err);
+            log.error('Export Error:', err);
             Alert.alert('Export Failed', err.message || 'Unknown error occurred');
         } finally {
             setIsExporting(false);

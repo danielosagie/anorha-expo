@@ -34,6 +34,9 @@ import { useProductVariantRealtime } from '../hooks/useProductVariantRealtime';
 import { useUser } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SessionContext } from '../context/SessionContext';
+import { createLogger } from '../utils/logger';
+const log = createLogger('ActivityFeedScreen');
+
 
 const TAB_BAR_HEIGHT = 84;
 const TAB_BAR_BOTTOM_OFFSET = 18;
@@ -250,7 +253,7 @@ const ActivityFeedScreen = observer(() => {
         setUserImageMap(newUserImageMap);
       }
     } catch (e) {
-      console.warn('[ActivityFeed] Failed to fetch org members:', e);
+      log.warn('[ActivityFeed] Failed to fetch org members:', e);
       // Fallback: at least have current user
       if (clerkUser?.id && clerkUser?.imageUrl) {
         setUserImageMap({ [clerkUser.id]: clerkUser.imageUrl });
@@ -290,9 +293,9 @@ const ActivityFeedScreen = observer(() => {
       const response = await apiFetch(`/api/activity?${queryString}`);
 
       if (!response.ok) {
-        console.error(`[ActivityFeed] HTTP ${response.status} ${response.statusText}`);
+        log.error(`[ActivityFeed] HTTP ${response.status} ${response.statusText}`);
         const errorText = await response.text();
-        console.error(`[ActivityFeed] Error body:`, errorText);
+        log.error(`[ActivityFeed] Error body:`, errorText);
         setEvents([]);
         setLoading(false);
         return;
@@ -354,7 +357,7 @@ const ActivityFeedScreen = observer(() => {
       setNextCursor(data.nextCursor);
       setHasMore(data.hasMore);
     } catch (error) {
-      console.error('[ActivityFeed] Error fetching activity feed:', error);
+      log.error('[ActivityFeed] Error fetching activity feed:', error);
       setEvents([]);
     } finally {
       setLoading(false);
@@ -368,7 +371,7 @@ const ActivityFeedScreen = observer(() => {
     const fetchPlatformData = async () => {
       if (!legendState?.userId) return;
       if (!session?.bridgeReady) {
-        console.log('[ActivityFeedScreen] Skipping platform data fetch until auth bridge is ready');
+        log.debug('[ActivityFeedScreen] Skipping platform data fetch until auth bridge is ready');
         setIsLoadingConnections(false);
         return;
       }
@@ -381,7 +384,7 @@ const ActivityFeedScreen = observer(() => {
           .eq('UserId', legendState.userId);
 
         if (connectionsError) {
-          console.error('[ActivityFeedScreen] Error fetching platform connections:', connectionsError);
+          log.error('[ActivityFeedScreen] Error fetching platform connections:', connectionsError);
         } else {
           setPlatformConnections((connectionsData || []) as unknown as PlatformConnection[]);
         }
@@ -394,13 +397,13 @@ const ActivityFeedScreen = observer(() => {
             .in('PlatformConnectionId', connectionIds);
 
           if (locationsError) {
-            console.error('[ActivityFeedScreen] Error fetching platform locations:', locationsError);
+            log.error('[ActivityFeedScreen] Error fetching platform locations:', locationsError);
           } else {
             setPlatformLocations((locationsData || []) as unknown as PlatformLocation[]);
           }
         }
       } catch (error) {
-        console.error('[ActivityFeedScreen] Exception fetching platform data:', error);
+        log.error('[ActivityFeedScreen] Exception fetching platform data:', error);
       } finally {
         setIsLoadingConnections(false);
       }
@@ -430,7 +433,7 @@ const ActivityFeedScreen = observer(() => {
   const fetchCampaigns = useCallback(async () => {
     if (!currentOrg?.id) return;
     if (!session?.bridgeReady) {
-      console.log('[ActivityFeed] Skipping campaigns fetch until auth bridge is ready');
+      log.debug('[ActivityFeed] Skipping campaigns fetch until auth bridge is ready');
       return;
     }
     try {
@@ -440,7 +443,7 @@ const ActivityFeedScreen = observer(() => {
         if (data.success) setCampaigns(data.campaigns || []);
       }
     } catch (e) {
-      console.log('Error fetching campaigns', e);
+      log.debug('Error fetching campaigns', e);
     }
   }, [currentOrg?.id, session?.bridgeReady]);
 

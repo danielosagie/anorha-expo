@@ -1,5 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { useCollaboration } from './useCollaboration';
+import { createLogger } from '../utils/logger';
+const log = createLogger('useJobProgress');
+
 
 export interface JobProgressData {
     jobId: string;
@@ -22,7 +25,7 @@ export function useJobProgress(targetJobId?: string) {
         // Ideally useCollaboration should be updated to expose this, or we can add a generic event listener
         const unsubscribe = onJobProgress && onJobProgress((data) => {
             if (data.jobId === targetJobId) {
-                console.log('[SOCKET] Job progress:', data.status, data.currentStage);
+                log.debug('[SOCKET] Job progress:', data.status, data.currentStage);
                 setJobState(data);
             }
         });

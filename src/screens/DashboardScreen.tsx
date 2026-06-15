@@ -28,6 +28,9 @@ import { QuickSellCard } from '../components/liquidation/QuickSellCard';
 import { PartnerWelcomeModal } from '../components/PartnerWelcomeModal';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SessionContext } from '../context/SessionContext';
+import { createLogger } from '../utils/logger';
+const log = createLogger('DashboardScreen');
+
 
 
 // User-relevant event types for activity display (excludes system/webhook events)
@@ -339,7 +342,7 @@ const DashboardScreen = () => {
             variantIds.push(v.Id);
           });
           setDirectFetchVariants(variantMap);
-          console.log(`[Dashboard] Direct fetch: ${variants.length} variants`);
+          log.debug(`[Dashboard] Direct fetch: ${variants.length} variants`);
 
           const { data: levels, error: levelErr } = await supabase
             .from('InventoryLevels')
@@ -350,11 +353,11 @@ const DashboardScreen = () => {
             const levelMap: Record<string, any> = {};
             levels.forEach((l: any) => { levelMap[l.Id] = l; });
             setDirectFetchLevels(levelMap);
-            console.log(`[Dashboard] Direct fetch: ${levels.length} inventory levels`);
+            log.debug(`[Dashboard] Direct fetch: ${levels.length} inventory levels`);
           }
         }
       } catch (e) {
-        console.error('[Dashboard] Direct fetch error:', e);
+        log.error('[Dashboard] Direct fetch error:', e);
       }
     };
 
@@ -398,10 +401,10 @@ const DashboardScreen = () => {
                 setDirectFetchLevels(levelMap);
               }
             }
-            console.log(`[Dashboard] Focus refresh complete: ${variants.length} products`);
+            log.debug(`[Dashboard] Focus refresh complete: ${variants.length} products`);
           }
         } catch (e) {
-          console.error('[Dashboard] Focus refresh error:', e);
+          log.error('[Dashboard] Focus refresh error:', e);
         }
       };
 
@@ -425,7 +428,7 @@ const DashboardScreen = () => {
 
   // Handle insight feedback (thumbs up/down) - log for now, can extend to API
   const handleInsightFeedback = useCallback((feedback: 'up' | 'down', insightHeadline: string) => {
-    console.log(`[Dashboard] Insight feedback: ${feedback} for "${insightHeadline}"`);
+    log.debug(`[Dashboard] Insight feedback: ${feedback} for "${insightHeadline}"`);
     // TODO: Send to API to affect future insight generation
     // Example: POST /api/insights/feedback { orgId, feedback, insightHeadline }
   }, []);
@@ -472,7 +475,7 @@ const DashboardScreen = () => {
   const fetchPoolPerformance = async () => {
     if (!currentOrg?.id) return;
     if (!session?.bridgeReady) {
-      console.log('[Dashboard] Skipping pool performance fetch until auth bridge is ready');
+      log.debug('[Dashboard] Skipping pool performance fetch until auth bridge is ready');
       setLoadingPools(false);
       return;
     }
@@ -481,7 +484,7 @@ const DashboardScreen = () => {
       setLoadingPools(true);
       const token = await ensureSupabaseJwt();
       if (!token) {
-        console.warn('[Dashboard] No JWT available for pool performance fetch');
+        log.warn('[Dashboard] No JWT available for pool performance fetch');
         setPoolPerformance([]);
         return;
       }
@@ -492,7 +495,7 @@ const DashboardScreen = () => {
       });
 
       if (!poolsRes.ok) {
-        console.error(`Pool fetch failed: ${poolsRes.status} ${poolsRes.statusText}`);
+        log.error(`Pool fetch failed: ${poolsRes.status} ${poolsRes.statusText}`);
         setPoolPerformance([]);
         return;
       }
@@ -526,7 +529,7 @@ const DashboardScreen = () => {
 
       setPoolPerformance(performanceData);
     } catch (e) {
-      console.error('Failed to fetch pool performance:', e);
+      log.error('Failed to fetch pool performance:', e);
       setPoolPerformance([]);
     } finally {
       setLoadingPools(false);
@@ -537,7 +540,7 @@ const DashboardScreen = () => {
   const fetchLocationPerformance = async () => {
     if (!currentOrg?.id) return;
     if (!session?.bridgeReady) {
-      console.log('[Dashboard] Skipping location performance fetch until auth bridge is ready');
+      log.debug('[Dashboard] Skipping location performance fetch until auth bridge is ready');
       computeLocationPerformanceFromLegend();
       return;
     }
@@ -546,7 +549,7 @@ const DashboardScreen = () => {
       setLoadingLocations(true);
       const token = await ensureSupabaseJwt();
       if (!token) {
-        console.warn('[Dashboard] No JWT available for location performance fetch');
+        log.warn('[Dashboard] No JWT available for location performance fetch');
         computeLocationPerformanceFromLegend();
         return;
       }
@@ -557,7 +560,7 @@ const DashboardScreen = () => {
       });
 
       if (!locationsRes.ok) {
-        console.error(`Locations fetch failed: ${locationsRes.status} ${locationsRes.statusText}`);
+        log.error(`Locations fetch failed: ${locationsRes.status} ${locationsRes.statusText}`);
         // Fallback: compute from local inventory levels
         computeLocationPerformanceFromLegend();
         return;
@@ -597,7 +600,7 @@ const DashboardScreen = () => {
 
       setLocationPerformance(performanceData);
     } catch (e) {
-      console.error('Failed to fetch location performance:', e);
+      log.error('Failed to fetch location performance:', e);
       // Fallback: compute from local inventory levels
       computeLocationPerformanceFromLegend();
     } finally {
@@ -674,7 +677,7 @@ const DashboardScreen = () => {
 
     // Guard against no data at all
     if (Object.keys(pv).length === 0 && Object.keys(levels).length === 0) {
-      console.log('[Dashboard] No data available (Legend or fallback), skipping low stock computation');
+      log.debug('[Dashboard] No data available (Legend or fallback), skipping low stock computation');
       return {
         totalInventory: 0,
         lowStockItems: [],
@@ -758,14 +761,14 @@ const DashboardScreen = () => {
   // 2. Fetch Recent Activity (filtered to user-relevant events only)
   const fetchActivity = async () => {
     if (!currentOrg?.id) {
-      console.warn('[Dashboard] Skipping activity fetch: no current org');
+      log.warn('[Dashboard] Skipping activity fetch: no current org');
       setLoadingActivity(false);
       setRecentActivity([]);
       return;
     }
 
     if (!session?.bridgeReady) {
-      console.log('[Dashboard] Skipping activity fetch until auth bridge is ready');
+      log.debug('[Dashboard] Skipping activity fetch until auth bridge is ready');
       setLoadingActivity(false);
       setInitialDataLoaded(true);
       return;
@@ -774,7 +777,7 @@ const DashboardScreen = () => {
     try {
       const token = await ensureSupabaseJwt();
       if (!token) {
-        console.warn('[Dashboard] No JWT available for activity fetch');
+        log.warn('[Dashboard] No JWT available for activity fetch');
         setLoadingActivity(false);
         setRecentActivity([]);
         return;
@@ -784,7 +787,7 @@ const DashboardScreen = () => {
       // Fetch more events so we can filter and still have enough to show
       const url = `${base}/api/activity?limit=20&orgId=${encodeURIComponent(currentOrg.id)}`;
 
-      console.log(`[Dashboard] Fetching activity from ${url}`);
+      log.debug(`[Dashboard] Fetching activity from ${url}`);
 
       const response = await fetch(url, {
         method: 'GET',
@@ -795,16 +798,16 @@ const DashboardScreen = () => {
       });
 
       if (!response.ok) {
-        console.error(`[Dashboard] Activity fetch failed: ${response.status} ${response.statusText}`);
+        log.error(`[Dashboard] Activity fetch failed: ${response.status} ${response.statusText}`);
         const errorBody = await response.text();
-        console.error(`[Dashboard] Error: ${errorBody}`);
+        log.error(`[Dashboard] Error: ${errorBody}`);
         setRecentActivity([]);
         setLoadingActivity(false);
         return;
       }
 
       const json = await response.json();
-      console.log(`[Dashboard] Activity response:`, {
+      log.debug(`[Dashboard] Activity response:`, {
         eventsCount: json.events?.length || 0,
         hasMore: json.hasMore,
       });
@@ -824,16 +827,16 @@ const DashboardScreen = () => {
           return !isSystemEvent;
         });
 
-        console.log(`[Dashboard] Filtered ${json.events.length} → ${filteredEvents.length} non-system events`);
+        log.debug(`[Dashboard] Filtered ${json.events.length} → ${filteredEvents.length} non-system events`);
         // If we have filtered events, use them; otherwise fall back to all events (except webhooks)
         const eventsToShow = filteredEvents.length > 0 ? filteredEvents : json.events;
         setRecentActivity(eventsToShow.slice(0, 5)); // Show top 5 events
       } else {
-        console.warn('[Dashboard] Activity response missing events array:', json);
+        log.warn('[Dashboard] Activity response missing events array:', json);
         setRecentActivity([]);
       }
     } catch (e) {
-      console.error('[Dashboard] Failed to fetch activity:', e);
+      log.error('[Dashboard] Failed to fetch activity:', e);
       setRecentActivity([]);
     } finally {
       setLoadingActivity(false);
@@ -844,25 +847,25 @@ const DashboardScreen = () => {
   // Only fetch data when org context has finished loading AND we have an org ID
   useEffect(() => {
     if (isOrgLoading) {
-      console.log('[Dashboard] Waiting for org context to load...');
+      log.debug('[Dashboard] Waiting for org context to load...');
       return;
     }
 
     if (!session?.bridgeReady) {
-      console.log('[Dashboard] Waiting for auth bridge to become ready...');
+      log.debug('[Dashboard] Waiting for auth bridge to become ready...');
       setLoadingActivity(false);
       setInitialDataLoaded(true);
       return;
     }
 
     if (!currentOrg?.id) {
-      console.log('[Dashboard] No org ID available after org context loaded');
+      log.debug('[Dashboard] No org ID available after org context loaded');
       setLoadingActivity(false);
       setInitialDataLoaded(true);
       return;
     }
 
-    console.log(`[Dashboard] Org context loaded, fetching data for org: ${currentOrg.id}`);
+    log.debug(`[Dashboard] Org context loaded, fetching data for org: ${currentOrg.id}`);
     fetchActivity();
     fetchPoolPerformance();
     fetchLocationPerformance();

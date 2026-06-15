@@ -7,6 +7,9 @@ import PlatformLogo from '../components/PlatformLogo';
 import { normalizeDisplayName } from '../config/platforms';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
+import { createLogger } from '../utils/logger';
+const log = createLogger('PublishConfirmationScreen');
+
 
 type Props = StackScreenProps<AppStackParamList, 'PublishConfirmation'>;
 
@@ -37,14 +40,14 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   };
 
   const handleReviewInInventory = () => {
-    console.log('[PublishConfirmation] handleReviewInInventory called');
-    console.log('[PublishConfirmation] origin:', origin);
-    console.log('[PublishConfirmation] productId:', productId);
-    console.log('[PublishConfirmation] variantId:', variantId);
+    log.debug('[PublishConfirmation] handleReviewInInventory called');
+    log.debug('[PublishConfirmation] origin:', origin);
+    log.debug('[PublishConfirmation] productId:', productId);
+    log.debug('[PublishConfirmation] variantId:', variantId);
 
     // For import flow (multiple products), always go to Inventory tab
     if (origin === 'import') {
-      console.log('[PublishConfirmation] Import origin - navigating to Inventory tab');
+      log.debug('[PublishConfirmation] Import origin - navigating to Inventory tab');
       navigation.navigate('TabNavigator' as any, { screen: 'Inventory' } as any);
       return;
     }
@@ -54,10 +57,10 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     const idToUse = variantId || productId;
 
     if (idToUse) {
-      console.log('[PublishConfirmation] Navigating to ProductDetail with ID:', idToUse);
+      log.debug('[PublishConfirmation] Navigating to ProductDetail with ID:', idToUse);
       navigation.navigate('ProductDetail', { productId: idToUse });
     } else {
-      console.log('[PublishConfirmation] No valid ID, navigating to Inventory tab');
+      log.debug('[PublishConfirmation] No valid ID, navigating to Inventory tab');
       navigation.navigate('TabNavigator' as any, { screen: 'Inventory' } as any);
     }
   };

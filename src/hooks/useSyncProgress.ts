@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react';
 import { acquireCollaborationSocket, releaseCollaborationSocket, type Socket } from '../lib/collaborationSocket';
+import { createLogger } from '../utils/logger';
+const log = createLogger('useSyncProgress');
+
 
 interface SyncProgress {
   connectionId: string;
@@ -38,7 +41,7 @@ export function useSyncProgress(connectionId: string) {
         s?.on('sync:progress', handleProgress);
       })
       .catch((error) => {
-        console.error('[useSyncProgress] Error acquiring collaboration socket:', error);
+        log.error('[useSyncProgress] Error acquiring collaboration socket:', error);
       });
 
     return () => {

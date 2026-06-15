@@ -4,6 +4,9 @@ import { Alert } from 'react-native';
 import { UserEntitlements, fetchUserEntitlements, isFeatureAvailable } from '../utils/entitlements';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
+import { createLogger } from '../utils/logger';
+const log = createLogger('usePaywall');
+
 
 const API_BASE_URL = ENV_API_BASE_URL;
 
@@ -33,7 +36,7 @@ export function usePaywall(): UsePaywallReturn {
       const data = await fetchUserEntitlements();
       setEntitlements(data);
     } catch (error) {
-      console.error('[usePaywall] Error fetching entitlements:', error);
+      log.error('[usePaywall] Error fetching entitlements:', error);
     } finally {
       setLoading(false);
     }
@@ -88,7 +91,7 @@ export function usePaywall(): UsePaywallReturn {
       // Refresh entitlements after returning from billing
       await refreshEntitlements();
     } catch (error: any) {
-      console.error('[usePaywall] Failed to open billing:', error);
+      log.error('[usePaywall] Failed to open billing:', error);
       Alert.alert('Error', `Failed to open billing: ${error.message}`);
     }
   }, [closePaywall, refreshEntitlements]);

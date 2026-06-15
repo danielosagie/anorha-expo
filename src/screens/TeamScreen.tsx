@@ -22,6 +22,9 @@ import { showMessage } from 'react-native-flash-message';
 import InviteMemberModal from '../components/team/InviteMemberModal';
 import { useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { createLogger } from '../utils/logger';
+const log = createLogger('TeamScreen');
+
 
 const SSSYNC_API_BASE_URL = API_BASE_URL;
 const API_BASE_RAW = API_BASE_URL;
@@ -115,7 +118,7 @@ export default function TeamScreen() {
           isAdminFromBackend = adminCheckData.isAdmin === true;
         }
       } catch (e) {
-        console.warn('[TeamScreen] Failed to check admin status from backend:', e);
+        log.warn('[TeamScreen] Failed to check admin status from backend:', e);
       }
       
       setCurrentUserRole(isAdminFromBackend ? 'admin' : 'member');
@@ -184,7 +187,7 @@ export default function TeamScreen() {
       }
 
     } catch (error) {
-      console.error('[TeamScreen] Error loading team data:', error);
+      log.error('[TeamScreen] Error loading team data:', error);
       showMessage({ message: 'Error', description: 'Failed to load team data', type: 'danger' });
     } finally {
       setLoading(false);
@@ -286,11 +289,11 @@ export default function TeamScreen() {
           loadTeamData();
         } else {
           const errorText = await res.text();
-          console.error('[TeamScreen] Role update failed:', errorText);
+          log.error('[TeamScreen] Role update failed:', errorText);
           showMessage({ message: 'Error', description: 'Failed to update role', type: 'danger' });
         }
       } catch (e) {
-        console.error('[TeamScreen] Role update error:', e);
+        log.error('[TeamScreen] Role update error:', e);
         showMessage({ message: 'Error', description: 'Failed to update role', type: 'danger' });
       }
     };

@@ -20,6 +20,9 @@ import PlatformLogo from './PlatformLogo';
 import { getPlatform } from '../config/platforms';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
+import { createLogger } from '../utils/logger';
+const log = createLogger('CreateLocationPoolModal');
+
 
 const API_BASE_URL = ENV_API_BASE_URL;
 
@@ -72,7 +75,7 @@ export default function CreateLocationPoolModal({
       const data = await response.json();
       setAvailableLocations(data);
     } catch (error) {
-      console.error('Error loading locations:', error);
+      log.error('Error loading locations:', error);
       Alert.alert('Error', 'Failed to load available locations');
     } finally {
       setLoading(false);
@@ -133,7 +136,7 @@ export default function CreateLocationPoolModal({
       handleClose();
       onSuccess();
     } catch (error) {
-      console.error('Error creating pool:', error);
+      log.error('Error creating pool:', error);
       Alert.alert('Error', error instanceof Error ? error.message : 'Failed to create location pool');
     } finally {
       setCreatingPool(false);

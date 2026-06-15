@@ -29,6 +29,9 @@ import type {
 } from './types';
 import { isFolder, isItem } from './types';
 import { canTransition, STATUS_HISTORY_LIMIT } from './transitions';
+import { createLogger } from '../../utils/logger';
+const log = createLogger('cartStore');
+
 
 const STORAGE_KEY = 'cart:v1';
 const newId = () => uuidv4();
@@ -166,7 +169,7 @@ export function transitionItem(
   if (!isItem(item)) return false;
   const from = item.status;
   if (!canTransition(from, to)) {
-    console.warn(`[cart] REFUSED illegal transition ${from} → ${to} for item ${itemId}`);
+    log.warn(`[cart] REFUSED illegal transition ${from} → ${to} for item ${itemId}`);
     return false;
   }
   if (from !== to) {

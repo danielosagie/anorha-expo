@@ -6,12 +6,14 @@ interface CardProps {
   children: React.ReactNode;
   style?: ViewStyle | ViewStyle[] | any;
   onPress?: () => void;
+  /** Drop-shadow level; pass "none" for a flat card. */
+  shadow?: 'none' | 'xs' | 'sm' | 'md' | 'lg';
 }
 
-const Card: React.FC<CardProps> = ({ children, style, onPress }) => {
+const Card: React.FC<CardProps> = ({ children, style, onPress, shadow = 'sm' }) => {
   if (onPress) {
     return (
-      <ShadowSurface shadow="sm" style={[styles.cardOuter, style]} innerStyle={styles.cardSurface}>
+      <ShadowSurface shadow={shadow} style={[styles.cardOuter, style]} innerStyle={styles.cardSurface}>
         <TouchableOpacity style={styles.cardContent} onPress={onPress} activeOpacity={0.7}>
           {children}
         </TouchableOpacity>
@@ -20,7 +22,7 @@ const Card: React.FC<CardProps> = ({ children, style, onPress }) => {
   }
 
   return (
-    <ShadowSurface shadow="sm" style={[styles.cardOuter, style]} innerStyle={styles.cardSurface}>
+    <ShadowSurface shadow={shadow} style={[styles.cardOuter, style]} innerStyle={styles.cardSurface}>
       <View style={styles.cardContent}>{children}</View>
     </ShadowSurface>
   );

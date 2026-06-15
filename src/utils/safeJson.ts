@@ -1,4 +1,7 @@
 import * as Sentry from '@sentry/react-native';
+import { createLogger } from './logger';
+const log = createLogger('safeJson');
+
 
 /**
  * Parse a fetch Response body without throwing. A non-JSON body (HTML error
@@ -22,7 +25,7 @@ export async function safeJson<T = any>(response: Response): Promise<T | null> {
     } catch {
       /* no-op */
     }
-    console.warn('[safeJson] Failed to parse response body:', e?.message);
+    log.warn('[safeJson] Failed to parse response body:', e?.message);
     return null;
   }
 }
@@ -33,7 +36,7 @@ export function safeJsonParse<T = any>(raw: string | null | undefined): T | null
   try {
     return JSON.parse(raw) as T;
   } catch (e: any) {
-    console.warn('[safeJsonParse] Failed to parse JSON string:', e?.message);
+    log.warn('[safeJsonParse] Failed to parse JSON string:', e?.message);
     return null;
   }
 }

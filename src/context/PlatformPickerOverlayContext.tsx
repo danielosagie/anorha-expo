@@ -1,4 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createLogger } from '../utils/logger';
+const log = createLogger('PlatformPickerOverlayContext');
+
 
 export type StartConnectHandler = (platform: string) => void;
 
@@ -19,26 +22,26 @@ export const PlatformPickerOverlayProvider: React.FC<{ children: React.ReactNode
 
   // Debug: Log state changes
   useEffect(() => {
-    console.log('[PlatformPickerOverlayContext] visible changed to:', visible);
+    log.debug('[PlatformPickerOverlayContext] visible changed to:', visible);
   }, [visible]);
 
   useEffect(() => {
-    console.log('[PlatformPickerOverlayContext] onStartConnect changed to:', !!onStartConnect);
+    log.debug('[PlatformPickerOverlayContext] onStartConnect changed to:', !!onStartConnect);
   }, [onStartConnect]);
 
   const show = useCallback(() => {
-    console.log('[PlatformPickerOverlayContext] show() called');
+    log.debug('[PlatformPickerOverlayContext] show() called');
     setVisible(true);
   }, []);
   const hide = useCallback(() => {
-    console.log('[PlatformPickerOverlayContext] hide() called');
+    log.debug('[PlatformPickerOverlayContext] hide() called');
     setVisible(false);
   }, []);
   const enableForScreen = useCallback((handler: StartConnectHandler) => {
     setOnStartConnect(() => handler);
   }, []);
   const disableForScreen = useCallback(() => {
-    console.log('[PlatformPickerOverlayContext] disableForScreen() called');
+    log.debug('[PlatformPickerOverlayContext] disableForScreen() called');
     setOnStartConnect(undefined);
     // Don't automatically hide - let the user explicitly call hide()
     // setVisible(false);

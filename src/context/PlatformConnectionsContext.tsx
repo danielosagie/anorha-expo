@@ -1,7 +1,11 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import { ensureSupabaseJwt } from '../../lib/supabase';
+import { subscribePlatformConnectionChanges } from '../lib/platformConnectionsRealtime';
 import { API_BASE_URL } from '../config/env';
-import { io, Socket } from 'socket.io-client';
+import { acquireCollaborationSocket, releaseCollaborationSocket, type Socket } from '../lib/collaborationSocket';
+import { createLogger } from '../utils/logger';
+const log = createLogger('PlatformConnectionsContext');
+
 
 export type PlatformKey = 'shopify' | 'square' | 'clover' | 'ebay' | 'facebook' | 'amazon' | 'depop' | 'whatnot' | 'etsy';
 
@@ -43,7 +47,6 @@ type ContextValue = {
 const PlatformConnectionsContext = createContext<ContextValue | undefined>(undefined);
 
 const API_BASE = API_BASE_URL;
-const SOCKET_BASE = API_BASE.endsWith('/api') ? API_BASE.replace(/\/api$/, '') : API_BASE;
 const CONNECTION_STATUS_SET = new Set(['active', 'inactive', 'pending', 'review', 'ready_to_sync', 'scanning', 'syncing', 'reconciling', 'error']);
 const TERMINAL_STATUS_SET = new Set(['active', 'review', 'error']);
 const PROGRESS_OVERRIDE_TTL_MS = 2 * 60 * 1000;
@@ -58,7 +61,6 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
   const [progressByConnectionId, setProgressByConnectionId] = useState<Record<string, SyncProgressUpdate>>({});
   const [authReady, setAuthReady] = useState(false);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const socketRef = useRef<Socket | null>(null);
 
   const fetchConnections = useCallback(async () => {
     setLoading(true);
@@ -118,7 +120,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
   const scheduleRefresh = useCallback((reason: string) => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     refreshTimerRef.current = setTimeout(() => {
-      console.log(`[PlatformConnectionsContext] Refreshing connections (${reason})`);
+      log.debug(`[PlatformConnectionsContext] Refreshing connections (${reason})`);
       fetchConnections();
     }, 600);
     // NOTE: do NOT add `scheduleRefresh` to its own deps — the self-reference made
@@ -128,141 +130,82 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
 
   useEffect(() => {
     fetchConnections();
-
-    let channel: ReturnType<typeof supabase.channel> | null = null;
-    let retryCount = 0;
-    const maxRetries = 3;
-    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
-
-    const setupSubscription = () => {
-      // Subscribe to realtime updates for PlatformConnections table
-      channel = supabase
-        // Stable channel name: a `Date.now()` suffix produced a new, distinctly-named
-        // channel on every (re)subscribe, risking orphaned channels on the server.
-        .channel('platform-connections-changes')
-        .on(
-          'postgres_changes',
-          {
-            event: '*', // Listen for INSERT, UPDATE, DELETE
-            schema: 'public',
-            table: 'PlatformConnections',
-          },
-          (payload) => {
-            console.log('[PlatformConnectionsContext] Realtime update received:', payload.eventType);
-            // Refetch all connections on any change
-            scheduleRefresh('realtime');
-          }
-        )
-        .subscribe((status) => {
-          console.log('[PlatformConnectionsContext] Realtime subscription status:', status);
-          if (status === 'SUBSCRIBED') {
-            retryCount = 0; // Reset on success
-          } else if (status === 'CHANNEL_ERROR') {
-            // Auto-retry with exponential backoff
-            if (retryCount < maxRetries) {
-              const delay = Math.min(1000 * Math.pow(2, retryCount), 10000);
-              console.log(`[PlatformConnectionsContext] Retrying in ${delay}ms (attempt ${retryCount + 1}/${maxRetries})`);
-              retryTimeout = setTimeout(() => {
-                retryCount++;
-                if (channel) supabase.removeChannel(channel);
-                setupSubscription();
-              }, delay);
-            } else {
-              console.error('[PlatformConnectionsContext] Max retries reached for realtime subscription');
-            }
-          }
-        });
-    };
-
-    setupSubscription();
-
-    // Cleanup subscription on unmount
-    return () => {
-      console.log('[PlatformConnectionsContext] Unsubscribing from realtime updates');
-      if (retryTimeout) clearTimeout(retryTimeout);
-      if (channel) supabase.removeChannel(channel);
-    };
-  }, [fetchConnections]);
+    // Realtime change-signal now lives in the data layer (src/lib) per the
+    // no-raw-channel-in-contexts rule; on any PlatformConnections change we refetch
+    // (the API enriches the rows beyond what a raw table row provides).
+    const unsubscribe = subscribePlatformConnectionChanges(() => scheduleRefresh('realtime'));
+    return unsubscribe;
+  }, [fetchConnections, scheduleRefresh]);
 
   useEffect(() => {
+    if (!authReady) return;
+
     let isCancelled = false;
-    if (!authReady) {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-        socketRef.current = null;
-      }
-      return;
-    }
-
-    const connectSocket = async () => {
-      try {
-        const token = await ensureSupabaseJwt();
-        if (!token || isCancelled) return;
-
-        if (socketRef.current) {
-          socketRef.current.disconnect();
-          socketRef.current = null;
-        }
-
-        const socket = io(`${SOCKET_BASE}/collaboration`, {
-          transports: ['websocket'],
-          timeout: 5000,
-          auth: { token },
-          query: { token },
-        });
-
-        socket.on('connect', () => {
-          console.log('[PlatformConnectionsContext] Socket connected');
-        });
-
-        socket.on('connect_error', (err: any) => {
-          console.error('[PlatformConnectionsContext] Socket connection error:', err);
-        });
-
-        socket.on('disconnect', () => {
-          console.log('[PlatformConnectionsContext] Socket disconnected');
-        });
-
-        socket.on('sync:progress', (data: Omit<SyncProgressUpdate, 'receivedAt'>) => {
-          if (!data?.connectionId) return;
-          const receivedAt = Date.now();
-          setProgressByConnectionId(prev => ({
-            ...prev,
-            [data.connectionId]: { ...data, receivedAt },
-          }));
-
-          const status = normalizeStatus(data.status);
-          if (TERMINAL_STATUS_SET.has(status) || (typeof data.progress === 'number' && data.progress >= 100)) {
-            scheduleRefresh('progress-terminal');
-          }
-        });
-
-        socket.on('connection:status', (data: { connectionId: string; status: string; platformType?: string; timestamp?: string }) => {
-          if (!data?.connectionId) return;
-          const status = normalizeStatus(data.status);
-          if (!status) return;
-          setConnections(prev =>
-            prev.map(conn => (conn.Id === data.connectionId ? { ...conn, Status: status } : conn))
-          );
-          if (TERMINAL_STATUS_SET.has(status)) {
-            scheduleRefresh('connection-status');
-          }
-        });
-
-        socketRef.current = socket;
-      } catch (error) {
-        console.error('[PlatformConnectionsContext] Failed to connect socket:', error);
+    let socket: Socket | null = null;
+    // Exactly-once release: acquireCollaborationSocket() bumps the refcount
+    // synchronously, so every acquire must be balanced by one release regardless
+    // of how this effect resolves or unmounts.
+    let released = false;
+    const releaseOnce = () => {
+      if (!released) {
+        released = true;
+        releaseCollaborationSocket();
       }
     };
 
-    connectSocket();
+    // Stable handler refs so cleanup off()s exactly these — the shared socket is
+    // also used by useSyncProgress/useCollaboration, so never blanket-remove.
+    const onSyncProgress = (data: Omit<SyncProgressUpdate, 'receivedAt'>) => {
+      if (!data?.connectionId) return;
+      const receivedAt = Date.now();
+      setProgressByConnectionId(prev => ({
+        ...prev,
+        [data.connectionId]: { ...data, receivedAt },
+      }));
+
+      const status = normalizeStatus(data.status);
+      if (TERMINAL_STATUS_SET.has(status) || (typeof data.progress === 'number' && data.progress >= 100)) {
+        scheduleRefresh('progress-terminal');
+      }
+    };
+
+    const onConnectionStatus = (data: { connectionId: string; status: string; platformType?: string; timestamp?: string }) => {
+      if (!data?.connectionId) return;
+      const status = normalizeStatus(data.status);
+      if (!status) return;
+      setConnections(prev =>
+        prev.map(conn => (conn.Id === data.connectionId ? { ...conn, Status: status } : conn))
+      );
+      if (TERMINAL_STATUS_SET.has(status)) {
+        scheduleRefresh('connection-status');
+      }
+    };
+
+    // Use the ONE shared, ref-counted /collaboration socket instead of opening a
+    // second io() connection to the same namespace.
+    acquireCollaborationSocket()
+      .then((s) => {
+        if (isCancelled || !s) {
+          releaseOnce();
+          return;
+        }
+        socket = s;
+        s.on('sync:progress', onSyncProgress);
+        s.on('connection:status', onConnectionStatus);
+      })
+      .catch((error) => {
+        log.error('[PlatformConnectionsContext] Failed to acquire collaboration socket:', error);
+        releaseOnce();
+      });
 
     return () => {
       isCancelled = true;
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-        socketRef.current = null;
+      if (socket) {
+        socket.off('sync:progress', onSyncProgress);
+        socket.off('connection:status', onConnectionStatus);
+        socket = null;
       }
+      releaseOnce();
     };
   }, [authReady, scheduleRefresh]);
 

@@ -3,6 +3,9 @@ import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, TextInput, TouchableOpacity, Image, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
+import { createLogger } from '../utils/logger';
+const log = createLogger('VariantInventoryRow');
+
 
 interface VariantInventoryRowProps {
     variantName: string;
@@ -56,7 +59,7 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
     }, [quantity]);
 
     useEffect(() => {
-        console.log(`[VariantInventoryRow] Price prop changed for variant ${variantId}: prop=${price}, localPrice=${localPrice}, willUpdate=${String(price) !== localPrice}`);
+        log.debug(`[VariantInventoryRow] Price prop changed for variant ${variantId}: prop=${price}, localPrice=${localPrice}, willUpdate=${String(price) !== localPrice}`);
         if (String(price) !== localPrice) {
             setLocalPrice(String(price));
         }
@@ -126,24 +129,29 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
                 <View style={styles.leftCol}>
                     <Text style={styles.variantNameBadge}>{variantName}</Text>
 
-                    {/* Inputs Column - 2 column layout */}
+                    {/* Inputs Column — label + control */}
                     <View style={styles.inputsCol}>
 
-                        {/* Quantity Row - no +/- buttons on platform tabs */}
+                        {/* Quantity Row — roomy stepper */}
                         <View style={styles.inputRow}>
                             <View style={styles.labelCol}>
-                                <Text style={styles.label}>Quantity:</Text>
+                                <Text style={styles.label}>Quantity</Text>
                             </View>
                             <View style={styles.inputCol}>
-                                <View style={styles.priceContainer}>
-                                    <Text style={[styles.currencySymbol, { color: '#ffffffff' }]}>$</Text>
+                                <View style={styles.stepper}>
+                                    <TouchableOpacity onPress={handleDecrement} style={styles.stepBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}>
+                                        <Icon name="minus" size={16} color="#374151" />
+                                    </TouchableOpacity>
                                     <TextInput
-                                        style={[styles.qtyInputSimple, externalUpdateQuantity && { borderColor: BRAND_PRIMARY, borderWidth: 2 }]}
+                                        style={[styles.stepInput, externalUpdateQuantity && { color: BRAND_PRIMARY }]}
                                         value={localQty}
                                         onChangeText={handleQtyChange}
                                         keyboardType="number-pad"
                                         selectTextOnFocus
                                     />
+                                    <TouchableOpacity onPress={handleIncrement} style={styles.stepBtn} hitSlop={{ top: 8, bottom: 8, left: 4, right: 8 }}>
+                                        <Icon name="plus" size={16} color="#374151" />
+                                    </TouchableOpacity>
                                 </View>
                             </View>
                         </View>
@@ -151,13 +159,13 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
                         {/* Price Row */}
                         <View style={styles.inputRow}>
                             <View style={styles.labelCol}>
-                                <Text style={styles.label}>Price:</Text>
+                                <Text style={styles.label}>Price</Text>
                             </View>
                             <View style={styles.inputCol}>
-                                <View style={styles.priceContainer}>
+                                <View style={[styles.priceBox, priceInputStyle, externalUpdatePrice && { borderColor: BRAND_PRIMARY, borderWidth: 2 }]}>
                                     <Text style={[styles.currencySymbol, isGlobalPrice && { color: '#1976D2' }]}>$</Text>
                                     <TextInput
-                                        style={[styles.priceInput, priceInputStyle, externalUpdatePrice && { borderColor: BRAND_PRIMARY, borderWidth: 2 }]}
+                                        style={[styles.priceInputInner, { color: priceInputStyle.color }]}
                                         value={localPrice}
                                         onChangeText={handlePriceChange}
                                         keyboardType="decimal-pad"
@@ -338,6 +346,47 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderRadius: 8,
         padding: 0,
+    },
+    /* Modernized per-platform controls */
+    stepper: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#F3F4F6',
+        borderRadius: 10,
+        height: 40,
+        alignSelf: 'flex-start',
+        paddingHorizontal: 2,
+    },
+    stepBtn: {
+        paddingHorizontal: 12,
+        height: '100%',
+        justifyContent: 'center',
+    },
+    stepInput: {
+        minWidth: 40,
+        textAlign: 'center',
+        fontWeight: '700',
+        fontSize: 15,
+        color: '#111827',
+        height: '100%',
+        padding: 0,
+    },
+    priceBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 2,
+        height: 40,
+        borderWidth: 1,
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        alignSelf: 'flex-start',
+    },
+    priceInputInner: {
+        minWidth: 56,
+        fontWeight: '700',
+        fontSize: 15,
+        padding: 0,
+        height: '100%',
     },
     imageSlot: {
         width: 100,

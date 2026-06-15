@@ -1,5 +1,8 @@
 import { AppState, AppStateStatus } from 'react-native';
 import { AuthPersistence } from './AuthPersistence';
+import { createLogger } from './logger';
+const log = createLogger('AppStateManager');
+
 
 export class AppStateManager {
   private static instance: AppStateManager;
@@ -21,24 +24,24 @@ export class AppStateManager {
 
   private setupAppStateListener(): void {
     this.appStateSubscription = AppState.addEventListener('change', this.handleAppStateChange);
-    console.log('[AppStateManager] App state listener initialized');
+    log.debug('[AppStateManager] App state listener initialized');
   }
 
   private handleAppStateChange = (nextAppState: AppStateStatus): void => {
-    console.log('[AppStateManager] App state changed to:', nextAppState);
+    log.debug('[AppStateManager] App state changed to:', nextAppState);
     
     if (nextAppState === 'background') {
       this.backgroundTimestamp = Date.now();
-      console.log('[AppStateManager] App went to background');
+      log.debug('[AppStateManager] App went to background');
     } else if (nextAppState === 'active' && this.backgroundTimestamp) {
       const backgroundDuration = Date.now() - this.backgroundTimestamp;
       const fiveMinutes = 5 * 60 * 1000;
       
-      console.log('[AppStateManager] App returned to foreground after:', backgroundDuration / 1000, 'seconds');
+      log.debug('[AppStateManager] App returned to foreground after:', backgroundDuration / 1000, 'seconds');
       
       // If app was in background for more than 5 minutes, validate auth
       if (backgroundDuration > fiveMinutes) {
-        console.log('[AppStateManager] App was backgrounded for >5 minutes, triggering auth validation');
+        log.debug('[AppStateManager] App was backgrounded for >5 minutes, triggering auth validation');
         this.onAuthValidationNeeded?.();
       }
       
@@ -50,7 +53,7 @@ export class AppStateManager {
     if (this.appStateSubscription) {
       this.appStateSubscription.remove();
       this.appStateSubscription = null;
-      console.log('[AppStateManager] App state listener cleaned up');
+      log.debug('[AppStateManager] App state listener cleaned up');
     }
   }
 }

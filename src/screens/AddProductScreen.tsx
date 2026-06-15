@@ -61,6 +61,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
   PanResponder,
+  AppState,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
@@ -132,6 +133,9 @@ import {
   PendingBillingAction,
   savePendingBillingAction,
 } from '../utils/billingGatePersistence';
+import { createLogger } from '../utils/logger';
+const log = createLogger('AddProductScreen');
+
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BULK_MODAL_FTUX_KEY = '@anorha_hasSeenBulkItemsModal';
@@ -482,7 +486,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const draftSessionCreatePromiseRef = useRef<Promise<string | null> | null>(null);
   const hasAutoOpenedFtuxRef = useRef(false);
 
-  console.log('[RENDER] AddProductScreen rendered');
+  log.debug('[RENDER] AddProductScreen rendered');
 
   // Camera state
   const [facing, setFacing] = useState<CameraType>('back');
@@ -549,7 +553,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           })));
         }
       } catch (e) {
-        console.error('[AddProduct] Error fetching locations:', e);
+        log.error('[AddProduct] Error fetching locations:', e);
       }
     };
     fetchLocations();
@@ -596,7 +600,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           if (shelfUri) shelfPhotoUriForDraftRef.current = shelfUri;
         }
       } catch (e) {
-        console.error('[AddProduct] Hydrate draft failed:', e);
+        log.error('[AddProduct] Hydrate draft failed:', e);
       } finally {
         if (!cancelled) isHydratingRef.current = false;
       }
@@ -650,7 +654,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         body: JSON.stringify(toQuickScanSessionBody(payload)),
       });
     } catch (e) {
-      console.warn('[AddProduct] Save draft failed:', e);
+      log.warn('[AddProduct] Save draft failed:', e);
     }
   }, [ensureDraftSessionId]);
 
@@ -807,7 +811,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   useEffect(() => {
     if (genJobs.length === 0) return;
     let cancelled = false;
+    let inFlight = false; // dedup: don't stack overlapping polls if a tick runs >1.5s
+    let interval: ReturnType<typeof setInterval> | null = null;
     const poll = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
       const token = await ensureSupabaseJwt();
       if (!token || cancelled) return;
       for (const job of genJobs) {
@@ -859,10 +868,31 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           /* transient — keep polling */
         }
       }
+      } finally {
+        inFlight = false;
+      }
+    };
+    const startInterval = () => {
+      if (!interval && !cancelled) interval = setInterval(() => { void poll(); }, 1500);
+    };
+    const stopInterval = () => {
+      if (interval) { clearInterval(interval); interval = null; }
     };
     void poll();
-    const interval = setInterval(() => { void poll(); }, 1500);
-    return () => { cancelled = true; clearInterval(interval); };
+    startInterval();
+    // Pause polling while the app is backgrounded; resume + poll immediately on foreground.
+    let prevAppState = AppState.currentState;
+    const sub = AppState.addEventListener('change', (next) => {
+      const wasBackground = /inactive|background/.test(prevAppState);
+      prevAppState = next;
+      if (next === 'active') { startInterval(); if (wasBackground) void poll(); }
+      else if (/inactive|background/.test(next)) stopInterval();
+    });
+    return () => {
+      cancelled = true;
+      stopInterval();
+      sub.remove();
+    };
   }, [genJobs, setItemStageById]);
 
   // Click → GenerateDetailsScreen for a queued/generated item: per-item finalize + the built-in
@@ -1252,7 +1282,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Force re-render counter for debugging
   const [forceRenderCount, setForceRenderCount] = useState(0);
   const forceRerender = useCallback(() => {
-    console.log('[FORCE RENDER] Forcing component re-render');
+    log.debug('[FORCE RENDER] Forcing component re-render');
     setForceRenderCount(prev => prev + 1);
   }, []);
   const captureButtonScale = useSharedValue(1);
@@ -1277,7 +1307,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     loadPendingBillingAction().then((pending) => {
       pendingBillingActionRef.current = pending;
     }).catch((error) => {
-      console.warn('[AddProduct] Failed to hydrate pending billing action:', error);
+      log.warn('[AddProduct] Failed to hydrate pending billing action:', error);
     });
   }, []);
 
@@ -1461,7 +1491,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     setCurrentInstruction('focus');
 
     // TODO: Implement actual focus at coordinates
-    console.log('Focus at:', locationX, locationY);
+    log.debug('Focus at:', locationX, locationY);
 
     setTimeout(() => {
       setCurrentInstruction('ready');
@@ -1535,7 +1565,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           // SIMPLIFIED: Always create real items, regardless of mode
           if (bulkItems.length === 0) {
             // Very first photo ever - create first item
-            console.log('[ITEM CREATION] Creating FIRST ITEM (no items exist yet)');
+            log.debug('[ITEM CREATION] Creating FIRST ITEM (no items exist yet)');
             const firstItem = {
               id: `item-${Date.now()}`,
               photos: [newPhoto],
@@ -1545,12 +1575,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             setBulkItems([firstItem]);
             setActiveItemId(firstItem.id);
             capture(AnalyticsEvents.PRODUCT_ADDED, { source: 'camera' });
-            console.log('[ITEM CREATION] Created first item:', firstItem.id);
-            console.log('[ITEM CREATION] Triggering quick scan (first photo of first item)');
+            log.debug('[ITEM CREATION] Created first item:', firstItem.id);
+            log.debug('[ITEM CREATION] Triggering quick scan (first photo of first item)');
 
-            console.log('[FIRST ITEM] Created first item with ID:', firstItem.id);
+            log.debug('[FIRST ITEM] Created first item with ID:', firstItem.id);
             setTimeout(() => {
-              console.log('[FIRST ITEM] About to call performQuickScan for first item:', firstItem.id);
+              log.debug('[FIRST ITEM] About to call performQuickScan for first item:', firstItem.id);
               performQuickScan(newPhoto, firstItem.id);
             }, 500);
 
@@ -1606,7 +1636,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
 
     } catch (error) {
-      console.error('Error taking photo:', error);
+      log.error('Error taking photo:', error);
       Alert.alert('Error', 'Failed to take photo. Please try again.');
       setCurrentInstruction('ready');
       stopProgressAnimation();
@@ -1638,7 +1668,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     setCurrentInstruction('barcode_scanned');
     setBarcodeNotificationCount(prev => prev + 1);
 
-    console.log('Barcode scanned:', scanningResult.data);
+    log.debug('Barcode scanned:', scanningResult.data);
 
     // Search backend for this barcode (once only)
     searchBarcodeOnBackend(scanningResult.data);
@@ -1655,7 +1685,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     try {
       setBarcodeSearching(true);
       setCurrentInstruction('processing');
-      console.log(`[BARCODE] Searching backend for barcode: ${barcode}`);
+      log.debug(`[BARCODE] Searching backend for barcode: ${barcode}`);
 
       const token = await ensureSupabaseJwt();
       if (!token) {
@@ -1677,7 +1707,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       );
 
       if (!response.ok) {
-        console.log(`[BARCODE] Search returned status ${response.status}`);
+        log.debug(`[BARCODE] Search returned status ${response.status}`);
         setBarcodeSearching(false);
         setCurrentInstruction('ready');
         return;
@@ -1686,26 +1716,26 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       const data = await safeJson<any>(response);
 
       if (!data) {
-        console.warn('[BARCODE] Non-JSON response from lookup');
+        log.warn('[BARCODE] Non-JSON response from lookup');
         setCurrentInstruction('ready');
         return;
       }
 
       if (data.error) {
-        console.log(`[BARCODE] Product not found: ${data.error}`);
+        log.debug(`[BARCODE] Product not found: ${data.error}`);
         Alert.alert('Product Not Found', data.error);
         setBarcodeSearching(false);
         setCurrentInstruction('ready');
         return;
       }
 
-      console.log(`[BARCODE] Found product:`, data.variant.Title);
+      log.debug(`[BARCODE] Found product:`, data.variant.Title);
       setBarcodeSearchResult(data);
       setShowBarcodeResultModal(true);
       setBarcodeSearching(false);
       setCurrentInstruction('ready');
     } catch (error) {
-      console.error(`[BARCODE] Search error:`, error);
+      log.error(`[BARCODE] Search error:`, error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       Alert.alert('Search Error', `Failed to search: ${errorMessage}`);
       setBarcodeSearching(false);
@@ -1757,7 +1787,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       const rawApiBase = API_BASE_URL;
       const API_BASE = rawApiBase;
 
-      console.log(`[SHELF MODE] Starting SSE stream with ${base64.length} bytes`);
+      log.debug(`[SHELF MODE] Starting SSE stream with ${base64.length} bytes`);
       const sseUrl = `${API_BASE}/api/products/orchestrate/quick-scan-stream`;
       shelfScanStreamRef.current = openQuickScanStream({
         url: sseUrl,
@@ -1771,7 +1801,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         },
         onConnectionError: (message) => {
           const parsedError = parseShelfScanErrorMessage(message);
-          console.error('[SHELF MODE] Stream error:', message);
+          log.error('[SHELF MODE] Stream error:', message);
           stopShelfScan('error', {
             phase: 'finishing',
             progress: 1,
@@ -1780,7 +1810,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           });
         },
         onEvent: (parsed: QuickScanStreamEvent) => {
-          console.log('[SHELF MODE] Stream event:', parsed.type);
+          log.debug('[SHELF MODE] Stream event:', parsed.type);
           const presentation = getShelfProgressPresentation({
             phase: parsed.phase || 'inspecting_shelf',
             progress: typeof parsed.progress === 'number' ? parsed.progress : 0,
@@ -1963,7 +1993,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           }
 
           if (parsed.type === 'ERROR') {
-            console.error('[SHELF MODE] Agent error:', parsed.message);
+            log.error('[SHELF MODE] Agent error:', parsed.message);
             const parsedError = parseShelfScanErrorMessage(parsed.message);
             stopShelfScan('error', {
               phase: 'finishing',
@@ -1977,7 +2007,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       });
 
     } catch (error: any) {
-      console.error(`[SHELF MODE] Error:`, error);
+      log.error(`[SHELF MODE] Error:`, error);
       stopShelfScan('error', {
         phase: 'finishing',
         progress: 1,
@@ -2110,8 +2140,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }, [flash]);
 
   const handleContinue = useCallback(async () => {
-    console.log('[CONTINUE] Button pressed, opening search sheet');
-    console.log('[CONTINUE] Current state:', {
+    log.debug('[CONTINUE] Button pressed, opening search sheet');
+    log.debug('[CONTINUE] Current state:', {
       capturedPhotosCount: capturedPhotos.length,
       isBulkMode,
       bulkItemsCount: bulkItems.length,
@@ -2167,7 +2197,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
     // BARCODE MODE: Open barcode result modal if we have a result
     if (cameraMode === 'barcode' && barcodeSearchResult) {
-      console.log('[CONTINUE] Barcode mode - opening barcode result modal');
+      log.debug('[CONTINUE] Barcode mode - opening barcode result modal');
       setShowBarcodeResultModal(true);
       return;
     }
@@ -2180,7 +2210,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         return;
       }
 
-      console.log('[CONTINUE] Manifest mode - parsing', allPhotos.length, 'pages');
+      log.debug('[CONTINUE] Manifest mode - parsing', allPhotos.length, 'pages');
       showNotificationMessage('Parsing manifest...', 10000);
 
       try {
@@ -2204,7 +2234,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               });
               return { base64, filename: `page_${index + 1}.jpg` };
             } catch (e) {
-              console.error('[MANIFEST] Failed to read photo:', e);
+              log.error('[MANIFEST] Failed to read photo:', e);
               return null;
             }
           })
@@ -2236,7 +2266,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         if (!data?.jobId) {
           throw new Error('Invalid response from manifest endpoint');
         }
-        console.log('[MANIFEST] Job started:', data.jobId);
+        log.debug('[MANIFEST] Job started:', data.jobId);
 
         // Show the ManifestReviewSheet with the job ID
         setManifestJobId(data.jobId);
@@ -2247,7 +2277,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         setActiveItemId(null);
 
       } catch (error: any) {
-        console.error('[MANIFEST] Error:', error);
+        log.error('[MANIFEST] Error:', error);
         Alert.alert('Error', error.message || 'Failed to parse manifest');
       }
 
@@ -2262,7 +2292,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         return;
       }
 
-      console.log('[CONTINUE] Receipt mode - processing', allPhotos.length, 'receipts');
+      log.debug('[CONTINUE] Receipt mode - processing', allPhotos.length, 'receipts');
       showNotificationMessage('Processing receipt...', 10000);
 
       try {
@@ -2284,7 +2314,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               });
               return { base64, filename: `receipt_${index + 1}.jpg` };
             } catch (e) {
-              console.error('[RECEIPT] Failed to read photo:', e);
+              log.error('[RECEIPT] Failed to read photo:', e);
               return null;
             }
           })
@@ -2316,7 +2346,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         if (!data?.jobId) {
           throw new Error('Invalid response from receipt endpoint');
         }
-        console.log('[RECEIPT] Job started:', data.jobId);
+        log.debug('[RECEIPT] Job started:', data.jobId);
 
         // Show the ReceiptReviewSheet with the job ID
         setReceiptJobId(data.jobId);
@@ -2327,7 +2357,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         setActiveItemId(null);
 
       } catch (error: any) {
-        console.error('[RECEIPT] Error:', error);
+        log.error('[RECEIPT] Error:', error);
         Alert.alert('Error', error.message || 'Failed to process receipt');
       }
 
@@ -2355,7 +2385,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
     if (!result.canceled && result.assets?.length) {
       const assets = result.assets;
-      console.log('[IMAGE UPLOAD] Adding', assets.length, 'uploaded image(s)');
+      log.debug('[IMAGE UPLOAD] Adding', assets.length, 'uploaded image(s)');
 
       // Build CapturedPhoto for each selected asset (no crop frame)
       const newPhotos: CapturedPhoto[] = assets.map((asset, idx) => ({
@@ -2370,7 +2400,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // SHELF MODE: Route uploaded image to shelf extraction instead of normal bulkItems
       // ONLY if we don't already have items. If we have items, we are likely adding photos to one of them.
       if (cameraMode === 'shelf' && newPhotos.length > 0 && bulkItems.length === 0) {
-        console.log('[IMAGE UPLOAD] Shelf mode - routing to handleShelfModeScan');
+        log.debug('[IMAGE UPLOAD] Shelf mode - routing to handleShelfModeScan');
         const shelfPhoto = newPhotos[0];
         setCapturedPhotos(prev => [...prev, shelfPhoto]);
         setShelfPhotoUri(shelfPhoto.uri);
@@ -2439,12 +2469,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   const handleDragStart = useCallback((photoId: string) => {
     setDraggedPhotoId(photoId);
-    console.log('Drag started for photo:', photoId);
+    log.debug('Drag started for photo:', photoId);
   }, []);
 
   const handleDragEnd = useCallback(() => {
     setDraggedPhotoId(null);
-    console.log('Drag ended');
+    log.debug('Drag ended');
   }, []);
 
   // Reorder photos within active item (simplified)
@@ -2471,7 +2501,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         'Content-Type': 'application/json',
       };
     } catch (error) {
-      console.error('Error getting auth headers:', error);
+      log.error('Error getting auth headers:', error);
       return {
         'Content-Type': 'application/json',
         // 'Authorization': `Bearer ${token}`, // Uncomment when you have auth
@@ -2487,7 +2517,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Compresses/resizes before upload to reduce storage and egress (Supabase Free Plan)
   const uploadImageToSupabase = useCallback(async (localUri: string, photoId: string): Promise<string> => {
     try {
-      console.log('[UPLOAD] Starting upload for:', photoId);
+      log.debug('[UPLOAD] Starting upload for:', photoId);
 
       // Get current user
       const { data: { user } } = await supabase.auth.getUser();
@@ -2527,7 +2557,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         });
 
       if (error) {
-        console.error('[UPLOAD] Supabase upload error:', error);
+        log.error('[UPLOAD] Supabase upload error:', error);
         throw error;
       }
 
@@ -2537,11 +2567,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         .getPublicUrl(fileName);
 
       const publicUrl = urlData.publicUrl;
-      console.log('[UPLOAD] Successfully uploaded to:', publicUrl);
+      log.debug('[UPLOAD] Successfully uploaded to:', publicUrl);
 
       return publicUrl;
     } catch (error) {
-      console.error('[UPLOAD] Failed to upload image:', error);
+      log.error('[UPLOAD] Failed to upload image:', error);
       throw error;
     }
   }, []);
@@ -2554,14 +2584,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   ) => {
     if (isAutoScanning) {
       if (quickScanQueueRef.current.length >= QUICK_SCAN_QUEUE_LIMIT) {
-        console.log('[QUICK SCAN] Queue limit reached, dropping oldest queued scan');
+        log.debug('[QUICK SCAN] Queue limit reached, dropping oldest queued scan');
         quickScanQueueRef.current.shift();
       }
       const alreadyQueued = quickScanQueueRef.current.some(task => task.itemId === itemId && task.photo.id === photo.id);
       if (!alreadyQueued) {
         quickScanQueueRef.current.push({ photo, itemId });
       }
-      console.log('[QUICK SCAN] Scan in progress, queued follow-up scan');
+      log.debug('[QUICK SCAN] Scan in progress, queued follow-up scan');
       return;
     }
 
@@ -2583,15 +2613,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // Ensure auth bridge is ready and we have a Supabase JWT before any network calls
       const tokenMaybe = await ensureSupabaseJwt();
       if (!tokenMaybe) {
-        console.warn('[QUICK SCAN] No Supabase JWT available. Are you signed in and the Clerk bridge configured?');
+        log.warn('[QUICK SCAN] No Supabase JWT available. Are you signed in and the Clerk bridge configured?');
         showNotificationMessage('Sign in required to scan. Please log in and try again.', 3000);
         scanErrorMessage = 'Sign in required';
         setIsAutoScanning(false);
         return;
       }
-      console.log('[QUICK SCAN] Starting quick scan for photo:', photo.id);
-      console.log('[QUICK SCAN] Photo URI:', photo.uri);
-      console.log('[QUICK SCAN] Timestamp:', new Date().toISOString());
+      log.debug('[QUICK SCAN] Starting quick scan for photo:', photo.id);
+      log.debug('[QUICK SCAN] Photo URI:', photo.uri);
+      log.debug('[QUICK SCAN] Timestamp:', new Date().toISOString());
 
       if (!options?.skipPreflight) {
         const gate = await preflightAIGate('ai_quick_scan', 1);
@@ -2620,9 +2650,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
 
       // Upload image to Supabase Storage first
-      console.log('[QUICK SCAN] Uploading image to Supabase...');
+      log.debug('[QUICK SCAN] Uploading image to Supabase...');
       const publicImageUrl = await uploadImageToSupabase(photo.uri, photo.id);
-      console.log('[QUICK SCAN] Image uploaded to:', publicImageUrl);
+      log.debug('[QUICK SCAN] Image uploaded to:', publicImageUrl);
 
       const token = tokenMaybe;
 
@@ -2655,7 +2685,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         });
       } catch (networkErr) {
         if (quickScanUrlPrimary !== quickScanUrlFallback) {
-          console.warn(`[QUICK SCAN] Primary endpoint failed (${quickScanUrlPrimary}), retrying fallback`);
+          log.warn(`[QUICK SCAN] Primary endpoint failed (${quickScanUrlPrimary}), retrying fallback`);
           response = await fetch(quickScanUrlFallback, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -2682,7 +2712,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // 🎯 FREEMIUM: Handle 402 Payment Required (free tier exhausted)
       if (response.status === 402) {
         const errorData = await response.json();
-        console.log('[QUICK SCAN] Free tier exhausted:', errorData);
+        log.debug('[QUICK SCAN] Free tier exhausted:', errorData);
         const gate = normalizeBillingGateResponse(errorData, 'ai_quick_scan');
         await persistPendingQuickScan(photo, itemId);
         const decision = await presentBillingGateSheet(gate);
@@ -2702,8 +2732,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       if (quickScanCancelledRef.current) return;
 
-      console.log('[QUICK SCAN] Received result for item:', itemId);
-      console.log('[QUICK SCAN] Full result:', JSON.stringify(result, null, 2));
+      log.debug('[QUICK SCAN] Received result for item:', itemId);
+      log.debug('[QUICK SCAN] Full result:', JSON.stringify(result, null, 2));
 
       // Parse backend response - backend returns results array with matches
       const allMatches = result.results?.flatMap((r: any) => r.matches) || result.matches || result.quickScanMatches || [];
@@ -2805,7 +2835,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
               const priceData = priceRes.ok ? await priceRes.json() : null;
               if (!priceData || priceData.error) {
-                console.warn('[QUICK SCAN] pricing research returned no data or error');
+                log.warn('[QUICK SCAN] pricing research returned no data or error');
                 return;
               }
               const recommended = Number(priceData?.recommended ?? priceData?.median ?? priceData?.low ?? 0);
@@ -2843,13 +2873,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 return { ...prev, [itemId]: { ...existing } };
               });
             } catch (enrichErr) {
-              console.warn('[QUICK SCAN] pricing enrichment skipped:', enrichErr);
+              log.warn('[QUICK SCAN] pricing enrichment skipped:', enrichErr);
             }
           })();
         }
 
       } else {
-        console.log('[QUICK SCAN] No matches found');
+        log.debug('[QUICK SCAN] No matches found');
         showNotificationMessage('No quick matches found. Added to review.', 3000);
         setConfirmedQuickMatchByItemId(prev => {
           if (!prev[itemId]) return prev;
@@ -2861,7 +2891,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
 
     } catch (error) {
-      console.error('[QUICK SCAN] scan failed:', error);
+      log.error('[QUICK SCAN] scan failed:', error);
       showNotificationMessage('Quick scan failed. Retrying in background...', 3000);
       scanErrorMessage = error instanceof Error ? error.message : 'Quick scan failed';
     } finally {
@@ -2940,7 +2970,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       refreshFreemiumStatus().catch(() => null);
       maybeResumePendingQuickScan().catch((error) => {
-        console.warn('[AddProduct] Failed to resume pending quick scan:', error);
+        log.warn('[AddProduct] Failed to resume pending quick scan:', error);
         isResumingPendingBillingRef.current = false;
       });
 
@@ -3059,10 +3089,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       photoCount: firstPhotos.length,
     });
     try {
-      console.log('[ANALYZE] Sending payload of ' + firstPhotos.length + ' first photos to backend for analysis, matching, and item creation');
+      log.debug('[ANALYZE] Sending payload of ' + firstPhotos.length + ' first photos to backend for analysis, matching, and item creation');
 
       // Upload images to Supabase Storage first
-      console.log('[ANALYZE] Uploading images to Supabase...');
+      log.debug('[ANALYZE] Uploading images to Supabase...');
 
       const publicImageUrls = await Promise.all(
         firstPhotos.map(photo => uploadImageToSupabase(photo.uri, photo.id))
@@ -3070,7 +3100,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       const products = buildMatchAnalyzeProducts(publicImageUrls, itemsForAnalyze, quickMatchHintsByItemId);
 
-      console.log('[ANALYZE] Images uploaded to:', publicImageUrls);
+      log.debug('[ANALYZE] Images uploaded to:', publicImageUrls);
 
       const finalPayload = {
         products,
@@ -3090,7 +3120,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         throw new Error('No auth token available for analysis request');
       }
       const traceHeaders = await getTraceHeaders();
-      console.log('[ANALYZE] Request details:', {
+      log.debug('[ANALYZE] Request details:', {
         platform: Platform.OS,
         productsCount: finalPayload.products.length,
       });
@@ -3112,7 +3142,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         analyzeResult = null;
       }
 
-      console.log('[ANALYZE] Response status/body:', {
+      log.debug('[ANALYZE] Response status/body:', {
         status: response.status,
         ok: response.ok,
         bodyPreview: responseText.slice(0, 300),
@@ -3124,7 +3154,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       const normalizedJobId = analyzeResult?.jobId || analyzeResult?.job?.jobId || analyzeResult?.data?.jobId || null;
       if (!normalizedJobId) {
-        console.error('[ANALYZE] Missing jobId in response payload:', analyzeResult);
+        log.error('[ANALYZE] Missing jobId in response payload:', analyzeResult);
       }
 
       logFlowEvent(FlowEvents.SCAN_ANALYSIS_COMPLETED, {
@@ -3141,7 +3171,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       logFlowEvent(FlowEvents.SCAN_ANALYSIS_FAILED, {
         error: error instanceof Error ? error.message : String(error),
       });
-      console.error('[ANALYZE] Analyze failed:', error);
+      log.error('[ANALYZE] Analyze failed:', error);
       showNotificationMessage('Analysis failed. Please try again in a second or two.', 3000);
       throw error;
     }
@@ -3183,13 +3213,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return;
     }
     const newItemId = generateItemId();
-    console.log('[ADD NEW ITEM] Starting to add new item:', newItemId);
-    console.log('[ADD NEW ITEM] Current bulk mode:', isBulkMode);
-    console.log('[ADD NEW ITEM] Current items count:', bulkItems.length);
+    log.debug('[ADD NEW ITEM] Starting to add new item:', newItemId);
+    log.debug('[ADD NEW ITEM] Current bulk mode:', isBulkMode);
+    log.debug('[ADD NEW ITEM] Current items count:', bulkItems.length);
 
     // Auto-enable bulk mode when adding items
     if (!isBulkMode) {
-      console.log('[ADD NEW ITEM] Enabling bulk mode');
+      log.debug('[ADD NEW ITEM] Enabling bulk mode');
       setIsBulkMode(true);
       if (capturedPhotos.length > 0) {
         // Create first item with existing photos
@@ -3208,7 +3238,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             isActive: true
           }
         ];
-        console.log('[ADD NEW ITEM] Creating items with existing photos:', newItems);
+        log.debug('[ADD NEW ITEM] Creating items with existing photos:', newItems);
         setBulkItems(newItems);
         setActiveItemId(newItemId);
 
@@ -3230,13 +3260,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           title: undefined,
           isActive: true
         }];
-        console.log('[ADD NEW ITEM] Creating first item:', newItems);
+        log.debug('[ADD NEW ITEM] Creating first item:', newItems);
         setBulkItems(newItems);
         setActiveItemId(newItemId);
       }
     } else {
       // Deactivate all items and add new active one
-      console.log('[ADD NEW ITEM] Adding to existing bulk items');
+      log.debug('[ADD NEW ITEM] Adding to existing bulk items');
       setBulkItems(prev => {
         const newItems = [
           ...prev.map(item => ({ ...item, isActive: false })),
@@ -3247,14 +3277,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             isActive: true
           }
         ];
-        console.log('[ADD NEW ITEM] New items array:', newItems);
+        log.debug('[ADD NEW ITEM] New items array:', newItems);
         return newItems;
       });
       setActiveItemId(newItemId);
     }
 
     if (isBulkMode && bulkItems.length > 0) {
-      console.log("You can't disable bulk mode when there are items in the list");
+      log.debug("You can't disable bulk mode when there are items in the list");
       showNotificationMessage('You can\'t disable bulk mode when there are items in the list', 3000);
       setIsBulkMode(true);
     }
@@ -3263,7 +3293,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // NEW: Handle pressing the match indicator/banner
   const handleMatchIndicatorPress = useCallback(() => {
     if (activeItemId) {
-      console.log('[MATCH CLICK] Indicator pressed for item:', activeItemId);
+      log.debug('[MATCH CLICK] Indicator pressed for item:', activeItemId);
 
       const itemMatches = quickScanStore[activeItemId];
       const hasMatches = (itemMatches?.matchData?.totalMatches || 0) > 0;
@@ -3306,9 +3336,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Select item as active
   const selectActiveItem = useCallback((itemId: string) => {
-    console.log('[SELECT ITEM] Setting active item to:', itemId);
-    console.log('[SELECT ITEM] quickScanStore keys:', Object.keys(quickScanStore));
-    console.log('[SELECT ITEM] quickScanStore for itemId:', quickScanStore[itemId] ? 'EXISTS' : 'MISSING');
+    log.debug('[SELECT ITEM] Setting active item to:', itemId);
+    log.debug('[SELECT ITEM] quickScanStore keys:', Object.keys(quickScanStore));
+    log.debug('[SELECT ITEM] quickScanStore for itemId:', quickScanStore[itemId] ? 'EXISTS' : 'MISSING');
     setBulkItems(prev => {
       // Normalize isActive flags to exactly one active item
       const next = prev.map(item => ({ ...item, isActive: item.id === itemId }));
@@ -3340,7 +3370,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     // Clean up quickScanStore for deleted item
     setQuickScanStore(prev => {
       const { [itemId]: removed, ...rest } = prev;
-      console.log('[DELETE ITEM] Cleaned up quickScanStore for item:', itemId);
+      log.debug('[DELETE ITEM] Cleaned up quickScanStore for item:', itemId);
       return rest;
     });
   }, [activeItemId]);
@@ -3557,7 +3587,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // When starting a broad search or analysis, cancel any in-progress quick scan and reset camera state
   const handleStartBroadSearch = useCallback(() => {
-    console.log('[BROAD SEARCH] Starting broad search: cancelling quick scan and resetting state');
+    log.debug('[BROAD SEARCH] Starting broad search: cancelling quick scan and resetting state');
     
     // Check if we are transitioning from shelf mode to take photos
     if (cameraMode === 'shelf' && bulkItems.length > 0) {
@@ -4260,11 +4290,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                     productId: variantId,  // This is the ProductVariant.Id that ProductDetail expects
                   });
                 } else {
-                  console.error('[QUICK DETAIL] No variant Id found for navigation');
+                  log.error('[QUICK DETAIL] No variant Id found for navigation');
                 }
               }}
               onSave={async (updates) => {
-                console.log('[BARCODE SAVE] Saving updates via API:', updates);
+                log.debug('[BARCODE SAVE] Saving updates via API:', updates);
                 try {
                   const token = await ensureSupabaseJwt();
                   if (!token) throw new Error('No auth token');
@@ -4285,7 +4315,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                       // Find connectionId for the location
                       const locInfo = platformLocations.find(l => l.id === u.location);
                       if (!locInfo?.connectionId) {
-                        console.warn(`[BARCODE SAVE] No connectionId found for location ${u.location}`);
+                        log.warn(`[BARCODE SAVE] No connectionId found for location ${u.location}`);
                         return null;
                       }
                       return {
@@ -4318,7 +4348,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   // User might want to scan next.
                   // Let's keep open for verification or manual close.
                 } catch (e) {
-                  console.error('[BARCODE SAVE] Error:', e);
+                  log.error('[BARCODE SAVE] Error:', e);
                   Alert.alert('Error', 'Failed to save updates');
                 }
               }}
@@ -4349,7 +4379,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   setManifestJobId(null);
                 }}
                 onAddToInventory={(items) => {
-                  console.log('[MANIFEST] Adding items to inventory:', items.length);
+                  log.debug('[MANIFEST] Adding items to inventory:', items.length);
                   Alert.alert(
                     'Coming Soon',
                     `${items.length} items will be added to inventory in a future update.`,
@@ -4389,7 +4419,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   setReceiptJobId(null);
                 }}
                 onApplyUpdates={(updates) => {
-                  console.log('[RECEIPT] Applied updates:', updates.length);
+                  log.debug('[RECEIPT] Applied updates:', updates.length);
                 }}
                 onCreateNew={(itemName) => {
                   // Switch to camera mode with the item name pre-filled

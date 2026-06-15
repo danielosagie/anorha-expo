@@ -16,6 +16,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useAuth } from '@clerk/clerk-expo';
 import { ensureSupabaseJwt, supabase } from '../../lib/supabase';
+import { createLogger } from '../../utils/logger';
+const log = createLogger('OptimizerBatchGenerateView');
+
 
 const { width } = Dimensions.get('window');
 
@@ -76,7 +79,7 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
             list.slice(0, 5).forEach((p: any) => initialSelection.add(p.Id));
             setSelectedIds(initialSelection);
         } catch (err) {
-            console.error('[BatchMode] Error loading', err);
+            log.error('[BatchMode] Error loading', err);
             Alert.alert('Error', 'Failed to load products for batch generation.');
         } finally {
             setLoading(false);

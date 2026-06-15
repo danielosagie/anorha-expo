@@ -1,5 +1,8 @@
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createLogger } from './logger';
+const log = createLogger('AuthPersistence');
+
 
 interface AuthState {
   isAuthenticated: boolean;
@@ -42,13 +45,13 @@ export class AuthPersistence {
       
       await AsyncStorage.setItem(AUTH_STATE_KEY, JSON.stringify(newState));
       this.authState = newState;
-      console.log('[AuthPersistence] Auth state saved:', { 
+      log.debug('[AuthPersistence] Auth state saved:', { 
         isAuthenticated: newState.isAuthenticated, 
         userId: newState.userId,
         email: newState.email
       });
     } catch (error) {
-      console.error('[AuthPersistence] Failed to save auth state:', error);
+      log.error('[AuthPersistence] Failed to save auth state:', error);
     }
   }
 
@@ -62,7 +65,7 @@ export class AuthPersistence {
       this.authState = JSON.parse(stored);
       return this.authState;
     } catch (error) {
-      console.error('[AuthPersistence] Failed to get auth state:', error);
+      log.error('[AuthPersistence] Failed to get auth state:', error);
       return null;
     }
   }
@@ -76,9 +79,9 @@ export class AuthPersistence {
         timestamp: Date.now(),
       };
       await SecureStore.setItemAsync(TOKEN_CACHE_KEY, JSON.stringify(tokenData));
-      console.log('[AuthPersistence] Tokens saved securely');
+      log.debug('[AuthPersistence] Tokens saved securely');
     } catch (error) {
-      console.error('[AuthPersistence] Failed to save tokens:', error);
+      log.error('[AuthPersistence] Failed to save tokens:', error);
     }
   }
 
@@ -93,7 +96,7 @@ export class AuthPersistence {
         supabaseToken: tokenData.supabaseToken,
       };
     } catch (error) {
-      console.error('[AuthPersistence] Failed to get tokens:', error);
+      log.error('[AuthPersistence] Failed to get tokens:', error);
       return null;
     }
   }
@@ -103,9 +106,9 @@ export class AuthPersistence {
       await AsyncStorage.removeItem(AUTH_STATE_KEY);
       await SecureStore.deleteItemAsync(TOKEN_CACHE_KEY);
       this.authState = null;
-      console.log('[AuthPersistence] Auth data cleared');
+      log.debug('[AuthPersistence] Auth data cleared');
     } catch (error) {
-      console.error('[AuthPersistence] Failed to clear auth data:', error);
+      log.error('[AuthPersistence] Failed to clear auth data:', error);
     }
   }
 

@@ -11,6 +11,9 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetchGenerateJobStatus } from '../lib/generateJobs';
+import { createLogger } from '../utils/logger';
+const log = createLogger('useJobsState');
+
 
 // Step status types
 export type StepStatus = 'pending' | 'queued' | 'processing' | 'completed' | 'failed' | 'skipped';
@@ -309,7 +312,7 @@ export function useJobsState(initParams?: JobsStateInitParams): UseJobsStateRetu
                     });
                 }
             } catch (e) {
-                console.warn(`[useJobsState] Failed to poll job ${item.generate.jobId}:`, e);
+                log.warn(`[useJobsState] Failed to poll job ${item.generate.jobId}:`, e);
             }
         }
     }, [items, markGenerateComplete, markGenerateFailed, updateItemGenerate]);

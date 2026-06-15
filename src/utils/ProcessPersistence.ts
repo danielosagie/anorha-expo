@@ -1,4 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createLogger } from './logger';
+const log = createLogger('ProcessPersistence');
+
 
 // Feature flag to disable process persistence during debugging
 const ENABLE_PROCESS_PERSISTENCE = true;
@@ -93,7 +96,7 @@ export class ProcessPersistence {
   // Initialize and load existing processes
   async initialize(userId: string): Promise<void> {
     if (!ENABLE_PROCESS_PERSISTENCE) {
-      console.log('[ProcessPersistence] Process persistence disabled');
+      log.debug('[ProcessPersistence] Process persistence disabled');
       return;
     }
 
@@ -110,10 +113,10 @@ export class ProcessPersistence {
             this.processes.set(process.id, process);
           });
         
-        console.log(`[ProcessPersistence] Loaded ${this.processes.size} active processes for user ${userId}`);
+        log.debug(`[ProcessPersistence] Loaded ${this.processes.size} active processes for user ${userId}`);
       }
     } catch (error) {
-      console.error('[ProcessPersistence] Failed to load processes:', error);
+      log.error('[ProcessPersistence] Failed to load processes:', error);
       // Don't throw - let app continue without process persistence
     }
   }
@@ -130,9 +133,9 @@ export class ProcessPersistence {
       const processListeners = this.listeners.get(process.id) || [];
       processListeners.forEach(listener => listener(process));
       
-      console.log(`[ProcessPersistence] Saved process ${process.id} (${process.type})`);
+      log.debug(`[ProcessPersistence] Saved process ${process.id} (${process.type})`);
     } catch (error) {
-      console.error('[ProcessPersistence] Failed to save process:', error);
+      log.error('[ProcessPersistence] Failed to save process:', error);
     }
   }
 
@@ -202,7 +205,7 @@ export class ProcessPersistence {
     this.processes.delete(processId);
     await this.persistToStorage(process.userId);
     
-    console.log(`[ProcessPersistence] Deleted process ${processId}`);
+    log.debug(`[ProcessPersistence] Deleted process ${processId}`);
   }
 
   // Clean up old completed processes
@@ -221,7 +224,7 @@ export class ProcessPersistence {
 
     if (toDelete.length > 0) {
       await this.persistToStorage(userId);
-      console.log(`[ProcessPersistence] Cleaned up ${toDelete.length} old processes`);
+      log.debug(`[ProcessPersistence] Cleaned up ${toDelete.length} old processes`);
     }
   }
 
@@ -279,7 +282,7 @@ export class ProcessPersistence {
       const userProcesses = this.getAllProcesses(userId);
       await AsyncStorage.setItem(`${PROCESS_STORAGE_KEY}_${userId}`, JSON.stringify(userProcesses));
     } catch (error) {
-      console.error('[ProcessPersistence] Failed to persist to storage:', error);
+      log.error('[ProcessPersistence] Failed to persist to storage:', error);
     }
   }
 }

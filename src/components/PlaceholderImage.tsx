@@ -2,6 +2,9 @@ import React from 'react';
 import { View, Text, StyleSheet, Image } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { createLogger } from '../utils/logger';
+const log = createLogger('PlaceholderImage');
+
 
 interface PlaceholderImageProps {
   size?: number;
@@ -51,7 +54,7 @@ const PlaceholderImage: React.FC<PlaceholderImageProps> = ({
           ]}
           onError={(e) => {
             // This is a simple fallback, you could set a state to show an icon instead
-            console.log('Failed to load image:', e.nativeEvent.error);
+            log.debug('Failed to load image:', e.nativeEvent.error);
           }}
         />
       </View>
