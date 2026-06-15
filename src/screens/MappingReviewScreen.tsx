@@ -98,17 +98,21 @@ const MappingReviewScreen: React.FC = () => {
   const answeredSkips = draftLog.filter((d) => d.kind === 'answer' && d.answer === 'skip').length;
   const broughtInCount = autoMatched + Math.max(0, answered - answeredSkips);
 
-  // Polling for scan completion
+  // Scan completion: react to the sync status instead of polling every 2.5s forever.
+  // syncProgress comes from usePlatformConnections() — a React state value in the dep
+  // array — so this effect already re-runs the moment the socket pushes a new status.
+  // A single bounded fallback re-fetches once if a terminal event is ever missed
+  // (reconnect / background / packet loss), preserving the old poll's safety-net intent
+  // without the forever loop.
   useEffect(() => {
     if (!connectionId || !isScanningEarly) return;
-    const interval = setInterval(() => {
-      const status = syncProgress?.status;
-      if (status === 'review' || status === 'active' || status === 'completed') {
-        refreshSuggestions();
-        clearInterval(interval);
-      }
-    }, 2500);
-    return () => clearInterval(interval);
+    const status = syncProgress?.status;
+    if (status === 'review' || status === 'active' || status === 'completed') {
+      refreshSuggestions();
+      return;
+    }
+    const fallback = setTimeout(() => { refreshSuggestions(); }, 20000);
+    return () => clearTimeout(fallback);
   }, [connectionId, isScanningEarly, syncProgress?.status, refreshSuggestions]);
 
   // Search filter
