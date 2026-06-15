@@ -10,6 +10,7 @@ import PlatformLogo from '../components/PlatformLogo';
 import { getPlatform } from '../config/platforms';
 import ListingEditorForm, { ListingEditorFormRef } from '../components/ListingEditorForm';
 import BottomActionBar from '../components/BottomActionBar';
+import { PageHeader } from '../components/ui/PageHeader';
 import { CameraView } from 'expo-camera';
 import Card from '../components/Card';
 import PlaceholderImage from '../components/PlaceholderImage';
@@ -625,17 +626,17 @@ const ProductDetailScreen = observer(
       if (!detailedItem) return;
 
       try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
+        if (!currentOrg?.id) return;
 
         console.log('[ProductDetail] Loading platform data for variant:', detailedItem.Id, 'ProductId:', detailedItem.ProductId);
 
-        // Load all ACTIVE platform connections for the user
-        // Connections in 'review', 'scanning', or 'error' status shouldn't show their locations
+        // Load all ACTIVE platform connections for the org. (Clerk-native auth configures
+        // the Supabase client with an accessToken, which blocks supabase.auth.getUser();
+        // connections are org-owned, so scope by OrgId — matches Connections/Settings.)
         const { data: connectionsData, error: connectionsError } = await supabase
           .from('PlatformConnections')
           .select('Id, UserId, OrgId, PlatformType, DisplayName, Status, IsEnabled, LastSyncAttemptAt, LastSyncSuccessAt, CreatedAt, UpdatedAt')
-          .eq('UserId', user.id)
+          .eq('OrgId', currentOrg.id)
           .eq('IsEnabled', true)
           .eq('Status', 'active'); // Only show active connections
 
@@ -942,9 +943,9 @@ const ProductDetailScreen = observer(
         setMappings(mappingsData as PlatformProductMapping[] || []);
 
       } catch (error) {
-        console.error('Error loading platform data:', error);
+        console.warn('Error loading platform data:', error);
       }
-    }, [detailedItem]);
+    }, [detailedItem, currentOrg?.id]);
 
     // ========== PARTNERSHIP FUNCTIONS ==========
     // Load partnerships where this org is the SOURCE (we sent the invite)
@@ -3704,40 +3705,32 @@ const ProductDetailScreen = observer(
 
         <ScrollView
           ref={scrollViewRef}
-          stickyHeaderIndices={[0]}
           contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomSafePadding }]}
         >
-          {/* Header with auto-save indicator */}
-          <View style={[styles.header, { backgroundColor: theme.colors.surface }]}>
-            <TouchableOpacity onPress={navigation.goBack} style={styles.backButton}>
-              <Icon name="arrow-left" size={24} color={theme.colors.text} />
-            </TouchableOpacity>
-            <View style={styles.headerCenter}>
-              <Text style={[styles.headerTitle, { color: theme.colors.text }]}>Product Details</Text>
-              {isSaving && (
-                <View style={styles.savingIndicator}>
-                  <ActivityIndicator size="small" color={theme.colors.primary} />
-                  <Text style={[styles.savingText, { color: theme.colors.primary }]}>Saving...</Text>
-                </View>
-              )}
-              {hasUnsavedChanges && (
-                <Text style={{ color: 'orange', fontSize: 12 }}>Unsaved changes</Text>
-              )}
-
-              {!isSaving && lastSaveTime > 0 && (
-                <Text style={[styles.savedText, { color: theme.colors.success }]}>
-                  Saved {new Date(lastSaveTime).toLocaleTimeString()}
-                </Text>
-              )}
-            </View>
-            <View style={styles.headerActions}>
-              <TouchableOpacity
-                onPress={() => setActionMenuVisible(true)}
-                style={styles.refreshButton}
-              >
-                <Icon name="dots-horizontal" size={24} color={theme.colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
+          {/* Header — shared PageHeader (matches Connections/Settings/etc.) */}
+          <View style={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: 4, backgroundColor: theme.colors.surface }}>
+            <PageHeader
+              title="Product Details"
+              onBack={navigation.goBack}
+              right={
+                <>
+                  {isSaving ? (
+                    <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '600' }}>Saving…</Text>
+                  ) : hasUnsavedChanges ? (
+                    <Text style={{ color: '#D97706', fontSize: 12, fontWeight: '600' }}>Unsaved</Text>
+                  ) : lastSaveTime > 0 ? (
+                    <Text style={{ color: theme.colors.success, fontSize: 12, fontWeight: '600' }}>Saved</Text>
+                  ) : null}
+                  <TouchableOpacity
+                    onPress={() => setActionMenuVisible(true)}
+                    activeOpacity={0.85}
+                    style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 }}
+                  >
+                    <Icon name="dots-horizontal" size={22} color="#18181B" />
+                  </TouchableOpacity>
+                </>
+              }
+            />
           </View>
 
 
@@ -3862,17 +3855,7 @@ const ProductDetailScreen = observer(
 
             {/* Active Listings */}
             <Card shadow="none" style={styles.platformsSection}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Active Listings</Text>
-                <TouchableOpacity
-                  onPress={openClearout}
-                  activeOpacity={0.8}
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingVertical: 6, paddingHorizontal: 12 }}
-                >
-                  <Icon name="sprout-outline" size={15} color="#5D7E16" />
-                  <Text style={{ fontSize: 13, fontWeight: '600', color: '#5D7E16' }}>Add to clearout</Text>
-                </TouchableOpacity>
-              </View>
+              <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Active Listings</Text>
 
               {mappings.length > 0 ? (
                 <>
