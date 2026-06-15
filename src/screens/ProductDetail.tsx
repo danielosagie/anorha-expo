@@ -3203,45 +3203,55 @@ const ProductDetailScreen = observer(
     useEffect(() => {
       if (!detailedItem) return;
 
-      log.debug('[ProductDetail] Setting up realtime subscriptions for product:', detailedItem.Id);
+      log.debug('[ProductDetail] Setting up Legend-State realtime subscriptions for product:', detailedItem.Id);
 
-      // Subscribe to product variant changes
-      const productSubscription = supabase
-        .channel(`product-${detailedItem.Id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'ProductVariants',
-            filter: `Id=eq.${detailedItem.Id}`,
-          },
-          (payload) => {
-            log.debug('[ProductDetail] REALTIME EVENT FIRED:', payload.eventType);
-            log.debug('[ProductDetail] hasUnsavedChangesRef.current:', hasUnsavedChangesRef.current);
+      let obs;
+      try {
+        obs = getLegendStateObservables();
+      } catch {
+        return;
+      }
 
-            // ✅ CRITICAL FIX: Check timestamp-based blocking window FIRST
-            // This prevents realtime from overwriting data right after a save
-            if (isInSaveBlockingWindow()) {
-              log.debug('[ProductDetail] ⚠️ BLOCKING REALTIME - in save blocking window (2s after save)');
-              scheduleDeferredExternalReload('product_update_block_window');
-              return;
-            }
+      const disposers: Array<() => void> = [];
+      const track = (d: unknown) => {
+        if (typeof d === 'function') disposers.push(d as () => void);
+      };
 
-            // CRITICAL: Never update if user has unsaved changes
-            if (hasUnsavedChangesRef.current) {
-              log.debug('[ProductDetail] ⚠️ BLOCKING REALTIME - user has unsaved changes');
-              showBanner('External update available. Save your changes first.', false);
-              scheduleDeferredExternalReload('product_update_unsaved');
-              return;
-            }
+      // Subscribe to product variant changes (was channel `product-${detailedItem.Id}`)
+      track(obs?.productVariants$?.onChange?.(({ value, getPrevious, isFromSync }) => {
+        if (!isFromSync) return;
+        const detailId = detailedItem?.Id;
+        if (!detailId) return;
+        const prev = (getPrevious() || {})[detailId];
+        const next = (value || {})[detailId];
+        if (!next || !prev) return;
+        if (JSON.stringify(next) === JSON.stringify(prev)) return;
 
-            if (payload.eventType === 'UPDATE' && payload.new) {
-              const updatedProduct = payload.new as ProductVariant;
-              log.debug('[ProductDetail] Processing realtime update for:', updatedProduct.Title);
+        const updatedProduct = next as ProductVariant;
+        log.debug('[ProductDetail] REALTIME EVENT FIRED: UPDATE');
+        log.debug('[ProductDetail] hasUnsavedChangesRef.current:', hasUnsavedChangesRef.current);
 
-              // ✅ CRITICAL FIX: Merge instead of replacing to preserve nested data
-              setDetailedItem((prev) => {
+        // ✅ CRITICAL FIX: Check timestamp-based blocking window FIRST
+        // This prevents realtime from overwriting data right after a save
+        if (isInSaveBlockingWindow()) {
+          log.debug('[ProductDetail] ⚠️ BLOCKING REALTIME - in save blocking window (2s after save)');
+          scheduleDeferredExternalReload('product_update_block_window');
+          return;
+        }
+
+        // CRITICAL: Never update if user has unsaved changes
+        if (hasUnsavedChangesRef.current) {
+          log.debug('[ProductDetail] ⚠️ BLOCKING REALTIME - user has unsaved changes');
+          showBanner('External update available. Save your changes first.', false);
+          scheduleDeferredExternalReload('product_update_unsaved');
+          return;
+        }
+
+        {
+          log.debug('[ProductDetail] Processing realtime update for:', updatedProduct.Title);
+
+          // ✅ CRITICAL FIX: Merge instead of replacing to preserve nested data
+          setDetailedItem((prev) => {
                 if (!prev) return prev;
 
                 // Check all user-facing scalar fields for meaningful changes.
@@ -3384,49 +3394,48 @@ const ProductDetailScreen = observer(
                 return updated;
               });
             }
-          }
-        )
-        .subscribe();
+      }));
 
-      // Subscribe to inventory level changes - but DON'T trigger full reload if user is editing
-      // CRITICAL FIX: Don't filter by ProductVariantId in the subscription because:
+      // Subscribe to inventory level changes (was UNFILTERED channel `inventory-product-${detailedItem.ProductId}`)
+      // - but DON'T trigger full reload if user is editing
+      // CRITICAL FIX: We don't filter by ProductVariantId on the source because:
       // - detailedItem.Id is often the BASE variant
       // - Inventory is stored against OPTION variants (different IDs)
       // - Instead, we filter in the callback using allProductVariantsRef
-      const inventorySubscription = supabase
-        .channel(`inventory-product-${detailedItem.ProductId}`)
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'InventoryLevels',
-            // No filter here - we check in callback if it's for our product
-          },
-          (payload) => {
-            const updatedLevel = payload.new as InventoryLevel | undefined;
-            const deletedLevel = payload.old as InventoryLevel | undefined;
-            const affectedVariantId = updatedLevel?.ProductVariantId || deletedLevel?.ProductVariantId;
+      track(obs?.inventoryLevels$?.onChange?.(({ value, getPrevious, isFromSync }) => {
+        if (!isFromSync) return;
+        if (!detailedItem?.Id) return;
+        const prevMap = getPrevious() || {};
+        const nextMap = value || {};
+        // Skip the initial / repopulation sync (empty prev): those rows are already on
+        // screen via loadPlatformData(); treating them as INSERTs would storm reloads.
+        if (Object.keys(prevMap).length === 0) return;
+        for (const levelId of new Set([...Object.keys(prevMap), ...Object.keys(nextMap)])) {
+          const updatedLevel = nextMap[levelId] as InventoryLevel | undefined;
+          const deletedLevel = prevMap[levelId] as InventoryLevel | undefined;
+          const isUpdate = !!updatedLevel && !!deletedLevel;
+          if (isUpdate && JSON.stringify(updatedLevel) === JSON.stringify(deletedLevel)) continue;
+          const affectedVariantId = updatedLevel?.ProductVariantId || deletedLevel?.ProductVariantId;
 
             // CRITICAL: Check if this inventory update is for one of our product's variants
             const ourVariantIds = allProductVariantsRef.current.map(v => v.Id);
             if (!affectedVariantId || !ourVariantIds.includes(affectedVariantId)) {
               // Not our product - ignore
-              return;
+              continue;
             }
 
-            log.debug('[ProductDetail] Inventory level updated:', payload.eventType, 'for variant:', affectedVariantId);
+            log.debug('[ProductDetail] Inventory level updated:', isUpdate ? 'UPDATE' : 'INSERT/DELETE', 'for variant:', affectedVariantId);
 
             // CRITICAL: Don't reload if user has unsaved changes - it will overwrite their edits
             if (hasUnsavedChangesRef.current) {
               log.debug('[ProductDetail] ⚠️ Skipping inventory reload - user has unsaved changes');
               showBanner('Inventory changed externally. Save your changes first.');
               scheduleDeferredExternalReload('inventory_unsaved');
-              return;
+              continue;
             }
 
             // Update inventory in place without full page reload
-            if (payload.eventType === 'UPDATE' && updatedLevel) {
+            if (isUpdate && updatedLevel) {
               // Update raw inventory levels and trigger re-render
               setRawInventoryLevels(prev => {
                 const updated = prev.map(level =>
@@ -3531,49 +3540,46 @@ const ProductDetailScreen = observer(
                 loadPlatformData();
               }
             }
-          }
-        )
-        .subscribe();
+        }
+      }));
 
-      // Subscribe to platform mapping changes
-      const mappingSubscription = supabase
-        .channel(`mappings-${detailedItem.Id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'PlatformProductMappings',
-            filter: `ProductVariantId=eq.${detailedItem.Id}`,
-          },
-          (payload) => {
-            log.debug('[ProductDetail] Platform mapping updated:', payload.eventType);
+      // Subscribe to platform mapping changes (was channel `mappings-${detailedItem.Id}`, filter ProductVariantId=eq)
+      track(obs?.platformProductMappings$?.onChange?.(({ value, getPrevious, isFromSync }) => {
+        if (!isFromSync) return;
+        const detailId = detailedItem?.Id;
+        if (!detailId) return;
+        const prevMappings = getPrevious() || {};
+        // Skip the initial / repopulation sync (empty prev) — not a real per-row change.
+        if (Object.keys(prevMappings).length === 0) return;
+        const before = Object.values(prevMappings).filter((m: any) => m?.ProductVariantId === detailId);
+        const after = Object.values(value || {}).filter((m: any) => m?.ProductVariantId === detailId);
+        if (JSON.stringify(before) === JSON.stringify(after)) return;
 
-            // ✅ CRITICAL: Block during save window
-            if (isInSaveBlockingWindow()) {
-              log.debug('[ProductDetail] ⚠️ Skipping mapping reload - in save blocking window');
-              scheduleDeferredExternalReload('mapping_blocked');
-              return;
-            }
+        log.debug('[ProductDetail] Platform mapping updated');
 
-            // Mapping changes are less disruptive - reload if no unsaved changes
-            if (!hasUnsavedChangesRef.current) {
-              loadPlatformData();
-            } else {
-              showBanner('Platform mapping changed. Save your changes first.');
-              scheduleDeferredExternalReload('mapping_unsaved');
-            }
-          }
-        )
-        .subscribe();
+        // ✅ CRITICAL: Block during save window
+        if (isInSaveBlockingWindow()) {
+          log.debug('[ProductDetail] ⚠️ Skipping mapping reload - in save blocking window');
+          scheduleDeferredExternalReload('mapping_blocked');
+          return;
+        }
+
+        // Mapping changes are less disruptive - reload if no unsaved changes
+        if (!hasUnsavedChangesRef.current) {
+          loadPlatformData();
+        } else {
+          showBanner('Platform mapping changed. Save your changes first.');
+          scheduleDeferredExternalReload('mapping_unsaved');
+        }
+      }));
 
       return () => {
-        log.debug('[ProductDetail] Cleaning up realtime subscriptions');
-        productSubscription.unsubscribe();
-        inventorySubscription.unsubscribe();
-        mappingSubscription.unsubscribe();
+        log.debug('[ProductDetail] Cleaning up Legend-State realtime subscriptions');
+        disposers.forEach(d => {
+          try { d(); } catch {}
+        });
       };
-    }, [detailedItem?.Id, loadPlatformData, showBanner, isInSaveBlockingWindow, scheduleDeferredExternalReload]);
+    }, [detailedItem?.Id, detailedItem?.ProductId, loadPlatformData, showBanner, isInSaveBlockingWindow, scheduleDeferredExternalReload]);
 
     // Collaboration: Request edit lock and listen for team updates
     useEffect(() => {
