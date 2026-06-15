@@ -523,13 +523,14 @@ const ProductDetailScreen = observer(
       try {
         await campaignAdapter.addCampaignItems(campaignId, [detailedItem.Id]);
         setClearoutVisible(false);
-        Alert.alert('Added to clearout', `This product is now in "${title}".`);
+        // Drop straight into the clearout so the user sees the product in it.
+        (navigation as any).navigate('LiquidationCampaignScreen', { campaignId, entryPoint: 'detail' });
       } catch (e: any) {
         Alert.alert('Could not add', e?.message || 'Please try again.');
       } finally {
         setClearoutBusy(null);
       }
-    }, [campaignAdapter, detailedItem?.Id, clearoutBusy]);
+    }, [campaignAdapter, detailedItem?.Id, clearoutBusy, navigation]);
 
     const createClearoutWithProduct = useCallback(async () => {
       if (!detailedItem?.Id || clearoutBusy) return;
@@ -3703,6 +3704,7 @@ const ProductDetailScreen = observer(
 
         <ScrollView
           ref={scrollViewRef}
+          stickyHeaderIndices={[0]}
           contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomSafePadding }]}
         >
           {/* Header with auto-save indicator */}
@@ -3860,7 +3862,17 @@ const ProductDetailScreen = observer(
 
             {/* Active Listings */}
             <Card style={styles.platformsSection}>
-              <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Active Listings</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Active Listings</Text>
+                <TouchableOpacity
+                  onPress={openClearout}
+                  activeOpacity={0.8}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingVertical: 6, paddingHorizontal: 12 }}
+                >
+                  <Icon name="sprout-outline" size={15} color="#5D7E16" />
+                  <Text style={{ fontSize: 13, fontWeight: '600', color: '#5D7E16' }}>Add to clearout</Text>
+                </TouchableOpacity>
+              </View>
 
               {mappings.length > 0 ? (
                 <>
