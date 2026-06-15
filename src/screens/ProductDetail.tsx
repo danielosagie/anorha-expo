@@ -4088,7 +4088,7 @@ const ProductDetailScreen = observer(
                   'Are you sure you want to archive this product? It will be hidden from your active listings.',
                   [
                     { text: 'Cancel', style: 'cancel' },
-                    { text: 'Archive', style: 'default', onPress: () => log.debug('Archive (Placeholder)') }
+                    { text: 'Archive', style: 'default', onPress: () => { void archiveProduct(); } }
                   ]
                 );
               }}

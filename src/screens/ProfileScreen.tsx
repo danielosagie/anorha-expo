@@ -1589,7 +1589,8 @@ const ProfileScreen = () => {
     try {
       const token = await getApiToken();
       if (token) {
-        log.debug('Current API token:', token);
+        // Never log the token value — it's a live bearer secret. Presence + length only.
+        log.debug('Current API token present (redacted), length:', token.length);
       } else {
         log.debug('No active API token found.');
       }
