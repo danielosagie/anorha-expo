@@ -208,6 +208,31 @@ function jwtExpiryMs(token: string | null): number | null {
   }
 }
 
+/**
+ * The current Supabase user id (JWT `sub` claim), decoded synchronously, or null
+ * if no token is minted yet / it can't be parsed. Same atob/Buffer fallback as
+ * jwtExpiryMs — no extra dependency. Lets callers that sit ABOVE the session
+ * provider (e.g. PlatformConnectionsContext) scope realtime filters without a
+ * network round-trip; returns null safely so callers degrade to RLS-only scoping.
+ */
+export function getSupabaseUserId(): string | null {
+  const token = currentSupabaseJwt;
+  if (!token) return null;
+  try {
+    const part = token.split('.')[1];
+    if (!part) return null;
+    const base64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    const json = typeof atob === 'function'
+      ? atob(base64)
+      : (globalThis as any).Buffer?.from(base64, 'base64').toString('binary');
+    if (!json) return null;
+    const payload = JSON.parse(json);
+    return typeof payload.sub === 'string' && payload.sub.length > 0 ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
+
 // Refresh ~1 min before the token actually expires so long requests (e.g. the
 // import flow) never send a token that lapses mid-flight.
 const TOKEN_REFRESH_BUFFER_MS = 60_000;

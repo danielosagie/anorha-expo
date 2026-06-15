@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import { supabase, ensureSupabaseJwt, getSupabaseUserId } from '../../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import { acquireCollaborationSocket, releaseCollaborationSocket, type Socket } from '../lib/collaborationSocket';
 import { TABLES } from '../constants/tableNames';
@@ -134,6 +134,12 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
     let retryTimeout: ReturnType<typeof setTimeout> | null = null;
 
     const setupSubscription = () => {
+      // Defense-in-depth: scope the channel to the current user when their id is
+      // known (decoded from the Supabase JWT — this provider mounts above the
+      // session provider, so we read the id from the token, not context). RLS
+      // already enforces row scoping; if the JWT hasn't minted yet we fall back to
+      // an unfiltered channel (the previous behaviour), still RLS-protected.
+      const currentUserId = getSupabaseUserId();
       // Subscribe to realtime updates for PlatformConnections table
       channel = supabase
         // Stable channel name: a `Date.now()` suffix produced a new, distinctly-named
@@ -145,10 +151,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
             event: '*', // Listen for INSERT, UPDATE, DELETE
             schema: 'public',
             table: TABLES.PlatformConnections,
-            // Row scoping is enforced by RLS (the client only receives its own
-            // connections). A server-side `UserId=eq.<id>` filter is a follow-up:
-            // this provider currently mounts ABOVE the session provider, so the
-            // user id isn't available here yet — unblocked by the session-spine work.
+            ...(currentUserId ? { filter: `UserId=eq.${currentUserId}` } : {}),
           },
           (payload) => {
             console.log('[PlatformConnectionsContext] Realtime update received:', payload.eventType);
