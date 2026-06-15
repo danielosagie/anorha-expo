@@ -1486,7 +1486,7 @@ const InventoryOrdersScreen = observer(() => {
       {/* Tappable header title → AppMenu (Inventory / Orders / Scan inventory). */}
       <View style={[styles.titleBar, { top: insets.top + 6 }]} pointerEvents="box-none">
         <TouchableOpacity style={styles.titleTap} onPress={() => setHeaderMenuOpen(true)} activeOpacity={0.7}>
-          <Text style={styles.titleText}>{activeTab === 'inventory' ? 'Inventory' : 'Orders'}</Text> {/*Page Title*/}
+          <Text style={styles.titleText}>{activeTab === 'inventory' ? 'Inventory' : 'Orders'}</Text>
           <ChevronsUpDownIcon color="#2c2c2c" fontWeight={500}/>
         </TouchableOpacity>
       </View>
